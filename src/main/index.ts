@@ -52,6 +52,7 @@ import { TableFilteredUpdateOwners } from './tableFilteredUpdateOwners';
 import { mergeTableFilteredUpdateProgress } from './tableFilteredUpdateProgress';
 import type { TableFilteredUpdatePreviewInput, TableFilteredUpdateApplyInput, TableFilteredUpdateProgress } from '../shared/tableFilteredUpdate';
 import { binaryCellFileText, textCellFileTitle } from '../shared/binaryCellFiles';
+import { relationshipDiagramPngText } from '../shared/relationshipDiagramPng';
 import { databaseDropAcknowledgements, databaseDropIdentifier } from '../shared/databaseDrop';
 import type { DatabaseDropTarget, DatabaseDropCounts } from '../shared/databaseDrop';
 import { QueryFileSources } from './queryFileSources';
@@ -1924,7 +1925,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (command === 'table.filteredUpdate.release') return filteredUpdates.release(input, columns!);
   if (command === 'query.cancel' && filteredUpdates.has(input.taskId)) return filteredUpdates.cancel(input.taskId, columns!);
   // 原生选择器和实际写盘属于同一次文档操作；仅用本机连接概要保护 SQLite 文件，不连接数据库。
-  if (command === 'binaryCellFiles.open' || command === 'binaryCellFiles.save' || command === 'cellFiles.saveText') {
+  if (command === 'binaryCellFiles.open' || command === 'binaryCellFiles.save' || command === 'cellFiles.saveText' || command === 'relationshipDiagram.savePng') {
     const assertCurrent = () => { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error(binaryCellFileText.shuttingDown); };
     assertCurrent();
     if (binaryCellFileActive) throw Error(binaryCellFileText.busy);
@@ -1939,11 +1940,15 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           if (chosen.canceled || !chosen.filePaths.length) return null;
           return readBinaryCellFile(chosen.filePaths[0], assertCurrent);
         }
-        const chosen = await dialog.showSaveDialog(window!, command === 'cellFiles.saveText' ?
+        const chosen = await dialog.showSaveDialog(window!, command === 'relationshipDiagram.savePng' ?
+          { title: relationshipDiagramPngText.title, defaultPath: relationshipDiagramPngText.name,
+            filters: [{ name: relationshipDiagramPngText.filter, extensions: ['png'] }] } :
+          command === 'cellFiles.saveText' ?
           { title: textCellFileTitle, defaultPath: 'cell.txt', filters: [{ name: 'UTF-8 文本', extensions: ['txt'] }, ...filters] } :
           { title: binaryCellFileText.saveTitle, defaultPath: input.suggestedName ?? binaryCellFileText.defaultName, filters });
         assertCurrent();
         if (chosen.canceled || !chosen.filePath) return null;
+        if (command === 'relationshipDiagram.savePng' && extname(chosen.filePath).toLowerCase() !== '.png') throw Error(relationshipDiagramPngText.extension);
         const release = await exportReservations.acquire(chosen.filePath);
         try {
           assertCurrent();
@@ -3908,7 +3913,7 @@ else {
         const filteredExportCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && ['table.exportFiltered', 'sqlite.tableExport', 'sqlite.queryExport', 'sqlite.workbookExport', 'postgres.workbookExport', 'mysql.workbookExport'].includes(tasks.get(payload.input.taskId)?.kind ?? '') && tableFilteredExports.has(payload.input.taskId);
         const historyDeleteCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && typeof historyDelete !== 'undefined' && historyDelete.owns(payload.input.taskId);
         if (payload.command.startsWith('result.insert') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(payload.input.taskId)) columns = columnsMain.capture(event);
-        if (payload.command.startsWith('history.delete') || historyDeleteCancel || payload.command.startsWith('binaryCellFiles.') || payload.command === 'cellFiles.saveText' || payload.command.startsWith('table.filteredUpdate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredUpdates.has(payload.input.taskId)) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('history.delete') || historyDeleteCancel || payload.command.startsWith('binaryCellFiles.') || payload.command === 'cellFiles.saveText' || payload.command === 'relationshipDiagram.savePng' || payload.command.startsWith('table.filteredUpdate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredUpdates.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('table.filteredDelete.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredDeletes.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.tableChecks.') || payload.command === 'queries.readText' || payload.command === 'queries.readBatch' || payload.command === 'history.readBatch' || payload.command === 'queries.copySql' || payload.command === 'history.copySql' || payload.command === 'history.exportSql' || payload.command === 'history.exportSqlArchive' || payload.command === 'history.saveQuery' || payload.command === 'history.saveQueryBatch' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions' || payload.command === 'table.exportFiltered' || payload.command === 'sqlite.tableExport' || payload.command === 'sqlite.queryExport' || payload.command === 'sqlite.workbookExport' || payload.command === 'postgres.workbookExport' || payload.command === 'mysql.workbookExport' || filteredExportCancel) columns = columnsMain.capture(event);

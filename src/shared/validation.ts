@@ -97,6 +97,7 @@ import { assertQueryTabPinWrite } from './queryTabPin';
 import { uiMenuStateSchema, objectCategories, assertObjectBrowserTabs } from './uiCommands';
 import { tableFilteredDeletePreviewInputSchema, tableFilteredDeleteApplyInputSchema, tableFilteredDeleteReleaseInputSchema } from './tableFilteredDelete';
 import { binaryCellFileOpenSchema, binaryCellFileSaveSchema, textCellFileSaveSchema } from './binaryCellFiles';
+import { relationshipDiagramPngSchema } from './relationshipDiagramPng';
 import { tableFilteredUpdatePreviewInputSchema, tableFilteredUpdateApplyInputSchema, tableFilteredUpdateReleaseInputSchema } from './tableFilteredUpdate';
 import { fileImportTransactionMode, fileImportTransactionModeSchema } from './fileImportTransaction';
 import { importFileInspectInputSchema, importFileSourceSchema, importSourceColumn } from './importNewTable';
@@ -830,6 +831,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'table.filteredUpdate.apply': tableFilteredUpdateApplyInputSchema,
   'table.filteredUpdate.release': tableFilteredUpdateReleaseInputSchema,
   'binaryCellFiles.save': binaryCellFileSaveSchema,
+  'relationshipDiagram.savePng': relationshipDiagramPngSchema,
   'cellFiles.saveText': textCellFileSaveSchema,
   'schema.databaseDrop.get': z.object({ connectionId: id, database: databaseDropName, taskId: id }).strict(),
   'schema.databaseDrop.preview': z.object({ snapshotId: id, taskId: id }).strict(),

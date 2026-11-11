@@ -3,6 +3,7 @@ import type { TableInfo } from '../../shared/contracts';
 import { useWorkspace } from '../store';
 import { invoke, errorMessage } from '../lib';
 import { buildRelationshipDiagram, captureDiagramTable, relationshipDiagramLimits, type RelationshipDiagram } from '../relationshipDiagram';
+import { relationshipDiagramPng } from '../relationshipDiagramImage';
 import { RelationshipDiagramReader, type RelationshipDiagramServices, type RelationshipJoinDraft } from '../relationshipDiagramReader';
 import { relationshipDiagramZh as text } from '../locales/relationshipDiagram.zh-CN';
 import { ErrorBox, Modal, Spinner } from './ui';
@@ -79,21 +80,56 @@ export function RelationshipDiagramDialog({ connectionId, source, current, onClo
       <div className="relationship-diagram-pick-controls"><button disabled={disabled || !index} onClick={() => setPage(index - 1)}>{text.previous}</button><span>{index + 1} / {pages}</span><button disabled={disabled || index + 1 >= pages} onClick={() => setPage(index + 1)}>{text.next}</button><button disabled={disabled || !selection.size} onClick={() => { if (environment() && !reader.busy && !closingRef.current) { selectedRef.current = new Set(); setSelection(selectedRef.current); setNotice(text.selectionChanged); } }}>{text.clear}</button><button disabled={disabled || !selection.size} onClick={() => readTables([...selectedRef.current])}>{text.read}</button><button disabled={disabled || !diagram} onClick={() => readTables(diagram!.tables.map(table => table.name))}>{text.refresh}</button>{busy && <button disabled={closing} onClick={() => { void reader.stop().catch(reason => { if (alive.current) setError(errorMessage(reason)); }); }}>{text.stop}</button>}</div>
     </div>
     <ErrorBox message={invalid ? text.stale : error || initial.error}/>{notice && <p role="status">{notice}</p>}{busy && <Spinner text={progress || text.catalog}/>}<p className="muted">{text.limit}</p>
-    {diagram && <RelationshipDiagramCanvas diagram={diagram} joinDisabled={disabled} onJoin={onJoin ? id => { void prepareJoin(diagram, id); } : undefined}/>}
+    {diagram && <RelationshipDiagramCanvas diagram={diagram} joinDisabled={disabled} exportDisabled={disabled} exportCurrent={environment}
+      onJoin={onJoin ? id => { void prepareJoin(diagram, id); } : undefined}/>}
   </div><footer className="modal-footer"><span className="grow"/><button disabled={closing} onClick={() => { void close(); }}>{text.close}</button></footer></Modal>;
 }
 
 /** 图只使用已验证结构，未读取的外部目标采用虚线框；名称始终作为React纯文本。 */
-export function RelationshipDiagramCanvas({ diagram, onJoin, joinDisabled, onDesign, designDisabled, localDatabase }: {
+export function RelationshipDiagramCanvas({ diagram, onJoin, joinDisabled, onDesign, designDisabled, localDatabase, exportDisabled, exportCurrent }: {
   diagram: RelationshipDiagram; onJoin?(edgeId: string): void; joinDisabled?: boolean; onDesign?(table: string): void;
-  designDisabled?: boolean; localDatabase?: string;
+  designDisabled?: boolean; localDatabase?: string; exportDisabled?: boolean; exportCurrent?(): boolean;
 }) {
   const [allFields, setAllFields] = useState(true), [zoom, setZoom] = useState(1), [selected, setSelected] = useState('');
+  const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState(''), [exportNotice, setExportNotice] = useState('');
   const viewport = useRef<HTMLDivElement>(null), marker = useRef('relationship-arrow-' + crypto.randomUUID()).current;
   const graph = useMemo(() => buildRelationshipDiagram(diagram.tables, allFields), [diagram, allFields]);
   const chosen = graph.nodes.find(node => node.id === selected), edges = chosen ? graph.edges.filter(edge => edge.source === chosen.id || edge.target === chosen.id) : graph.edges;
+  const exportWork = useRef(false), mounted = useRef(false);
+  const latest = useRef({ graph, selected, localDatabase, exportDisabled, exportCurrent });
+  latest.current = { graph, selected, localDatabase, exportDisabled, exportCurrent };
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  /** 图或来源在编码期间变化时，旧图片不能再打开保存选择器。 */
+  async function exportPng() {
+    const element = viewport.current;
+    if (!element || exportDisabled || exportWork.current) return;
+    const current = () => {
+      const now = latest.current;
+      return mounted.current && now.graph === graph && now.selected === selected && now.localDatabase === localDatabase &&
+        !now.exportDisabled && now.exportCurrent?.() !== false;
+    };
+    exportWork.current = true;
+    setExporting(true); setExportError(''); setExportNotice('');
+    try {
+      if (!current()) throw Error(text.stale);
+      const base64 = await relationshipDiagramPng(graph, element, chosen?.id, localDatabase);
+      if (!current()) throw Error(text.stale);
+      const result = await invoke('relationshipDiagram.savePng', { base64 });
+      if (mounted.current && result) setExportNotice(text.pngSaved(result.name));
+    } catch (reason) {
+      if (mounted.current) setExportError(errorMessage(reason));
+    } finally {
+      exportWork.current = false;
+      if (mounted.current) setExporting(false);
+    }
+  }
   function design(node: typeof chosen) { if (node && !node.external && !designDisabled) onDesign?.(node.name); }
-  return <section className="relationship-diagram"><div className="relationship-diagram-controls"><span>{text.counts(graph.tables.length, graph.nodes.filter(node => node.external).length, graph.edges.length)}</span><label><input type="checkbox" checked={allFields} onChange={event => setAllFields(event.target.checked)}/>{text.fields}</label><button aria-label={text.zoomOut} disabled={zoom <= .25} onClick={() => setZoom(value => Math.max(.25, value - .25))}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label={text.zoomIn} disabled={zoom >= 2} onClick={() => setZoom(value => Math.min(2, value + .25))}>＋</button><button onClick={() => { const width = viewport.current?.clientWidth; if (width) setZoom(Math.max(.25, Math.min(1, (width - 20) / graph.width))); }}>{text.fit}</button>{onDesign && <button disabled={!chosen || chosen.external || designDisabled} onClick={() => design(chosen)}>{text.browserDesign}</button>}</div>
+  return <section className="relationship-diagram"><div className="relationship-diagram-controls"><span>{text.counts(graph.tables.length, graph.nodes.filter(node => node.external).length, graph.edges.length)}</span><label><input type="checkbox" checked={allFields} onChange={event => setAllFields(event.target.checked)}/>{text.fields}</label><button aria-label={text.zoomOut} disabled={zoom <= .25} onClick={() => setZoom(value => Math.max(.25, value - .25))}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label={text.zoomIn} disabled={zoom >= 2} onClick={() => setZoom(value => Math.min(2, value + .25))}>＋</button><button onClick={() => { const width = viewport.current?.clientWidth; if (width) setZoom(Math.max(.25, Math.min(1, (width - 20) / graph.width))); }}>{text.fit}</button>{onDesign && <button disabled={!chosen || chosen.external || designDisabled} onClick={() => design(chosen)}>{text.browserDesign}</button>}
+      <button type="button" disabled={exportDisabled || exporting} onClick={() => { void exportPng(); }}>
+        {exporting ? text.exportingPng : text.exportPng}</button>
+    </div>
+    <ErrorBox message={exportError}/>
+    {exportNotice && <p role="status">{exportNotice}</p>}
     <div className="relationship-diagram-viewport" aria-label={text.viewport} tabIndex={0} ref={viewport}><div style={{ width: graph.width * zoom, height: graph.height * zoom }}><div className="relationship-diagram-stage" style={{ width: graph.width, height: graph.height, transform: `scale(${zoom})` }}>
       <svg width={graph.width} height={graph.height} aria-hidden="true"><defs><marker id={marker} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z"/></marker></defs>{graph.edges.map(edge => <path key={edge.id} className={chosen && (edge.source === chosen.id || edge.target === chosen.id) ? 'selected' : ''} d={edge.path} markerEnd={`url(#${marker})`}/>)}</svg>
       {graph.nodes.map(node => {

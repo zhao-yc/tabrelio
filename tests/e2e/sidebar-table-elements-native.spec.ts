@@ -18,6 +18,7 @@ import { postgresStructureZh } from '../../src/renderer/locales/postgresStructur
 import { postgresColumnEditZh } from '../../src/renderer/locales/postgresColumnEdit.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { relationshipDiagramZh as diagramText } from '../../src/renderer/locales/relationshipDiagram.zh-CN';
+import { relationshipDiagramPngText } from '../../src/shared/relationshipDiagramPng';
 import { designerFieldFindZh as fieldFind } from '../../src/renderer/locales/designerFieldFind.zh-CN';
 import { sqliteTableRebuildZh as rebuild } from '../../src/renderer/locales/sqliteTableRebuild.zh-CN';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
@@ -446,6 +447,44 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     await relation.locator('summary').click();
     await expect(relation.getByRole('listitem')).toHaveText(['scope_id → scope_id', 'parent_id → id']);
     await page.screenshot({ path: info.outputPath('对象浏览ER图.png') });
+    const exportPng = diagram.getByRole('button', { name: diagramText.exportPng, exact: true });
+    async function preparePngPicker(path?: string) {
+      await desktop.evaluate(({ dialog, BrowserWindow }, request) => {
+        const original = dialog.showSaveDialog;
+        dialog.showSaveDialog = (async (...args: unknown[]) => {
+          dialog.showSaveDialog = original;
+          const options = args[1] as Electron.SaveDialogOptions;
+          if (args[0] !== BrowserWindow.getAllWindows()[0] || options.title !== request.title ||
+              options.defaultPath !== request.name || options.filters?.[0]?.extensions.join() !== 'png')
+            throw Error('保存选择器越过本例 PNG 范围');
+          return { canceled: !request.path, filePath: request.path };
+        }) as typeof original;
+      }, { path, title: relationshipDiagramPngText.title, name: relationshipDiagramPngText.name });
+    }
+    if (sqlite) {
+      await preparePngPicker();
+      await exportPng.click();
+      await expect(exportPng).toBeEnabled();
+      await expect(diagram.getByText(/已保存关系图/)).toHaveCount(0);
+    }
+    const pngPath = info.outputPath('导出的整张 ER 图.png');
+    for (let step = 0; step < 4; step++) await diagram.getByRole('button', { name: diagramText.zoomIn, exact: true }).click();
+    const canvasViewport = diagram.locator('.relationship-diagram-viewport');
+    await canvasViewport.evaluate(node => { node.scrollLeft = node.scrollWidth; node.scrollTop = node.scrollHeight; });
+    await expect.poll(() => canvasViewport.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+    await preparePngPicker(pngPath);
+    await exportPng.click();
+    await expect(diagram.getByText(diagramText.pngSaved('导出的整张 ER 图.png'), { exact: true })).toBeVisible();
+    const picture = await desktop.evaluate(({ nativeImage }, file) => {
+      const png = nativeImage.createFromPath(file), { width, height } = png.getSize(), bitmap = png.toBitmap();
+      const pixel = (x: number, y: number) => bitmap.readUInt32LE((y * width + x) * 4);
+      const bg = pixel(0, 0);
+      let edge = false;
+      for (let y = 170; y < 350 && !edge; y++) for (let x = 690; x < 910 && !edge; x++) edge = pixel(x, y) !== bg;
+      return { width, height, left: pixel(80, 95) !== bg, right: pixel(980, 95) !== bg, edge };
+    }, pngPath);
+    expect(picture).toEqual({ width: 1700, height: 628, left: true, right: true, edge: true });
+    await diagram.getByRole('button', { name: diagramText.fit, exact: true }).click();
     if (!sqlite && !postgres) {
       await parent.dblclick();
       const parentStructure = page.getByRole('dialog', { name: '设计表 · ' + parentName, exact: true });
@@ -461,6 +500,15 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     await parent.click();
     await expect(parent.locator('..')).toHaveClass(/\bexternal\b/);
     await expect(design).toBeDisabled();
+    if (sqlite) {
+      await diagram.getByRole('checkbox', { name: diagramText.fields, exact: true }).uncheck();
+      const keysPath = info.outputPath('导出的关联字段与未读表.png');
+      await preparePngPicker(keysPath);
+      await exportPng.click();
+      await expect(diagram.getByText(diagramText.pngSaved('导出的关联字段与未读表.png'), { exact: true })).toBeVisible();
+      const size = await desktop.evaluate(({ nativeImage }, file) => nativeImage.createFromPath(file).getSize(), keysPath);
+      expect(size).toEqual({ width: 1700, height: 524 });
+    }
     await child.click();
     await design.click();
     const structure = page.getByRole('dialog', { name: postgres ? postgresStructureZh.title :

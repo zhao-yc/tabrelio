@@ -76,7 +76,7 @@ export function ObjectBrowserDiagram({ profile, database, tables, current, onDes
     {notice && <p role="status">{notice}</p>}
     {busy && <Spinner text={progress}/>}
     <ErrorBox message={error}/>
-    {diagram ? <RelationshipDiagramCanvas diagram={diagram} localDatabase={database} onDesign={table => {
+    {diagram ? <RelationshipDiagramCanvas diagram={diagram} localDatabase={database} exportDisabled={busy} exportCurrent={current} onDesign={table => {
       if (!reading.current && latest.current()) onDesign(table);
     }} designDisabled={busy}/> : !tables.length && <p>{text.noTables}</p>}
   </section>;

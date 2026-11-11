@@ -6,7 +6,7 @@ export interface DiagramColumn { name: string; type: string; nullable: boolean; 
 export interface DiagramForeignKey { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[]; onUpdate: string; onDelete: string; implicit?: boolean; warning?: string; }
 export interface DiagramTable { database: string; name: string; columns: DiagramColumn[]; primaryKey: string[]; foreignKeys: DiagramForeignKey[]; sqlite?: boolean; }
 export interface DiagramNode { id: string; database: string; name: string; external: boolean; columns: DiagramColumn[]; primaryKey: string[]; foreignColumns: string[]; x: number; y: number; width: number; height: number; }
-export interface DiagramEdge { id: string; source: string; target: string; key: DiagramForeignKey; path: string; }
+export interface DiagramEdge { id: string; source: string; target: string; key: DiagramForeignKey; path: string; end: { x: number; y: number }; }
 export interface RelationshipDiagram { nodes: DiagramNode[]; edges: DiagramEdge[]; width: number; height: number; tables: DiagramTable[]; }
 export const diagramTableId = (database: string, table: string) => JSON.stringify([database, table]);
 /** 只有SQLite名称使用ASCII折叠；MySQL原精确身份和跨库规则保持不变。 */
@@ -49,7 +49,7 @@ export function buildRelationshipDiagram(tables: readonly DiagramTable[], allFie
     if (!node) { if (nodes.length - tables.length >= relationshipDiagramLimits.targets) return fail(); node = { id: target, database: key.referencedDatabase, name: key.referencedTable, external: true, columns: [], primaryKey: [], foreignColumns: [], x: 0, y: 0, width: 300, height: 0 }; byId.set(target, node); nodes.push(node); }
     if (!table.sqlite && !node.external && key.referencedColumns.some(name => !node!.columns.some(column => column.name === name))) return fail();
     for (const name of key.referencedColumns) relevant.get(target)?.add(name);
-    edges.push({ id: JSON.stringify([source, key.name]), source, target, key, path: '' });
+    edges.push({ id: JSON.stringify([source, key.name]), source, target, key, path: '', end: { x: 0, y: 0 } });
   }
   let y = 30, width = 0;
   for (let row = 0; row < nodes.length; row += 3) {
@@ -65,6 +65,7 @@ export function buildRelationshipDiagram(tables: readonly DiagramTable[], allFie
     const source = byId.get(edge.source)!, target = byId.get(edge.target)!;
     const at = (node: DiagramNode, columns: string[]) => { const indices = columns.map(name => node.columns.findIndex(column => column.name === name)).filter(index => index >= 0); return node.y + (indices.length ? 54 + (indices.reduce((sum, value) => sum + value, 0) / indices.length + .5) * 26 : 40); };
     const sx = source.x + source.width, sy = at(source, edge.key.columns), ty = at(target, edge.key.referencedColumns), tx = target.x;
+    edge.end = source === target ? { x: sx - 20, y: source.y } : { x: tx, y: ty };
     // 自引用绕过原节点；多条关系略作偏移，完整名称与各字段顺序仍由旁侧列表展示。
     const bend = 45 + index % 7 * 7;
     if (source === target) edge.path = `M ${sx} ${sy} C ${sx + bend} ${sy}, ${sx + bend} ${source.y - 22}, ${sx - 20} ${source.y - 22} L ${sx - 20} ${source.y}`;

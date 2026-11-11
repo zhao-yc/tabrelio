@@ -3,6 +3,8 @@ export const relationshipDiagramZh = {
   title: '表关系图', entry: '查看表关系图', catalog: '读取表目录', read: '读取所选表', refresh: '刷新图中表', stop: '停止读取', close: '关闭',
   search: '搜索表名', selected: '已选择', selectVisible: '选择本页', clear: '清空选择', previous: '上一页', next: '下一页',
   fields: '显示全部字段', zoomOut: '缩小关系图', zoomIn: '放大关系图', fit: '适应宽度', viewport: '表关系图，可使用滚动条移动',
+  exportPng: '导出 PNG', exportingPng: '正在导出 PNG…', exportFailed: '无法生成关系图 PNG。',
+  pngSaved: (name: string) => `已保存关系图 ${name}`,
   scope: '只展示目录声明的外键，不推测业务关系或一对一基数。箭头从引用表指向被引用表；复合映射按原顺序显示。',
   readScope: '表选择仅修改草稿，点击读取后才访问结构。外部或未选入图的目标仅为外键声明，不代表已核实存在。分次读取不构成事务一致快照。',
   external: '目标结构未读取', primary: '主键', foreign: '外键', nullable: '可空', required: '非空', noKeys: '没有关联键字段，可切换显示全部字段。',

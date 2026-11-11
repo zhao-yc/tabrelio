@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。四种关系数据库的对象浏览 ER 图与表关系图可导出整张 PNG。图片沿用当前字段显示、主题和节点选择，覆盖滚动范围，保留箭头与虚线未读目标。E01 增加 PNG 导出。[Navicat 对象页 ER 图](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#er-diagram-view-available-only-in-enterprise-and-standard-edition)
+
 2026-11-12 源码增量。四种关系数据库的新建表设计器及已有表的字段列表支持查找字段名、定位命中和循环查看。支持 Ctrl／⌘＋F、F3 和 Shift＋F3，保留设计草稿和当前字段顺序。O01 增加设计器字段查找。[Navicat 表设计器快捷键](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/hot_keys.html#table--collection-designer)
 
 2026-11-12 源码增量。表格和查询结果可通过快捷键跳到当前行的首列或末列、当前列的首行或末行。加 Shift 可从原活动格扩选矩形，使用当前页或已载入结果的可见顺序。D01、D02、Q05 增加网格边缘定位及扩选。[Navicat 数据编辑器快捷键](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/hot_keys.html#data-editor)
