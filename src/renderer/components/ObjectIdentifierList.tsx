@@ -11,7 +11,7 @@ import { canInsertObjectIdentifier, type QueryIdentifier } from '../objectIdenti
 import { useWorkspace } from '../store';
 import type { OpenWorkbenchTarget } from '../workbenchNavigation';
 import { tableElementsZh } from '../locales/tableElements.zh-CN';
-import { useSidebarObjectDrop } from './SidebarContextMenu';
+import { useSqlEditorDrop } from './SidebarContextMenu';
 
 const pageSize = 50;
 
@@ -22,7 +22,7 @@ export function ObjectIdentifierList({ entries, fields, profile, database, expan
 }) {
   const [search, setSearch] = useState(''), [page, setPage] = useState(0);
   const list = useRef<HTMLUListElement>(null);
-  const insertion = useSidebarObjectDrop();
+  const insertion = useSqlEditorDrop();
   const compatible = useWorkspace(({ settings, activeJobs }) => {
     const tab = settings.tabs.find(item => item.id === settings.activeTabId);
     return !!tab && canInsertObjectIdentifier(tab, profile, database) && !activeJobs[tab.id];

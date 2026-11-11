@@ -2,14 +2,14 @@ import { Children, Fragment, cloneElement, createContext, isValidElement, useCon
 import { ChevronRight, Copy, FileCode2 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import type { WorkbenchTarget } from '../../shared/workbench';
-import type { ConnectionProfile } from '../../shared/contracts';
+import type { ConnectionProfile, SqlSnippet } from '../../shared/contracts';
 import { useWorkspace } from '../store';
 import { sidebarContextMenuZh as text } from '../locales/sidebarContextMenu.zh-CN';
 import { objectQueryKeyShortcuts, objectQueryShortcut, openObjectQuery } from '../objectQueryNavigation';
 import { objectIdentifierCopy } from '../objectIdentifierCopy';
 import { canInsertObjectIdentifier, objectIdentifierDragType, type QueryIdentifier } from '../objectIdentifierInsertion';
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
-import type { HistoryInsertionRegistry, HistoryInsertionTarget, ObjectIdentifierDrop } from '../historyInsertion';
+import type { HistoryInsertionRegistry, HistoryInsertionTarget, SqlEditorDrop } from '../historyInsertion';
 import { writeTableClipboardEvent } from '../gridClipboard';
 import { errorMessage, uid } from '../lib';
 import '../sidebarContextMenu.css';
@@ -21,10 +21,12 @@ interface MenuOwner {
   target: SidebarNodeTarget; name: string; node: HTMLElement; lease: RowLease; actions: ReactNode;
   x: number; y: number; profile: unknown; revision: number; observer: MutationObserver; release(): void;
 }
-interface ObjectDragOwner {
-  tabId: string; node: HTMLElement; token: string; sql: string; insertion: HistoryInsertionTarget;
+interface EditorDragOwner {
+  tabId: string; node: HTMLElement; token: string;
+  drop(destination: SqlEditorDrop): void;
   current(): boolean; release(): void;
 }
+interface EditorInsertionCapture { tabId: string; insertion: HistoryInsertionTarget; isCurrent(): boolean; }
 interface TreeContext {
   target?: SidebarNodeTarget;
   current(): SidebarNodeTarget | undefined;
@@ -32,14 +34,15 @@ interface TreeContext {
   select(target: SidebarNodeTarget, lease?: RowLease): void;
   open(target: SidebarNodeTarget, name: string, node: HTMLElement, lease: RowLease, actions: ReactNode, point?: { x: number; y: number }, elementMenu?: boolean): void;
   beginIdentifierDrag(source: QueryIdentifier, node: HTMLElement, lease: RowLease, data: DataTransfer): boolean;
+  beginSnippetDrag(tabId: string, snippet: SqlSnippet, node: HTMLElement, lease: RowLease, data: DataTransfer): boolean;
   insertIdentifier(source: QueryIdentifier, node: HTMLElement, lease: RowLease): boolean;
-  canDropIdentifier(tabId: string): boolean;
-  dropIdentifier(tabId: string, data: DataTransfer, destination: ObjectIdentifierDrop): void;
+  canDropSql(tabId: string): boolean;
+  dropSql(tabId: string, data: DataTransfer, destination: SqlEditorDrop): void;
   retireFor(node: HTMLElement | null): void;
 }
 const Context = createContext<TreeContext | null>(null);
 
-export function useSidebarObjectDrop() { return useContext(Context); }
+export function useSqlEditorDrop() { return useContext(Context); }
 
 /** 左树与中央对象列表共用明确选择，不将当前编辑标签作为对象菜单的隐式目标。 */
 export function useSidebarSelection(): { target?: SidebarNodeTarget; current(): SidebarNodeTarget | undefined; select(target: SidebarNodeTarget): void } {
@@ -75,7 +78,7 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
   const selectedOwner = useRef<{ profile: unknown; revision: number; lease?: RowLease; invalid: boolean } | undefined>(undefined);
   const fallbackSelection = useRef<{ selection: ReturnType<typeof useWorkspace.getState>['selection']; profile: unknown; revision: number; target: SidebarNodeTarget } | undefined>(undefined);
   const [menu, setMenu] = useState<MenuOwner>(), ownerRef = useRef<MenuOwner | undefined>(undefined);
-  const dragRef = useRef<ObjectDragOwner | undefined>(undefined);
+  const dragRef = useRef<EditorDragOwner | undefined>(undefined);
   const menuRef = useRef<HTMLDivElement>(null), mounted = useRef(false);
 
   /** 只清理原owner；迟到事件不能关闭后来打开的菜单。 */
@@ -120,7 +123,7 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
     owner.release();
   }
 
-  function currentDrag(tabId: string): ObjectDragOwner | undefined {
+  function currentDrag(tabId: string): EditorDragOwner | undefined {
     const owner = dragRef.current;
     if (owner && !owner.current()) cancelDrag(owner);
     else if (owner?.tabId === tabId) return owner;
@@ -160,7 +163,23 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
     cancelDrag();
     const captured = captureIdentifier(source, node, lease);
     if (!captured) return false;
-    const { tabId, insertion, isCurrent } = captured;
+    return beginEditorDrag(captured, node, data, destination => captured.insertion.insert(source.sql, destination));
+  }
+
+  function beginSnippetDrag(tabId: string, snippet: SqlSnippet, node: HTMLElement, lease: RowLease, data: DataTransfer): boolean {
+    cancelDrag();
+    if (!queryInsertion || !mounted.current || !node.isConnected || !lease.current() || document.querySelector(appModalSelector)) return false;
+    const insertion = queryInsertion.capture(tabId, 'snippet');
+    const insertSnippet = insertion?.insertSnippet;
+    if (!insertion || !insertSnippet) { insertion?.dispose(); return false; }
+    return beginEditorDrag({ tabId, insertion, isCurrent: () => node.isConnected && lease.current() &&
+      !document.querySelector(appModalSelector) && insertion.current() }, node, data, destination => insertSnippet(snippet, destination));
+  }
+
+  /** 对象和片段共用一次性拖放标记，来源 SQL 保留在原窗口。 */
+  function beginEditorDrag({ tabId, insertion, isCurrent }: EditorInsertionCapture, node: HTMLElement, data: DataTransfer,
+    drop: (destination: SqlEditorDrop) => void): boolean {
+    if (!isCurrent()) { insertion.dispose(); return false; }
     const token = uid();
     const observer = new MutationObserver(records => { if (modalChanged(records)) cancelDrag(owner); });
     const lost = () => cancelDrag(owner);
@@ -169,7 +188,7 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
     // document 捕获早于编辑器处理；兜底清理留到整次原生 drop 派发结束。
     const dropped = () => { cleanupTask ??= setTimeout(lost, 0); };
     const unsubscribe = insertion.subscribe(lost);
-    const owner: ObjectDragOwner = { tabId, node, token, sql: source.sql, insertion,
+    const owner: EditorDragOwner = { tabId, node, token, drop,
       current: () => !modalChanged(observer.takeRecords()) && isCurrent(), release() {
       clearTimeout(cleanupTask); observer.disconnect(); unsubscribe(); insertion.dispose();
       document.removeEventListener('dragend', lost, true); document.removeEventListener('dragstart', lost, true);
@@ -187,10 +206,10 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
     } catch { cancelDrag(owner); return false; }
   }
 
-  function dropIdentifier(tabId: string, data: DataTransfer, destination: ObjectIdentifierDrop) {
+  function dropSql(tabId: string, data: DataTransfer, destination: SqlEditorDrop) {
     const owner = currentDrag(tabId);
     if (!owner || data.getData(objectIdentifierDragType) !== owner.token) return;
-    try { owner.insertion.insert(owner.sql, destination); }
+    try { owner.drop(destination); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
     finally { cancelDrag(owner); }
   }
@@ -310,7 +329,7 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
       const local = selectedTarget();
       if (local && sameScope(local)) return sidebarNodeKey(local) === sidebarNodeKey(target);
       return selection?.connectionId === target.connectionId && (target.kind === 'connection' ? !selection.database : target.kind === 'database' && selection.database === target.database);
-    }, select, open, beginIdentifierDrag, insertIdentifier, dropIdentifier, canDropIdentifier: tabId => !!currentDrag(tabId),
+    }, select, open, beginIdentifierDrag, beginSnippetDrag, insertIdentifier, dropSql, canDropSql: tabId => !!currentDrag(tabId),
     retireFor(node) {
       if (node && ownerRef.current?.node === node) retire();
       if (node && dragRef.current?.node === node) cancelDrag();

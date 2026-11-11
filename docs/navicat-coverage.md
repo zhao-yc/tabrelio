@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。信息窗格可新建 SQL 片段，并把自定义片段或内置模板拖到查询编辑器的实际落点。模板保留 Tab 字段，原选中文字保持，目录或查询变化会撤销迟到的拖放。Q01、W02 增加片段新建和拖放。[Navicat SQL 片段说明](https://www.navicat.com/en/company/aboutus/blog/693-using-navicat-code-snippets.html)
+
 2026-11-12 源码增量。对象信息窗格可搜索、按分组浏览和预览 SQL 片段。双击或按插入按钮将原文写入活动查询选区，内置模板沿用对应方言和 Tab 字段。片段库修改后窗格自动刷新。Q01、W02 增加就地片段浏览和插入。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#information-pane)
 
 2026-11-12 源码增量。对象信息窗格的表、视图和字段标识符可双击、用键盘按钮插入当前查询选区，或拖放到编辑器的实际落点。沿用原方言引用和编辑器撤销，拖放中的目录或查询变化会撤销原操作。W02 增加窗格到查询编辑器的标识符插入。[Navicat 查询编辑器手册](https://www.navicat.com/manual/pdf_manual/en/navicat_17/win_manual/navicat_en.pdf)

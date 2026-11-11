@@ -12,12 +12,12 @@ export interface HistoryInsertionTarget {
   readonly title: string;
   readonly connectionId: string;
   current(): boolean;
-  insert(sql: string, drop?: ObjectIdentifierDrop, applyBuiltin?: () => void): void;
-  insertSnippet?(snippet: SqlSnippet): void;
+  insert(sql: string, drop?: SqlEditorDrop, applyBuiltin?: () => void): void;
+  insertSnippet?(snippet: SqlSnippet, drop?: SqlEditorDrop): void;
   dispose(): void;
   subscribe(listener: () => void): () => void;
 }
-export interface ObjectIdentifierDrop { editor: HistoryInsertionEditor; position: monaco.IPosition }
+export interface SqlEditorDrop { editor: HistoryInsertionEditor; position: monaco.IPosition }
 interface Model {
   isDisposed(): boolean;
   getVersionId(): number;
@@ -32,6 +32,7 @@ export interface HistoryInsertionEditor {
   getDomNode?(): HTMLElement | null;
   getRawOptions?(): { readOnly?: boolean };
   getContribution?: monaco.editor.IStandaloneCodeEditor['getContribution'];
+  setPosition?(position: monaco.IPosition): void;
   focus?(): void;
   onDidChangeModel(listener: () => void): monaco.IDisposable;
   onDidChangeCursorSelection(listener: () => void): monaco.IDisposable;
@@ -57,7 +58,7 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
   const initial = read(), model = editor.getModel(), selected = editor.getSelection();
   if (!initial.alive || initial.busy || initial.closing || initial.tab?.kind !== 'query' || initial.activeTabId !== initial.tab.id || !initial.connection || !model || model.isDisposed() || !selected) return null;
   // 侧栏和片段只接受可见的单一选区，不对结果专注模式、只读正文或多光标作隐式编辑。
-  const cursor = mode === 'object-identifier' ? editor.getSelections?.()?.[0] : undefined;
+  const cursor = mode ? editor.getSelections?.()?.[0] : undefined;
   const editable = () => !mode || (editor.getSelections?.()?.length === 1 &&
     !!editor.getDomNode?.()?.getClientRects().length && !editor.getRawOptions?.().readOnly);
   if (!editable()) return null;
@@ -90,7 +91,8 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
     subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     dispose,
     insert(sql, drop, applyBuiltin) {
-      if (!current() || (drop && (!cursor || drop.editor !== editor)) || (applyBuiltin && mode !== 'snippet')) throw Error(text.changed);
+      if (!current() || (drop && (!cursor || drop.editor !== editor || (applyBuiltin && !editor.setPosition))) ||
+          (applyBuiltin && mode !== 'snippet')) throw Error(text.changed);
       // 拖入的位置来自原编辑器的命中测试，只插入文本，保留拖动前已选中的文字。
       const destination = drop ? {
         startLineNumber: drop.position.lineNumber, startColumn: drop.position.column,
@@ -98,22 +100,29 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
       } : range;
       if (typeof sql !== 'string' || sql.length > 20_000_000 || model.getValueLength() - model.getValueLengthInRange(destination) + sql.length > 20_000_000) throw Error(text.tooLarge);
       dispose();
-      if (applyBuiltin) { applyBuiltin(); return; }
+      if (applyBuiltin) {
+        // 先消费原选区租约，再把模板控制器的光标移到实际落点，保留拖动前的选中文字。
+        if (drop) editor.setPosition?.(drop.position);
+        applyBuiltin();
+        return;
+      }
       editor.pushUndoStop();
       const edit = snippetEdit(destination, sql);
-      const accepted = cursor
+      const insertionCursor = mode === 'object-identifier' || drop ? cursor : undefined;
+      const accepted = insertionCursor
         ? editor.executeEdits('dbark-object-identifier-insertion', [edit], changes => changes.map(({ range: inserted }) =>
-          cursor.setEndPosition(inserted.endLineNumber, inserted.endColumn).setStartPosition(inserted.endLineNumber, inserted.endColumn)
+          insertionCursor.setEndPosition(inserted.endLineNumber, inserted.endColumn).setStartPosition(inserted.endLineNumber, inserted.endColumn)
             .setEndPosition(inserted.endLineNumber, inserted.endColumn)))
         : editor.executeEdits('dbark-history-insertion', [edit]);
       editor.pushUndoStop();
       if (!accepted) throw Error(text.failed);
-      if (cursor) editor.focus?.();
+      if (insertionCursor) editor.focus?.();
     },
   };
-  if (mode === 'snippet') target.insertSnippet = snippet => {
-    target.insert(snippet.sql, undefined, prepareBuiltinSnippetInsert(editor, snippet));
-    editor.focus?.();
+  if (mode === 'snippet') target.insertSnippet = (snippet, drop) => {
+    const builtin = prepareBuiltinSnippetInsert(editor, snippet);
+    target.insert(snippet.sql, drop, builtin);
+    if (!drop || builtin) editor.focus?.();
   };
   return target;
 }

@@ -16,6 +16,7 @@ export const objectInformationZh = {
   snippets: 'SQL 片段',
   snippetsReadFailed: '无法读取自定义片段，请刷新后重试。',
   insertSnippet: (name: string) => `将片段 ${name} 插入查询`,
+  dragSnippet: '拖到查询编辑器，或双击插入',
   relationIdentifiers: '表和视图名称',
   fieldIdentifiers: '字段名称',
   searchRelationIdentifiers: '搜索表和视图',

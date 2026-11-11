@@ -2,6 +2,7 @@ import { test, expect, page, desktop, pageErrors, quitDesktop, launchDesktop, st
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { objectInformationZh as paneText } from '../../src/renderer/locales/objectInformation.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
+import { objectIdentifierDragType } from '../../src/renderer/objectIdentifierInsertion';
 
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const source = "-- 原样保留 $1 ${name} 和注释\nSELECT JSON_OBJECT('a', '$&'), '${1:值}', '🚢';\n";
@@ -122,6 +123,85 @@ test('信息窗格浏览和插入片段，内置字段可编辑，管理器保�
   await expect(pane).toHaveAttribute('data-layout', 'overlay');
   await expect.poll(() => snippets.evaluate(element => element.scrollWidth - element.clientWidth)).toBe(0);
   await page.screenshot({ path: info.outputPath('信息窗格片段预览.png') });
+  await noExecution();
+});
+
+test('从信息窗格新建片段并拖到真实编辑器落点，内置模板保留 Tab 字段', async ({}, info) => {
+  const name = '窗格新建片段', sql = "SELECT '\u0024{原文}';";
+  // 只观察真实 Monaco 落点，所有编辑仍通过原鼠标和键盘入口。
+  await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
+  await page.reload();
+  await page.getByRole('button', { name: paneText.title, exact: true }).click();
+  const pane = page.getByRole('complementary', { name: paneText.title, exact: true });
+  const snippets = pane.getByRole('region', { name: paneText.snippets, exact: true });
+  await pane.getByRole('button', { name: paneText.snippets, exact: true }).click();
+  const newSnippet = snippets.getByRole('button', { name: zh.snippets.new, exact: true });
+  await newSnippet.press('Enter');
+  const nameInput = dialog().getByRole('textbox', { name: zh.snippets.name, exact: true });
+  await expect(nameInput).toBeFocused();
+  await nameInput.fill(name);
+  await dialog().getByRole('textbox', { name: zh.snippets.sql, exact: true }).fill(sql);
+  await dialog().getByRole('button', { name: zh.common.save, exact: true }).click();
+  await expect(dialog().getByRole('button', { name: zh.snippets.edit, exact: true })).toBeVisible();
+  await expect(dialog().getByRole('button', { name: zh.snippets.insert, exact: true })).toHaveCount(0);
+  await dialog().getByRole('button', { name: zh.common.close, exact: true }).click();
+  await expect(newSnippet).toBeFocused();
+  const row = (item: string) => snippets.getByRole('button', { name: formatText(zh.snippets.selectName, item), exact: true });
+  await expect(row(name)).toBeVisible();
+
+  await offlineQuery();
+  const newline = process.platform === 'win32' ? '\r\n' : '\n';
+  const original = 'SELECT 0;' + newline;
+  const editor = query().locator('.monaco-editor');
+  const input = editor.getByRole('textbox');
+  await writeSql(original);
+  const selectDraft = async () => { await input.focus(); await page.keyboard.press(`${modifier}+A`); };
+  const endPoint = () => editor.evaluate(node => {
+    const editor = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco?.editor.getEditors()
+      .find(instance => instance.getDomNode() === node);
+    const end = editor?.getModel()?.getFullModelRange().getEndPosition();
+    const visible = end && editor?.getScrolledVisiblePosition(end);
+    if (!visible || !end) throw Error('查询行尾不可见');
+    const rect = node.getBoundingClientRect(), x = visible.left + 2, y = visible.top + visible.height / 2;
+    const hit = editor?.getTargetAtClientPoint(rect.left + x, rect.top + y)?.position;
+    if (hit?.lineNumber !== end.lineNumber || hit.column !== end.column) throw Error('落点未命中查询行尾');
+    return { x, y, clientX: rect.left + x, clientY: rect.top + y };
+  });
+  async function drag(item: string) {
+    await selectDraft();
+    const point = await endPoint();
+    await row(item).dragTo(editor, { targetPosition: { x: point.x, y: point.y } });
+    await expect(input).toBeFocused();
+  }
+  await drag(name);
+  await expectSql(original + sql);
+  await page.keyboard.press(`${modifier}+Z`);
+  await expectSql(original);
+
+  const template = zh.snippets.resultTitleName;
+  await drag(template);
+  await expectSql(original + '-- NAME:查询结果' + newline + 'SELECT 1 AS value;');
+  await page.keyboard.press(`${modifier}+Z`);
+  await expectSql(original);
+  await drag(template);
+  await page.keyboard.insertText('拖放结果');
+  await page.keyboard.press('Tab');
+  await page.keyboard.insertText('SELECT 9;');
+  await expectSql(original + '-- NAME:拖放结果' + newline + 'SELECT 9;');
+  await page.screenshot({ path: info.outputPath('片段拖放保留模板字段.png') });
+
+  const data = await page.evaluateHandle(() => new DataTransfer());
+  try {
+    await selectDraft();
+    const point = await endPoint();
+    await row(name).dispatchEvent('dragstart', { dataTransfer: data });
+    expect(await data.evaluate((transfer, type) => ({ types: [...transfer.types], token: transfer.getData(type) }), objectIdentifierDragType))
+      .toEqual({ types: [objectIdentifierDragType], token: expect.stringMatching(/^[a-f\d-]{36}$/) });
+    await snippets.getByRole('searchbox', { name: zh.snippets.search, exact: true }).fill('找不到的片段');
+    await expect(row(name)).toHaveCount(0);
+    await editor.dispatchEvent('drop', { dataTransfer: data, clientX: point.clientX, clientY: point.clientY });
+    await expectSql(original + '-- NAME:拖放结果' + newline + 'SELECT 9;');
+  } finally { await data.dispose(); }
   await noExecution();
 });
 
