@@ -13,6 +13,7 @@ import { PostgresQueryReferenceDialog } from './PostgresQueryReferenceDialog';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { QueryResultNavigator } from './QueryResultNavigator';
+import { PinnedResultRename } from './PinnedResultRename';
 import { ResultSqlDialog } from './ResultSqlDialog';
 import { focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
@@ -49,7 +50,7 @@ import { acquireWorkspaceBusy, flushSettings, useWorkspace, type WorkspaceTab } 
 import { invoke, uid, errorMessage, ownCell } from '../lib';
 import { postgresZh as text } from '../locales/postgres.zh-CN';
 import { formatText, zh } from '../locales/zh-CN';
-import { pinLimits, snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
+import { pinLimits, pinnedResultSnapshotName, pinnedResultTooltip, renamePinnedResult, snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
 import { QueryResultSnapshotIntent } from '../queryResultSnapshotIntent';
 import { createDisplayedQueryResultSnapshot } from '../../shared/queryResultSnapshot';
 import { queryResultSnapshotUiZh as snapshotText } from '../locales/queryResultSnapshot.zh-CN';
@@ -1101,7 +1102,8 @@ export function PostgresQueryTab({
     };
   }, [historyInsertionRegistry, tab.id]);
   const resultSource = pin?.result ?? (!outcome?.analysis && !outcome?.explain && result?.columns.length ? result : undefined);
-  const resultContext = [pin ?? outcome, pin ? undefined : selected, profile, version, scope.database];
+  // 名称修改会替换快照元数据，只有结果来源变化才撤销网格状态。
+  const resultContext = [pin?.result ?? outcome, pin ? undefined : selected, profile, version, scope.database];
   const snapshotIdentity = [tab, pinState, ...resultContext, resultSource];
   useLayoutEffect(() => { snapshotOperation.current?.observe(snapshotIdentity); });
   const currentLayout = columnLayout?.source === resultSource ? columnLayout : undefined;
@@ -1169,8 +1171,9 @@ export function PostgresQueryTab({
     if (mode === 'save' && !resultSource?.columns.length) throw Error(zh.query.pinRequiresRows);
     if (mode === 'open' && pinState.items.length >= pinLimits.count) throw Error(zh.query.pinCountLimit);
     if (shown && (!resultSource || !displayResult || !visibleColumns?.length || !resultScopeCurrent())) throw Error(snapshotText.stale);
+    const name = pinnedResultSnapshotName(pin);
     const snapshot = shown && resultSource && displayResult && visibleColumns
-      ? createDisplayedQueryResultSnapshot(resultSource, displayResult, visibleColumns) : undefined;
+      ? createDisplayedQueryResultSnapshot(resultSource, displayResult, visibleColumns, name) : undefined;
     const job = acquireWorkspaceBusy(tab.id);
     const intent: QueryResultSnapshotIntent = new QueryResultSnapshotIntent(snapshotIdentity, () =>
       snapshotOperation.current === intent && same(scope) && currentTab() === tab &&
@@ -1181,7 +1184,7 @@ export function PostgresQueryTab({
     let finished = false;
     const notify = (message: string) => useWorkspace.getState().notify(message, true);
     return {
-      result: resultSource, snapshot,
+      result: resultSource, name, snapshot,
       current: () => intent.current(),
       invalidate: () => intent.invalidate(),
       /** 完成方言和容量检查后一次性加入固定列表。 */
@@ -1235,6 +1238,14 @@ export function PostgresQueryTab({
     if (!pinNavigationCurrent() || next && !pinState.items.includes(next) || pin === next) return;
     resetResultView();
     publishPinState({ ...pinState, selected: next?.id });
+  }
+
+  function renameSelectedPin(target: PinnedQueryResult, name: string): boolean {
+    if (pin !== target || !pinNavigationCurrent()) return false;
+    const items = renamePinnedResult(pinState.items, target, name);
+    if (!items) return false;
+    publishPinState({ ...pinState, items });
+    return true;
   }
 
   /** 离开快照只切换显示来源，快照仍保留在当前查询中。 */
@@ -2342,7 +2353,7 @@ export function PostgresQueryTab({
             <button className={`current-results ${pin ? '' : 'selected'}`} aria-pressed={!pin} disabled={locked}
               onClick={() => selectPinnedResult()}>{zh.query.currentResults}</button>
             {pinState.items.map(item => <div key={item.id} className={`pinned-result ${pin === item ? 'selected' : ''}`}>
-              <button aria-pressed={pin === item} disabled={locked} onClick={() => selectPinnedResult(item)}>{item.label}</button>
+              <button aria-pressed={pin === item} title={pinnedResultTooltip(item)} disabled={locked} onClick={() => selectPinnedResult(item)}>{item.label}</button>
               <button aria-label={formatText(zh.query.releasePin, item.label)} title={formatText(zh.query.releasePin, item.label)}
                 disabled={locked} onClick={() => releasePinnedResult(item)}>×</button>
             </div>)}
@@ -2358,6 +2369,7 @@ export function PostgresQueryTab({
               {(results.length > 1 || pinState.items.length > 0) && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames}
                 selected={pin ? undefined : selected} pins={pinState.items} selectedPin={pin}
                 disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
+              {pin && <PinnedResultRename tabId={tab.id} pin={pin} disabled={locked} isCurrent={pinNavigationCurrent} onRename={renameSelectedPin}/>}
               {archiveAvailable && <button disabled={locked} onClick={() => {
                 if (outcome && resultScopeCurrent() && !document.querySelector(appModalSelector)) setArchiveOutcome(outcome);
               }}>{archiveText.open}</button>}

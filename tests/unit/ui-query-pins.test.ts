@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { QueryResult } from '../../src/shared/contracts';
-import { pinLimits, snapshotQueryResult } from '../../src/renderer/queryPins';
+import { pinLimits, pinnedResultName, pinnedResultSnapshotName, pinnedResultTooltip, renamePinnedResult, snapshotQueryResult } from '../../src/renderer/queryPins';
 
 /** 用调用方后续修改模拟新执行及结果网格操作，确保固定结果不跟随变动。 */
 function result(): QueryResult {
@@ -30,5 +30,24 @@ describe('查询结果固定快照', () => {
     const pin = snapshotQueryResult([], source, 'pin', '固定');
     expect(pin.bytes).toBe(Buffer.byteLength(JSON.stringify(source), 'utf8'));
     expect(() => snapshotQueryResult([{ ...pin, bytes: pinLimits.bytes - pin.bytes + 1 }], source, 'two', '固定 2')).toThrow('16 MiB');
+  });
+  it('重命名保留固定身份、原数据和第一次名称，旧对象无法改写新版', () => {
+    const first = snapshotQueryResult([], result(), 'first', '固定 1 · 月报');
+    const second = snapshotQueryResult([], result(), 'second', '固定 2');
+    expect(pinnedResultSnapshotName(first)).toBeUndefined();
+    const renamed = renamePinnedResult([first, second], first, '  基准📌  ')!;
+    expect(renamed[0]).toEqual({ ...first, label: '基准📌', originalLabel: first.label });
+    expect(renamed[0].result).toBe(first.result);
+    expect(renamed[1]).toBe(second);
+    expect(pinnedResultSnapshotName(renamed[0])).toBe('基准📌');
+    expect(renamePinnedResult(renamed, first, '过期')).toBeUndefined();
+    expect(renamePinnedResult(renamed, renamed[0], '基准📌')).toBeUndefined();
+    expect(renamePinnedResult(renamed, renamed[0], '新名')?.[0].originalLabel).toBe(first.label);
+  });
+  it('名称可写入快照，支持多字节且拒绝控制字符、空白和孤立代理', () => {
+    expect(pinnedResultName('中'.repeat(85) + 'a')).toBe('中'.repeat(85) + 'a');
+    for (const value of ['中'.repeat(86), ' ', 'a\nb', '\uD800']) expect(pinnedResultName(value)).toBeUndefined();
+    const pin = snapshotQueryResult([], { ...result(), statement: 'a'.repeat(199) + '📌末尾' }, 'pin', '固定');
+    expect(pinnedResultTooltip(pin)).toBe('固定\n执行耗时 12 ms\n' + 'a'.repeat(199) + '…');
   });
 });

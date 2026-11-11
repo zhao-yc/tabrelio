@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import type { QueryResult } from '../../shared/contracts';
+import { queryPinsZh } from '../locales/queryPins.zh-CN';
 import { queryResultNavigatorZh as text } from '../locales/queryResultNavigator.zh-CN';
 import { appModalSelector } from '../modalSelectors';
 import type { PinnedQueryResult } from '../queryPins';
@@ -100,7 +101,8 @@ function ResultList({ results, names, selected, pins, selectedPin, onSelect, onC
       if (source !== 'all' && source !== entry.kind) return false;
       if (!value || entry.kind === 'current' && entry.index + 1 === ordinal) return true;
       const { result, name } = entry;
-      return !ordinalOnly && (name?.toLowerCase().includes(value) || result.postgresCommand?.toLowerCase().includes(value) ||
+      return !ordinalOnly && (name?.toLowerCase().includes(value) ||
+        entry.kind === 'pinned' && entry.pin.originalLabel?.toLowerCase().includes(value) || result.postgresCommand?.toLowerCase().includes(value) ||
         result.statement.toLowerCase().includes(value) || result.columns.some(column => column.name.toLowerCase().includes(value)));
     });
   }, [entries, query, source]);
@@ -153,6 +155,7 @@ function ResultList({ results, names, selected, pins, selectedPin, onSelect, onC
             <span className="open-tab-search-heading"><strong>{label}</strong></span>
             <span className="open-tab-search-meta">{[
               item.kind === 'pinned' && text.sources.pinned,
+              item.kind === 'pinned' && queryPinsZh.elapsed(result.elapsedMs),
               result.columns.length ? text.rows(result.rows.length) : result.postgresCommand ?? text.status,
               result.affectedRows !== undefined && text.affected(result.affectedRows),
               result.truncated && text.truncated,

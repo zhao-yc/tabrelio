@@ -21,6 +21,7 @@ function register(): void {
   const { zh } = require('../../src/renderer/locales/zh-CN') as typeof import('../../src/renderer/locales/zh-CN');
   const { queryResultSnapshotUiZh: text } = require('../../src/renderer/locales/queryResultSnapshot.zh-CN') as typeof import('../../src/renderer/locales/queryResultSnapshot.zh-CN');
   const { queryResultNavigatorZh: navigatorText } = require('../../src/renderer/locales/queryResultNavigator.zh-CN') as typeof import('../../src/renderer/locales/queryResultNavigator.zh-CN');
+  const { queryPinsZh: pinText } = require('../../src/renderer/locales/queryPins.zh-CN') as typeof import('../../src/renderer/locales/queryPins.zh-CN');
   const { queryResultSnapshotFileMessages: filesText } = require('../../src/main/queryResultSnapshotFiles') as typeof import('../../src/main/queryResultSnapshotFiles');
   const executable = require('electron') as string;
   const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -128,7 +129,9 @@ function register(): void {
       expect(await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})))).toEqual([]); expect(await step(() => page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]);
       await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotOffline.arm('open')));
       const query = page.locator('.query-tab:visible'); await step(async () => (await navigationMenuItem(query, { name: text.open, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(query.getByText(text.opened, { exact: true })).toBeVisible());
-      const label = mode === 'save' ? '离线合成结果' : basename(savedPath), pin = query.locator('.pinned-result.selected'); await step(async () => expect((await navigationMenuItem(pin, { name: label, exact: true }, () => clock.assertCurrent()))).toBeVisible()); await step(() => expect(query.getByText(text.truncated, { exact: true })).toBeVisible());
+      const renamed = '离线复核基准📌';
+      let label = mode === 'save' ? '离线合成结果' : renamed;
+      const pin = query.locator('.pinned-result.selected'); await step(async () => expect((await navigationMenuItem(pin, { name: label, exact: true }, () => clock.assertCurrent()))).toBeVisible()); await step(() => expect(query.getByText(text.truncated, { exact: true })).toBeVisible());
       const actualCells = (await step(audit)).originalCells;
       expect(actualCells).toEqual({ negativeZero: true, prototypeOwn: true, constructorOwn: true, big: '18446744073709551615', decimal: '12345678901234567890.1234567890', date: '2026-10-28 12:34:56.123456', nullable: null, empty: '', blob: 'AP8A', emptyBlob: '', truncated: true });
       await step(() => expect(query.locator('.query-result-snapshot-actions')).toHaveCount(0)); const actions = query.locator('.query-result-actions'); await step(async () => expect((await navigationMenuItem(actions, { name: text.open, exact: true }, () => clock.assertCurrent()))).toBeVisible()); await step(async () => expect((await navigationMenuItem(actions, { name: text.save, exact: true }, () => clock.assertCurrent()))).toBeVisible());
@@ -149,9 +152,16 @@ function register(): void {
       }
       await step(async () => (await navigationMenuItem(query, { name: zh.query.pinnedStatement, exact: true }, () => clock.assertCurrent())).click()); const source = page.getByRole('dialog', { name: zh.query.pinSource, exact: true }); await step(() => expect(source.locator('.monaco-editor .view-lines')).toContainText('仅快照SQL')); await step(() => expect(source.getByRole('textbox')).toHaveAttribute('aria-autocomplete', 'none')); await step(async () => (await navigationMenuItem(source, { name: zh.common.close, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(source).toBeHidden());
       if (mode === 'save') {
+        await step(() => query.getByRole('button', { name: pinText.rename, exact: true }).click());
+        const dialog = page.getByRole('dialog', { name: pinText.rename, exact: true });
+        await step(() => dialog.getByRole('textbox', { name: pinText.name, exact: true }).fill(renamed));
+        await step(() => dialog.getByRole('button', { name: zh.common.save, exact: true }).click());
+        label = renamed;
+        await step(() => expect(pin.getByRole('button', { name: renamed, exact: true })).toBeVisible());
         await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotOffline.arm('save'))); await step(async () => (await navigationMenuItem(query, { name: text.save, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(query.getByText(text.saved, { exact: true })).toBeVisible());
         const saved = await step(() => readFile(savedPath)); savedSha256 = hash(saved); const independent = JSON.parse(saved.toString('utf8'));
-        expect(Object.keys(independent).sort()).toEqual(['kind', 'result', 'version']); expect(independent.kind).toBe(expectedWire.kind); expect(independent.version).toBe(1); expect(independent.result).toEqual(expectedWire.result);
+        expect(Object.keys(independent).sort()).toEqual(['kind', 'name', 'result', 'version']);
+        expect(independent.name).toBe(renamed); expect(independent.kind).toBe(expectedWire.kind); expect(independent.version).toBe(1); expect(independent.result).toEqual(expectedWire.result);
         expect(Object.hasOwn(independent.result.rows[0], '__proto__')).toBe(true); expect(independent.result.rows[0].negativeZero).toEqual({ type: 'number', text: '-0' });
       }
       await step(async () => (await navigationMenuItem(query, { name: zh.query.currentResults, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(query.locator('.results-grid')).toHaveCount(0)); await step(async () => (await navigationMenuItem(query.locator('.pinned-result'), { name: label, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(query.locator('.results-grid')).toBeVisible());

@@ -4,6 +4,7 @@ import { sqlClipboardStackAction } from '../sqlClipboardStack';
 import { sqlQuotedCopyAction } from '../sqlQuotedCopy';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { QueryResultNavigator } from './QueryResultNavigator';
+import { PinnedResultRename } from './PinnedResultRename';
 import { ResultSqlDialog } from './ResultSqlDialog';
 import { focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
 import { sqliteStatementTimeoutMaximumMs, validSqliteStatementTimeout } from '../../shared/sqliteStatementTimeout';
@@ -119,7 +120,7 @@ import type { QueryFailure } from '../../shared/queryFailure';
 import { captureQueryFailureSource, type QueryFailureSourceLease, type QueryFailureSourceScope } from '../queryFailureSource';
 import { queryFailureSourceZh as sourceLocationText } from '../locales/queryFailureSource.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
-import { pinLimits, snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
+import { pinLimits, pinnedResultSnapshotName, pinnedResultTooltip, renamePinnedResult, snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
 import { queryResultTitle } from '../../shared/queryResultTitle';
 import { ResultArchiveDialog } from './ResultArchiveDialog';
 import { sqliteQueryEditMaxRows, type SqliteQueryRecordInput, type SqliteTablePageInput } from '../../shared/sqliteTableBrowse';
@@ -399,10 +400,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const unsubscribe=useWorkspace.subscribe(state=>{const source=resultOwner.current,current=state.settings.tabs.find(item=>item.id===source.tabId);const sourceChanged=current?.kind!=='query'||current.connectionId!==source.connectionId||(state.connectionVersions[source.connectionId]??0)!==source.version;const changed=state.settings.activeTabId!==source.tabId||sourceChanged;if(sourceChanged)resultMemoryRef.current=undefined;if(changed)resultHistory.invalidate();if(changed||state.activeJobs[source.tabId]&&!resultInsertActivity.current)revoke();else resultInsertRef.current?.current();});
     let blocked=false;
     const inspect=(records:MutationRecord[]=[])=>{
-      // 当前查询自己的网格尺寸窗口保留结果绑定；实际应用仍等窗口关闭后复核。
+      // 网格尺寸和快照改名窗口保留原结果绑定，实际应用仍等窗口关闭后复核。
+      const dialogs = Array.from(document.querySelectorAll(appDialogSelector));
       const gridSizeDialog=layoutRoot.current?.querySelector('[data-grid-size-dialog]')?.closest(appDialogSelector);
-      const lease=columnLeaseRef.current, preset=presetLeaseRef.current, statistics=statisticsLeaseRef.current, comparison=comparisonLeaseRef.current, insert=resultInsertRef.current, owned=lease?document.querySelector(`[data-query-columns-owner="${lease.owner}"]`)?.querySelector(appDialogSelector):preset?document.querySelector(`[data-query-result-presets-owner="${preset.owner}"]`)?.querySelector(appDialogSelector):statistics?document.querySelector(`[data-query-result-statistics-owner="${statistics.owner}"]`)?.querySelector(appDialogSelector):comparison?document.querySelector(`[data-query-result-comparison-owner="${comparison.owner}"]`)?.querySelector(appDialogSelector):insert?Array.from(document.querySelectorAll(appDialogSelector)).find(node=>node.querySelector(`[data-result-insert-owner="${insert.owner}"]`)):gridSizeDialog;
-      const foreign=Array.from(document.querySelectorAll(appDialogSelector)).some(node=>node!==owned);
+      const pinRenameDialog = dialogs.find(dialog => dialog.querySelector('[data-pinned-result-rename]')?.getAttribute('data-pinned-result-rename') === tab.id);
+      const lease=columnLeaseRef.current, preset=presetLeaseRef.current, statistics=statisticsLeaseRef.current, comparison=comparisonLeaseRef.current, insert=resultInsertRef.current, owned=lease?document.querySelector(`[data-query-columns-owner="${lease.owner}"]`)?.querySelector(appDialogSelector):preset?document.querySelector(`[data-query-result-presets-owner="${preset.owner}"]`)?.querySelector(appDialogSelector):statistics?document.querySelector(`[data-query-result-statistics-owner="${statistics.owner}"]`)?.querySelector(appDialogSelector):comparison?document.querySelector(`[data-query-result-comparison-owner="${comparison.owner}"]`)?.querySelector(appDialogSelector):insert?dialogs.find(node=>node.querySelector(`[data-result-insert-owner="${insert.owner}"]`)):gridSizeDialog ?? pinRenameDialog;
+      const foreign=dialogs.some(node=>node!==owned);
       const added=records.some(record=>Array.from(record.addedNodes).some(node=>node instanceof Element&&(node.getAttribute('role')==='dialog'&&node!==owned||Array.from(node.querySelectorAll(appDialogSelector)).some(dialog=>dialog!==owned))));
       if(foreign&&!blocked||added)revoke();else if(blocked&&!foreign)revoke();blocked=foreign;
     };
@@ -1379,7 +1382,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if (mode === 'save' && !view.result?.columns.length) throw Error(zh.query.pinRequiresRows);
     if (mode === 'open' && view.pins.length >= pinLimits.count) throw Error(zh.query.pinCountLimit);
     if (shown && (!view.result || !result || !resultViewCurrent(result) || !visibleColumns.length)) throw Error(queryResultSnapshotUiZh.stale);
-    const snapshot = shown && view.result && result ? createDisplayedQueryResultSnapshot(view.result, result, visibleColumns) : undefined;
+    const name = pinnedResultSnapshotName(pin);
+    const snapshot = shown && view.result && result ? createDisplayedQueryResultSnapshot(view.result, result, visibleColumns, name) : undefined;
     const version = state.connectionVersions[tab.connectionId] ?? 0;
     let operation: SnapshotOperation;
     const intent = new QueryResultSnapshotIntent(values, () => {
@@ -1392,7 +1396,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     finally { operation.acquiring = false; }
     let finished = false;
     return {
-      result: view.result, snapshot,
+      result: view.result, name, snapshot,
       current: () => intent.current(), invalidate: () => intent.invalidate(),
       /** 解析和容量检查全部完成后一次追加固定结果，原结果/SQL/事务都保留。 */
       adopt(snapshot, name) {
@@ -2769,6 +2773,15 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     setShowPinSql(null);
   }
 
+  /** 名称变化不撤销当前网格的选择、筛选或布局，结果仍使用原快照。 */
+  function renameSelectedPin(target: PinnedQueryResult, name: string): boolean {
+    if (pin !== target || !pinNavigationCurrent()) return false;
+    const next = renamePinnedResult(pins, target, name);
+    if (!next) return false;
+    setPins(next);
+    return true;
+  }
+
   return <div ref={layoutRoot} className="workspace-tab query-tab" data-result-layout={resultLayout}
     onKeyDownCapture={event => {
       const focused = () => !!editor.current?.hasTextFocus();
@@ -2836,6 +2849,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         selected={pin ? undefined : resultIndex} pins={pins} selectedPin={pin}
         disabled={busy || queryRunning || resultModal || fileSource.busy}
         isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
+      {pin && <PinnedResultRename tabId={tab.id} pin={pin} disabled={busy || queryRunning || resultModal || fileSource.busy}
+        isCurrent={pinNavigationCurrent} onRename={renameSelectedPin}/>}
       <ActionMenu label={queryLayoutZh.placement} contextKey={JSON.stringify([queryMenuKey, resultLayout, preferredPlacement])} isCurrent={queryMenuCurrent}>
         {(['below', 'beside', 'results'] as const).map(value => <button key={value} className={(resultsOnly ? 'results' : preferredPlacement) === value ? 'selected' : undefined} onClick={() => changeResultLayout(value)} title={value === 'beside' && !besideAvailable ? queryLayoutZh.besideNarrow : undefined}>{queryLayoutZh[value]}</button>)}
       </ActionMenu>
@@ -2897,7 +2912,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           <ActionMenuSection label={menuText.snapshots}>{snapshotActions}</ActionMenuSection>
         </>}/>
 
-    </div>}/>{pins.length > 0 && <div className="pinned-results" role="group" aria-label={zh.query.pinSection}><span>{zh.query.pinSection}</span><button className={`current-results ${!pin ? 'selected' : ''}`} aria-pressed={!pin} onClick={() => selectPinnedResult()}>{zh.query.currentResults}</button>{pins.map(item => <div key={item.id} className={`pinned-result ${pin?.id === item.id ? 'selected' : ''}`}><button aria-pressed={pin?.id === item.id} title={item.result.statement} onClick={() => selectPinnedResult(item)}><Pin size={11}/>{item.label}</button><button aria-label={formatText(zh.query.releasePin, item.label)} onClick={() => releasePin(item.id)}><X size={11}/></button></div>)}</div>}<ErrorBox message={error}/>{outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length} locateAvailable={failure => scriptFailureRanges.current.has(failure) && !!failureLocator?.available()} onLocate={locateScriptFailure}/>}{outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length} locateAvailable={!!failureLocator?.available()} onLocate={() => { failureLocator?.locate(); }}/>}<div className="query-result-filter-bar">{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><span>{filterText.counts(sourceResult.rows.length,filterView?.result.rows.length??sourceResult.rows.length)}</span>{sourceResult.truncated&&<strong>{filterText.truncated}</strong>}</>:null}{resultMemory&&<span role="status" title={memoryText.hint}>{memoryText.saved}</span>}</div>{activeFilterLease&&<QueryResultFilterPanel binding={activeFilterLease.binding} initial={activeFilterLease.view} seed={activeFilterLease.seed} isCurrent={()=>filterPanelCurrent(activeFilterLease)} onApply={expression=>applyFilterRules(activeFilterLease,expression)} onClose={()=>closeFilterPanel(activeFilterLease)}/>}{activeSortLease&&<QueryResultSortPanel binding={activeSortLease.binding} initial={activeSortLease.view} isCurrent={()=>sortPanelCurrent(activeSortLease)} onApply={rules=>applySortPanel(activeSortLease,rules)} onClose={()=>closeSortPanel(activeSortLease)}/>}<div className="query-result-sort-scope">{result?.columns.length && (pin || !(outcome?.explain || outcome?.analysis)) && (!!sortView?.rules.length || !sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal) ? <>{!sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal && <strong>{sortText.budget}</strong>}<button disabled={!sortView?.rules.length || !selectionBinding || !!activeColumnLease || !!activeFilterLease} onClick={() => sortResult([])}>{sortText.clear}</button>{!!sortView?.rules.length && <ol className="query-result-sort-priorities" aria-label={sortText.priorities}>{sortView.rules.map((rule,index)=>{
+    </div>}/>{pins.length > 0 && <div className="pinned-results" role="group" aria-label={zh.query.pinSection}><span>{zh.query.pinSection}</span><button className={`current-results ${!pin ? 'selected' : ''}`} aria-pressed={!pin} onClick={() => selectPinnedResult()}>{zh.query.currentResults}</button>{pins.map(item => <div key={item.id} className={`pinned-result ${pin?.id === item.id ? 'selected' : ''}`}><button aria-pressed={pin?.id === item.id} title={pinnedResultTooltip(item)} onClick={() => selectPinnedResult(item)}><Pin size={11}/>{item.label}</button><button aria-label={formatText(zh.query.releasePin, item.label)} onClick={() => releasePin(item.id)}><X size={11}/></button></div>)}</div>}<ErrorBox message={error}/>{outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length} locateAvailable={failure => scriptFailureRanges.current.has(failure) && !!failureLocator?.available()} onLocate={locateScriptFailure}/>}{outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length} locateAvailable={!!failureLocator?.available()} onLocate={() => { failureLocator?.locate(); }}/>}<div className="query-result-filter-bar">{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><span>{filterText.counts(sourceResult.rows.length,filterView?.result.rows.length??sourceResult.rows.length)}</span>{sourceResult.truncated&&<strong>{filterText.truncated}</strong>}</>:null}{resultMemory&&<span role="status" title={memoryText.hint}>{memoryText.saved}</span>}</div>{activeFilterLease&&<QueryResultFilterPanel binding={activeFilterLease.binding} initial={activeFilterLease.view} seed={activeFilterLease.seed} isCurrent={()=>filterPanelCurrent(activeFilterLease)} onApply={expression=>applyFilterRules(activeFilterLease,expression)} onClose={()=>closeFilterPanel(activeFilterLease)}/>}{activeSortLease&&<QueryResultSortPanel binding={activeSortLease.binding} initial={activeSortLease.view} isCurrent={()=>sortPanelCurrent(activeSortLease)} onApply={rules=>applySortPanel(activeSortLease,rules)} onClose={()=>closeSortPanel(activeSortLease)}/>}<div className="query-result-sort-scope">{result?.columns.length && (pin || !(outcome?.explain || outcome?.analysis)) && (!!sortView?.rules.length || !sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal) ? <>{!sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal && <strong>{sortText.budget}</strong>}<button disabled={!sortView?.rules.length || !selectionBinding || !!activeColumnLease || !!activeFilterLease} onClick={() => sortResult([])}>{sortText.clear}</button>{!!sortView?.rules.length && <ol className="query-result-sort-priorities" aria-label={sortText.priorities}>{sortView.rules.map((rule,index)=>{
     const column=sourceResult?.columns.find(column=>column.key===rule.column),name=column?.name ?? rule.column;
     return <li key={rule.column}>
       <span>{sortText.priority(index+1,name)} · {rule.direction==='ASC'?sortText.ascending:sortText.descending}</span>

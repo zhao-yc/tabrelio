@@ -7,6 +7,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { queryFailureSourceZh } from '../../src/renderer/locales/queryFailureSource.zh-CN';
 import { queryResultNavigatorZh as resultNavigatorText } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
+import { queryPinsZh as pinText } from '../../src/renderer/locales/queryPins.zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -183,6 +184,15 @@ test('原生查询运行、停止与结果数字切换各自遵循焦点和原�
     await expect(resultList.getByRole('option')).toContainText(resultNavigatorText.sources.pinned);
     await resultSearch.press('Enter');
     await expect(cell(2)).toBeVisible();
+    const checkedRow = body.getByRole('row').filter({ hasText: '结果数据-2' }).getByRole('checkbox');
+    await checkedRow.check();
+    await expect(checkedRow).toBeChecked();
+    await result.getByRole('button', { name: pinText.rename, exact: true }).click();
+    const rename = page.getByRole('dialog', { name: pinText.rename, exact: true });
+    await rename.getByRole('textbox', { name: pinText.name, exact: true }).fill('已保存基准');
+    await rename.getByRole('button', { name: zh.common.save, exact: true }).click();
+    await expect(pins.getByRole('button', { name: '已保存基准', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(checkedRow).toBeChecked();
     await navigator.click();
     await resultSearch.fill('#1');
     await resultSearch.press('Enter');
