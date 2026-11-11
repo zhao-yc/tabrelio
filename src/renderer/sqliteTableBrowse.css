@@ -54,3 +54,4 @@
 .sqlite-table-tab .table-action-bar > [role="status"], .sqlite-table-tab .table-action-bar > button { flex-shrink: 0; white-space: nowrap; }
 .sqlite-table-tab .tab-status { height: auto; min-height: 33px; flex-wrap: wrap; padding-block: 3px; }
 .sqlite-table-tab .tab-status small { flex: 1 1 5rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sqlite-record-input-footer { flex-wrap: wrap; }

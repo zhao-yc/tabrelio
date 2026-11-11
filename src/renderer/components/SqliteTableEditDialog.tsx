@@ -12,7 +12,8 @@ import type { SqliteDraftRow, SqliteEditView } from '../sqliteTableEditor';
 import { sqliteTableEditZh as text } from '../locales/sqliteTableEdit.zh-CN';
 import { cellPreview, errorMessage } from '../lib';
 import { recordValueSummary } from '../recordViews';
-import { RecordNavigator, type useRecordNavigator } from './RecordNavigator';
+import { RecordBoundaryButton, RecordNavigator, type useRecordNavigator } from './RecordNavigator';
+import { recordNavigatorZh as navigatorText } from '../locales/recordNavigator.zh-CN';
 import { ErrorBox, Modal, Spinner } from './ui';
 import { recordTemporalSpec } from '../recordTemporal';
 import { RecordTemporalControls } from './RecordTemporalControls';
@@ -63,6 +64,9 @@ export function SqliteTableValueDialog({ ticket, page, row, column, initialFocus
   }, [initialFocus]);
   const columns = owner.page.edit?.kind === 'editable' ? owner.page.edit.columns : [];
   const records = navigation?.records;
+  const activeRecord = records?.rows.indexOf(owner.row) ?? -1;
+  const existingRecord = (item: SqliteDraftRow) => item.index !== undefined && !item.deleted;
+  const lastRecord = records?.rows.reduce((last, item, index) => existingRecord(item) ? index : last, -1) ?? -1;
   /** 即使误用相同组件 key，来源变化也永久拒绝旧字段与回调；关闭同样受原输入票据约束。 */
   const invalid = useRef(false); if (owner.ticket !== ticket || owner.page !== page || owner.row !== row || owner.column !== column || owner.duplicate !== duplicate || owner.duplicateOwner !== duplicateOwner || owner.duplicatePosition !== duplicatePosition || owner.batch?.ownerId !== batch?.ownerId || owner.batch?.position !== batch?.position || owner.batch?.count !== batch?.count || owner.batch?.groups !== batch?.groups || owner.batch?.sourcePage !== batch?.sourcePage) invalid.current = true;
   // 复制模式只拥有独立的新行草稿；观察到existing index后不因恢复undefined复活保存权。
@@ -150,19 +154,20 @@ export function SqliteTableValueDialog({ ticket, page, row, column, initialFocus
     {owner.batch.sourcePage !== undefined && <p role="status">{batchText.sourcePage(owner.batch.sourcePage)}</p>}</>}{owner.duplicate && <p>{text.duplicateHint}</p>}{owner.duplicatePosition && <p role="status">{owner.duplicatePosition}</p>}{owner.navigation && !owner.batch && <p>{text.recordNavigation}</p>}
     {records && <RecordNavigator state={records.state} count={records.rows.length}
       columns={columns.map(column => ({ key: column.name, name: column.name }))}
-      active={records.rows.indexOf(owner.row)} disabled={treePending} stage={changed}
-      canSelect={index => {
-        const row = records.rows[index];
-        return row.index !== undefined && !row.deleted;
-      }}
+      active={activeRecord} disabled={treePending} stage={changed}
+      canSelect={index => existingRecord(records.rows[index])}
       value={(index, key) => recordSummary(records.rows[index].values[columns.findIndex(column => column.name === key)])}
       onSelect={index => save({ index })}/>}
     {owner.column === undefined && <div role="group" aria-label={jsonText.modes}><button type="button" aria-label={jsonText.form} aria-pressed={mode === 'form'} disabled={treePending} onClick={() => switchMode('form')}>{jsonText.form}</button><button type="button" aria-label={jsonText.json} aria-pressed={mode === 'json'} disabled={treePending} onClick={() => switchMode('json')}>{jsonText.json}</button><button type="button" aria-label={treeText.mode} aria-pressed={mode === 'tree'} disabled={treePending} onClick={() => switchMode('tree')}>{treeText.mode}</button></div>}{mode === 'tree' && tree ? <SqliteRecordTree key={tree.revision} columns={columns} values={tree.values} current={() => localCurrent() && modeRef.current === 'tree' && treeRef.current === tree && owner.current()} onPending={(token, pending) => treePendingChange(tree, token, pending)} onChange={(index, value, values, token) => treeChange(tree, index, value, values, token)}/> : mode === 'json' && json ? <><p>{jsonText.hint}</p><BoundedRecordTextarea aria-label={jsonText.input} spellCheck={false} rows={18} style={{ width: '100%', fontFamily: 'monospace' }} value={json.text} inputIdentity={json.input} budget={sqliteRecordJsonBudget} onValueChange={changeJson}/></> : columns.map((item, index) => column !== undefined && index !== column ? null : <fieldset key={item.name}><legend>{item.name}{item.generated ? ' · ' + text.generated : ''}</legend>{row.index === undefined && <label><input type="checkbox" aria-label={text.include(item.name)} checked={fields[index].include} disabled={item.generated} onChange={event => change(index, { include: event.target.checked })}/>{text.include(item.name)}</label>}<select aria-label={text.type(item.name)} value={fields[index].kind} disabled={item.generated || !fields[index].include} onChange={event => change(index, { kind: event.target.value as FieldDraft['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select>{fields[index].kind === 'blob' && fields[index].include ? <SqliteBinaryField value={fields[index].value} label={text.value(item.name)} readonlyReason={item.generated ? text.generated : ''} source={[owner.ticket, owner.page, owner.row, index, fields[index]]} current={() => localCurrent() && fieldSourceAvailable(index)} available={() => fieldSourceAvailable(index)} onChange={value => change(index, { value })}/> : owner.batch ? <BoundedRecordTextarea aria-label={text.value(item.name)} value={fields[index].value} inputIdentity={owner.row} budget={{ units: 65536, bytes: 65536 * 4, message: batchText.budget }} disabled={item.generated || !fields[index].include || fields[index].kind === 'null'} onValueChange={value => change(index, { value })}/> : <textarea aria-label={text.value(item.name)} value={fields[index].value} maxLength={65536} disabled={item.generated || !fields[index].include || fields[index].kind === 'null'} onChange={event => change(index, { value: event.target.value })}/>}
     {temporalField(index)}
     {fields[index].include && fields[index].kind === 'text' && <HtmlCellPreviewToggle value={fields[index].value}/>}
-    </fieldset>)}</div><ErrorBox message={owner.duplicate && !duplicateSource.current ? text.stale : error}/><footer className="modal-footer">{owner.navigation && <>
+    </fieldset>)}</div><ErrorBox message={owner.duplicate && !duplicateSource.current ? text.stale : error}/><footer className="modal-footer sqlite-record-input-footer">{owner.navigation && <>
+    {records && <RecordBoundaryButton label={changed ? navigatorText.stageFirstRecord : navigatorText.firstRecord}
+      index={records.rows.findIndex(existingRecord)} active={activeRecord} disabled={treePending} onSelect={index => save({ index })}/>}
     <button type="button" aria-label={owner.batch ? changed ? batchText.savePrevious : batchText.previous : owner.navigation.pagePrevious ? changed ? text.savePreviousPageRecord : text.previousPageRecord : changed ? text.savePreviousRecord : text.previousRecord} disabled={treePending || !owner.navigation.previous} onClick={() => save({ direction: -1 })}>{owner.batch ? changed ? batchText.savePrevious : batchText.previous : owner.navigation.pagePrevious ? changed ? text.savePreviousPageRecord : text.previousPageRecord : changed ? text.savePreviousRecord : text.previousRecord}</button>
     <button type="button" aria-label={owner.batch ? changed ? batchText.saveNext : batchText.next : owner.navigation.pageNext ? changed ? text.saveNextPageRecord : text.nextPageRecord : changed ? text.saveNextRecord : text.nextRecord} disabled={treePending || !owner.navigation.next} onClick={() => save({ direction: 1 })}>{owner.batch ? changed ? batchText.saveNext : batchText.next : owner.navigation.pageNext ? changed ? text.saveNextPageRecord : text.nextPageRecord : changed ? text.saveNextRecord : text.nextRecord}</button>
+    {records && <RecordBoundaryButton label={changed ? navigatorText.stageLastRecord : navigatorText.lastRecord}
+      index={lastRecord} active={activeRecord} disabled={treePending} onSelect={index => save({ index })}/>}
   <span className="grow"/></>}<button aria-label={owner.batch ? batchText.cancel : owner.duplicate ? text.duplicateCancel : text.cancelInput} onClick={close}>{owner.batch ? batchText.cancel : owner.duplicate ? text.duplicateCancel : text.cancelInput}</button><button className="primary" aria-label={owner.batch ? batchText.save : owner.duplicate ? text.duplicateSave : text.saveInput} disabled={treePending || owner.duplicate && !duplicateSource.current} onClick={() => save()}>{owner.batch ? batchText.save : owner.duplicate ? text.duplicateSave : text.saveInput}</button></footer></Modal>;
 }
 

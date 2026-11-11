@@ -42,6 +42,7 @@ function copy(props=mainGrid()){const values=new Map<string,string>();props.onCe
 async function layout(){await click(text.open);await toggle(5,false);for(let i=0;i<3;i++)await click(text.up(4));await click(text.apply);}
 
 import { queryRowDetailsZh as detailsText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
+import { recordNavigatorZh as recordNav } from '../../src/renderer/locales/recordNavigator.zh-CN';
 import { QueryRowDetails, queryRowDetailsLimits } from '../../src/renderer/queryRowDetails';
 import { QueryRowDetailsPanel } from '../../src/renderer/components/QueryRowDetailsPanel';
 
@@ -83,9 +84,15 @@ it('完整原列顺序包含隐藏列，精确值普通文本显示；打开、�
   expect(region()!.querySelectorAll('article').map(node => node.querySelector('small')!.textContent)).toEqual(original.columns.map(column => column.type));
   expect(region()!.querySelectorAll('article').map(node => node.querySelector('pre')!.textContent)).toEqual(['18446744073709551615', '0.12345678901234567890', detailsText.empty, 'AP8=', '秘密']);
   expect(button(detailsText.previous).disabled).toBe(true); expect(region()!.textContent).toContain(detailsText.truncated);
-  await click(detailsText.next); expect(button(detailsText.next).disabled).toBe(true);
+  expect(button(recordNav.firstResult).disabled).toBe(true);
+  const oldLast = callback(button(recordNav.lastResult));
+  await click(recordNav.lastResult); expect(button(detailsText.next).disabled).toBe(true);
   expect(region()!.querySelectorAll('pre').map(node => node.textContent)).toEqual([detailsText.empty, '1.00000000000000000001', detailsText.null, '', '秘密']);
   expect(region()!.textContent).toContain(detailsText.binary + ' · 0');
+  expect(button(recordNav.lastResult).disabled).toBe(true);
+  await click(recordNav.firstResult);
+  await act(async () => oldLast());
+  expect(region()!.textContent).toContain('行详情 · 1 / 2');
   // 内联region进入DOM不触发现有foreignModal观察器撤销选择。
   await act(async () => { for (const observer of [...observers]) observer([{ addedNodes: [region()] }]); });
   expect([...mainGrid().selectedRows]).toEqual(selected); expect(copy()).toEqual(copied); expect(mainGrid().columns.map((c: any) => c.key)).toEqual(keys);

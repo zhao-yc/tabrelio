@@ -19,6 +19,18 @@ export function RecordNavigatorToggle({ state }: { state: NavigatorState }) {
     onClick={() => state.setOpen(!state.open)}>{text.title}</button>;
 }
 
+/** 直接定位已加载记录，选中动作仍交给原表单的来源与暂存守卫。 */
+export function RecordBoundaryButton({ label, index, active, disabled, onSelect }: {
+  label: string;
+  index: number;
+  active: number;
+  disabled?: boolean;
+  onSelect(index: number): void;
+}) {
+  const unavailable = disabled || index < 0 || index === active;
+  return <button type="button" disabled={unavailable} onClick={() => { if (!unavailable) onSelect(index); }}>{label}</button>;
+}
+
 interface Props {
   state: NavigatorState;
   columns: readonly SummaryColumn[];

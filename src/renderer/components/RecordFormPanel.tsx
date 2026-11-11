@@ -14,7 +14,8 @@ import { recordDocumentZh as documentText } from '../locales/recordDocument.zh-C
 import { recordJsonNodeInputZh as nodeText } from '../locales/recordJsonNodeInput.zh-CN';
 import {RecordJsonStructureEditor} from './RecordJsonStructureEditor';
 import { RecordValueEditor } from './RecordValueEditor';
-import { RecordNavigator, useRecordNavigator } from './RecordNavigator';
+import { RecordBoundaryButton, RecordNavigator, useRecordNavigator } from './RecordNavigator';
+import { recordNavigatorZh as navigatorText } from '../locales/recordNavigator.zh-CN';
 import { RecordReadonlyProjection } from './RecordReadonlyProjection';
 import { RecordJsonNodeEditor } from './RecordJsonNodeEditor';
 import { recordDocumentInputBudget } from '../recordInputDocument';
@@ -49,6 +50,9 @@ export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect, 
   useEffect(() => { heading.current?.focus(); }, [editor.displayMode]);
   const keys = recordFieldOrder(context.info?.columns ?? [], visibleKeys, showHidden); const reason = recordReadonlyReason(context, row,editor.nodeInput?.columnName??editor.structureInput?.base.columnName);
   const previous = adjacentRecordId(rows, row?.id, -1), next = adjacentRecordId(rows, row?.id, 1);
+  const activeRecord = row ? rows.indexOf(row) : -1;
+  const recordSelectionBlocked = context.busy || context.stale || !!editor.pending;
+  const selectIndex = (index: number) => { if (rows[index]) onSelect(rows[index].id); };
   const status = !row ? text.empty : row.deleted ? text.deleted : row.inserted ? text.inserted : row.original && !rowEqual(row.original, row.data) ? text.staged : text.unchanged;
   const binaryCurrent = binarySnapshotCurrent(row, editor.draft, context);
   return <aside className="record-form-panel" aria-label={batch ? batchText.panel : text.title} onKeyDown={event => {
@@ -58,12 +62,20 @@ export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect, 
   }}>
     <header><h2 tabIndex={-1} ref={heading}>{batch ? batchText.panel : text.title}</h2>{!batch && <button onClick={editor.closeForm}>{text.close}</button>}</header>
     <p className="record-context">{context.target.database} / {context.target.table}</p>
-    <nav aria-label={batch ? batchText.panel : text.title}><button disabled={(!previous && !pageNavigation?.previous) || context.busy} onClick={() => previous ? onSelect(previous) : pageNavigation?.onNavigate(-1)}>{batch ? batchText.previous : !previous && pageNavigation?.previous ? pageNavigation.previousLabel ?? text.previous : text.previous}</button><span>{row ? batch ? batchText.position(rows.indexOf(row) + 1, rows.length) : formatText(text.position, rows.indexOf(row) + 1, rows.length) : text.empty}</span><button disabled={(!next && !pageNavigation?.next) || context.busy} onClick={() => next ? onSelect(next) : pageNavigation?.onNavigate(1)}>{batch ? batchText.next : !next && pageNavigation?.next ? pageNavigation.nextLabel ?? text.next : text.next}</button></nav>
+    <nav className={batch ? undefined : 'record-page-nav'} aria-label={batch ? batchText.panel : text.title}>
+      {!batch && <RecordBoundaryButton label={navigatorText.firstRecord} index={rows.length ? 0 : -1} active={activeRecord}
+        disabled={recordSelectionBlocked} onSelect={selectIndex}/>}
+      <button disabled={(!previous && !pageNavigation?.previous) || context.busy} onClick={() => previous ? onSelect(previous) : pageNavigation?.onNavigate(-1)}>{batch ? batchText.previous : !previous && pageNavigation?.previous ? pageNavigation.previousLabel ?? text.previous : text.previous}</button>
+      <span>{row ? batch ? batchText.position(activeRecord + 1, rows.length) : formatText(text.position, activeRecord + 1, rows.length) : text.empty}</span>
+      <button disabled={(!next && !pageNavigation?.next) || context.busy} onClick={() => next ? onSelect(next) : pageNavigation?.onNavigate(1)}>{batch ? batchText.next : !next && pageNavigation?.next ? pageNavigation.nextLabel ?? text.next : text.next}</button>
+      {!batch && <RecordBoundaryButton label={navigatorText.lastRecord} index={rows.length - 1} active={activeRecord}
+        disabled={recordSelectionBlocked} onSelect={selectIndex}/>}
+    </nav>
     {pageNavigation?.message && <p role="note" aria-label={text.pageNavigation} aria-live="polite">{pageNavigation.message}</p>}
     {!batch && <RecordNavigator state={navigator} columns={context.info?.columns.map(column => ({ key: column.name, name: column.name })) ?? []}
-      count={rows.length} active={row ? rows.indexOf(row) : -1} disabled={context.busy || context.stale || !!editor.pending}
+      count={rows.length} active={activeRecord} disabled={recordSelectionBlocked}
       value={(index, key) => recordValueSummary(ownCell(rows[index].data, key))}
-      onSelect={index => onSelect(rows[index].id)}/>}
+      onSelect={selectIndex}/>}
     <p aria-live="polite">{status}{editor.dirty ? ` · ${text.inputDirty}` : ''}</p>
     <div className="record-display-modes" role="group" aria-label={projectionText.mode}>{(['form', 'tree', 'json', 'input'] as const).map(mode => <button key={mode} aria-pressed={editor.displayMode === mode} disabled={context.busy || editor.pending || (mode==='input' && !!reason)} title={mode==='input' ? reason : mode==='tree' ? nodeText.treeHint : mode==='json' ? projectionText.readonly : undefined} onClick={() => editor.changeDisplayMode(mode)}>{mode==='input'?documentText.input:projectionText[mode]}</button>)}</div>
     {editor.displayMode !== 'json' && editor.displayMode !== 'input' && <label className="record-hidden-toggle"><input type="checkbox" checked={showHidden} onChange={event => setShowHidden(event.target.checked)}/>{text.showHidden}</label>}

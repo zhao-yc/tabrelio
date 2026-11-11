@@ -574,6 +574,34 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
       : await navigationMenuItem(tab, { name: recordForm.title, exact: true });
     await recordToggle.click();
     const record = tab.locator(postgresForm ? '.pg-record-view' : '.record-form-panel');
+    const first = record.getByRole('button', { name: recordNav.firstRecord, exact: true });
+    const last = record.getByRole('button', { name: recordNav.lastRecord, exact: true });
+    const position = (index: number) => record.getByText(postgresForm ? pgForm.position(index, 0, 3) : `本页第 ${index + 1} / 3 条`, { exact: true });
+    if (await first.isEnabled()) await first.click();
+    await expect(position(0)).toBeVisible();
+    await expect(first).toBeDisabled();
+    if (!postgresForm) {
+      const field = record.getByRole('region', { name: 'label', exact: true });
+      await field.getByRole('button', { name: recordForm.editField, exact: true }).click();
+      const input = field.getByRole('textbox', { name: 'label · ' + recordForm.value, exact: true });
+      await input.fill('仍留在原行的输入');
+      const confirm = page.getByRole('dialog', { name: recordForm.leaveTitle, exact: true });
+      await last.click();
+      await confirm.getByRole('button', { name: recordForm.stay, exact: true }).click();
+      await expect(position(0)).toBeVisible();
+      await expect(input).toHaveValue('仍留在原行的输入');
+      await last.click();
+      await confirm.getByRole('button', { name: recordForm.discardContinue, exact: true }).click();
+    } else await last.click();
+    await expect(position(2)).toBeVisible();
+    await expect(last).toBeDisabled();
+    if (!postgresForm) {
+      const [firstBox, lastBox] = await Promise.all([first.boundingBox(), last.boundingBox()]);
+      expect(firstBox && lastBox && Math.abs(firstBox.y - lastBox.y) < 2).toBe(true);
+    }
+    await page.screenshot({ path: info.outputPath('表单首末记录.png') });
+    await first.click();
+    await expect(position(0)).toBeVisible();
     await record.getByRole('button', { name: recordNav.title, exact: true }).click();
     const recordList = record.getByRole('region', { name: recordNav.title, exact: true });
     await recordList.getByText(recordNav.columns, { exact: true }).click();

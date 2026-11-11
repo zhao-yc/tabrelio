@@ -1,5 +1,7 @@
 import { queryReadonlyRecordZh as recordText } from '../../src/renderer/locales/queryReadonlyRecord.zh-CN';
 import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
+import { recordNavigatorZh as recordNav } from '../../src/renderer/locales/recordNavigator.zh-CN';
+import { actionMenuZh as menuText } from '../../src/renderer/locales/actionMenu.zh-CN';
 import { recordJsonNodeInputZh as nodeText } from '../../src/renderer/locales/recordJsonNodeInput.zh-CN';
 import { recordJsonStructureInputZh as structureText } from '../../src/renderer/locales/recordJsonStructureInput.zh-CN';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
@@ -100,7 +102,11 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     const before = await step(audit), originalDisk = disk();
     const region = () => query().getByRole('region', { name: detailText.region, exact: true });
     await step(() => query().getByRole('grid').getByText('9223372036854775807', { exact: true }).click());
-    await step(async () => (await navigationMenuItem(query(), { name: detailText.open, exact: true }, check)).click());
+    const more = query().getByRole('button', { name: menuText.resultMore, exact: true });
+    await step(() => more.scrollIntoViewIfNeeded());
+    await step(() => more.press('Enter'));
+    await step(() => page.getByRole('menuitem', { name: menuText.resultView, exact: true }).press('ArrowRight'));
+    await step(() => page.getByRole('menuitem', { name: detailText.open, exact: true }).press('Enter'));
     await step(() => expect(region()).toBeVisible());
     await step(() => region().getByRole('button', { name: recordText.tree, exact: true }).click());
     await step(() => region().getByRole('button', { name: recordText.parse('note'), exact: true }).click());
@@ -121,11 +127,13 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     expect(first.fields[2].value).toEqual({ kind: 'null' });
     expect(first.fields[3].value).toEqual({ kind: 'blob', encoding: 'base64', value: 'AP8=', bytes: 2 });
     expect(first.fields[4].value).toEqual({ kind: 'integer', value: '2' });
-    await step(() => region().getByRole('button', { name: detailText.next, exact: true }).click());
+    await step(() => expect(region().getByRole('button', { name: recordNav.firstResult, exact: true })).toBeDisabled());
+    await step(() => region().getByRole('button', { name: recordNav.lastResult, exact: true }).click());
     const second = JSON.parse(await step(() => box().inputValue()));
     expect(second.fields[0].value).toEqual({ kind: 'integer', value: '-9223372036854775808' });
     expect(second.fields[4].value).toEqual({ kind: 'text', value: '2' });
-    await step(() => region().getByRole('button', { name: detailText.previous, exact: true }).click());
+    await step(() => expect(region().getByRole('button', { name: recordNav.lastResult, exact: true })).toBeDisabled());
+    await step(() => region().getByRole('button', { name: recordNav.firstResult, exact: true }).click());
     expect(JSON.parse(await step(() => box().inputValue()))).toEqual(first);
     await info.attach(label + '查询完整记录JSON', { body: JSON.stringify({ first, second }), contentType: 'application/json' });
     await step(() => region().getByRole('button', { name: detailText.close, exact: true }).click());

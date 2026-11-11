@@ -4,6 +4,8 @@
 .record-form-panel header, .record-form-panel nav, .record-actions { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
 .record-form-panel h2 { font-size: 15px; margin: 0; }
 .record-form-panel nav span { text-align: center; }
+.record-form-panel .record-page-nav { flex-wrap: wrap; justify-content: center; }
+.record-form-panel .record-page-nav span { flex-basis: 100%; order: 1; }
 .record-context, .record-field h3, .record-field dd { overflow-wrap: anywhere; }
 .record-context { margin: 8px 0; }
 .record-hidden-toggle { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }

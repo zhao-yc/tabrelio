@@ -211,6 +211,12 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     };
     const recordList = () => details().getByRole('region', { name: recordNav.title, exact: true });
     await openDetail();
+    await step(() => expect(details().getByRole('button', { name: recordNav.firstRecord, exact: true })).toBeDisabled());
+    await step(() => details().getByRole('button', { name: recordNav.lastRecord, exact: true }).click());
+    await step(() => expect(details().getByLabel(detailText.sqliteRow, { exact: true })).toHaveValue('34'));
+    await step(() => expect(details().getByRole('button', { name: recordNav.lastRecord, exact: true })).toBeDisabled());
+    await step(() => details().getByRole('button', { name: recordNav.firstRecord, exact: true }).click());
+    await step(() => expect(details().getByLabel(detailText.sqliteRow, { exact: true })).toHaveValue('1'));
     await step(() => details().getByRole('button', { name: recordNav.title, exact: true }).click());
     await step(() => expect(recordList().getByRole('listitem')).toHaveCount(25));
     await step(() => recordList().getByRole('button', { name: recordNav.next, exact: true }).click());

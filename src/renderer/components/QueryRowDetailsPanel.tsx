@@ -7,7 +7,8 @@ import { SqliteReadonlyRecordView } from './SqliteReadonlyRecordView';
 import { useMemo, useState } from 'react';
 import { queryRowDetailPrefix, queryRowDetailValue, queryRowDetailsLimits, type QueryRowDetails, type QueryRowDetailsView } from '../queryRowDetails';
 import { queryRowDetailsZh as text } from '../locales/queryRowDetails.zh-CN';
-import { RecordNavigator, useRecordNavigator } from './RecordNavigator';
+import { RecordBoundaryButton, RecordNavigator, useRecordNavigator } from './RecordNavigator';
+import { recordNavigatorZh as navigatorText } from '../locales/recordNavigator.zh-CN';
 import { ownCell } from '../lib';
 import { recordValueSummary } from '../recordViews';
 import '../queryRowDetails.css';
@@ -49,6 +50,7 @@ function RowDetailsContent({ controller, view, isCurrent, onMove, onClose, sqlit
   const rowLabel = sqlitePage ? text.sqliteRow : text.row;
   const storage = sqlitePage?.storageTypes?.[view.index];
   const previousPage = view.index === 0 && pageNavigation?.previous, nextPage = view.index + 1 === view.binding.rows.length && pageNavigation?.next;
+  const selectIndex = (index: number) => { if (current()) onMove(view, index); };
   /** 页内只翻已加载行；边界用明确的跨页文案并交回原父页核对来源。 */
   function move(direction: -1 | 1): void {
     if (!current()) return;
@@ -67,8 +69,17 @@ function RowDetailsContent({ controller, view, isCurrent, onMove, onClose, sqlit
     <p title={pageNavigation ? text.sqlitePageNavigation : text.readonly}>{text.scope}</p>{pageNavigation && <p>{text.sqlitePageNavigation}</p>}{view.binding.truncated && <p className="warning-text">{text.truncated}</p>}
     {pageNavigation && <RecordNavigator state={navigator} columns={columns} count={view.binding.rows.length} active={view.index}
       value={(index, key) => recordValueSummary(ownCell(view.binding.rows[index], key))}
-      onSelect={index => { if (current()) onMove(view, index); }}/>}
-    <div className="query-row-details-actions"><button disabled={view.index === 0 && !previousPage} onClick={() => move(-1)}>{previousPage ? text.sqlitePreviousPage : text.previous}</button><button disabled={view.index + 1 >= view.binding.rows.length && !nextPage} onClick={() => move(1)}>{nextPage ? text.sqliteNextPage : text.next}</button><label>{rowLabel}<input aria-label={rowLabel} value={row} inputMode="numeric" maxLength={6} onChange={event => { if (current()) setRow(event.target.value); }}/></label><button disabled={!/^[1-9][0-9]{0,5}$/u.test(row) || Number(row) > view.binding.rows.length} onClick={() => { if (current() && /^[1-9][0-9]{0,5}$/u.test(row) && Number(row) <= view.binding.rows.length) onMove(view, Number(row) - 1); }}>{text.go}</button></div>
+      onSelect={selectIndex}/>}
+    <div className="query-row-details-actions">
+      <RecordBoundaryButton label={sqlitePage ? navigatorText.firstRecord : navigatorText.firstResult} index={0}
+        active={view.index} onSelect={selectIndex}/>
+      <button disabled={view.index === 0 && !previousPage} onClick={() => move(-1)}>{previousPage ? text.sqlitePreviousPage : text.previous}</button>
+      <button disabled={view.index + 1 >= view.binding.rows.length && !nextPage} onClick={() => move(1)}>{nextPage ? text.sqliteNextPage : text.next}</button>
+      <RecordBoundaryButton label={sqlitePage ? navigatorText.lastRecord : navigatorText.lastResult} index={view.binding.rows.length - 1}
+        active={view.index} onSelect={selectIndex}/>
+      <label>{rowLabel}<input aria-label={rowLabel} value={row} inputMode="numeric" maxLength={6} onChange={event => { if (current()) setRow(event.target.value); }}/></label>
+      <button disabled={!/^[1-9][0-9]{0,5}$/u.test(row) || Number(row) > view.binding.rows.length} onClick={() => { if (/^[1-9][0-9]{0,5}$/u.test(row) && Number(row) <= view.binding.rows.length) selectIndex(Number(row) - 1); }}>{text.go}</button>
+    </div>
     {(fullSqlitePage || !sqlitePage) && <div className="query-row-details-actions" role="group" aria-label={modeText.modes}>{(['fields','tree','json'] as const).map(value => <button key={value} aria-pressed={display === value} onClick={() => { if (current()) onMode(value); }}>{modeText[value]}</button>)}</div>}
     {display !== 'json' && <div className="query-row-details-search"><input type="search" aria-label={text.fieldSearch} placeholder={text.fieldSearch} value={filter} maxLength={256} onChange={event => changeFilter(event.target.value)}/><button disabled={!filter} onClick={() => changeFilter('')}>{text.clearFieldSearch}</button></div>}
     {display !== 'json' && !matching.length && <p role="status">{text.noFields}</p>}
