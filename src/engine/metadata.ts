@@ -1,4 +1,5 @@
-import type { DatabaseObject, ForeignKeyInfo, IndexInfo, ObjectKind, TableInfo } from '../shared/contracts';
+import type { DatabaseObject, DatabaseObjectDetails, ForeignKeyInfo, IndexInfo, ObjectKind, TableInfo } from '../shared/contracts';
+import { catalogUnsignedInteger } from '../shared/objectBrowser';
 import { execute, type ManagedConnection } from './connection';
 import { foreignKeyActions } from './references';
 import { mariaDefault, qualified, temporalDefault } from './sql';
@@ -32,11 +33,36 @@ export async function databases(connection: ManagedConnection): Promise<string[]
   return rows.map(row => Object.values(row)[0]);
 }
 
-/** 分别查询表、例程、触发器和事件；information_schema 自身按数据库权限过滤。 */
-export async function objects(connection: ManagedConnection, database: string): Promise<DatabaseObject[]> {
+type TableCatalogRow = { name: string; type: string; engine?: string | null; collation?: string | null;
+  rowCount?: string | null; dataBytes?: string | null; indexBytes?: string | null;
+  created?: string | null; updated?: string | null; comment?: string | null };
+const tableCatalogDetails = `, ENGINE AS engine, TABLE_COLLATION AS collation,
+  CAST(TABLE_ROWS AS CHAR) AS rowCount, CAST(DATA_LENGTH AS CHAR) AS dataBytes,
+  CAST(INDEX_LENGTH AS CHAR) AS indexBytes, CAST(CREATE_TIME AS CHAR) AS created,
+  CAST(UPDATE_TIME AS CHAR) AS updated, LEFT(TABLE_COMMENT, 512) AS comment`;
+
+function tableCatalogProperties(row: TableCatalogRow): DatabaseObjectDetails {
+  return {
+    storage: row.engine || undefined, collation: row.collation || undefined,
+    estimatedRows: catalogUnsignedInteger(row.rowCount),
+    dataBytes: catalogUnsignedInteger(row.dataBytes), indexBytes: catalogUnsignedInteger(row.indexBytes),
+    created: row.created || undefined, updated: row.updated || undefined, comment: row.comment || undefined,
+  };
+}
+
+/** 仅详情视图读取可能需要引擎访问的统计，沿用服务器目录缓存及权限，不读取用户表行。 */
+export async function objects(connection: ManagedConnection, database: string, tableDetails = false): Promise<DatabaseObject[]> {
   const result: DatabaseObject[] = [];
-  const tables = await execute<{ name: string; type: string }[]>(connection, 'SELECT TABLE_NAME AS name, TABLE_TYPE AS type FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME', [database]);
-  result.push(...tables.rows.map(row => ({ name: row.name, kind: row.type === 'VIEW' ? 'view' as const : 'table' as const })));
+  const tables = await execute<TableCatalogRow[]>(connection,
+    'SELECT TABLE_NAME AS name, TABLE_TYPE AS type' + (tableDetails ? tableCatalogDetails : '') +
+    ' FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?' +
+    (tableDetails ? ' AND CAST(TABLE_SCHEMA AS BINARY) = CAST(? AS BINARY)' : '') + ' ORDER BY TABLE_NAME' +
+    (tableDetails ? ' LIMIT 10001' : ''), tableDetails ? [database, database] : [database]);
+  if (tableDetails && tables.rows.length > 10000) throw Error('表和视图数量超过 10000，无法读取对象详情');
+  result.push(...tables.rows.map(row => ({
+    name: row.name, kind: row.type === 'VIEW' ? 'view' as const : 'table' as const,
+    ...(tableDetails && row.type === 'BASE TABLE' && { details: tableCatalogProperties(row) }),
+  })));
   const routines = await execute<{ name: string; type: string }[]>(connection, 'SELECT ROUTINE_NAME AS name, ROUTINE_TYPE AS type FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = ? ORDER BY ROUTINE_NAME', [database]);
   result.push(...routines.rows.map(row => ({ name: row.name, kind: row.type === 'PROCEDURE' ? 'procedure' as const : 'function' as const })));
   const triggers = await execute<{ name: string }[]>(connection, 'SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = ? ORDER BY TRIGGER_NAME', [database]);

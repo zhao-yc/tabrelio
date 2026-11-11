@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的对象浏览表分类可切换详情模式、配置属性列并按列排序。估算行数来自目录统计，未知值与零分开。详情模式保留搜索、打开及右键操作。W02 增加四种数据库的表详情视图。[Navicat 对象详情视图](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#detail-view)
+
 2026-11-12 源码增量。PostgreSQL 可编辑网格和记录表单按目录顺序选择标量 ENUM 与基于 ENUM 的域成员，区分空标签、文字 NULL 和 SQL NULL，沿用草稿预览与事务提交。D02、D04 增加枚举字段选值。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#edit-records-with-special-handling) · [PostgreSQL 枚举目录](https://www.postgresql.org/docs/18/catalog-pg-enum.html)
 
 2026-11-11 源码增量。MySQL 和 MariaDB 的表及视图支持从对象树直接打开本机命名方案。独立标签首屏应用保存的筛选、排序和可选列布局，工作区恢复时重新核对方案。D06 增加两种数据库的对象树方案入口。[Navicat 表方案手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#save-table-profile)

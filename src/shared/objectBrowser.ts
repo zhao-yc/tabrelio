@@ -2,6 +2,12 @@
 export const objectCategories = ['table', 'view', 'routine', 'trigger', 'event', 'sequence'] as const;
 export type ObjectCategory = typeof objectCategories[number];
 
+/** 统计精度不经过 JS number；拒绝负数、非整数及超出目录支持范围的值。 */
+export function catalogUnsignedInteger(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.length || value.length > 20 || /[^0-9]/.test(value)) return undefined;
+  return value.length === 1 || value[0] !== '0' ? value : undefined;
+}
+
 /** 原输入先核自有属性，避免解析器把继承的对象分类或数据库提升为有效定位。 */
 export function assertObjectBrowserTabs(settings: { tabs?: unknown }): void {
   if (!Array.isArray(settings.tabs)) throw Error('工作区标签列表必须是数组');

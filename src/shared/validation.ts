@@ -590,7 +590,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     z.object({kind:z.literal('objects'),connectionId:id,taskId:id,prefix:completionPrefix,database:completionName,objectKind:z.enum(['relation','function','procedure'])}).strict(),
     z.object({kind:z.literal('columns'),connectionId:id,taskId:id,prefix:completionPrefix,database:completionName,table:completionName,details:z.literal(true).optional()}).strict(),
   ]),
-  'metadata.objects': z.object({ connectionId: id, database: name }).strict(),
+  'metadata.objects': z.object({ connectionId: id, database: name, tableDetails: z.literal(true).optional() }).strict(),
   'metadata.table': z.object({ ...target, taskId: id.optional() }).strict(),
   'metadata.ddl': z.object({ connectionId: id, database: name, name, kind: z.enum(['table','view','procedure','function','trigger','event','index']) }).strict(),
   'metadata.schemaScript': networkSchemaScriptSchema,

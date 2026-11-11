@@ -9,7 +9,8 @@ import { parseSqliteTableDraft, type SqliteTableDraftDocument, type SqliteDraftR
 import { sqliteIncomingInputSchema, sqliteIncomingLimits, type SqliteIncomingInput, type SqliteIncomingOutput } from '../shared/sqliteIncoming';
 import { readSqliteIncoming } from './sqliteIncoming';
 import { randomUUID } from 'node:crypto';
-import type { CommandMap, DatabaseObject, SqliteConnectionProfile, TaskEvent } from '../shared/contracts';
+import type { CommandMap, DatabaseObject, DatabaseObjectDetails, SqliteConnectionProfile, TaskEvent } from '../shared/contracts';
+import { catalogUnsignedInteger } from '../shared/objectBrowser';
 import { SqliteDriverError, SqliteDriverSession } from '../engine/sqlite/session';
 import { sqliteDriverLimits, type SqliteProcessExit, type SqliteProcessTransport, type SqliteValue } from '../engine/sqlite/protocol';
 import { createSqliteProcess } from './sqliteProcess';
@@ -471,6 +472,45 @@ export class SqliteRuntime {
     const result = await driver.execute(sql, { parameters, maxRows, maxBytes: 16 * 1024 * 1024, onBatch: batch => { rows.push(...batch.rows); } });
     if (result.statements.some(statement => statement.truncated)) throw Error('SQLite元数据超过读取预算，请缩小范围');
     return rows;
+  }
+  /** 同一只读快照核对原目录、表存储方式及 ANALYZE 统计；部分索引的样本数不作为表行数。 */
+  private async objectCatalog(driver: SqliteDriverSession, tableDetails: boolean, check: () => void): Promise<DatabaseObject[]> {
+    if (tableDetails) await driver.execute('BEGIN');
+    try {
+      const rows = await this.rows(driver, "SELECT name,type FROM main.sqlite_schema WHERE type IN ('table','view','trigger') AND substr(name,1,7) <> 'sqlite_' ORDER BY type,name LIMIT 10001");
+      if (rows.length > 10000) throw Error('SQLite对象数量超过10000，请缩小范围');
+      const objects = rows.map(row => ({ name: row[0], kind: row[1] })) as DatabaseObject[];
+      if (!tableDetails) return objects;
+      check();
+      const tables = await this.rows(driver, `SELECT name,type,CAST(wr AS TEXT),CAST(strict AS TEXT)
+        FROM pragma_table_list WHERE schema='main' AND type IN ('table','virtual','shadow')
+          AND substr(name,1,7)<>'sqlite_' LIMIT 10001`);
+      if (tables.length > 10000) throw Error('SQLite 表数量超过 10000，无法读取对象详情');
+      const properties = new Map<string, DatabaseObjectDetails>();
+      for (const [name, type, withoutRowid, strict] of tables) {
+        if (typeof name !== 'string') continue;
+        const relation = type === 'virtual' || type === 'shadow' ? type : withoutRowid === '1' ? 'withoutRowid' : 'rowid';
+        properties.set(name, { relation, strict: strict === '1' });
+      }
+      check();
+      if ((await this.rows(driver, "SELECT 1 FROM main.sqlite_schema WHERE name='sqlite_stat1' AND type='table'")).length) {
+        check();
+        const statistics = await this.rows(driver, `SELECT s.tbl,substr(s.stat,1,64) FROM main.sqlite_stat1 s
+          WHERE s.idx IS NULL OR s.idx=s.tbl OR EXISTS (
+            SELECT 1 FROM pragma_index_list(s.tbl,'main') i WHERE i.name=s.idx COLLATE BINARY AND i.partial=0
+          ) ORDER BY s.tbl, CASE WHEN s.idx IS NULL OR s.idx=s.tbl THEN 0 ELSE 1 END, s.idx LIMIT 10001`);
+        if (statistics.length > 10000) throw Error('SQLite 目录统计超过读取预算');
+        for (const [name, stat] of statistics) {
+          if (typeof name !== 'string' || typeof stat !== 'string') continue;
+          const details = properties.get(name);
+          if (details && (details.relation === 'rowid' || details.relation === 'withoutRowid')) {
+            details.estimatedRows ??= catalogUnsignedInteger(stat.split(' ', 1)[0]);
+          }
+        }
+      }
+      check();
+      return objects.map(object => object.kind === 'table' ? { ...object, details: properties.get(object.name) } : object);
+    } finally { if (tableDetails && driver.isUsable && driver.transaction) await driver.execute('ROLLBACK'); }
   }
   /** 会话关闭屏障与连接关闭屏障均先检查，状态查询仍可显示失效事实。 */
   private session(id: string, allowClosing = false): Session {
@@ -1554,11 +1594,7 @@ export class SqliteRuntime {
       case 'sqlite.tableImport.apply': return this.tableImportApply(input);
       case 'sqlite.tableImport.release': return this.imports.release(sqliteTableImportReleaseSchema.parse(input));
       case 'metadata.databases': return this.metadata(input, async () => ['main']);
-      case 'metadata.objects': return this.metadata(input, async driver => {
-        const rows = await this.rows(driver, "SELECT name,type FROM main.sqlite_schema WHERE type IN ('table','view','trigger') AND substr(name,1,7) <> 'sqlite_' ORDER BY type,name LIMIT 10001");
-        if (rows.length > 10000) throw Error('SQLite对象数量超过10000，请缩小范围');
-        return rows.map(row => ({ name: row[0], kind: row[1] })) as DatabaseObject[];
-      });
+      case 'metadata.objects': return this.metadata(input, (driver, check) => this.objectCatalog(driver, input.tableDetails === true, check));
       case 'metadata.ddl': return this.metadata(input, async (driver, check) => {
         if (typeof input.name !== 'string' || !input.name || /^sqlite_/i.test(input.name) ||
             !['table', 'view', 'trigger', 'index'].includes(input.kind)) throw Error('SQLite对象定义类型或名称无效');

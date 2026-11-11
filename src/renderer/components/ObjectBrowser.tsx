@@ -1,8 +1,8 @@
 import { postgresSequenceZh } from '../locales/postgresSequence.zh-CN';
 import { postgresRoutineZh } from '../locales/postgresRoutine.zh-CN';
 import { sqliteObjectsZh } from '../locales/sqliteObjects.zh-CN';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Database, RefreshCw, Table2 } from 'lucide-react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Columns3, Database, RefreshCw, Table2 } from 'lucide-react';
 import type { ConnectionProfile, DatabaseObject } from '../../shared/contracts';
 import { objectCategories, type ObjectCategory } from '../../shared/objectBrowser';
 import { useWorkspace, type WorkspaceTab } from '../store';
@@ -14,6 +14,7 @@ import '../navigation.css';
 import { WorkbookExportDialog } from './WorkbookExportDialog';
 import { sqliteWorkbookExportZh } from '../locales/workbookExport.zh-CN';
 import { importNewTableZh } from '../locales/importNewTable.zh-CN';
+import { compareBrowserObjects, defaultObjectProperty, numericObjectProperty, objectProperties, objectPropertyText, objectPropertyWidths, type ObjectProperty } from '../objectBrowserDetails';
 
 interface Props { tab: WorkspaceTab; active: boolean; refreshVersion: number; onOpen(object: DatabaseObject): void; onNewTable(): void; onNewSequence?(): void; onNewRoutine?(): void; onSqliteCreate?(kind: 'view' | 'trigger'): void; onImportNewTable?(): void; actions(object: DatabaseObject, refresh: () => void): ReactNode; }
 /** 目录标签只读取元数据，固定行高虚拟滚动，不取得查询会话或自动执行用户SQL。 */
@@ -21,7 +22,10 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
   const workspace = useWorkspace();
   const profile = workspace.connections.find(item => item.id === tab.connectionId), version = workspace.connectionVersions[tab.connectionId] ?? 0;
   const [objects, setObjects] = useState<DatabaseObject[]>([]), [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const [search, setSearch] = useState(''), [descending, setDescending] = useState(false), [refresh, setRefresh] = useState(0);
+  const [search, setSearch] = useState(''), [refresh, setRefresh] = useState(0);
+  const [detailMode, setDetailMode] = useState(false), [columnPicker, setColumnPicker] = useState(false);
+  const [visibility, setVisibility] = useState<Partial<Record<ObjectProperty, boolean>>>({});
+  const [sort, setSort] = useState<{ property: 'name' | ObjectProperty; descending: boolean }>({ property: 'name', descending: false });
   const [scrollTop, setScrollTop] = useState(0), [height, setHeight] = useState(400), viewport = useRef<HTMLDivElement>(null);
   const generation = useRef<object>({}), latest = useRef({ tab, active, profile, version }); latest.current = { tab, active, profile, version };
   const pageContext = useRef<{ tab: WorkspaceTab; profile: ConnectionProfile | undefined; version: number; active: boolean; valid: boolean } | undefined>(undefined);
@@ -30,6 +34,15 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
   const catalog = useRef<{ owner: object; objects: DatabaseObject[]; profile: ConnectionProfile; version: number; connectionId: string; database: string } | undefined>(undefined);
   const [workbook, setWorkbook] = useState<{ objects: DatabaseObject[]; current(): boolean }>();
   const category = tab.objectCategory ?? 'table';
+  const tableDetails = detailMode && category === 'table' && !!profile;
+  const available = tableDetails ? objectProperties(profile.dialect) : [];
+  const visible = available.filter(property => visibility[property] ?? defaultObjectProperty(property));
+  const { property: sortProperty, descending } = sort.property === 'name' || visible.includes(sort.property)
+    ? sort : { property: 'name' as const, descending: false };
+  const detailLayout = visible.length ? {
+    '--object-columns': ['minmax(180px,min(32vw,400px))', '110px', ...visible.map(property => objectPropertyWidths[property] + 'px')].join(' '),
+    minWidth: 180 + 110 + 24 + visible.reduce((width, property) => width + objectPropertyWidths[property], 0) + (visible.length + 1) * 8,
+  } as CSSProperties : undefined;
   /** 页头动作也绑定原页面代次，目录读取失败不妨碍用户明确新建表。 */
   const contextCurrent = (requireNoDialog = true) => {
     const now = useWorkspace.getState();
@@ -61,22 +74,36 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
       generation.current = {}; catalog.current = undefined; setObjects([]); setBusy(false); setError(text.stale);
     });
     setBusy(true); setObjects([]); setError('');
-    void invoke('connections.open', { id: connectionId }).then(() => current() ? invoke('metadata.objects', { connectionId, database }) : undefined)
+    void invoke('connections.open', { id: connectionId }).then(() => current() ? invoke('metadata.objects', {
+      connectionId, database, ...(tableDetails ? { tableDetails: true } : {}),
+    }) : undefined)
       .then(next => { if (next && current()) { catalog.current = { owner, objects: next, profile, version, connectionId, database }; setObjects(next); } }, reason => { if (current()) setError(errorMessage(reason)); })
       .finally(() => { if (current()) setBusy(false); });
     return () => { unsubscribe(); if (generation.current === owner) generation.current = {}; };
-  }, [active, profile, version, tab, refreshVersion, refresh]);
+  }, [active, profile, version, tab, refreshVersion, refresh, tableDetails]);
   useLayoutEffect(() => {
     const node = viewport.current; if (!node) return;
     const observer = new ResizeObserver(() => setHeight(node.clientHeight)); observer.observe(node); setHeight(node.clientHeight);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => { if (viewport.current) viewport.current.scrollTop = 0; setScrollTop(0); }, [category, search, descending]);
+  useEffect(() => { if (viewport.current) viewport.current.scrollTop = 0; setScrollTop(0); }, [category, search, sortProperty, descending]);
+  useEffect(() => { setColumnPicker(false); }, [active, tab]);
   const filtered = useMemo(() => objects.filter(object => (category === 'routine' ? object.kind === 'procedure' || object.kind === 'function' : object.kind === category)
     && object.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
-    .sort((a, b) => (descending ? -1 : 1) * (a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind))), [objects, category, search, descending]);
+    .sort((a, b) => compareBrowserObjects(a, b, sortProperty, descending)), [objects, category, search, sortProperty, descending]);
   const start = Math.max(0, Math.floor(scrollTop / 31) - 5), count = Math.ceil(height / 31) + 10;
   const reload = () => { generation.current = {}; setRefresh(value => value + 1); };
+  function changeSort(property: 'name' | ObjectProperty) {
+    if (contextCurrent()) setSort({ property, descending: sortProperty === property && !descending });
+  }
+  function heading(property: 'name' | ObjectProperty) {
+    const label = property === 'name' ? text.name : text.objectProperties[property];
+    const selected = sortProperty === property;
+    const hint = property in text.propertyHints ? text.propertyHints[property as keyof typeof text.propertyHints] : undefined;
+    return <button key={property} aria-label={label} aria-description={selected ? (descending ? text.sortDescending : text.sortAscending) : undefined}
+      aria-pressed={selected} title={hint} className={property !== 'name' && numericObjectProperty(property) ? 'object-number' : undefined}
+      onClick={() => changeSort(property)}>{label}{selected && <span aria-hidden="true">{descending ? '↓' : '↑'}</span>}</button>;
+  }
   /** 刷新意图在React提交前已撤销旧目录；原行菜单不得趁此窗口使用旧动作。 */
   const actionCurrent = () => {
     const proof = catalog.current, now = useWorkspace.getState(), current = latest.current;
@@ -102,17 +129,43 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
       {profile?.dialect === 'sqlite' && tab.database === 'main' && (category === 'view' || category === 'trigger') && onSqliteCreate && <button aria-label={category === 'view' ? sqliteObjectsZh.createView : sqliteObjectsZh.createTrigger} disabled={busy} onClick={() => { if (contextCurrent() && (category === 'view' || category === 'trigger')) onSqliteCreate(category); }}>{category === 'view' ? sqliteObjectsZh.createView : sqliteObjectsZh.createTrigger}</button>}{category === 'table' && <button disabled={busy || !profile || profile.dialect === 'sqlite' && tab.database !== 'main'} onClick={() => { if (contextCurrent() && (profile?.dialect !== 'sqlite' || tab.database === 'main')) onNewTable(); }}>{text.newTable}</button>}{category === 'table' && onImportNewTable && <button disabled={busy || !profile || profile.dialect === 'sqlite' && (tab.database !== 'main' || profile.sqlite.readOnly)} onClick={() => { if (contextCurrent() && (profile?.dialect !== 'sqlite' || tab.database === 'main' && !profile.sqlite.readOnly)) onImportNewTable(); }}>{importNewTableZh.title}</button>}<button disabled={busy || !profile} onClick={() => { if (contextCurrent()) reload(); }}><RefreshCw size={13}/>{text.refresh}</button></div>
     <div className="object-browser-filter"><select aria-label={text.type} value={category} onChange={event => { if (contextCurrent()) useWorkspace.getState().updateTab(tab.id, { objectCategory: event.target.value as ObjectCategory }); }}>
       {objectCategories.filter(kind => kind === 'sequence' ? profile?.dialect === 'postgresql' : profile?.dialect !== 'sqlite' || kind === 'table' || kind === 'view' || kind === 'trigger').map(kind => <option key={kind} value={kind}>{text.categories[kind]}</option>)}</select>
-      <input aria-label={text.search} placeholder={text.search} value={search} onChange={event => setSearch(event.target.value)}/>{busy && <Spinner/>}</div>
-    <ErrorBox message={error}/><div className="object-browser-columns"><button onClick={() => setDescending(value => !value)}>{text.name} {descending ? '↓' : '↑'}</button><span className="object-browser-kind">{text.type}</span></div>
+      <input aria-label={text.search} placeholder={text.search} value={search} onChange={event => setSearch(event.target.value)}/>
+      {category === 'table' && profile && <button type="button" aria-pressed={tableDetails} onClick={() => {
+        if (!contextCurrent()) return;
+        generation.current = {};
+        setDetailMode(!tableDetails);
+      }}><Columns3 size={13}/>{text.tableDetails}</button>}
+      {tableDetails && <button type="button" onClick={() => { if (contextCurrent()) setColumnPicker(true); }}>{text.objectColumns}</button>}
+      {busy && <Spinner/>}</div>
+    <ErrorBox message={error}/>
     <div className="object-browser-grid objects-browser-scroll" ref={viewport} onScroll={event => setScrollTop(event.currentTarget.scrollTop)}>
+      <div style={detailLayout}>
+      <div className="object-browser-columns">{heading('name')}<span className="object-browser-kind">{text.type}</span>{visible.map(heading)}</div>
       {!filtered.length && !busy ? <div className="object-browser-empty">{text.noObjects}</div> : <div style={{ height: filtered.length * 31, position: 'relative' }}>
         <div style={{ position: 'absolute', top: start * 31, left: 0, right: 0 }}>{filtered.slice(start, start + count).map(object => {
           const target = { connectionId: tab.connectionId, database: tab.database!, kind: object.kind, name: object.name };
-          return <SidebarTreeRow key={JSON.stringify([object.kind, object.name])} target={target} label={object.name} className="object-list-row" version={[objects, busy, search, category, descending, version, refreshVersion]} isCurrent={actionCurrent}
+          return <SidebarTreeRow key={JSON.stringify([object.kind, object.name])} target={target} label={object.name} className="object-list-row" version={[objects, busy, search, category, tableDetails, sortProperty, descending, visibility, version, refreshVersion]} isCurrent={actionCurrent}
             actions={actions(object, reload)}><button className="tree-label" onDoubleClick={() => { if (actionCurrent()) onOpen(object); }}>
-              <Table2 size={14}/><span>{object.name}</span><span className="grow"/><small className="object-browser-kind">{kindLabels[object.kind]}</small></button></SidebarTreeRow>;
+              <span className="object-list-name"><Table2 size={14}/><span>{object.name}</span></span>
+              <small className="object-browser-kind">{kindLabels[object.kind]}</small>
+              {visible.map(property => {
+                const value = objectPropertyText(object, property);
+                return <small key={property} className={numericObjectProperty(property) ? 'object-number' : undefined} title={value}>{value}</small>;
+              })}</button></SidebarTreeRow>;
         })}</div></div>}
+      </div>
     </div><div className="object-browser-footer">{text.records(filtered.length, objects.length)}</div>
+    {columnPicker && active && tableDetails && <Modal title={text.objectColumns} onClose={() => setColumnPicker(false)}>
+      <div className="modal-content object-column-picker">{available.map(property => <label key={property}>
+        <input type="checkbox" checked={visible.includes(property)} onChange={event => {
+          if (!contextCurrent(false)) return;
+          const checked = event.target.checked;
+          setVisibility(previous => ({ ...previous, [property]: checked }));
+          if (!checked && sort.property === property) setSort({ property: 'name', descending: false });
+        }}/>{text.objectProperties[property]}
+      </label>)}</div>
+      <footer className="modal-footer"><span className="grow"/><button className="primary" onClick={() => setColumnPicker(false)}>{text.objectColumnsDone}</button></footer>
+    </Modal>}
     {workbook && workbookDialect && <WorkbookExportDialog connectionId={tab.connectionId} database={tab.database!}
       dialect={workbookDialect} tabId={tab.id} objects={workbook.objects}
       current={workbook.current} onClose={() => setWorkbook(undefined)}/>}

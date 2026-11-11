@@ -92,7 +92,21 @@ export interface NetworkConnectionStatus { version: string; dialect: 'mysql' | '
 export type ConnectionStatus = NetworkConnectionStatus | { version: string; dialect: 'postgresql'; connectionId?: number } | { version: string; dialect: 'sqlite' };
 /** 内部配置检查仅由主进程调用，不加入渲染进程可访问的 CommandMap/参数白名单。 */
 export type EngineCommand = Command | '__connections.prepareSave' | 'postgres.table.draft.capture' | 'postgres.table.draft.restoreVerified' | 'postgres.table.importKeys';
-export interface DatabaseObject { name: string; kind: ObjectKind; }
+export interface DatabaseObjectDetails {
+  storage?: string;
+  schema?: string;
+  relation?: 'ordinary' | 'partition' | 'partitioned' | 'foreign' | 'rowid' | 'withoutRowid' | 'virtual' | 'shadow';
+  strict?: boolean;
+  collation?: string;
+  /** 目录统计可能滞后；数值用十进制字符串保留全部位数，缺失值保持未定义。 */
+  estimatedRows?: string;
+  dataBytes?: string;
+  indexBytes?: string;
+  created?: string;
+  updated?: string;
+  comment?: string;
+}
+export interface DatabaseObject { name: string; kind: ObjectKind; details?: DatabaseObjectDetails; }
 export interface ColumnEnumeration { kind: 'ENUM' | 'SET'; values: readonly string[]; }
 export interface ColumnInfo { enumeration?: ColumnEnumeration; name: string; type: string; nullable: boolean; defaultValue: string | null; extra: string; comment: string; generated: boolean; /** 来自该列目录，文本容量不能套用整表默认字符集。 */ characterSet?: string | null; }
 export interface IndexInfo { name: string; unique: boolean; columns: string[]; }
@@ -305,7 +319,7 @@ export interface CommandMap {
   'search.catalogue':{input:DataSearchCatalogueInput;output:DataSearchCataloguePage};
   'search.dataNext':{input:DataSearchNext;output:DataSearchReply};
   'search.dataRelease':{input:{connectionId:string;taskId:string};output:void};
-  'metadata.objects': { input: { connectionId: string; database: string }; output: DatabaseObject[] };
+  'metadata.objects': { input: { connectionId: string; database: string; tableDetails?: true }; output: DatabaseObject[] };
   'metadata.table': { input: { connectionId: string; database: string; table: string; taskId?: string }; output: TableInfo };
   'metadata.ddl': { input: { connectionId: string; database: string; name: string; kind: ObjectKind | 'index' }; output: string };
   'metadata.schemaScript': { input: import('./networkSchemaScript').NetworkSchemaScriptInput; output: import('./networkSchemaScript').NetworkSchemaScriptOutput };

@@ -17,6 +17,7 @@ import type {
   TaskEvent,
 } from '../../shared/contracts';
 import { connectionTransportChanged } from '../../shared/connectionProfile';
+import { catalogUnsignedInteger } from '../../shared/objectBrowser';
 import { queryFailureMessage } from '../../shared/queryFailure';
 import type { QueryParameter } from '../../shared/queryParameters';
 import { postgresParameterBindings } from './parameters';
@@ -1930,19 +1931,38 @@ export class PostgresEngine {
         );
       case 'metadata.objects':
         return this.use(this.profile(input.connectionId), input.database, async m => {
+          const tableDetails = input.tableDetails === true;
+          // 分区父表可有行数估算，但无本地文件。空间读取只针对可读的本地普通表和叶分区。
+          const readable = "c.relkind IN ('r','p') AND c.relpersistence IN ('p','u') AND pg_catalog.has_table_privilege(c.oid,'SELECT')";
+          const local = `c.relkind = 'r' AND ${readable}`;
+          const properties = `, c.relispartition::text,
+            CASE WHEN ${readable} AND c.reltuples >= 0 THEN round(c.reltuples::double precision)::numeric::text END,
+            CASE WHEN ${local} THEN pg_catalog.pg_table_size(c.oid)::text END,
+            CASE WHEN ${local} THEN pg_catalog.pg_indexes_size(c.oid)::text END,
+            CASE WHEN c.relkind IN ('r','p','f') THEN
+              left(pg_catalog.obj_description(c.oid,'pg_class'), 512) END`;
           const result = await m.query(
-              `SELECT n.nspname,c.relname,c.relkind FROM pg_catalog.pg_class c
+              `SELECT n.nspname,c.relname,c.relkind${tableDetails ? properties : ''} FROM pg_catalog.pg_class c
                JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
                WHERE (CASE WHEN c.relkind = 'S' THEN c.relpersistence IN ('p','u') AND n.nspname !~ '^pg_'
                     AND (${postgresSequenceVisibleSql}) ELSE c.relkind IN ('r','p','v','m','f') END)
                  AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'
-                 AND has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname`,
+                 AND has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname${tableDetails ? ' LIMIT 10001' : ''}`,
               undefined,
-              { rows: 10000, bytes: 4 * 1024 * 1024 },
+              tableDetails ? { rows: 10001, bytes: 24 * 1024 * 1024 } : { rows: 10000, bytes: 4 * 1024 * 1024 },
           );
+          if (tableDetails && (result.truncated || result.rows.length > 10000)) throw Error('PostgreSQL 对象数量或详情超过读取预算');
           const relations: DatabaseObject[] = result.rows.map(r => ({
             name: postgresIdentifier(String(r.c0)) + '.' + postgresIdentifier(String(r.c1)),
             kind: r.c2 === 'S' ? 'sequence' : ['v', 'm'].includes(String(r.c2)) ? 'view' : 'table',
+            ...(tableDetails && (r.c2 === 'r' || r.c2 === 'p' || r.c2 === 'f') && { details: {
+              schema: String(r.c0),
+              relation: r.c2 === 'p' ? 'partitioned' : r.c2 === 'f' ? 'foreign' : r.c3 === 'true' ? 'partition' : 'ordinary',
+              estimatedRows: catalogUnsignedInteger(r.c4),
+              dataBytes: catalogUnsignedInteger(r.c5),
+              indexBytes: catalogUnsignedInteger(r.c6),
+              comment: typeof r.c7 === 'string' && r.c7 ? r.c7 : undefined,
+            } }),
           }));
           return [...relations, ...await readPostgresRoutineCatalog(m)];
         });

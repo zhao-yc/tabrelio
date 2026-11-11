@@ -19,16 +19,27 @@
 .object-browser{display:flex;flex-direction:column;min-height:0;height:100%}
 .object-browser-header,.object-browser-filter{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line);min-width:0}
 .object-browser-header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.object-browser-filter{flex-wrap:wrap}
 .object-browser-filter input{width:240px;max-width:45%;min-width:100px}
+.object-browser-filter button[aria-pressed=true]{color:var(--accent);border-color:var(--accent)}
 .object-browser-filter select{width:auto;max-width:150px}
 .object-browser-grid{position:relative;flex:1;min-height:0;overflow:auto}
 .object-browser-columns,.object-list-row{display:flex;align-items:center;min-width:0}
-.object-browser-columns{height:32px;padding:0 12px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted);background:var(--surface-2)}
-.object-browser-columns button{flex:1;text-align:left;justify-content:flex-start;min-height:26px;background:transparent;border:0}
-.object-browser-kind{width:110px;flex:0 0 110px;color:var(--muted);font-size:11px}
+.object-browser-columns,.object-list-row>.tree-label{display:grid;grid-template-columns:var(--object-columns,minmax(0,1fr) 110px);align-items:center;gap:8px}
+.object-browser-columns{position:sticky;top:0;z-index:1;height:32px;padding:0 12px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted);background:var(--surface-2)}
+.object-browser-columns button{text-align:left;justify-content:flex-start;min-height:26px;background:transparent;border:0;padding:0 7px;white-space:nowrap}
+.object-browser-columns button[aria-pressed=true]{color:var(--text)}
+.object-browser-kind{color:var(--muted);font-size:11px}
 .object-list-row{padding:0 12px;border-bottom:1px solid var(--line-soft)}
-.object-list-row .tree-label{padding-left:7px;min-width:0;flex:1}
-.object-list-row .tree-label span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.object-list-row>.tree-label{padding:0;min-width:0;flex:1}
+.object-list-name{display:flex;align-items:center;gap:8px;min-width:0;padding-left:7px}
+.object-list-name svg{flex-shrink:0}
+.object-list-name>span,.object-list-row .tree-label small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.object-browser-columns button.object-number{justify-content:flex-end}
+.object-list-row .tree-label .object-number{text-align:right;padding-right:7px;font-variant-numeric:tabular-nums}
+.object-column-picker{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px}
+.object-column-picker label{display:flex;align-items:center;gap:7px}
+.object-column-picker input{width:auto}
 .object-browser-footer{height:28px;display:flex;align-items:center;padding:0 14px;color:var(--muted);font-size:11px;border-top:1px solid var(--line)}
 .object-browser-empty{padding:30px;text-align:center;color:var(--muted)}
 .navigation-context{align-self:center;min-width:0;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--muted)}

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { assertObjectBrowserTabs, objectCategories, readObjectBrowserTabs } from '../../src/shared/objectBrowser';
 import { validateCommand } from '../../src/shared/validation';
 import { defaultSettings } from '../../src/main/storage';
+import { compareBrowserObjects, objectPropertyText } from '../../src/renderer/objectBrowserDetails';
+import type { DatabaseObject } from '../../src/shared/contracts';
 
 const browser = { id: 'objects', kind: 'objects', title: '对象', connectionId: 'c', database: '库.名`/🚢', objectCategory: 'table' };
 
@@ -46,5 +48,27 @@ describe('对象浏览标签设置合同', () => {
     const restored = readObjectBrowserTabs(input);
     expect(restored).toEqual([query, table, good]);
     expect(restored[0]).toBe(query); expect(restored[2]).toBe(good); expect(input).toEqual([query, bad, table, good]);
+  });
+});
+
+describe('对象详情读取与精确排序', () => {
+  it('原调用仍合法，只有显式 true 才申请读取表详情', () => {
+    const target = { connectionId: 'c', database: 'main' };
+    expect(validateCommand('metadata.objects', target)).toEqual(target);
+    expect(validateCommand('metadata.objects', { ...target, tableDetails: true })).toEqual({ ...target, tableDetails: true });
+    for (const tableDetails of [false, 1, 'true', null]) {
+      expect(() => validateCommand('metadata.objects', { ...target, tableDetails })).toThrow();
+    }
+  });
+
+  it('按全部位数比较，零和未知分别显示，未知在两种方向均排在最后', () => {
+    const make = (name: string, estimatedRows?: string): DatabaseObject => ({ name, kind: 'table', details: { estimatedRows } });
+    const unknown = make('A'), zero = make('B', '0'), lower = make('Z', '9007199254740992'), higher = make('C', '9007199254740993');
+    const objects = [higher, unknown, zero, lower];
+    expect([...objects].sort((a, b) => compareBrowserObjects(a, b, 'estimatedRows', false))).toEqual([zero, lower, higher, unknown]);
+    expect([...objects].sort((a, b) => compareBrowserObjects(a, b, 'estimatedRows', true))).toEqual([higher, lower, zero, unknown]);
+    expect(objectPropertyText(higher, 'estimatedRows')).toBe('≈ 9,007,199,254,740,993');
+    expect(objectPropertyText(zero, 'estimatedRows')).toBe('≈ 0');
+    expect(objectPropertyText(unknown, 'estimatedRows')).toBe('—');
   });
 });
