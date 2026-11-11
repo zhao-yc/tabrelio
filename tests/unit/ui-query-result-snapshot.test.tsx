@@ -1,6 +1,7 @@
 import { installNavigationMenuRamPort, navigationMenuRamButton, navigationMenuRamInput, navigationMenuRamCheckbox } from '../helpers/navigationMenuRamPort';
 import { queryWarningsZh } from '../../src/renderer/locales/queryWarnings.zh-CN';
 import { queryContinueOnErrorZh } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
+import { mysqlQueryStatusZh } from '../../src/renderer/locales/mysqlQueryStatus.zh-CN';
 let restoreNavigationMenuPort: () => void = () => {};
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
@@ -94,7 +95,14 @@ it('会话菜单按需展示原执行checkbox，保留受控值、风险说明�
   await act(async () => change(warnings!, true)); expect(warnings!.checked).toBe(true); expect(document.body.textContent).toContain(queryWarningsZh.hint);
   const continuation = navigationMenuRamCheckbox(section(), queryContinueOnErrorZh.option); expect(continuation).toBeDefined(); expect(continuation!.parentNode!.getAttribute('title')).toBe(queryContinueOnErrorZh.hint);
   await act(async () => change(continuation!, true)); expect(continuation!.checked).toBe(true);
-  warnings!.focus(); await act(async () => warnings!.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'ArrowDown' }))); expect(document.activeElement).toBe(continuation);
+  const status = navigationMenuRamCheckbox(section(), mysqlQueryStatusZh.collect);
+  expect(status).toBeDefined(); expect(status!.checked).toBe(false);
+  warnings!.focus();
+  await act(async () => warnings!.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'ArrowDown' })));
+  expect(document.activeElement).toBe(status);
+  await act(async () => status!.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'ArrowDown' })));
+  expect(document.activeElement).toBe(continuation);
+  await act(async () => change(status!, true)); expect(status!.checked).toBe(true);
   expect(store.getState().settings.tabs).toEqual(before); expect(renders.grids).toHaveLength(0);
 });
 it('保存已返回当前结果或打开的固定结果，保来源SQL/列/精度/NULL/字节且不重跑', async () => {

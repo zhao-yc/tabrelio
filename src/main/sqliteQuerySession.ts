@@ -88,6 +88,7 @@ export class SqliteQuerySession {
     this.available(input.sessionId);
     if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || typeof input.sql !== 'string' || Buffer.byteLength(input.sql) > sqliteDriverLimits.sqlBytes || !Number.isSafeInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > sqliteDriverLimits.rows) throw Error('SQLite查询请求或结果预算无效');
     if (input.collectWarnings === true) throw Error('SQLite 不支持 MySQL 警告采集，本次未发送 SQL');
+    if (input.collectStatus === true) throw Error('SQLite 不支持 MySQL 协议流量统计，本次未发送 SQL');
     const selected = this.locateCurrent(input);
     const continueRanges = !selected && input.continueOnError === true ? sqliteStatementRanges(input.sql) : undefined;
     return this.run(input, selected?.sql ?? input.sql, { single: !!selected, continueRanges,
@@ -133,6 +134,7 @@ export class SqliteQuerySession {
     this.available(input.sessionId);
     if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || !Number.isSafeInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > 100000) throw Error('SQLite参数查询请求或结果预算无效');
     if (input.collectWarnings === true) throw Error('SQLite 参数查询不支持 MySQL 警告采集，本次未发送 SQL');
+    if (input.collectStatus === true) throw Error('SQLite 参数查询不支持 MySQL 协议流量统计，本次未发送 SQL');
     const selected = this.locateCurrent(input);
     const sql = selected?.sql ?? input.sql;
     const names = sqliteNamedParameterNames(sql), values = validateSqliteQueryParameters(input.parameters);

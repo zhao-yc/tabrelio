@@ -99,6 +99,20 @@ function engineFixture() {
 }
 
 describe('显式警告采集Engine集成', () => {
+  it('执行状态只采集用户命令，不发送额外SQL，并在真实命令终态释放观测', async () => {
+    const f = engineFixture();
+    let released = 0;
+    Object.assign(f.native, { dbarkStartQueryTraffic: () => () => { released++; return { sent: 19, received: 117 }; } });
+    const result = await f.run('SELECT one; SELECT two;', { collectStatus: true });
+    expect(result.mysqlQueryStatus?.entries).toEqual([1, 2].map(ordinal => ({
+      ordinal, status: 'completed', elapsedMs: expect.any(Number), traffic: { sent: 19, received: 117 },
+    })));
+    expect(released).toBe(2);
+    expect(f.diagnostics).toEqual([]);
+    expect(f.sent).toEqual(['SELECT one', 'SELECT two']);
+    expect(driver.connect).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, false, 1, 'true'])('非true值%j不读取任何附加SQL，仍被动映射SELECT EOF计数', async collectWarnings => {
     const f = engineFixture(), output = await f.run('SELECT one;', { collectWarnings });
     expect(output.warnings).toBeUndefined(); expect(output.results[0].warningCount).toBe(1); expect(f.diagnostics).toEqual([]);

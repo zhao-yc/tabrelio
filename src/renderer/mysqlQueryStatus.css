@@ -1,0 +1,6 @@
+.mysql-query-status { flex-shrink: 0; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.mysql-query-status summary { cursor: pointer; }
+.mysql-query-status-body { max-height: min(28vh, 240px); overflow: auto; }
+.mysql-query-status-body p { margin: 6px 0; }
+.mysql-query-status-body table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.mysql-query-status-body th, .mysql-query-status-body td { border-bottom: 1px solid var(--line); text-align: start; padding: 4px 8px; }

@@ -1,8 +1,36 @@
 diff --git a/lib/base/connection.js b/lib/base/connection.js
-index 4a02617f76648ebabfda755c5850b98a3d47bf25..0004e33730669b23ea63b10f95be8676d13cab78 100644
+index 4a02617f76648ebabfda755c5850b98a3d47bf25..474185c9fd6931dfc81d9bfb4a3c082f0bfa1a56 100644
 --- a/lib/base/connection.js
 +++ b/lib/base/connection.js
-@@ -456,6 +456,8 @@ class BaseConnection extends EventEmitter {
+@@ -153,6 +153,7 @@ class BaseConnection extends EventEmitter {
+         Timers.clearTimeout(this.connectTimeout);
+         this.connectTimeout = null;
+       }
++      if (this._dbarkQueryTraffic) this._dbarkQueryTraffic.received += data.length;
+       this.packetParser.execute(data);
+     });
+     this.stream.on('end', () => {
+@@ -346,6 +347,19 @@ class BaseConnection extends EventEmitter {
++  // DBArk 仅观察单条命令的 MySQL 协议字节，不读取内容或发送诊断 SQL。
++  dbarkStartQueryTraffic() {
++    if (this._dbarkQueryTraffic || this.config.compress || this.config.isServer) return;
++    const sample = { sent: 0, received: 0 };
++    this._dbarkQueryTraffic = sample;
++    return () => {
++      if (this._dbarkQueryTraffic !== sample) return;
++      this._dbarkQueryTraffic = undefined;
++      return sample;
++    };
++  }
++
+   write(buffer) {
+     const result = this.stream.write(buffer, (err) => {
+       if (err) {
+         this._handleNetworkError(err);
+       }
+     });
++    if (this._dbarkQueryTraffic) this._dbarkQueryTraffic.sent += buffer.length;
+@@ -456,6 +470,8 @@ class BaseConnection extends EventEmitter {
          session: sessionSlot.get(),
          isServer: false,
          socket: this.stream,
@@ -11,6 +39,14 @@ index 4a02617f76648ebabfda755c5850b98a3d47bf25..0004e33730669b23ea63b10f95be8676
          servername,
        },
        () => {
+@@ -498,6 +514,7 @@ class BaseConnection extends EventEmitter {
+       }
+     });
+     secureSocket.on('data', (data) => {
++      if (this._dbarkQueryTraffic) this._dbarkQueryTraffic.received += data.length;
+       this.packetParser.execute(data);
+     });
+     this.stream = secureSocket;
 diff --git a/lib/commands/query.js b/lib/commands/query.js
 --- a/lib/commands/query.js
 +++ b/lib/commands/query.js

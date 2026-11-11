@@ -1025,6 +1025,7 @@ export class PostgresEngine {
       throw Error('PostgreSQL任务编号已使用或登记已满');
     if (input.collectWarnings || input.continueOnError && (estimate || analysisSql))
       throw Error('PostgreSQL计划分析不使用遇错继续，且不支持MySQL诊断采集');
+    if (input.collectStatus === true) throw Error('PostgreSQL 不支持 MySQL 协议流量统计，本次未发送 SQL');
     const task: Task = { id: input.taskId, session, cancelled: false, sent: false, terminal: false };
     const originalState = session.managed.state();
     session.queryRecord = undefined;

@@ -101,6 +101,7 @@ export interface TableInfo { database: string; name: string; columns: ColumnInfo
 export interface ResultColumn { key: string; name: string; type: string; }
 export interface QueryResult { /** PostgreSQL真实CommandComplete标签，COMMIT在失败事务中可能实际回滚。 */ postgresCommand?: string; columns: ResultColumn[]; rows: DataRow[]; /** SQLite逐格原生存储类型；缺省表示未知，不可从字符串外观推断。 */ sqliteStorage?: import('./sqliteResultStorage').SqliteResultStorage; affectedRows?: number; insertId?: string; warningCount?: number; truncated: boolean; elapsedMs: number; statement: string; }
 export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳过注释，名称单独按已完成结果的序号传回。 */ resultTitles?: (string | null)[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; /** SQLite原始四列计划，与MySQL指标和实际执行分析分别建模。 */ sqliteExplain?: import('./sqliteExplain').SqliteExplainPlan; /** 独立于估算计划；该结果来自用户明确确认后的实际执行。 */ analysis?: QueryAnalyzePlan; /** 默认首错停止；显式遇错继续也只保留完整结果，失败语句不保证未执行且不重放。 */ failure?: import('./queryFailure').QueryFailure; /** 仅显式遇错继续携带，不改变默认首错停止回包。 */ scriptReport?: QueryScriptReport; /** 仅显式采集携带；SHOW诊断会改变ROW_COUNT等原会话诊断信息。 */ warnings?: QueryWarningsReport; /** 原会话本次执行期间的有界 NoticeResponse，只在结果内存展示。 */ postgresNotices?: import('./postgresNotices').PostgresNoticeReport;
+  mysqlQueryStatus?: import('./mysqlQueryStatus').MysqlQueryStatusReport;
   /** PostgreSQL 普通执行专用。与完整结果逐项对应，范围相对本次提交的 SQL。 */
   postgresResultSources?: PostgresResultSource[];
   /** 当前结果可尝试回查原行，编辑仍须由引擎核验主键及已返回值。 */
@@ -311,7 +312,7 @@ export interface CommandMap {
   'metadata.routineInvocation': { input: RoutineInvocationTarget & { taskId: string }; output: RoutineInvocationMetadata };
   'sessions.open': { input: { connectionId: string; database?: string|null }; output: { sessionId: string } };
   'sessions.close': { input: { sessionId: string }; output: void };
-  'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; continueOnError?: boolean; /** 仅true插入SHOW诊断，false或省略保持既有查询行为。 */ collectWarnings?: boolean; /** 同一Monaco模型全文中的UTF-16光标；缺省保持原选区/全部行为。 */ currentStatement?: { offset: number } }; output: QueryOutcome };
+  'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; continueOnError?: boolean; /** 仅true插入SHOW诊断，false或省略保持既有查询行为。 */ collectWarnings?: boolean; collectStatus?: boolean; /** 同一Monaco模型全文中的UTF-16光标；缺省保持原选区/全部行为。 */ currentStatement?: { offset: number } }; output: QueryOutcome };
   'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; currentStatement?: { offset: number }; format?: 'auto' | 'text' }; output: QueryOutcome };
   'postgres.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; format?: 'auto' | 'text'; currentStatement?: { offset: number } }; output: QueryOutcome };
   'postgres.transactionSettings.read': {input: {sessionId: string; taskId: string}; output: PostgresTransactionSnapshot};
@@ -332,7 +333,7 @@ export interface CommandMap {
   'query.temporaryState':{input:{sessionId:string};output:SessionObjectSnapshot};
   'query.temporaryCompletion':{input:{sessionId:string;database:string;prefix:string;kind:'objects'}|{sessionId:string;database:string;table:string;prefix:string;kind:'columns';details?:true};output:SessionObjectCompletion};
   'query.temporaryRead':{input:{sessionId:string;database:string;table:string;taskId:string};output:SessionObjectReadResult};
-  'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; currentStatement?: { offset: number }; continueOnError?: boolean; /** 显式采集时警告消息隐藏参数展开值。 */ collectWarnings?: boolean }; output: QueryOutcome };
+  'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; currentStatement?: { offset: number }; continueOnError?: boolean; /** 显式采集时警告消息隐藏参数展开值。 */ collectWarnings?: boolean; collectStatus?: boolean }; output: QueryOutcome };
   'query.exportStream': { input: QueryStreamExportInput; output: QueryStreamExportOutput };
   'query.confirmInsertExport': { input: import('zod').infer<typeof import('./queryInsertExport').queryInsertConfirmationSchema>; output: void };
   'query.cancel': { input: { taskId: string }; output: void };

@@ -331,6 +331,7 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
   it('不支持的警告采集、续执行词法错误及错误 session 在任何 SQL 投递前拒绝', async () => {
     const path = fixture(), harness = await open(path), baseline = harness.process.sent.length;
     await expect(execute(harness, "INSERT INTO subject VALUES(1,'不得执行')", {collectWarnings: true})).rejects.toThrow('不支持');
+    await expect(execute(harness, "INSERT INTO subject VALUES(1,'不得执行')", {collectStatus: true})).rejects.toThrow('不支持');
     await expect(execute(harness, "INSERT INTO subject VALUES(1,'不得执行'); SELECT '未闭合", {continueOnError: true})).rejects.toThrow('未闭合');
     await expect(execute(harness, "INSERT INTO subject VALUES(2,'错误会话')", { sessionId: '另一会话' })).rejects.toThrow('关闭或失效');
     await expect(harness.session.transaction({ sessionId: '另一会话', action: 'begin' })).rejects.toThrow('关闭或失效');
