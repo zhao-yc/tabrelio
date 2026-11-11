@@ -17,7 +17,7 @@ function compile(): Promise<string> {
     builder.onLoad({ filter: /.*/, namespace: 'sidebar-test' }, args => ({ contents: ({
       react: 'export const useState=(...a)=>globalThis.host.state(...a),useRef=(...a)=>globalThis.host.ref(...a),useEffect=(...a)=>globalThis.host.effect(...a),useLayoutEffect=useEffect;',
       jsx: 'export const jsx=(type,props)=>({type,props}),jsxs=jsx,Fragment="fragment";',
-      icons: 'export const ChevronDown="down",ChevronRight="right",Database="database",Table2="table",Search="search",Plus="plus",Pencil="pencil",RefreshCw="refresh",FileCode2="file",Folder="folder",Unplug="unplug",Trash2="trash",Copy="copy",HardDriveDownload="backup",HardDriveUpload="restore",ListChecks="list-checks",ListFilter="list-filter",Columns3="columns",KeyRound="key",List="list",Link2="link";',
+      icons: 'export const ChevronDown="down",ChevronRight="right",Database="database",Table2="table",Search="search",Plus="plus",Pencil="pencil",RefreshCw="refresh",FileCode2="file",Folder="folder",Unplug="unplug",Trash2="trash",Copy="copy",HardDriveDownload="backup",HardDriveUpload="restore",ListChecks="list-checks",ListFilter="list-filter",LocateFixed="locate-fixed",Columns3="columns",KeyRound="key",List="list",Link2="link";',
       lib: 'export const invoke=(...a)=>globalThis.sidebarIpcInvoke(...a),uid=()=>globalThis.sidebarUid(),qualifiedName=globalThis.sidebarQualifiedName,errorMessage=e=>e instanceof Error?e.message:String(e),kindLabels={table:"表",view:"视图"};',
       store: 'export const useWorkspace=s=>s(globalThis.store);useWorkspace.getState=()=>globalThis.store;',
       ui: 'export const Spinner="spinner",ErrorBox="error-box",FavoriteButton="favorite",WorkbenchShelf="shelf",SidebarTreeRow="tree-row",SidebarTreeProvider="tree-provider";'
@@ -54,7 +54,7 @@ export class SidebarComponentRenderer {
 /** 每个夹具有独立真实请求门和补全事实缓存，可在同一上下文模拟节点重挂载。 */
 export async function sidebarHarness() {
   const calls: Deferred[] = [], notices: string[] = [], renderers: SidebarComponentRenderer[] = [];
-  const state = { connections: [{ id: 'c', name: '测试连接', color: '#123456' } as ConnectionProfile], selection: null, connectionVersions: { c: 0 } as Record<string, number>, select() {}, notify(message: string) { notices.push(message); }, openTab() {}, setConnections() {} };
+  const state = { connections: [{ id: 'c', name: '测试连接', color: '#123456' } as ConnectionProfile], selection: null, settings: { tabs: [], activeTabId: undefined }, connectionVersions: { c: 0 } as Record<string, number>, select() {}, notify(message: string) { notices.push(message); }, openTab() {}, setConnections() {} };
   const module = { exports: {} as Record<string, any> }, context = { module, exports: module.exports, store: state, window: { confirm: () => true }, sidebarUid: uid, sidebarQualifiedName: qualifiedName, sidebarIpcInvoke: (command: string, input: unknown) => new Promise((resolve, reject) => calls.push({ command, input, resolve, reject, settled: false })) };
   runInNewContext(await compile(), context);
   const facts = module.exports.completionServerFacts as CompletionServerFacts;

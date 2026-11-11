@@ -367,7 +367,7 @@ function SidebarSubmenu({ label, open, onOpen, onClose, children }: { label: str
 }
 
 /** 每个节点持有独立租约，目录代次变化或卸载永久撤销旧菜单；不依赖名称反查新对象。 */
-export function SidebarTreeRow({ target, label, className, version, actions, children, leading, isCurrent, allowIdentifierDrag, elementMenu = false }: { target: SidebarNodeTarget; label: string; className: string; version: readonly unknown[]; actions: ReactNode; children: ReactElement; leading?: ReactNode; isCurrent?: () => boolean; allowIdentifierDrag?: boolean; elementMenu?: boolean }) {
+export function SidebarTreeRow({ target, label, className, version, actions, children, leading, isCurrent, allowIdentifierDrag, elementMenu = false, locate }: { target: SidebarNodeTarget; label: string; className: string; version: readonly unknown[]; actions: ReactNode; children: ReactElement; leading?: ReactNode; isCurrent?: () => boolean; allowIdentifierDrag?: boolean; elementMenu?: boolean; locate?: import('../sidebarLocate').SidebarLocateRequest }) {
   const context = useContext(Context), row = useRef<HTMLDivElement>(null);
   const present = useRef(false);
   const lease = useRef<{ key: string; version: readonly unknown[]; token: object } | undefined>(undefined);
@@ -380,6 +380,18 @@ export function SidebarTreeRow({ target, label, className, version, actions, chi
   function proof(node: HTMLDivElement, captured: typeof latest.current): RowLease {
     return { node, current: () => present.current && row.current === node && latest.current.token === captured.token && captured.isCurrent?.() !== false };
   }
+  /** 目录行实际挂载后才选中并聚焦，复用原节点租约，绝不触发行点击。 */
+  useLayoutEffect(() => {
+    const node = row.current, captured = latest.current;
+    const button = node?.querySelector<HTMLButtonElement>('.tree-label');
+    if (!locate || !node?.isConnected || !button || !context) return;
+    const current = proof(node, captured);
+    if (current.current()) locate.complete(() => {
+      context.select(captured.target, current);
+      button.focus({ preventScroll: true });
+      button.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    });
+  }, [locate, token]);
   /** 右键与菜单键仅选择节点，不调用children的左键处理器。 */
   function menu(point?: { x: number; y: number }) {
     const node = row.current, captured = latest.current;

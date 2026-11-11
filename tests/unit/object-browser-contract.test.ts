@@ -1,11 +1,48 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { assertObjectBrowserTabs, objectCategories, readObjectBrowserTabs } from '../../src/shared/objectBrowser';
 import { validateCommand } from '../../src/shared/validation';
 import { defaultSettings } from '../../src/main/storage';
 import { compareBrowserObjects, objectPropertyText } from '../../src/renderer/objectBrowserDetails';
-import type { DatabaseObject } from '../../src/shared/contracts';
+import { sidebarLocatedObject, sidebarLocation } from '../../src/renderer/sidebarLocate';
+import type { DatabaseObject, PostgresConnectionProfile } from '../../src/shared/contracts';
+import type { WorkspaceTab } from '../../src/renderer/store';
+
+vi.mock('../../src/renderer/store', () => ({ useWorkspace: vi.fn() }));
 
 const browser = { id: 'objects', kind: 'objects', title: '对象', connectionId: 'c', database: '库.名`/🚢', objectCategory: 'table' };
+
+describe('当前标签在对象树中的位置', () => {
+  const profile: PostgresConnectionProfile = {
+    id: 'c', name: '连接', group: '', color: '#123456', dialect: 'postgresql',
+    host: 'localhost', port: 5432, user: 'tester', database: '旧默认库',
+  };
+  const query = { id: 'q', kind: 'query', title: '查询', connectionId: 'c', sql: '', database: '初始库' } as const;
+
+  it('使用查询的显式库上下文；未知、空库和无初始库都只定位连接', () => {
+    expect(sidebarLocation(query, profile)).toEqual({ connectionId: 'c', database: '初始库' });
+    expect(sidebarLocation({ ...query, databaseContext: { state: 'known', database: '实际库' } }, profile))
+      .toEqual({ connectionId: 'c', database: '实际库' });
+    for (const patch of [{ databaseContext: { state: 'unknown' } }, { databaseContext: { state: 'known', database: null } }, { database: undefined }] as const) {
+      expect(sidebarLocation({ ...query, ...patch }, profile)).toEqual({ connectionId: 'c' });
+    }
+    expect(sidebarLocation({ ...browser, kind: 'objects', objectCategory: 'table' }, profile))
+      .toEqual({ connectionId: 'c', database: browser.database });
+    expect(sidebarLocation(query, { ...profile, id: 'other' })).toBeUndefined();
+  });
+
+  it('按表页使用的 PostgreSQL 标识符定位，拒绝无法唯一识别的关系', () => {
+    const tab: WorkspaceTab = { id: 't', kind: 'table', title: '标题', connectionId: 'c', database: 'db', table: 'Odd.Name' };
+    expect(sidebarLocation(tab, profile)).toEqual({ connectionId: 'c', database: 'db', relation: '"public"."Odd.Name"' });
+    const relation = '"odd.schema"."Odd""Name"';
+    expect(sidebarLocation({ ...tab, table: relation }, profile)?.relation).toBe(relation);
+    expect(sidebarLocation({ ...tab, database: undefined }, profile)).toBeUndefined();
+    const view: DatabaseObject = { name: relation, kind: 'view' };
+    const routine: DatabaseObject = { name: relation, kind: 'function' };
+    expect(sidebarLocatedObject([routine, view], relation)).toBe(view);
+    expect(sidebarLocatedObject([view, { ...view, kind: 'table' }], relation)).toBeUndefined();
+    expect(sidebarLocatedObject([view], relation.toLowerCase())).toBeUndefined();
+  });
+});
 
 describe('对象浏览标签设置合同', () => {
   it('五类对象定位可经原设置入口读写，旧查询及表标签保持兼容', () => {

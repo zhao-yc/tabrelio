@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { actionMenuZh } from '../../src/renderer/locales/actionMenu.zh-CN';
+import { sidebarLocateZh } from '../../src/renderer/locales/sidebarLocate.zh-CN';
+import { productName } from '../../src/shared/productName';
 
 const source = readFileSync(new URL('../e2e/navigation-workbench.spec.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
@@ -25,6 +27,8 @@ function collect(args: string[], values: Record<string, string | undefined>) {
       if (name === '../../src/renderer/locales/zh-CN') return { zh };
       if (name === '../../src/renderer/locales/navigation.zh-CN') return { navigationZh };
       if (name === '../../src/renderer/locales/actionMenu.zh-CN') return { actionMenuZh };
+      if (name === '../../src/renderer/locales/sidebarLocate.zh-CN') return { sidebarLocateZh };
+      if (name === '../../src/shared/productName') return { productName };
       // 只有生产register里的准确夹具入口才是桌面边界；遗漏静态依赖必须明确失败。
       if (name === './desktop-fixture') throw Error('RAM已到明确桌面注册边界');
       throw Error('RAM未登记静态模块端口：' + name);

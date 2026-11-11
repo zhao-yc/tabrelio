@@ -5,6 +5,7 @@ import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../
 import { tableElementsZh as text } from '../../src/renderer/locales/tableElements.zh-CN';
 import { tablePresetsZh } from '../../src/renderer/locales/tablePresets.zh-CN';
 import { sidebarContextMenuZh } from '../../src/renderer/locales/sidebarContextMenu.zh-CN';
+import { sidebarLocateZh } from '../../src/renderer/locales/sidebarLocate.zh-CN';
 import { columnPatchZh } from '../../src/renderer/locales/columnPatches.zh-CN';
 import { indexPatchZh } from '../../src/renderer/locales/indexPatches.zh-CN';
 import { foreignKeyPatchZh } from '../../src/renderer/locales/foreignKeyPatches.zh-CN';
@@ -235,6 +236,15 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     if (rename) await expect(page.getByRole('columnheader', { name: /^marker_renamed(?:\s|$)/ })).toBeVisible();
     const cellName = sqlite && rename ? 'TEXT · catalog-marker' : 'catalog-marker';
     await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();
+    const tableTabs = (await settings()).tabs;
+    await tree.locator(key([connectionId, null, 'connection', null])).locator('.tree-label').click();
+    await expect(row).toHaveCount(0);
+    await tree.getByRole('button', { name: sidebarLocateZh.action, exact: true }).click();
+    await expect(row).toHaveClass(/\bactive\b/);
+    await expect(rowLabel).toBeFocused();
+    await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();
+    expect((await settings()).tabs).toEqual(tableTabs);
+    await page.screenshot({ path: info.outputPath('对象树定位表页.png') });
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(pageErrors).toEqual([]);
     if (before && !rename) expect(await readFile(file)).toEqual(before);

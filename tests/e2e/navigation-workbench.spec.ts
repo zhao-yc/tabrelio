@@ -4,6 +4,7 @@ import type { DatabaseObject, TableInfo } from '../../src/shared/contracts';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationZh as text } from '../../src/renderer/locales/navigation.zh-CN';
 import { actionMenuZh } from '../../src/renderer/locales/actionMenu.zh-CN';
+import { sidebarLocateZh } from '../../src/renderer/locales/sidebarLocate.zh-CN';
 import type { UiCommandId } from '../../src/shared/uiCommands';
 import { productName } from '../../src/shared/productName';
 
@@ -206,6 +207,44 @@ function register(): void {
     expect(first.database).toBe(beta); expect((await settings()).tabs).toHaveLength(2);
     await native('previous-tab'); await expect(runtime.page.locator('.query-tab:visible')).toBeVisible(); await expect.poll(() => nativeEnabled('execute')).toBe(true);
     await originalPreserved(); expect((await audit()).calls.some(call => call.command === 'metadata.objects' && call.database === beta)).toBe(true);
+  });
+
+  test('定位只展开当前标签需要的节点，切换标签后丢弃迟到的对象目录', async () => {
+    const sidebar = runtime.page.locator('.sidebar'), search = sidebar.locator('.search-box input');
+    const locate = sidebar.getByRole('button', { name: sidebarLocateZh.action, exact: true });
+    const database = row('database'), target = row('view', alpha, viewName);
+    await search.fill('隐藏连接的筛选');
+    await locate.press('Enter');
+    await expect(search).toHaveValue('');
+    await expect(database).toHaveClass(/\bactive\b/);
+    await expect(database.locator('.tree-label')).toBeFocused();
+    await expect(database.locator('.tree-label')).toHaveAttribute('aria-expanded', 'false');
+    expect((await audit()).calls.map(call => call.command)).toEqual(['connections.open', 'metadata.databases']);
+    await originalPreserved();
+
+    await toolbar().getByRole('button', { name: text.view, exact: true }).click();
+    await row('view', alpha, viewName, browser()).dblclick();
+    await expect(runtime.page.locator('.table-tab:visible .results-grid')).toBeVisible();
+    await main(() => (globalThis as AuditRoot).__navigationWorkbenchAudit!.holdObjects());
+    await locate.click();
+    await expect.poll(async () => (await audit()).pending).toBe(1);
+    await expect(locate).toHaveAttribute('aria-busy', 'true');
+    await activateOriginal();
+    await expect(locate).toHaveAttribute('aria-busy', 'false');
+    await runtime.desktop.evaluate((_, objects) => (globalThis as AuditRoot).__navigationWorkbenchAudit!.releaseObjects(objects), smallObjects);
+    await expect(database.locator('.tree-label')).toHaveAttribute('aria-expanded', 'false');
+    await expect(target).toHaveCount(0);
+    await originalPreserved();
+
+    await runtime.page.locator('.tab-strip .tab-select').filter({ hasText: viewName }).click();
+    await locate.click();
+    await expect(target).toHaveClass(/\bactive\b/);
+    await expect(target.locator('.tree-label')).toBeFocused();
+    const before = (await audit()).calls;
+    await locate.click();
+    await expect(target.locator('.tree-label')).toBeFocused();
+    expect((await audit()).calls).toEqual(before);
+    await originalPreserved();
   });
 
   test('五千合成对象只渲染有界行，搜索和类别切换复用同库对象页并保留原稿', async () => {
