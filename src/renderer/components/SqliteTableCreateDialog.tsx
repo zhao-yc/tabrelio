@@ -1,3 +1,4 @@
+import { useDesignerFieldFind } from './DesignerFieldFind';
 import { duplicateNewTableColumn } from '../newTableColumnCopy';
 import { newTableColumnCopyZh as columnCopy } from '../locales/newTableColumnCopy.zh-CN';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -183,6 +184,7 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
   const directions = (['asc', 'desc'] as const).map(value => <option key={value} value={value}>{value === 'asc' ? text.ascending : text.descending}</option>);
   const columnOptions = design.columns.map((column, index) => <option key={index} value={column.name}>{column.name}</option>);
   const copying = fixed.copySource !== undefined;
+  const fieldFind = useDesignerFieldFind(design.columns, !copying && canEdit && !preview);
   return <Modal title={copying ? text.copyTitle : text.title} wide onClose={() => close()}><div className="modal-content sqlite-table-create" aria-busy={busy}>
     {copying ? <><p>{text.copySource} · {copyDestination?.sourceLabel ?? fixed.profile?.name} / {fixed.database} / {fixed.copySource}</p><p>{text.copyHint}</p></> : <><p>{fixed.profile?.name ?? fixed.connectionId} / {fixed.database}</p><UsageHelp><p>{text.affinity}</p><p>{text.defaultHint}</p></UsageHelp></>}
     {readOnly && <p className="warning-text">{text.readonly}</p>}{(!valid || unsupportedSeed) && <ErrorBox message={unsupportedSeed ? text.unsupportedSeed : text.invalid}/>}
@@ -193,8 +195,8 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
     {copying ? <Field label={text.copyMode}><select aria-label={text.copyMode} disabled={!canEdit} value={copyMode} onChange={event => {
       if (editable()) { setCopyMode(event.target.value === 'data' ? 'data' : 'structure'); change({ ...design }); }
     }}><option value="structure">{text.structureOnly}</option><option value="data">{text.structureAndData}</option></select></Field> : <>
-    <section aria-label={text.columns}><h3>{text.columns}</h3><div className="sqlite-create-fields">{design.columns.map((column, index) => <fieldset className="sqlite-create-column" key={index}><legend>{text.columns} {index + 1}</legend>
-      <Field label={text.columnName(index + 1)}><input aria-label={text.columnName(index + 1)} value={column.name} disabled={!canEdit} onChange={event => columnAt(column, { name: event.target.value })}/></Field>
+    <section aria-label={text.columns}><h3>{text.columns}</h3>{fieldFind.controls}<div className="sqlite-create-fields">{design.columns.map((column, index) => <fieldset className="sqlite-create-column" key={index} {...fieldFind.rowProps(index)}><legend>{text.columns} {index + 1}</legend>
+      <Field label={text.columnName(index + 1)}><input data-designer-field-name aria-label={text.columnName(index + 1)} value={column.name} disabled={!canEdit} onChange={event => columnAt(column, { name: event.target.value })}/></Field>
       <Field label={text.declaredType(index + 1)}><input aria-label={text.declaredType(index + 1)} value={column.declaredType} disabled={!canEdit} onChange={event => columnAt(column, { declaredType: event.target.value })}/></Field>
       <label><input type="checkbox" aria-label={text.nullable(index + 1)} checked={column.nullable} disabled={!canEdit} onChange={event => columnAt(column, { nullable: event.target.checked })}/>{text.nullable(index + 1)}</label>
       <label><input type="checkbox" aria-label={text.primaryColumn(index + 1)} checked={design.primaryKey.includes(column.name)} disabled={!canEdit} onChange={event => change({ ...design, primaryKey: event.target.checked ? [...design.primaryKey, column.name] : design.primaryKey.filter(name => name !== column.name) })}/>{text.primaryColumn(index + 1)}</label>

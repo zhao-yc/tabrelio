@@ -1,0 +1,22 @@
+.designer-field-find {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-block: 8px;
+}
+.designer-field-find input[type="search"] { flex: 0 1 230px; width: min(100%, 230px); }
+.designer-field-find [role="status"] { color: var(--muted); }
+.designer-field-find[data-open="true"] {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-block: 6px;
+  background: var(--surface);
+}
+.modal:has(.designer-field-find[data-open="true"]) [data-designer-field-index] { scroll-margin-block-start: 68px; }
+[data-designer-field-current="true"] {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  background: var(--surface-2);
+}

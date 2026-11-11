@@ -18,6 +18,8 @@ import { postgresStructureZh } from '../../src/renderer/locales/postgresStructur
 import { postgresColumnEditZh } from '../../src/renderer/locales/postgresColumnEdit.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { relationshipDiagramZh as diagramText } from '../../src/renderer/locales/relationshipDiagram.zh-CN';
+import { designerFieldFindZh as fieldFind } from '../../src/renderer/locales/designerFieldFind.zh-CN';
+import { sqliteTableRebuildZh as rebuild } from '../../src/renderer/locales/sqliteTableRebuild.zh-CN';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { clickSidebarAction } from './sidebar-menu';
 
@@ -153,7 +155,35 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
       await expect(chosen).toHaveCount(1);
       await expect(chosen).toContainText(name);
       await expect(chosen).toBeFocused();
-      if (screenshot) await page.screenshot({ path: info.outputPath(screenshot) });
+      if (screenshot) {
+        await page.screenshot({ path: info.outputPath(screenshot) });
+        await page.keyboard.press('ControlOrMeta+f');
+        const search = dialog.getByRole('searchbox', { name: fieldFind.query, exact: true });
+        const panel = dialog.getByRole('region', { name: fieldFind.title, exact: true });
+        const match = dialog.locator('[data-designer-field-current="true"]');
+        await expect(search).toBeFocused();
+        await search.fill('ID');
+        await expect(panel.getByRole('status')).toHaveText(fieldFind.count(3, 0));
+        await search.press('Enter');
+        await expect(match).toHaveAttribute('data-designer-field-index', '0');
+        await expect(match).toBeFocused();
+        await page.keyboard.press('F3');
+        await expect(match).toContainText('scope_id');
+        await page.keyboard.press('Shift+F3');
+        await expect(match).toHaveAttribute('data-designer-field-index', '0');
+        await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+g' : 'Shift+F3');
+        await expect(match).toContainText('parent_id');
+        await expect(match).toBeFocused();
+        await expect(panel.getByRole('status')).toHaveText(fieldFind.count(3, 3));
+        await page.screenshot({ path: info.outputPath('已有表设计器查找字段.png') });
+        await page.keyboard.press('ControlOrMeta+f');
+        await search.fill('不存在的字段');
+        await expect(panel.getByRole('status')).toHaveText(fieldFind.none);
+        await expect(match).toHaveCount(0);
+        await search.press('Escape');
+        await expect(search).toHaveCount(0);
+        await expect(chosen).toBeFocused();
+      }
       await page.keyboard.press('Escape');
       await expect(dialog).toHaveCount(0);
     }
@@ -164,6 +194,24 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     await columnButton.dblclick();
     await checkDesigner(columnTitle, 'derived', '从对象树定位字段.png');
     await expect(columnButton).toBeFocused();
+    if (sqlite) {
+      await clickSidebarAction(row, { name: rebuild.entry + ' ' + name, exact: true });
+      const dialog = page.getByRole('dialog', { name: rebuild.title, exact: true });
+      await dialog.getByRole('button', { name: rebuild.read, exact: true }).click();
+      await dialog.getByRole('button', { name: fieldFind.title, exact: true }).click();
+      const input = dialog.getByRole('searchbox', { name: fieldFind.query, exact: true });
+      await input.fill('marker');
+      await input.press('Enter');
+      const found = dialog.getByRole('region', { name: rebuild.columnOrder, exact: true })
+        .locator('[data-designer-field-current="true"]');
+      await expect(found).toContainText('marker');
+      await expect(found).toBeFocused();
+      await page.screenshot({ path: info.outputPath('SQLite重建字段查找.png') });
+      await page.keyboard.press('Escape');
+      await expect(input).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(dialog).toHaveCount(0);
+    }
     const indexButton = index.getByRole('button', { name: text.designNamed('idx_parent_pair'), exact: true });
     await indexButton.press('Enter');
     await checkDesigner(postgres ? postgresStructureZh.title : sqlite ? sqliteIndexesZh.title : indexPatchZh.title, 'idx_parent_pair');

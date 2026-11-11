@@ -1,3 +1,4 @@
+import { useDesignerFieldFind } from './DesignerFieldFind';
 import { useEffect, useRef, useState } from 'react';
 import { postgresIndexEditStamp } from '../../shared/postgresIndexEdit';
 import type { PostgresStructureInput, PostgresStructureResult } from '../../shared/postgresStructure';
@@ -99,6 +100,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
   const currentView = view?.key === scope && dialect === 'postgresql' ? view : undefined;
   const output = currentView?.output;
   const busy = !currentView && dialect === 'postgresql';
+  const fieldFind = useDesignerFieldFind(output?.columns ?? [], !!output && !editing && section === 'columns');
   const focusedItems = output && !editing && section === searchFocus?.section
     ? section === 'columns' ? output.columns : section === 'indexes' ? output.indexes
       : section === 'constraints' ? output.constraints.filter(item => !searchFocus.constraintKind || item.kind === searchFocus.constraintKind) : undefined
@@ -209,16 +211,16 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
         {searchFocus?.name !== undefined && elementFocus.missing && <ErrorBox message={tableElementsZh.missing(searchFocus.name)}/>}
         {searchFocus?.rename && searchFocus.name !== undefined && !elementFocus.missing &&
           (!output.editStamp || readOnly) && <ErrorBox message={tableElementsZh.renameUnavailable(searchFocus.name)}/>}
-        {section === 'columns' && <CatalogTable empty={!output.columns.length} headers={[
+        {section === 'columns' && <>{fieldFind.controls}<CatalogTable empty={!output.columns.length} headers={[
           text.position, text.name, text.type, text.nullable, text.defaultExpression, text.generatedExpression, text.identity, text.collation, text.comment,
-        ]}>{output.columns.map(column => <tr key={column.position}
-          {...elementFocus.rowProps(column)}>
+        ]}>{output.columns.map((column, index) => <tr key={column.position}
+          {...fieldFind.rowProps(index)} {...elementFocus.rowProps(column)}>
           <td>{column.position}</td><th scope="row">{column.name}</th><td><code>{column.type}</code></td>
           <td>{column.nullable ? text.yes : text.no}</td><td><code>{column.defaultExpression ?? '—'}</code></td>
           <td><code>{column.generationExpression ?? '—'}</code>{column.generation && <small>{column.generation === 's' ? text.stored : text.virtual}</small>}</td>
           <td>{column.identity === 'a' ? text.always : column.identity === 'd' ? text.byDefault : '—'}</td>
           <td>{column.collation ?? '—'}</td><td>{column.comment ?? '—'}</td>
-        </tr>)}</CatalogTable>}
+        </tr>)}</CatalogTable></>}
         {section === 'constraints' && <CatalogTable empty={!output.constraints.length} headers={[text.name, text.type, text.definition, text.status]}>
           {output.constraints.map((constraint, index) => <tr key={index}
             {...elementFocus.rowProps(constraint)}>

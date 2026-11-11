@@ -1,3 +1,4 @@
+import { useDesignerFieldFind } from './DesignerFieldFind';
 import { movePostgresCreateKey, PostgresCreateKeyOrder } from './PostgresCreateKeyOrder';
 import { NewTableColumnOrder } from '../newTableColumnOrder';
 import { tableCreateColumnOrderZh as columnOrderText } from '../locales/tableCreateColumnOrder.zh-CN';
@@ -196,6 +197,7 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
     onClose();
   }
 
+  const fieldFind = useDesignerFieldFind(fields, !preview && !busy && !loading && !unknown && !invalidated && !!schemas.length);
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content pg-create-content">
       <strong>PostgreSQL / {database}</strong>
@@ -211,9 +213,10 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
           <Field label={text.table}><input value={table} onChange={event => edit(() => setTable(event.target.value))}/></Field>
           <Field label={text.tableComment}><input value={comment} maxLength={4096} onChange={event => edit(() => setComment(event.target.value))}/></Field>
         </div>
-        {fields.map((field, index) => <fieldset className="pg-create-field" key={field.id}>
+        {fieldFind.controls}
+        {fields.map((field, index) => <fieldset className="pg-create-field" key={field.id} {...fieldFind.rowProps(index)}>
           <legend>{text.field(index + 1)}</legend>
-          <Field label={text.name}><input value={field.name} onChange={event => patch(field.id, { name: event.target.value })}/></Field>
+          <Field label={text.name}><input data-designer-field-name value={field.name} onChange={event => patch(field.id, { name: event.target.value })}/></Field>
           <Field label={text.type}><select aria-label={text.type} value={field.type} onChange={event => changeType(field, event.target.value as PostgresCreateColumn['type'])}>
             {postgresCreateTypes.map(type => <option key={type}>{type}</option>)}</select></Field>
           {field.type === 'varchar' && <Field label={text.length}><input type="number" min={1} value={field.length ?? ''} onChange={event => patch(field.id, { length: event.target.value ? Number(event.target.value) : undefined })}/></Field>}

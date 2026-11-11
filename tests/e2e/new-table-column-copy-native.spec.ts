@@ -8,6 +8,7 @@ import { tableCreateColumnOrderZh as order } from '../../src/renderer/locales/ta
 import { postgresCreateTableZh as pg } from '../../src/renderer/locales/postgresCreateTable.zh-CN';
 import { sqliteTableCreateZh as sqlite } from '../../src/renderer/locales/sqliteTableCreate.zh-CN';
 import { tableCreateZh as mysql } from '../../src/renderer/locales/tableCreate.zh-CN';
+import { designerFieldFindZh as fieldFind } from '../../src/renderer/locales/designerFieldFind.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
@@ -31,6 +32,7 @@ test('复制新表字段保留字段配置及原主键，预览后实际创建',
   };
 
   try {
+    await info.attach('本例原 Main 进程', { body: String(await desktop.evaluate(() => process.pid)), contentType: 'text/plain' });
     if (local) {
       new DatabaseSync(file).close();
       await desktop.evaluate(({ dialog, BrowserWindow }, path) => {
@@ -68,6 +70,30 @@ test('复制新表字段保留字段配置及原主键，预览后实际创建',
     }, { connectionId, database });
     const before = await catalog();
     expect(before.some(name => name.includes(table))).toBe(false);
+    async function checkDraftFieldFind() {
+      const panel = modal.getByRole('region', { name: fieldFind.title, exact: true });
+      await panel.getByRole('button', { name: fieldFind.title, exact: true }).click();
+      const search = panel.getByRole('searchbox', { name: fieldFind.query, exact: true });
+      await expect(search).toBeFocused();
+      await search.fill('ID_COPY');
+      await search.press('Enter');
+      const active = modal.locator('[data-designer-field-current="true"] [data-designer-field-name]');
+      await expect(active).toHaveValue('id_copy');
+      await expect(active).toBeFocused();
+      await expect(panel).toBeInViewport({ ratio: 0.9 });
+      await page.screenshot({ path: info.outputPath('新建表设计器查找字段.png') });
+      const index = await active.locator('xpath=ancestor::*[@data-designer-field-index]').getAttribute('data-designer-field-index');
+      await active.fill('draft_search_test');
+      await expect(active).toHaveCount(0);
+      await search.fill('draft_search_test');
+      await search.press('Enter');
+      await expect(active).toBeFocused();
+      await expect(active).toHaveValue('draft_search_test');
+      await modal.locator(`[data-designer-field-index="${index}"] [data-designer-field-name]`).fill('id_copy');
+      await panel.getByRole('button', { name: fieldFind.close, exact: true }).click();
+      await expect(modal).toBeVisible();
+      expect(await catalog()).toEqual(before);
+    }
 
     if (local) {
       await modal.getByLabel(sqlite.name, { exact: true }).fill(table);
@@ -79,6 +105,7 @@ test('复制新表字段保留字段配置及原主键，预览后实际创建',
       await modal.getByLabel(sqlite.defaultValue(2), { exact: true }).fill('9007199254740993');
       await duplicate(2);
       await expect(modal.getByLabel(sqlite.defaultValue(3), { exact: true })).toHaveValue('9007199254740993');
+      await checkDraftFieldFind();
       await modal.getByRole('button', { name: sqlite.preview, exact: true }).click();
       await expect(modal.getByLabel(sqlite.confirmation, { exact: true })).toBeVisible();
       expect(await catalog()).toEqual(before);
@@ -103,6 +130,7 @@ test('复制新表字段保留字段配置及原主键，预览后实际创建',
       await expect(field(2).getByLabel(pg.name, { exact: true })).toHaveValue('id_copy');
       await expect(field(2).getByLabel(pg.identity, { exact: true })).toHaveValue('none');
       await expect(field(2).getByRole('checkbox', { name: pg.unique, exact: true })).not.toBeChecked();
+      await checkDraftFieldFind();
       await field(1).getByRole('checkbox', { name: pg.unique, exact: true }).uncheck();
       await field(2).getByRole('checkbox', { name: pg.primary, exact: true }).check();
       await modal.getByLabel(pg.partition.strategy, { exact: true }).selectOption('range');
@@ -161,6 +189,7 @@ test('复制新表字段保留字段配置及原主键，预览后实际创建',
       await duplicate(1);
       await expect(modal.getByLabel(formatText(zh.schema.text018, 2), { exact: true })).toHaveValue('id_copy');
       await expect(modal.getByRole('checkbox', { name: formatText(zh.schema.text021, 2), exact: true })).not.toBeChecked();
+      await checkDraftFieldFind();
       await modal.getByRole('button', { name: zh.schema.text049, exact: true }).click();
       const confirm = page.getByRole('dialog', { name: mysql.title, exact: true });
       await expect(confirm.locator('.monaco-editor .view-lines')).toContainText('id_copy');
