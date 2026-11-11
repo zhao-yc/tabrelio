@@ -6,11 +6,13 @@ import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, re
 import { navigationMenuItem } from './navigation-menu';
 import { queryResultStatisticsZh as calendar } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import { sqliteStatisticsZh as statistics } from '../../src/renderer/locales/sqliteStatistics.zh-CN';
+import { sqliteTableBrowseZh as browse } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
+import { tableStatisticsZh as scope } from '../../src/renderer/locales/tableStatistics.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 test.skip(process.env.DBARK_SQLITE_TABLE_CALENDAR_NATIVE !== '1', '仅在显式启用的离线 SQLite 验收运行');
 
-test('SQLite 表页按已应用条件统计全部匹配日期并拒绝超限区间', async ({}, info) => {
+test('SQLite 表页按已应用条件统计全部和前 N 条匹配行并拒绝超限区间', async ({}, info) => {
   if (process.env.DBARK_INTEGRATION_ENABLED !== '0' || process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_DEV_URL)
     throw Error('只允许隔离 SQLite 源码验收');
   const file = join(realpathSync(dataDir), '全筛选日期分布.sqlite');
@@ -67,8 +69,14 @@ test('SQLite 表页按已应用条件统计全部匹配日期并拒绝超限区�
     await table.getByLabel('SQLite 筛选 1 运算符', { exact: true }).selectOption('eq');
     await table.getByLabel('SQLite 筛选 1 值类型', { exact: true }).selectOption('integer');
     await filterValue.fill('1');
+    await table.getByRole('button', { name: browse.addSort, exact: true }).click();
+    await table.getByLabel(browse.sortColumn(1), { exact: true }).selectOption('id');
+    await table.getByLabel(browse.sortDirection(1), { exact: true }).selectOption('desc');
     await apply.click();
-    await expect(grid.getByRole('gridcell', { name: '2024-02-29', exact: true })).toHaveCount(5);
+    await expect(grid.getByRole('gridcell', { name: '100', exact: true })).toBeVisible();
+    await table.getByRole('button', { name: browse.next, exact: true }).click();
+    await expect(grid.getByRole('gridcell', { name: '95', exact: true })).toBeVisible();
+    await expect(grid.getByRole('gridcell', { name: '100', exact: true })).toHaveCount(0);
     // 保留尚未应用的条件，统计必须继续使用已经应用的 bucket=1。
     await filterValue.fill('2');
     await (await filters()).click();
@@ -97,8 +105,34 @@ test('SQLite 表页按已应用条件统计全部匹配日期并拒绝超限区�
     await run();
     await expect(chart.getByRole('rowheader')).toHaveText(['2024', '2025']);
     expect(await counts()).toEqual(['94', '2']);
+
+    const beforeSample = await tasks();
+    await dialog.getByLabel(scope.scopeMode, { exact: true }).selectOption('first');
+    const sampleLimit = dialog.getByLabel(scope.sampleLimit, { exact: true });
+    await sampleLimit.fill('0');
+    await run();
+    await expect(dialog.getByRole('alert')).toContainText(scope.sampleLimitInvalid);
+    await expect(chart).toHaveCount(0);
+    await sampleLimit.fill('7');
+    await dialog.getByLabel(calendar.calendarUnit, { exact: true }).selectOption('month');
+    expect(await tasks()).toEqual(beforeSample);
+    await run();
+    await expect(dialog.getByText(scope.sampledScope(7), { exact: true })).toBeVisible();
+    await expect(dialog.getByText(scope.sampledRows + '：7', { exact: true })).toBeVisible();
+    await expect(chart.getByRole('rowheader')).toHaveText(['2024-03', '2025-01']);
+    expect(await counts()).toEqual(['1', '2']);
+    await expect(dialog.getByLabel(calendar.nulls, { exact: true })).toHaveText('1');
+    await expect(dialog.getByLabel(calendar.calendarUngrouped, { exact: true })).toHaveText('3');
+    await dialog.screenshot({ path: info.outputPath('SQLite表页前7条日期分布.png') });
+    await dialog.getByLabel(statistics.analysis, { exact: true }).selectOption('summary');
+    await dialog.getByLabel(statistics.column, { exact: true }).selectOption('id');
+    await run();
+    await expect(dialog.getByRole('row', { name: /^INTEGER/ }).getByRole('cell')).toHaveText(['7', '7', '94', '100']);
+    await dialog.screenshot({ path: info.outputPath('SQLite表页前7条字段概况.png') });
+    await dialog.getByRole('button', { name: statistics.readRowCount, exact: true }).click();
+    await expect(dialog.getByText(statistics.rowCountResult('100'), { exact: true })).toBeVisible();
     await close();
-    await expect(grid.getByRole('gridcell', { name: '2024-02-29', exact: true })).toHaveCount(5);
+    await expect(grid.getByRole('gridcell', { name: '95', exact: true })).toBeVisible();
     await (await filters()).click();
     await expect(filterValue).toHaveValue('2');
     expect((await current()).tabs).toEqual(tabs);
@@ -116,7 +150,7 @@ test('SQLite 表页按已应用条件统计全部匹配日期并拒绝超限区�
     await expect(dialog.getByLabel(calendar.calendarGrouped, { exact: true })).toHaveText('4097');
     await close();
     await expect.poll(async () => (await tasks()).filter(task => task.kind === 'sqlite.calendar').map(task => task.status).sort())
-      .toEqual(['completed', 'completed', 'completed', 'failed']);
+      .toEqual(['completed', 'completed', 'completed', 'completed', 'failed']);
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(pageErrors).toEqual([]);
     expect(hash()).toBe(before);

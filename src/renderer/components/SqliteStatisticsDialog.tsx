@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { SqliteStatisticsInput, SqliteStatisticsValue } from '../../shared/sqliteStatistics';
+import type { SqliteRowCountInput, SqliteStatisticsSample, SqliteStatisticsValue } from '../../shared/sqliteStatistics';
 import { SqliteStatisticsController, type SqliteStatisticsView } from '../sqliteStatistics';
 import { sqliteStatisticsZh as text } from '../locales/sqliteStatistics.zh-CN';
 import { acquireWorkspaceBusy } from '../store';
@@ -8,9 +8,11 @@ import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import { QueryResultCalendarChart } from './QueryResultCalendarChart';
 import { queryResultStatisticsZh as calendarText } from '../locales/queryResultStatistics.zh-CN';
 import { calendarUnits, type CalendarUnit } from '../../shared/civilDate';
+import { tableStatisticsZh as scopeText } from '../locales/tableStatistics.zh-CN';
+import { defaultStatisticsScope, readStatisticsSampleLimit, StatisticsSampleControls } from './StatisticsSampleControls';
 import '../sqliteStatistics.css';
 
-interface Props { tabId: string; base: Omit<SqliteStatisticsInput, 'column' | 'taskId'>; columns: readonly string[]; initialColumn?: string; current(): boolean; onClose(): void; onCleanup(reason: unknown): void; onCount?(rows: string): void; }
+interface Props { tabId: string; base: Omit<SqliteRowCountInput, 'taskId'>; columns: readonly string[]; sampleOrder: SqliteStatisticsSample['sort']; initialColumn?: string; current(): boolean; onClose(): void; onCleanup(reason: unknown): void; onCount?(rows: string): void; }
 /** 极值只展示准确typed值，文本保留JSON转义，二进制显示完整hex，不按声明类型隐式转换。 */
 function preview(value: SqliteStatisticsValue): string { return value.kind === 'null' ? 'NULL' : value.kind === 'text' ? JSON.stringify(value.value) : value.kind === 'blob' ? 'X\'' + value.value + '\'' : value.value; }
 /** 打开和选择字段不读取，明确开始才统计；关闭在途操作等原任务与ACK，原占用不提前释放。 */
@@ -19,15 +21,32 @@ export function SqliteStatisticsDialog(props: Props) {
   const [view, setView] = useState<SqliteStatisticsView>({ busy: false, stopping: false, error: '' }), [column, setColumn] = useState(origin.initialColumn ?? origin.columns[0] ?? ''), [closing, setClosing] = useState(false), [problem, setProblem] = useState('');
   const [analysis, setAnalysis] = useState<'summary' | 'calendar'>('summary');
   const [unit, setUnit] = useState<CalendarUnit>('month');
+  const [scope, setScope] = useState(defaultStatisticsScope), scopeRef = useRef(scope);
   const mounted = useRef(true), closingRef = useRef(false), closed = useRef(false), render = {}, committed = useRef<object | undefined>(undefined);
   useLayoutEffect(() => { committed.current = render; return () => { if (committed.current === render) committed.current = undefined; }; });
-  const [controller] = useState(() => new SqliteStatisticsController({ base: origin.base, current: () => latest.current.base === origin.base && latest.current.columns === origin.columns && latest.current.tabId === origin.tabId && origin.current(), acquire: () => acquireWorkspaceBusy(origin.tabId), read: input => invoke('sqlite.statistics', input), readCalendar: input => invoke('sqlite.calendar', input), countRows: input => invoke('sqlite.countRows', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: setView, cleanup: reason => origin.onCleanup(reason) }));
+  const [controller] = useState(() => new SqliteStatisticsController({ base: origin.base, current: () => latest.current.base === origin.base && latest.current.columns === origin.columns && latest.current.sampleOrder === origin.sampleOrder && latest.current.tabId === origin.tabId && origin.current(), acquire: () => acquireWorkspaceBusy(origin.tabId), read: input => invoke('sqlite.statistics', input), readCalendar: input => invoke('sqlite.calendar', input), countRows: input => invoke('sqlite.countRows', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: setView, cleanup: reason => origin.onCleanup(reason) }));
   useEffect(() => { controller.observe(); });
   useEffect(() => { mounted.current = true; controller.activate(); return () => { mounted.current = false; controller.dispose(); }; }, [controller]);
-  function current(): boolean { return committed.current === render && !closed.current && !closingRef.current && !controller.view.busy && controller.current(); }
+  function current(): boolean { return committed.current === render && scopeRef.current === scope && !closed.current && !closingRef.current && !controller.view.busy && controller.current(); }
+  /** 范围变动只清本地回执，等待用户显式执行。 */
+  function changeScope(next: typeof scope): void {
+    if (!current()) return;
+    scopeRef.current = next; setScope(next); controller.clear(); setProblem('');
+  }
+  function readStatistics(): void {
+    if (!current()) return;
+    let limit: number | undefined;
+    try { limit = readStatisticsSampleLimit(scope); }
+    catch (reason) { setProblem(errorMessage(reason)); return; }
+    const sample = limit === undefined ? undefined : { limit, sort: origin.sampleOrder };
+    setProblem('');
+    if (analysis === 'calendar') void controller.readCalendar(column, unit, sample);
+    else void controller.read(column, sample);
+  }
   /** 只把当前对话框已验且未取消的计数交还给原表页。 */
   async function countRows(): Promise<void> {
     if (!current()) return;
+    setProblem('');
     await controller.countRows();
     const count = controller.view.rowCount;
     if (count !== undefined && !closed.current && !closingRef.current && controller.current()) origin.onCount?.(count);
@@ -38,9 +57,11 @@ export function SqliteStatisticsDialog(props: Props) {
     try { await controller.stop(); if (mounted.current && !closed.current) { closed.current = true; origin.onClose(); } } catch (reason) { if (mounted.current) { closingRef.current = false; setProblem(errorMessage(reason)); setClosing(false); } }
   }
   const output = view.output, calendar = view.calendar;
+  const sample = output?.request.sample ?? calendar?.request.sample;
   const countOnly = !!origin.onCount, disabled = view.busy || closing || !controller.current();
   return <Modal title={countOnly ? text.countTitle : text.title} onClose={() => { void close(); }} wide><div className="modal-content sqlite-statistics-content">
-    <p>{text.hint}</p>{!countOnly && analysis === 'summary' && <UsageHelp><p className="muted small">{text.types}</p></UsageHelp>}<p className="muted small">{origin.base.database} / {origin.base.table}</p>
+    <p>{countOnly ? text.countHint : text.hint}</p>{!countOnly && analysis === 'summary' && <UsageHelp><p className="muted small">{text.types}</p></UsageHelp>}<p className="muted small">{origin.base.database} / {origin.base.table}</p>
+    {!countOnly && <StatisticsSampleControls scope={scope} disabled={disabled} onChange={changeScope}/>}
     <div className="sqlite-statistics-controls">{!countOnly && <><label>{text.column}<select aria-label={text.column} value={column} disabled={view.busy || closing} onChange={event => { if (!current() || !origin.columns.includes(event.target.value)) return; controller.clear(); setColumn(event.target.value); setProblem(''); }}>{origin.columns.map(name => <option key={name}>{name}</option>)}</select></label>
     <label>{text.analysis}<select aria-label={text.analysis} value={analysis} disabled={disabled} onChange={event => {
       const value = event.target.value;
@@ -52,14 +73,14 @@ export function SqliteStatisticsDialog(props: Props) {
       if (!current() || !value) return;
       controller.clear(); setUnit(value); setProblem('');
     }}>{calendarUnits.map(value => <option value={value} key={value}>{calendarText.calendarUnits[value]}</option>)}</select></label>}
-    <button disabled={disabled} onClick={() => {
-      if (!current()) return;
-      if (analysis === 'calendar') void controller.readCalendar(column, unit);
-      else void controller.read(column);
-    }}>{text.read}</button></>}<button disabled={disabled} onClick={() => void countRows()}>{countOnly ? text.read : text.readRowCount}</button>{view.busy && <><button disabled={view.stopping || closing} onClick={() => { if (committed.current === render) void controller.stop(); }}>{text.stop}</button><Spinner text={view.stopping ? text.stopping : text.loading}/></>}</div>
+    <button disabled={disabled} onClick={readStatistics}>{text.read}</button></>}<button disabled={disabled} onClick={() => void countRows()}>{countOnly ? text.read : text.readRowCount}</button>{view.busy && <><button disabled={view.stopping || closing} onClick={() => { if (committed.current === render) void controller.stop(); }}>{text.stop}</button><Spinner text={view.stopping ? text.stopping : text.loading}/></>}</div>
     <ErrorBox message={problem || view.error || (!controller.current() ? text.stale : '')}/>
     {view.rowCount !== undefined && controller.current() && <p className="sqlite-statistics-summary" role="status">{text.rowCountResult(view.rowCount)}</p>}
-    {calendar && controller.current() && <QueryResultCalendarChart distribution={{ ...calendar, column: calendar.request.column }}/>}
-    {output && <div className="sqlite-statistics-result" aria-label={text.entry}><p className="muted small">{text.declared}：{output.declaredType || text.dynamic}</p><p className="sqlite-statistics-summary" role="status">{text.rows}：{output.rows} · {text.nonNull}：{output.nonNull} · {text.nulls}：{output.nulls}</p>{!output.groups.length ? <p>{text.empty}</p> : <div className="sqlite-statistics-scroll"><table><thead><tr>{[text.kind, text.count, text.distinct, text.min, text.max].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{output.groups.map(group => <tr key={group.kind}><th scope="row">{group.kind.toUpperCase()}</th><td>{group.count}</td><td>{group.distinct}</td><td className="sqlite-statistics-bound">{preview(group.min)}</td><td className="sqlite-statistics-bound">{preview(group.max)}</td></tr>)}</tbody></table></div>}</div>}
+    {sample && controller.current() && <p>{scopeText.sampledScope(sample.limit)}</p>}
+    {calendar && controller.current() && <>
+      {sample && <p className="sqlite-statistics-summary" role="status">{scopeText.sampledRows}：{calendar.rows}</p>}
+      <QueryResultCalendarChart distribution={{ ...calendar, column: calendar.request.column }}/>
+    </>}
+    {output && <div className="sqlite-statistics-result" aria-label={text.entry}><p className="muted small">{text.declared}：{output.declaredType || text.dynamic}</p><p className="sqlite-statistics-summary" role="status">{sample ? scopeText.sampledRows : text.rows}：{output.rows} · {text.nonNull}：{output.nonNull} · {text.nulls}：{output.nulls}</p>{!output.groups.length ? <p>{text.empty}</p> : <div className="sqlite-statistics-scroll"><table><thead><tr>{[text.kind, text.count, text.distinct, text.min, text.max].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{output.groups.map(group => <tr key={group.kind}><th scope="row">{group.kind.toUpperCase()}</th><td>{group.count}</td><td>{group.distinct}</td><td className="sqlite-statistics-bound">{preview(group.min)}</td><td className="sqlite-statistics-bound">{preview(group.max)}</td></tr>)}</tbody></table></div>}</div>}
   </div><footer className="modal-footer"><button disabled={closing} onClick={() => { void close(); }}>{text.close}</button></footer></Modal>;
 }

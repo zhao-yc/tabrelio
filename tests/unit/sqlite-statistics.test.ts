@@ -31,6 +31,23 @@ const output = (): SqliteStatisticsOutput => ({ request: structuredClone(request
   { kind: 'integer', count: '3', distinct: '2', min: { kind: 'integer', value: '-9223372036854775808' }, max: { kind: 'integer', value: '9223372036854775807' } },
   { kind: 'null', count: '1', distinct: '0', min: { kind: 'null' }, max: { kind: 'null' } },
 ] });
+it('抽样只接受表页排序和有界整数，概况及日期回执必须守住同一上限', () => {
+  const sample = { limit: 4, sort: [{ column: 'v', direction: 'desc' as const }] };
+  const sampled = { ...request, sample };
+  const calendar = { ...calendarInput, sample };
+  const { column: _column, ...count } = sampled;
+  expect(sqliteRowCountInputSchema.safeParse(count).success).toBe(false);
+  expect(sqliteStatisticsInputSchema.parse(sampled)).toEqual(sampled);
+  expect(sqliteCalendarInputSchema.parse(calendar)).toEqual(calendar);
+  expect(sqliteStatisticsInputSchema.safeParse({ ...sampled, sample: { ...sample, offset: 5 } }).success).toBe(false);
+  for (const limit of [0, 1.5, 100001])
+    expect(sqliteStatisticsInputSchema.safeParse({ ...sampled, sample: { ...sample, limit } }).success).toBe(false);
+  expect(assertSqliteStatistics({ ...output(), request: sampled }, sampled).rows).toBe('4');
+  expect(() => assertSqliteStatistics(output(), sampled)).toThrow('原请求');
+  const tooSmall = { ...sampled, sample: { ...sample, limit: 3 } };
+  expect(() => assertSqliteStatistics({ ...output(), request: tooSmall }, tooSmall)).toThrow('原样本范围');
+  expect(() => assertSqliteCalendar({ ...calendarOutput, request: calendar }, calendar)).toThrow('原样本范围');
+});
 it.each(['running', 'completed', 'failed', 'cancelled'] as const)('%s任务概要不保存筛选、极值或错误原文', status => {
   const message = persistedTaskMessage('sqlite.statistics', { taskId: 'stats', status, progress: 0, message: '敏感筛选／极值／SQL错误' }); expect(message).not.toContain('敏感'); expect(message).toContain('SQLite');
 });

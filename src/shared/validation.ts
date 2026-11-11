@@ -58,7 +58,7 @@ import { postgresCreateViewPreviewSchema, postgresEditViewPreviewSchema, postgre
 import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postgresCreateTableSchemasSchema } from './postgresCreateTable';
 import { postgresTableCopyApplySchema, postgresTableCopyPreviewSchema } from './postgresTableCopy';
 import { postgresStructureInputSchema } from './postgresStructure';
-import { postgresBackupCatalogueSchema, postgresBackupSetSchema, postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportCheckSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema, postgresTableReferenceSchema, postgresRelatedTableSchema, postgresTableValuesSchema, postgresTableColumnReadSchema } from './postgresTable';
+import { postgresBackupCatalogueSchema, postgresBackupSetSchema, postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportCheckSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema, postgresTableReferenceSchema, postgresRelatedTableSchema, postgresTableValuesSchema, postgresTableStatisticsSchema } from './postgresTable';
 import { postgresTableCalendarSchema, postgresTableHistogramSchema } from './postgresTable';
 import { postgresFilteredUpdateSchema } from './postgresTable';
 import { sqliteDraftSaveSchema, sqliteDraftOpenSchema, sqliteDraftRestoreSchema } from './sqliteTableDraft';
@@ -428,7 +428,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.table.draft.save': postgresTablePreviewSchema,
   'postgres.table.draft.restore': postgresTableReleaseSchema,
   'postgres.table.values': postgresTableValuesSchema,
-  'postgres.table.statistics': postgresTableColumnReadSchema,
+  'postgres.table.statistics': postgresTableStatisticsSchema,
   'postgres.table.histogram': postgresTableHistogramSchema,
   'postgres.table.calendar': postgresTableCalendarSchema,
   'postgres.table.references': postgresTableReferenceSchema,

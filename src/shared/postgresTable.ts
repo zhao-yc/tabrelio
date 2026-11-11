@@ -14,6 +14,7 @@ import { FILTER_LIMITS, filterGroupSchema, filterRuleSchema, sortRulesSchema, va
 import { strictTableLayoutPreferences } from './tablePreferences';
 import { postgresRelatedTabPrefix } from './postgresRelatedTab';
 import { postgresHistogramBins } from './postgresTableHistogram';
+import { statisticsSampleLimitSchema } from './tableStatistics';
 import { postgresCalendarUnitSchema } from './postgresTableCalendar';
 import { postgresIdentifier, postgresRelationName } from './postgresSql';
 import { dataFileFormats, dataMarkupText, dataExportExtension } from './dataMarkupExport';
@@ -162,9 +163,11 @@ export const postgresFilteredUpdateSchema = postgresTableReleaseSchema.extend({ 
   });
 export const postgresTableColumnReadSchema = postgresTableReleaseSchema.extend({ column }).strict();
 export type PostgresTableColumnReadInput = z.infer<typeof postgresTableColumnReadSchema>;
-export const postgresTableHistogramSchema = postgresTableColumnReadSchema.extend({ bins: postgresHistogramBins }).strict();
+export const postgresTableStatisticsSchema = postgresTableColumnReadSchema.extend({ sampleLimit: statisticsSampleLimitSchema.optional() }).strict();
+export type PostgresTableStatisticsInput = z.infer<typeof postgresTableStatisticsSchema>;
+export const postgresTableHistogramSchema = postgresTableStatisticsSchema.extend({ bins: postgresHistogramBins }).strict();
 export type PostgresTableHistogramInput = z.infer<typeof postgresTableHistogramSchema>;
-export const postgresTableCalendarSchema = postgresTableColumnReadSchema.extend({ unit: postgresCalendarUnitSchema }).strict();
+export const postgresTableCalendarSchema = postgresTableStatisticsSchema.extend({ unit: postgresCalendarUnitSchema }).strict();
 export type PostgresTableCalendarInput = z.infer<typeof postgresTableCalendarSchema>;
 export const postgresTableValueLimits = { groups: 500, page: 50, search: 256 } as const;
 export const postgresTableValuesSchema = postgresTableColumnReadSchema.extend({

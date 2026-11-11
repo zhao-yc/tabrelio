@@ -1,4 +1,4 @@
-import { sqliteStatisticsInputSchema, assertSqliteStatistics, sqliteRowCountInputSchema, assertSqliteRowCount, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput, assertSqliteCalendar, sqliteCalendarInputSchema, type SqliteCalendarInput, type SqliteCalendarOutput } from '../shared/sqliteStatistics';
+import { sqliteStatisticsInputSchema, assertSqliteStatistics, sqliteRowCountInputSchema, assertSqliteRowCount, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput, type SqliteStatisticsSample, assertSqliteCalendar, sqliteCalendarInputSchema, type SqliteCalendarInput, type SqliteCalendarOutput } from '../shared/sqliteStatistics';
 import { sqliteStatisticsZh as text } from './locales/sqliteStatistics.zh-CN';
 import type { CalendarUnit } from '../shared/civilDate';
 
@@ -17,15 +17,15 @@ export class SqliteStatisticsController {
   /** 字段变更只清旧结果，不能触发读取或取消其它任务。 */
   clear(): void { if (this.active || !this.current()) return; this.emit({ output: undefined, calendar: undefined, error: '' }); }
   /** 同帧连点只接纳一次，申请租约和投递前都核原来源，回包必须绑定准确请求。 */
-  async read(column: string): Promise<void> {
+  async read(column: string, sample?: SqliteStatisticsSample): Promise<void> {
     if (this.active || !this.current()) return;
-    let input: SqliteStatisticsInput; try { input = sqliteStatisticsInputSchema.parse({ ...this.ports.base, column, taskId: this.ports.id() }); } catch { this.emit({ error: text.unavailable }); return; }
+    let input: SqliteStatisticsInput; try { input = sqliteStatisticsInputSchema.parse({ ...this.ports.base, column, ...(sample ? { sample } : {}), taskId: this.ports.id() }); } catch { this.emit({ error: text.unavailable }); return; }
     await this.run(input, async () => ({ output: assertSqliteStatistics(await this.ports.read(input), input) }));
   }
   /** 日期分布与字段概况互斥读取，沿用同一来源租约和取消终态。 */
-  async readCalendar(column: string, calendarUnit: CalendarUnit): Promise<void> {
+  async readCalendar(column: string, calendarUnit: CalendarUnit, sample?: SqliteStatisticsSample): Promise<void> {
     if (this.active || !this.current()) return;
-    const input = sqliteCalendarInputSchema.safeParse({ ...this.ports.base, column, calendarUnit, taskId: this.ports.id() });
+    const input = sqliteCalendarInputSchema.safeParse({ ...this.ports.base, column, calendarUnit, ...(sample ? { sample } : {}), taskId: this.ports.id() });
     if (!input.success) { this.emit({ error: text.unavailable }); return; }
     await this.run(input.data, async () => ({ calendar: assertSqliteCalendar(await this.ports.readCalendar(input.data), input.data) }));
   }

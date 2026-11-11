@@ -2,11 +2,12 @@ import { z } from 'zod';
 import { calendarUnits, isCivilDay, type CalendarUnit } from './civilDate';
 import { assertCalendarCounts, calendarCountSchema, calendarCountsShape, calendarTimeZoneSchema } from './calendarDistribution';
 import type { PostgresTableColumn } from './postgresTable';
+import { assertStatisticsSample, statisticsSampleLimitSchema } from './tableStatistics';
 
 export const postgresCalendarUnitSchema = z.enum(calendarUnits);
 const resultSchema = z.object({
   ...calendarCountsShape, column: z.string(), unit: postgresCalendarUnitSchema,
-  rows: calendarCountSchema, timeZone: calendarTimeZoneSchema.optional(),
+  rows: calendarCountSchema, timeZone: calendarTimeZoneSchema.optional(), sampleLimit: statisticsSampleLimitSchema.optional(),
 }).strict();
 export type PostgresTableCalendar = z.infer<typeof resultSchema>;
 
@@ -29,11 +30,12 @@ function postgresPeriodKey(label: string, unit: CalendarUnit): number | undefine
 }
 
 /** 发布前核对所选列、粒度、时区及完整计数。 */
-export function assertPostgresTableCalendar(raw: unknown, column: PostgresTableColumn, unit: CalendarUnit): PostgresTableCalendar {
+export function assertPostgresTableCalendar(raw: unknown, column: PostgresTableColumn, unit: CalendarUnit, sampleLimit?: number): PostgresTableCalendar {
   const value = resultSchema.parse(raw), kind = postgresCalendarKind(column);
   if (!kind || value.column !== column.name || value.unit !== unit || (kind === 'zoned') !== (value.timeZone !== undefined))
     throw Error('PostgreSQL 日期分布与所选字段、分组单位或统计时区不符');
   if (BigInt(value.rows) > 9223372036854775807n) throw Error('PostgreSQL 日期分布计数超出 bigint');
+  assertStatisticsSample(sampleLimit, value.sampleLimit, BigInt(value.rows));
   assertCalendarCounts(value, unit, value.rows, postgresPeriodKey);
   return value;
 }

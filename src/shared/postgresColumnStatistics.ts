@@ -27,4 +27,4 @@ export function postgresColumnStatistics(raw: unknown) {
   return { ...result, nulls: String(rows - nonNull),
     ...(groups ? { groups: { ...groups, repeated: String(BigInt(groups.distinct) - BigInt(groups.unique)) } } : {}) };
 }
-export type PostgresColumnStatistics = ReturnType<typeof postgresColumnStatistics>;
+export type PostgresColumnStatistics = ReturnType<typeof postgresColumnStatistics> & { sampleLimit?: number };

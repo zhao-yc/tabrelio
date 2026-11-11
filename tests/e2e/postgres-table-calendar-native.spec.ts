@@ -3,12 +3,15 @@ import { navigationMenuItem } from './navigation-menu';
 import { postgresColumnStatisticsZh as stats } from '../../src/renderer/locales/postgresColumnStatistics.zh-CN';
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { queryResultStatisticsZh as calendar } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
+import { tableStatisticsZh as scope } from '../../src/renderer/locales/tableStatistics.zh-CN';
+import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
+import { tableHistogramZh as histogram } from '../../src/renderer/locales/tableHistogram.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 test.skip(process.env.DBARK_POSTGRES_CALENDAR_NATIVE !== '1', '仅在显式启用的隔离 PostgreSQL 源码验收运行');
 
-test('PostgreSQL 表和视图日期分布覆盖完整筛选并保留原日历语义', async ({}, info) => {
+test('PostgreSQL 表和视图日期分布、已排序样本概况及直方图', async ({}, info) => {
   const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '', user = process.env.DBARK_POSTGRES_TEST_USER;
   const password = process.env.DBARK_POSTGRES_TEST_PASSWORD ?? '', port = Number(process.env.DBARK_POSTGRES_TEST_PORT);
   if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_DEV_URL ||
@@ -80,6 +83,61 @@ test('PostgreSQL 表和视图日期分布覆盖完整筛选并保留原日历语
     await close();
     await expect(draft).toHaveValue('2');
     await expect(firstFive).toHaveCount(5);
+
+    const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+    const marker = (id: number) => grid.getByRole('gridcell', { name: 'marker-' + id, exact: true });
+    await tab.getByRole('button', { name: sort.entry, exact: true }).click();
+    const sorting = page.getByRole('dialog', { name: sort.entry, exact: true });
+    await sorting.getByRole('button', { name: sort.add, exact: true }).click();
+    await sorting.getByLabel(sort.field(1), { exact: true }).selectOption('id');
+    await sorting.getByLabel(sort.direction(1), { exact: true }).selectOption('DESC');
+    await sorting.getByRole('button', { name: sort.apply, exact: true }).click();
+    await expect(marker(100)).toBeVisible();
+    await tab.getByRole('button', { name: tableText.next, exact: true }).click();
+    await expect(marker(95)).toBeVisible();
+    await expect(marker(100)).toHaveCount(0);
+    const baseline = await tasks();
+    await open();
+    await dialog.getByLabel(scope.scopeMode, { exact: true }).selectOption('first');
+    const sampleLimit = dialog.getByLabel(scope.sampleLimit, { exact: true });
+    const readSummary = () => dialog.getByRole('button', { name: stats.read, exact: true }).click();
+    await sampleLimit.fill('100001');
+    await readSummary();
+    await expect(dialog.getByRole('alert')).toContainText(scope.sampleLimitInvalid);
+    await sampleLimit.fill('7');
+    await chooseField('id');
+    expect(await tasks()).toEqual(baseline);
+    await readSummary();
+    const metric = (name: string) => dialog.getByRole('rowheader', { name, exact: true }).locator('..').getByRole('cell');
+    await expect(dialog.getByText(scope.sampledScope(7), { exact: true })).toBeVisible();
+    await expect(metric(scope.sampledRows)).toHaveText('7');
+    await expect(metric(stats.min)).toHaveText('94');
+    await expect(metric(stats.max)).toHaveText('100');
+    await expect(metric(stats.sum)).toHaveText('679');
+    await dialog.screenshot({ path: info.outputPath('PostgreSQL表页前7条字段概况.png') });
+    await dialog.getByLabel(histogram.bins, { exact: true }).selectOption('5');
+    await dialog.getByRole('button', { name: stats.readHistogram, exact: true }).click();
+    const distributionChart = dialog.getByRole('region', { name: histogram.title, exact: true });
+    await expect(dialog.getByText(scope.sampledRows + '：7', { exact: true })).toBeVisible();
+    await expect(distributionChart.getByRole('rowheader').first()).toContainText('[94,');
+    await expect(distributionChart.getByRole('rowheader').last()).toContainText(', 100]');
+    const frequencies = await distributionChart.locator('tbody tr > td:nth-child(2)').allTextContents();
+    expect(frequencies.reduce((total, value) => total + Number(value), 0)).toBe(7);
+    await dialog.screenshot({ path: info.outputPath('PostgreSQL表页前7条数值分布.png') });
+    await chooseField('occurred');
+    await chooseUnit('day');
+    await run();
+    await expect(dialog.getByLabel(scope.sampledRows, { exact: true })).toHaveText('7');
+    await expect(chart.getByRole('rowheader')).toHaveText(['0001-02-29 BC', '2024-03-01', '10000-01-01']);
+    await expect(dialog.getByLabel(calendar.nulls, { exact: true })).toHaveText('2');
+    await expect(dialog.getByLabel(calendar.calendarUngrouped, { exact: true })).toHaveText('2');
+    await dialog.screenshot({ path: info.outputPath('PostgreSQL表页前7条日期分布.png') });
+    await dialog.getByLabel(scope.scopeMode, { exact: true }).selectOption('all');
+    await expect(chart).toHaveCount(0);
+    await run();
+    await distribution(['0001-02-29 BC', '2024-02-29', '2024-03-01', '10000-01-01'], ['1', '45', '49', '1'], '2', '2');
+    await close();
+    await expect(marker(95)).toBeVisible();
 
     await selectTab('events_view');
     await open();

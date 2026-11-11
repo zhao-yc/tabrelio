@@ -485,7 +485,7 @@ export interface CommandMap {
   'postgres.table.draft.save': { input: import('./postgresTable').PostgresTablePreviewInput; output: { name: string } | null };
   'postgres.table.draft.restore': { input: import('./postgresTable').PostgresTableReleaseInput; output: import('./postgresTableDraft').PostgresDraftRestored | null };
   'postgres.table.values': { input: import('./postgresTable').PostgresTableValuesInput; output: import('./postgresTable').PostgresTableValues };
-  'postgres.table.statistics': { input: import('./postgresTable').PostgresTableColumnReadInput; output: import('./postgresColumnStatistics').PostgresColumnStatistics };
+  'postgres.table.statistics': { input: import('./postgresTable').PostgresTableStatisticsInput; output: import('./postgresColumnStatistics').PostgresColumnStatistics };
   'postgres.table.histogram': { input: import('./postgresTable').PostgresTableHistogramInput; output: import('./postgresTableHistogram').PostgresTableHistogram };
   'postgres.table.calendar': { input: import('./postgresTable').PostgresTableCalendarInput; output: import('./postgresTableCalendar').PostgresTableCalendar };
   'postgres.table.references': { input: import('./postgresTable').PostgresTableReferenceInput; output: import('./postgresTable').PostgresTableReferenceResult };

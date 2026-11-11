@@ -3,6 +3,7 @@ import { sqliteRowCountSchema as count, sqliteTablePageSchema } from './sqliteTa
 import { sqliteValueOptionSchema } from './sqliteValueOptions';
 import { calendarUnits } from './civilDate';
 import { assertCalendarCounts, calendarDistributionLimit } from './calendarDistribution';
+import { assertStatisticsSample, statisticsSampleLimitSchema } from './tableStatistics';
 
 export const sqliteStatisticsLimits = { groups: 5, bytes: 1024 * 1024, cellBytes: 65536, active: 2 } as const;
 export const sqliteStorageKinds = ['blob', 'integer', 'null', 'real', 'text'] as const;
@@ -16,7 +17,11 @@ function validateConditions(input: z.infer<typeof sqliteRowCountInputBase>, cont
 }
 const sqliteRowCountInputBase = z.object(aggregateSource).strict();
 export const sqliteRowCountInputSchema = sqliteRowCountInputBase.superRefine(validateConditions);
-export const sqliteStatisticsInputSchema = sqliteRowCountInputBase.extend({ column: page.table }).superRefine(validateConditions);
+const sqliteStatisticsSampleSchema = z.object({ limit: statisticsSampleLimitSchema, sort: page.sort }).strict();
+export type SqliteStatisticsSample = z.infer<typeof sqliteStatisticsSampleSchema>;
+export const sqliteStatisticsInputSchema = sqliteRowCountInputBase.extend({
+  column: page.table, sample: sqliteStatisticsSampleSchema.optional(),
+}).superRefine(validateConditions);
 export const sqliteCalendarInputSchema = sqliteStatisticsInputSchema.safeExtend({ calendarUnit: z.enum(calendarUnits) });
 export const sqliteCalendarLimits = { buckets: calendarDistributionLimit, statementMs: 30000 } as const;
 const sqliteRowCountOutputSchema = z.object({ request: sqliteRowCountInputSchema, rows: count }).strict();
@@ -48,6 +53,7 @@ export function assertSqliteCalendar(raw: unknown, request: SqliteCalendarInput)
   const value = sqliteCalendarOutputSchema.parse(raw);
   const input = sqliteCalendarInputSchema.parse(request);
   if (JSON.stringify(value.request) !== JSON.stringify(input)) throw Error('SQLite日期分布回包与原请求不符');
+  assertStatisticsSample(input.sample?.limit, value.request.sample?.limit, BigInt(value.rows));
   assertCalendarCounts(value, input.calendarUnit, value.rows);
   return value;
 }
@@ -66,5 +72,6 @@ export function assertSqliteStatistics(raw: unknown, request: SqliteStatisticsIn
     if (group.min.kind === 'integer' && group.max.kind === 'integer' && BigInt(group.min.value) > BigInt(group.max.value) || group.min.kind === 'real' && group.max.kind === 'real' && Number(group.min.value) > Number(group.max.value) || group.min.kind === 'blob' && group.max.kind === 'blob' && group.min.value.toLowerCase() > group.max.value.toLowerCase()) throw Error('SQLite字段概况极值顺序无效');
   }
   if (rows !== BigInt(value.rows) || nulls !== BigInt(value.nulls) || rows - nulls !== BigInt(value.nonNull)) throw Error('SQLite字段概况数量不完整');
+  assertStatisticsSample(request.sample?.limit, value.request.sample?.limit, rows);
   return value;
 }

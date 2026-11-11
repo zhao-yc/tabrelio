@@ -19,7 +19,7 @@ import {
   type PostgresTableReleaseInput, type PostgresTableTarget,
   type PostgresTableReferenceInput, type PostgresTableReferenceResult, type PostgresTableColumnReadInput, type PostgresTableValuesInput, type PostgresTableValues, type PostgresTableHistogramInput,
   type PostgresRelatedTableInput, type PostgresRelatedTablePage,
-  type PostgresFilteredUpdateInput, type PostgresTableCalendarInput,
+  type PostgresFilteredUpdateInput, type PostgresTableCalendarInput, type PostgresTableStatisticsInput,
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
 import type { PostgresSyncEvidence, PostgresSyncRow } from './dataCompare';
@@ -35,6 +35,7 @@ import { readPostgresTableReferences, type PostgresReferenceSourceRow, type Post
 import { readPostgresColumnStatistics } from './tableStatistics';
 import { hasPostgresRoundtripFloatText, readPostgresTableHistogram } from './tableHistogram';
 import { readPostgresTableCalendar } from './tableCalendar';
+import { assertStatisticsSample, statisticsRowCount } from '../../shared/tableStatistics';
 import { readTableValueOptionsOrder } from '../../shared/tableValueOptions';
 import { valueDistributionSchema } from '../../shared/valueDistribution';
 import {
@@ -833,7 +834,7 @@ export class PostgresTableWorkspace {
 
   /** 字段只读任务复用原表页范围，读前核对列目录，读后拒绝已撤销的原页。 */
   private async readColumn<T>(input: Scoped<PostgresTableColumnReadInput>, connect: Connect,
-    read: (connection: PostgresConnection, relation: Relation, column: PostgresTableColumn, filter: Snapshot['options']['filter']) => Promise<T>): Promise<T> {
+    read: (connection: PostgresConnection, relation: Relation, column: PostgresTableColumn, options: Snapshot['options']) => Promise<T>): Promise<T> {
     const original = this.snapshot(input);
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
@@ -845,7 +846,7 @@ export class PostgresTableWorkspace {
         if (relation.fingerprint !== original.relation.fingerprint) throw Error('原表页结构或权限已变化，请刷新');
         const column = relation.columns.find(item => item.key === input.column);
         if (!column) throw Error('原表页字段已变化，请刷新');
-        const output = await read(connection, relation, column, original.options.filter);
+        const output = await read(connection, relation, column, original.options);
         const completed = await connection.query('COMMIT', undefined, small());
         if (completed.postgresCommand !== 'COMMIT') throw Error('PostgreSQL 字段读取事务未完成');
         return output;
@@ -857,7 +858,7 @@ export class PostgresTableWorkspace {
 
   /** 候选沿原表页已应用条件读全范围，原生分组保留列的比较与排序规则。 */
   values(input: Scoped<PostgresTableValuesInput>, connect: Connect): Promise<PostgresTableValues> {
-    return this.readColumn(input, connect, async (connection, relation, column, filter) => {
+    return this.readColumn(input, connect, async (connection, relation, column, { filter }) => {
       if (!column.valueOptions) throw Error('当前字段不支持按不同值筛选');
       if (column.type === 'real' || column.type === 'double precision') {
         // 改精度会影响已应用的文字筛选。服务端启用舍入时拒绝生成可能失真的候选。
@@ -898,31 +899,37 @@ export class PostgresTableWorkspace {
     });
   }
 
-  /** 统计全部符合当前条件的已提交数据，不读取分页记录或 Renderer 草稿。 */
-  statistics(input: Scoped<PostgresTableColumnReadInput>, connect: Connect) {
-    return this.readColumn(input, connect, (connection, relation, column, filter) => {
+  /** 抽样从原表页排序的第一行起算，复用分页补序，聚合前截取已筛选的数据。 */
+  private readStatistic<T extends Parameters<typeof statisticsRowCount>[0]>(input: Scoped<PostgresTableStatisticsInput>, connect: Connect,
+    read: (connection: PostgresConnection, column: PostgresTableColumn, from: string, args: unknown[]) => Promise<T>) {
+    return this.readColumn(input, connect, async (connection, relation, column, options) => {
+      const { sampleLimit } = input;
+      if (sampleLimit !== undefined) {
+        const { sql, args } = readSql(relation, options, undefined, [column]);
+        const from = '(' + sql + ' LIMIT $' + args.push(sampleLimit) + ') AS dbark_stat_sample';
+        const output = await read(connection, column, from, args);
+        assertStatisticsSample(sampleLimit, sampleLimit, statisticsRowCount(output));
+        return { ...output, sampleLimit };
+      }
       const args: unknown[] = [];
-      const condition = postgresTableCondition(filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
-      return readPostgresColumnStatistics(connection, column, only(relation) + (condition ? ' WHERE ' + condition : ''), args);
+      const condition = postgresTableCondition(options.filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
+      return read(connection, column, only(relation) + (condition ? ' WHERE ' + condition : ''), args);
     });
   }
 
-  /** 分布独立于总和及方差计算，沿原表页快照验证与已应用筛选读取。 */
+  /** 概况和两种分布使用独立只读事务及相同的样本范围。 */
+  statistics(input: Scoped<PostgresTableStatisticsInput>, connect: Connect) {
+    return this.readStatistic(input, connect, readPostgresColumnStatistics);
+  }
+
   histogram(input: Scoped<PostgresTableHistogramInput>, connect: Connect) {
-    return this.readColumn(input, connect, (connection, relation, column, filter) => {
-      const args: unknown[] = [];
-      const condition = postgresTableCondition(filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
-      return readPostgresTableHistogram(connection, column, only(relation) + (condition ? ' WHERE ' + condition : ''), args, input.bins);
-    });
+    return this.readStatistic(input, connect,
+      (connection, column, from, args) => readPostgresTableHistogram(connection, column, from, args, input.bins));
   }
 
-  /** 日期区间与原分页共用已应用筛选，但在独立只读快照中聚合全部匹配行。 */
   calendar(input: Scoped<PostgresTableCalendarInput>, connect: Connect) {
-    return this.readColumn(input, connect, (connection, relation, column, filter) => {
-      const args: unknown[] = [];
-      const condition = postgresTableCondition(filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
-      return readPostgresTableCalendar(connection, column, only(relation) + (condition ? ' WHERE ' + condition : ''), args, input.unit);
-    });
+    return this.readStatistic(input, connect,
+      (connection, column, from, args) => readPostgresTableCalendar(connection, column, from, args, input.unit));
   }
 
   /** 先声明游标锁住并复核关系。原生 COPY 使用同一事务中的单条 SELECT 快照。 */

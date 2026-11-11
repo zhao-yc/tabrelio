@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { postgresColumnStatistics } from '../../src/shared/postgresColumnStatistics';
-import { postgresTableCalendarSchema, postgresTableColumnReadSchema, type PostgresTableColumn } from '../../src/shared/postgresTable';
+import { postgresTableCalendarSchema, postgresTableColumnReadSchema, postgresTableHistogramSchema, postgresTableStatisticsSchema, type PostgresTableColumn } from '../../src/shared/postgresTable';
 import { assertPostgresTableCalendar, postgresCalendarKind } from '../../src/shared/postgresTableCalendar';
+import { assertStatisticsSample, statisticsRowCount } from '../../src/shared/tableStatistics';
+import { validateCommand } from '../../src/shared/validation';
 
 describe('PostgreSQL 字段概况', () => {
   it('以原精度计算 NULL 与重复组数，并标出已截断的极值', () => {
@@ -23,6 +25,23 @@ describe('PostgreSQL 字段概况', () => {
       pageToken: 'd312a72b-fdfd-4a6e-8770-f5f1637af235', column: 'c1' };
     expect(postgresTableColumnReadSchema.safeParse(request).success).toBe(true);
     expect(postgresTableColumnReadSchema.safeParse({ ...request, search: '额外条件' }).success).toBe(false);
+  });
+
+  it('抽样限于统计命令及绑定表页，样本计数涵盖非有限值和 NULL', () => {
+    const request = { connectionId: '连接', database: '库', table: '表', tabId: '页',
+      pageToken: 'd312a72b-fdfd-4a6e-8770-f5f1637af235', column: 'c1', sampleLimit: 100000 };
+    expect(validateCommand('postgres.table.statistics', request)).toEqual(request);
+    expect(postgresTableHistogramSchema.parse({ ...request, bins: 5 })).toMatchObject(request);
+    expect(postgresTableCalendarSchema.parse({ ...request, unit: 'day' })).toMatchObject(request);
+    expect(postgresTableColumnReadSchema.safeParse(request).success).toBe(false);
+    expect(postgresTableStatisticsSchema.safeParse({ ...request, sort: [] }).success).toBe(false);
+    for (const sampleLimit of [0, 1.5, 100001])
+      expect(postgresTableStatisticsSchema.safeParse({ ...request, sampleLimit }).success).toBe(false);
+    const rows = statisticsRowCount({ finite: '5', nonFinite: '1', nulls: '1' });
+    expect(rows).toBe(7n);
+    expect(() => assertStatisticsSample(7, 7, rows)).not.toThrow();
+    expect(() => assertStatisticsSample(6, 6, rows)).toThrow('原样本范围');
+    expect(() => assertStatisticsSample(7, undefined, rows)).toThrow('原样本范围');
   });
 });
 

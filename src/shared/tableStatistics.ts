@@ -4,7 +4,19 @@ import { sortRulesSchema } from './filtering';
 
 export const tableStatisticsLimits = { columns: 12, metadataRows: 4096, cellBytes: 256 * 1024, bytes: 8 * 1024 * 1024 } as const;
 export const tableStatisticsSampleMax = 100_000;
-export const tableStatisticsSampleSchema = z.object({ limit: z.number().int().min(1).max(tableStatisticsSampleMax), sort: sortRulesSchema }).strict();
+export const statisticsSampleLimitSchema = z.number().int().min(1).max(tableStatisticsSampleMax);
+export const tableStatisticsSampleSchema = z.object({ limit: statisticsSampleLimitSchema, sort: sortRulesSchema }).strict();
+
+/** 样本回执必须对应原行数上限，且聚合覆盖的行数不能超出上限。 */
+export function assertStatisticsSample(expected: number | undefined, actual: number | undefined, rows: bigint): void {
+  if (actual !== expected || expected !== undefined && (rows < 0n || rows > BigInt(expected)))
+    throw Error('统计回包与原样本范围不符');
+}
+
+/** 直方图把同一样本的记录拆成有限值、非有限值和 NULL。 */
+export function statisticsRowCount(result: { rows: string } | { finite: string; nonFinite: string; nulls: string }): bigint {
+  return 'rows' in result ? BigInt(result.rows) : BigInt(result.finite) + BigInt(result.nonFinite) + BigInt(result.nulls);
+}
 export type TableStatisticsSample = z.infer<typeof tableStatisticsSampleSchema>;
 export interface TableStatisticsInput { connectionId: string; database: string; table: string; taskId: string; columns: string[]; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; distinct?: boolean; histogram?: import('./tableHistogram').TableHistogramRequest; calendar?: import('./tableCalendar').TableCalendarRequest; sample?: TableStatisticsSample; }
 interface StatisticsCounts { name: string; type: string; nonNull: string; nulls: string; }

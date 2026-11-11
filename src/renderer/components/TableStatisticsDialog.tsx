@@ -9,7 +9,8 @@ import { tableStatisticsZh as text } from '../locales/tableStatistics.zh-CN';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import '../tableStatistics.css';
 import { TableHistogramChart } from './TableHistogramChart';
-import { tableStatisticsCanSampleHistogram, tableStatisticsColumnKind, tableStatisticsMessages, tableStatisticsSampleMax, tableStatisticsSampleSchema } from '../../shared/tableStatistics';
+import { tableStatisticsCanSampleHistogram, tableStatisticsColumnKind, tableStatisticsMessages, tableStatisticsSampleSchema } from '../../shared/tableStatistics';
+import { defaultStatisticsScope, StatisticsSampleControls } from './StatisticsSampleControls';
 import { tableHistogramZh as histogramText } from '../locales/tableHistogram.zh-CN';
 import type { TableHistogramRequest } from '../../shared/tableHistogram';
 import { tableCalendarKind, type TableCalendarRequest } from '../../shared/tableCalendar';
@@ -35,7 +36,7 @@ export function TableStatisticsDialog({ base, intent, initialColumn, onClose, on
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set(initialColumn === undefined ? [] : [initialColumn]));
   const selectedRef = useRef(selected); selectedRef.current = selected;
   const [distinct, setDistinct] = useState(false), distinctRef = useRef(distinct); distinctRef.current = distinct;
-  const [scope, setScope] = useState({ sampled: false, limit: '1000' }), scopeRef = useRef(scope); scopeRef.current = scope;
+  const [scope, setScope] = useState(defaultStatisticsScope), scopeRef = useRef(scope); scopeRef.current = scope;
   const histogramAvailable = !scope.sampled || tableStatisticsCanSampleHistogram(origin.intent.source);
   const [histogram, setHistogram] = useState({ column: '', bins: 10 as TableHistogramRequest['bins'] }), histogramRef = useRef(histogram); histogramRef.current = histogram;
   const calendarColumns = origin.intent.source.columns.filter(column => tableCalendarKind(column.type));
@@ -137,17 +138,7 @@ export function TableStatisticsDialog({ base, intent, initialColumn, onClose, on
   return <Modal title={countOnly ? text.countTitle : text.title} wide={!countOnly} onClose={close}><div className="modal-content" aria-busy={busy || closing}>
     <p>{countOnly ? text.countHint : text.scope}</p><p className="warning-text">{text.drafts}</p><p>{origin.intent.source.database}.{origin.intent.source.name}</p>
     <section aria-label={text.conditions}><strong>{text.conditions}</strong><div className="table-statistics-conditions">{conditions.filters.length ? <ul>{conditions.filters.map((filter, index) => <li key={index}>{filter.enabled === false ? text.disabledPrefix : ''}{filterRuleSummary(filter)}</li>)}</ul> : <p>{text.noFilters}</p>}{conditions.filterGroup ? <p>{tableFilterGroupSummary(conditions.filterGroup)}</p> : <p>{conditions.filterMode === 'any' ? text.anyMode : text.allMode}</p>}</div></section>
-    {!countOnly && <>
-      <div className="table-histogram-controls">
-        <label>{text.scopeMode}<select aria-label={text.scopeMode} value={scope.sampled ? 'first' : 'all'} disabled={disabled} onChange={event => {
-          const value = event.target.value;
-          if (value === 'all' || value === 'first') selectScope({ ...scope, sampled: value === 'first' });
-        }}><option value="all">{text.allRows}</option><option value="first">{text.firstRows}</option></select></label>
-        {scope.sampled && <label>{text.sampleLimit}<input type="number" aria-label={text.sampleLimit} min={1} max={tableStatisticsSampleMax}
-          step={1} value={scope.limit} disabled={disabled} onChange={event => selectScope({ ...scope, limit: event.target.value })}/></label>}
-      </div>
-      {scope.sampled && <p>{text.sampleHint}</p>}
-    </>}
+    {!countOnly && <StatisticsSampleControls scope={scope} disabled={disabled} onChange={selectScope}/>}
     {!countOnly && calendarColumns.length > 0 && <div className="table-histogram-controls">
       <label>{text.analysis}<select aria-label={text.analysis} value={calendar.enabled ? 'calendar' : 'summary'} disabled={disabled}
         onChange={event => selectCalendar({ ...calendar, enabled: event.target.value === 'calendar' })}>

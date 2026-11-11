@@ -16,6 +16,7 @@ export function postgresHistogramKind(column: { type: string; valueOptions?: boo
 
 export interface PostgresTableHistogram {
   column: string;
+  sampleLimit?: number;
   requestedBins: PostgresHistogramBins;
   approximate: boolean;
   finite: string;

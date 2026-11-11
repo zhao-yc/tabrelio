@@ -1,6 +1,6 @@
 export const postgresColumnStatisticsZh = {
   title: '字段概况',
-  hint: '统计当前筛选匹配的全部已提交记录。当前页行数和未提交的草稿不影响统计。',
+  hint: '统计已应用筛选的已提交记录。当前页行数和未提交的草稿不影响统计。',
   field: '概况字段', read: '开始统计', loading: '正在统计字段…', close: '关闭',
   readHistogram: '读取数值分布',
   readCalendar: '读取日期分布',
