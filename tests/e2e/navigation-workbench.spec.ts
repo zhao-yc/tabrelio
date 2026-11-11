@@ -313,6 +313,59 @@ function register(): void {
     await expect.poll(async () => (await settings()).sidebarView).toEqual({ flat: true, starred: [] });
   });
 
+  test('树搜索展开已读取的命中路径，清除后恢复手动状态且没有额外读取', async () => {
+    const sidebar = runtime.page.locator('.sidebar'), search = sidebar.getByRole('textbox', { name: zh.sidebar.text003 });
+    const connection = row('connection'), database = row('database');
+    const view = row('view', alpha, viewName), table = row('table');
+    const viewControls = sidebar.getByRole('button', { name: sidebarViewZh.controls, exact: true });
+    const collapse = sidebar.getByRole('button', { name: sidebarViewZh.collapse, exact: true });
+    await search.fill(viewName);
+    await expect(sidebar.getByRole('status')).toHaveText(sidebarViewZh.noSearchMatch);
+    await expect(sidebar.locator('.connection-group-heading')).toHaveCount(0);
+    expect((await audit()).calls).toEqual([]);
+    await sidebar.getByRole('button', { name: sidebarViewZh.resetSearch, exact: true }).click();
+    await openTree();
+    await database.locator('.tree-label').click();
+    await expect(view).toBeVisible();
+    const calls = (await audit()).calls;
+    await search.fill(viewName);
+    await expect(view).toBeVisible();
+    await expect(table).toHaveCount(0);
+    await expect(row('database', beta)).toBeHidden();
+    await connection.locator('.tree-label').click();
+    await expect(view).toBeHidden();
+    await search.clear();
+    await expect(view).toBeVisible();
+    await expect(table).toBeVisible();
+    await expect(row('database', beta)).toBeVisible();
+
+    await viewControls.click();
+    await collapse.click();
+    await expect(database).toHaveCount(0);
+    await search.fill(viewName);
+    await expect(view).toBeVisible();
+    await expect(database.locator('.tree-label')).toHaveAttribute('aria-expanded', 'true');
+    await viewControls.click();
+    await collapse.click();
+    await expect(search).toHaveValue(viewName);
+    await expect(connection.locator('.tree-label')).toHaveAttribute('aria-expanded', 'false');
+    await search.fill('  ' + beta.toUpperCase() + '  ');
+    await expect(row('database', beta)).toBeVisible();
+    await expect(database).toBeHidden();
+    await search.clear();
+    await expect(row('database', beta)).toHaveCount(0);
+    expect((await audit()).calls).toEqual(calls);
+    await originalPreserved();
+
+    await search.fill(viewName);
+    await expect(view).toBeVisible();
+    await connection.locator('.tree-label').click({ button: 'right' });
+    await runtime.page.getByRole('menuitem', { name: zh.sidebar.text011, exact: true }).click();
+    await expect(sidebar.getByRole('status')).toHaveText(sidebarViewZh.noSearchMatch);
+    await expect(view).toBeHidden();
+    expect((await audit()).calls.slice(calls.length).map(call => call.command)).toEqual(['connections.open', 'metadata.databases']);
+  });
+
   test('五千合成对象只渲染有界行，搜索和类别切换复用同库对象页并保留原稿', async () => {
     const objects = [...Array.from({ length: 5000 }, (_, index): DatabaseObject => ({ kind: 'table', name: '合成表_' + String(index).padStart(5, '0') })), ...smallObjects.filter(item => item.kind !== 'table')];
     await runtime.desktop.evaluate((_, next) => (globalThis as AuditRoot).__navigationWorkbenchAudit!.replaceObjects(next), objects);

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。资源管理器按连接名、分组名、库名和已读对象名过滤，并临时展开匹配路径。清除搜索恢复手动展开的连接及数据库。W02 增加树搜索自动展开。[Navicat 导航面板](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#filter-navigation-pane)
+
 2026-11-12 源码增量。对象树可仅显示应用已确认打开的连接，结合类型及星标筛选。主进程从成功的连接打开、查询会话和数据页读取跟踪状态。折叠保留打开状态，断开、目标替换和网络引擎退出时撤销相关确认。W02 增加打开状态筛选。[Navicat 导航面板](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#filter-navigation-pane)
 
 2026-11-12 源码增量。对象树可按数据库类型和星标连接筛选、隐藏分组并折叠全部连接。星标及分组显示保存在本机，折叠可撤销待处理的目录展开。W02 增加连接筛选和树视图控制。[Navicat 导航面板](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#filter-navigation-pane)

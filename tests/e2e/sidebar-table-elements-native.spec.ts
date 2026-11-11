@@ -255,6 +255,14 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     const tableTabs = (await settings()).tabs;
     await tree.locator(key([connectionId, null, 'connection', null])).locator('.tree-label').click();
     await expect(row).toHaveCount(0);
+    const search = tree.getByRole('textbox', { name: zh.sidebar.text003, exact: true });
+    await search.fill(' A_SMALL ');
+    await expect(row).toBeVisible();
+    await expect(view).toHaveCount(0);
+    await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();
+    await page.screenshot({ path: info.outputPath('对象树搜索自动展开.png') });
+    await search.clear();
+    await expect(row).toHaveCount(0);
     await tree.getByRole('button', { name: sidebarLocateZh.action, exact: true }).click();
     await expect(row).toHaveClass(/\bactive\b/);
     await expect(rowLabel).toBeFocused();

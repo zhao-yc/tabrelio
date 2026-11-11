@@ -9,6 +9,8 @@ export const sidebarViewZh = {
   flat: '隐藏连接分组',
   collapse: '折叠全部',
   noMatch: '没有符合筛选条件的连接',
+  noSearchMatch: '已读取的目录中没有匹配项',
+  resetSearch: '清除搜索',
   reset: '清除连接筛选',
   star: '标记星标连接',
   unstar: '取消连接星标',

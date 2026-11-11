@@ -4,12 +4,33 @@ import { validateCommand } from '../../src/shared/validation';
 import { defaultSettings } from '../../src/main/storage';
 import { compareBrowserObjects, objectPropertyText } from '../../src/renderer/objectBrowserDetails';
 import { sidebarLocatedObject, sidebarLocation } from '../../src/renderer/sidebarLocate';
+import { sidebarSearchMatch, type SidebarCatalog } from '../../src/renderer/sidebarSearch';
 import type { DatabaseObject, PostgresConnectionProfile } from '../../src/shared/contracts';
 import type { WorkspaceTab } from '../../src/renderer/store';
 
 vi.mock('../../src/renderer/store', () => ({ useWorkspace: vi.fn() }));
 
 const browser = { id: 'objects', kind: 'objects', title: '对象', connectionId: 'c', database: '库.名`/🚢', objectCategory: 'table' };
+
+it('树搜索保留命中路径及同名对象身份，并排除过期库目录', () => {
+  const profile: PostgresConnectionProfile = {
+    id: 'c', name: '业务连接', group: '分析组', color: '#123456', dialect: 'postgresql',
+    host: 'localhost', port: 5432, user: 'tester',
+  };
+  const items: DatabaseObject[] = [
+    { name: '"Reporting"."Daily.View"', kind: 'table' }, { name: '"Reporting"."Daily.View"', kind: 'view' },
+    { name: '"Reporting"."Other"', kind: 'view' },
+  ];
+  const catalog: SidebarCatalog = { databases: ['目录', '其他库'], objects: new Map([['目录', { version: 4, items }]]) };
+  const scope = JSON.stringify(['c', '目录']);
+  expect(sidebarSearchMatch(profile, catalog, '分析组', {})?.visible).toBe(true);
+  expect(sidebarSearchMatch(profile, catalog, '分析组', {})?.reveal).toBe(false);
+  expect(sidebarSearchMatch(profile, catalog, '其他库', {})?.databases.get('其他库')).toEqual({ reveal: false, items: undefined });
+  const match = sidebarSearchMatch(profile, catalog, 'daily.view', { [scope]: 4 });
+  expect(match?.databases.get('目录')).toEqual({ reveal: true, items: items.slice(0, 2) });
+  expect(match?.databases.has('其他库')).toBe(false);
+  expect(sidebarSearchMatch(profile, catalog, 'daily.view', { [scope]: 5 })?.visible).toBe(false);
+});
 
 describe('当前标签在对象树中的位置', () => {
   const profile: PostgresConnectionProfile = {

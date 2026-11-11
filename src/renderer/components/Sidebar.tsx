@@ -44,6 +44,7 @@ import { sidebarViewZh } from '../locales/sidebarView.zh-CN';
 import { SidebarViewControls, type SidebarVendor } from './SidebarViewControls';
 import { sidebarStarLimit, type SidebarView } from '../../shared/sidebarView';
 import { useOpenedConnections } from '../useOpenedConnections';
+import { emptySidebarCatalog, sidebarCatalogObjects, sidebarSearchMatch, type SidebarCatalog, type SidebarDatabaseMatch, type SidebarSearchMatch } from '../sidebarSearch';
 import type { StructureElement } from '../structureElementFocus';
 import type { TableElementsTarget } from '../../shared/tableElements';
 import { FavoriteButton, WorkbenchShelf, type OpenWorkbenchTarget } from './Workbench';
@@ -117,7 +118,7 @@ function useNodeRequests(connectionId: string): SidebarNodeRequests {
   const ref = useRef<SidebarNodeRequests | null>(null);
   ref.current ??= new SidebarNodeRequests(() => useWorkspace.getState().connectionVersions[connectionId] ?? 0);
   const requests = ref.current;
-  useEffect(() => { requests.activate(); return () => requests.dispose(); }, [requests]);
+  useLayoutEffect(() => { requests.activate(); return () => requests.dispose(); }, [requests]);
   return requests;
 }
 
@@ -138,7 +139,11 @@ export function Sidebar({ onNewConnection, onEditConnection, onCopyConnection, o
   const connectionVersions = useWorkspace(state => state.connectionVersions);
   const activeTab = useWorkspace(state => state.settings.tabs.find(tab => tab.id === state.settings.activeTabId) ?? state.settings.tabs[0]);
   const view = useWorkspace(state => state.settings.sidebarView) ?? defaultSidebarView;
-  const [search, setSearch] = useState(''), [vendor, setVendor] = useState<SidebarVendor>(''), [starredOnly, setStarredOnly] = useState(false);
+  const [search, setSearch] = useState({ value: '' }), [vendor, setVendor] = useState<SidebarVendor>(''), [starredOnly, setStarredOnly] = useState(false);
+  const [foldedSearch, setFoldedSearch] = useState<typeof search>();
+  const [catalogs, setCatalogs] = useState(new Map<string, SidebarCatalog>());
+  const needle = search.value.trim().toLowerCase();
+  const searchToken = needle && foldedSearch !== search ? search : undefined;
   const [openedOnly, setOpenedOnly] = useState(false);
   const opened = useOpenedConnections(openedOnly);
   const collapseNodes = useRef(new Map<string, () => void>());
@@ -146,7 +151,20 @@ export function Sidebar({ onNewConnection, onEditConnection, onCopyConnection, o
   const location = sidebarLocation(activeTab, connections.find(profile => profile.id === activeTab?.connectionId));
   const starred = new Set(view.starred);
   const openedIds = new Set(opened.ids);
+  const keys = new Map(connections.map(profile => [profile.id, JSON.stringify([profile.id, refreshVersion,
+    connectionVersions[profile.id] ?? 0, connectionRefreshVersions[profile.id] ?? 0])]));
+  const liveKeys = useRef<ReadonlyMap<string, string>>(keys);
+  liveKeys.current = keys;
+  const keySignature = JSON.stringify([...keys.values()]);
+  useEffect(() => {
+    const active = new Set(liveKeys.current.values());
+    setCatalogs(previous => [...previous.keys()].some(key => !active.has(key))
+      ? new Map([...previous].filter(([key]) => active.has(key))) : previous);
+  }, [keySignature]);
+  const matches = new Map(connections.map(profile => [profile.id, sidebarSearchMatch(profile,
+    catalogs.get(keys.get(profile.id)!) ?? emptySidebarCatalog, needle, objectRefreshVersions)]));
   const visibleIds = new Set(connections.filter(profile =>
+    matches.get(profile.id)?.visible !== false &&
     (!vendor || profile.dialect === vendor) && (!starredOnly || starred.has(profile.id)) && (!openedOnly || openedIds.has(profile.id))
   ).map(profile => profile.id));
   // 同一层兄弟使用原连接键，换组、筛选及扁平显示都保留原节点的目录和请求。
@@ -154,22 +172,32 @@ export function Sidebar({ onNewConnection, onEditConnection, onCopyConnection, o
   function clearFilters() { setVendor(''); setStarredOnly(false); setOpenedOnly(false); }
   function collapseAll() {
     locate.cancel();
+    setFoldedSearch(search);
     for (const collapse of collapseNodes.current.values()) collapse();
+  }
+  /** 仅当前连接修订可发布目录。切换筛选条件不改动缓存或发起读取。 */
+  function updateCatalog(id: string, key: string, update: (current: SidebarCatalog) => SidebarCatalog) {
+    setCatalogs(previous => {
+      if (liveKeys.current.get(id) !== key) return previous;
+      const next = new Map(previous);
+      next.set(key, update(previous.get(key) ?? emptySidebarCatalog));
+      return next;
+    });
   }
   return <aside className="sidebar">
     <div className="sidebar-heading">
       <span>{zh.sidebar.text002}</span>
       <button type="button" className="icon-button sidebar-locate" aria-label={sidebarLocateZh.action}
         title={location ? sidebarLocateZh.action : sidebarLocateZh.unavailable} disabled={!location} aria-busy={!!locate.request}
-        onClick={() => { if (locate.start()) { setSearch(''); clearFilters(); } }}><LocateFixed size={15}/></button>
+        onClick={() => { if (locate.start()) { setSearch({ value: '' }); clearFilters(); } }}><LocateFixed size={15}/></button>
       <button className="icon-button" aria-label={sqliteDatabaseCopyZh.restore} title={sqliteDatabaseCopyZh.restore}
         onClick={() => void copySqliteDatabase({ mode: 'restore' })}><HardDriveUpload size={16}/></button>
       <button className="icon-button" aria-label={zh.common.newConnection} title={zh.common.newConnection}
         onClick={onNewConnection}><Plus size={17}/></button>
     </div>
     <div className="search-box">
-      <Search size={14}/><input aria-label={zh.sidebar.text003} value={search}
-        onChange={event => { locate.cancel(); setSearch(event.target.value); }} placeholder={zh.sidebar.text004}/>
+      <Search size={14}/><input aria-label={zh.sidebar.text003} value={search.value}
+        onChange={event => { locate.cancel(); setSearch({ value: event.target.value }); }} placeholder={zh.sidebar.text004}/>
       <SidebarViewControls vendor={vendor} starredOnly={starredOnly} openedOnly={openedOnly} flat={view.flat}
         onVendor={setVendor} onStarredOnly={setStarredOnly} onOpenedOnly={setOpenedOnly}
         onFlat={flat => { const state = useWorkspace.getState(); state.updateSettings({ sidebarView: { ...(state.settings.sidebarView ?? defaultSidebarView), flat } }); }}
@@ -183,8 +211,11 @@ export function Sidebar({ onNewConnection, onEditConnection, onCopyConnection, o
           !view.flat && lastVisible && <div className="group-label connection-group-heading" key={`connection-group:${JSON.stringify(group.name)}`}>
             <Folder size={13}/>{connectionOrganizationZh.groupDisplay(group.name)}
           </div>,
-          ...group.connections.map(profile => <ConnectionNode key={`${profile.id}:${refreshVersion}:${connectionVersions[profile.id] ?? 0}:${connectionRefreshVersions[profile.id] ?? 0}`}
-            groupEnd={!view.flat && profile === lastVisible} profile={profile} search={search} visible={visibleIds.has(profile.id)}
+          ...group.connections.map(profile => {
+            const key = keys.get(profile.id)!;
+            return <ConnectionNode key={key} groupEnd={!view.flat && profile === lastVisible} profile={profile}
+            search={needle} searchToken={searchToken} searchMatch={matches.get(profile.id)} visible={visibleIds.has(profile.id)}
+            catalog={catalogs.get(key) ?? emptySidebarCatalog} updateCatalog={update => updateCatalog(profile.id, key, update)}
             starred={starred.has(profile.id)} collapseNodes={collapseNodes.current} locate={locate.request?.connectionId === profile.id ? locate.request : undefined}
             onEdit={() => onEditConnection(profile)} onCopy={() => onCopyConnection(profile)} onImportNewTable={onImportNewTable}
             onDesign={onDesign} onDesignElement={onDesignElement} onColumnPatches={onColumnPatches}
@@ -193,14 +224,16 @@ export function Sidebar({ onNewConnection, onEditConnection, onCopyConnection, o
             onTableMaintenance={onTableMaintenance} onTableRename={onTableRename} onTableAutoIncrement={onTableAutoIncrement} onTableChecks={onTableChecks}
             onTableComment={onTableComment} onTableDefaultEncoding={onTableDefaultEncoding} onDatabaseDefaultEncoding={onDatabaseDefaultEncoding}
             onDatabaseDrop={onDatabaseDrop} onRoutineInvocation={onRoutineInvocation}
-            onDdl={onDdl} objectRefreshVersions={objectRefreshVersions}/>)
+            onDdl={onDdl} objectRefreshVersions={objectRefreshVersions}/>;
+          })
         ];
       })}
       {connections.length > 0 && visibleIds.size === 0 && <div className="sidebar-empty sidebar-filter-empty">
         <p role="status">{openedOnly && !opened.ids
           ? opened.failed ? sidebarViewZh.readOpenedFailed : sidebarViewZh.readingOpened
-          : sidebarViewZh.noMatch}</p>
-        <button type="button" onClick={clearFilters}>{sidebarViewZh.reset}</button>
+          : needle ? sidebarViewZh.noSearchMatch : sidebarViewZh.noMatch}</p>
+        {needle && <button type="button" onClick={() => setSearch({ value: '' })}>{sidebarViewZh.resetSearch}</button>}
+        {(vendor || starredOnly || openedOnly) && <button type="button" onClick={clearFilters}>{sidebarViewZh.reset}</button>}
       </div>}
       {connections.length === 0 && <div className="sidebar-empty"><Database size={30}/><p>{zh.sidebar.text005}</p><button onClick={onNewConnection}><Plus size={14}/>{zh.common.newConnection}</button></div>}
     </div>
@@ -211,8 +244,10 @@ export function Sidebar({ onNewConnection, onEditConnection, onCopyConnection, o
 }
 
 /** 连接节点维护展开状态及数据库列表；groupEnd仅保留原组尾间距，不参与节点身份或请求生命周期。 */
-function ConnectionNode({ groupEnd = false, visible = true, starred = false, collapseNodes, profile, search, locate, onEdit, onCopy, onImportNewTable, onDesign, onDesignElement, onColumnPatches, onIndexPatches, onForeignKeyPatches, onTableCopyData, onTableCopyStructure, onSqliteObjects, onSqliteTableRebuild, onTableMaintenance, onTableRename, onTableAutoIncrement, onTableChecks, onTableComment, onTableDefaultEncoding, onDatabaseDefaultEncoding, onDatabaseDrop, onRoutineInvocation, onDdl, objectRefreshVersions }: { groupEnd?: boolean; visible?: boolean; starred?: boolean; collapseNodes?: Map<string, () => void>; objectRefreshVersions: Record<string, number>; profile: ConnectionProfile; search: string; locate?: SidebarLocateRequest; onEdit: () => void; onCopy: () => void; onImportNewTable?: (connectionId: string, database: string) => void; onDesign: (connectionId: string, database: string, table?: string, createView?: PostgresCreateViewKind | 'sequence' | 'routine') => void; onDesignElement?: (target: TableElementsTarget, element: StructureElement) => void; onColumnPatches: (connectionId: string, database: string, table: string) => void; onIndexPatches: (connectionId: string, database: string, table: string) => void; onForeignKeyPatches: (connectionId: string, database: string, table: string) => void; onTableCopyData?: (connectionId: string, database: string, table: string) => void; onTableCopyStructure?: (connectionId: string, database: string, table: string) => void; onSqliteObjects?: (connectionId: string, database: string, kind: SqliteObjectsKind, action: SqliteObjectsAction, name?: string, sourceView?: string) => void; onSqliteTableRebuild?: (target: SqliteTableRebuildTarget) => void; onTableMaintenance?: (connectionId: string, database: string, table: string, action: SqliteTableMaintenanceAction) => void; onTableRename: (connectionId: string, database: string, table: string) => void; onTableAutoIncrement: (connectionId: string, database: string, table: string) => void; onTableChecks?: (connectionId: string, database: string, table: string) => void; onTableComment: (connectionId: string, database: string, table: string) => void; onDatabaseDefaultEncoding?: (connectionId: string, database: string) => void; onDatabaseDrop?: (connectionId: string, database: string) => void; onTableDefaultEncoding: (connectionId: string, database: string, table: string) => void; onRoutineInvocation?: (target: RoutineInvocationTarget) => void; onDdl: (connectionId: string, database?: string, object?: DatabaseObject, management?: 'extensions' | 'storage') => void }) {
-  const [databases, setDatabases] = useState<string[]>([]); const [opened, setOpened] = useState(false); const [busy, setBusy] = useState(false); const [connected, setConnected] = useState(false);
+function ConnectionNode({ groupEnd = false, visible = true, starred = false, collapseNodes, profile, search, searchToken, searchMatch, catalog, updateCatalog, locate, onEdit, onCopy, onImportNewTable, onDesign, onDesignElement, onColumnPatches, onIndexPatches, onForeignKeyPatches, onTableCopyData, onTableCopyStructure, onSqliteObjects, onSqliteTableRebuild, onTableMaintenance, onTableRename, onTableAutoIncrement, onTableChecks, onTableComment, onTableDefaultEncoding, onDatabaseDefaultEncoding, onDatabaseDrop, onRoutineInvocation, onDdl, objectRefreshVersions }: { groupEnd?: boolean; visible?: boolean; starred?: boolean; collapseNodes?: Map<string, () => void>; objectRefreshVersions: Record<string, number>; profile: ConnectionProfile; search: string; searchToken?: object; searchMatch?: SidebarSearchMatch; catalog: SidebarCatalog; updateCatalog(update: (current: SidebarCatalog) => SidebarCatalog): void; locate?: SidebarLocateRequest; onEdit: () => void; onCopy: () => void; onImportNewTable?: (connectionId: string, database: string) => void; onDesign: (connectionId: string, database: string, table?: string, createView?: PostgresCreateViewKind | 'sequence' | 'routine') => void; onDesignElement?: (target: TableElementsTarget, element: StructureElement) => void; onColumnPatches: (connectionId: string, database: string, table: string) => void; onIndexPatches: (connectionId: string, database: string, table: string) => void; onForeignKeyPatches: (connectionId: string, database: string, table: string) => void; onTableCopyData?: (connectionId: string, database: string, table: string) => void; onTableCopyStructure?: (connectionId: string, database: string, table: string) => void; onSqliteObjects?: (connectionId: string, database: string, kind: SqliteObjectsKind, action: SqliteObjectsAction, name?: string, sourceView?: string) => void; onSqliteTableRebuild?: (target: SqliteTableRebuildTarget) => void; onTableMaintenance?: (connectionId: string, database: string, table: string, action: SqliteTableMaintenanceAction) => void; onTableRename: (connectionId: string, database: string, table: string) => void; onTableAutoIncrement: (connectionId: string, database: string, table: string) => void; onTableChecks?: (connectionId: string, database: string, table: string) => void; onTableComment: (connectionId: string, database: string, table: string) => void; onDatabaseDefaultEncoding?: (connectionId: string, database: string) => void; onDatabaseDrop?: (connectionId: string, database: string) => void; onTableDefaultEncoding: (connectionId: string, database: string, table: string) => void; onRoutineInvocation?: (target: RoutineInvocationTarget) => void; onDdl: (connectionId: string, database?: string, object?: DatabaseObject, management?: 'extensions' | 'storage') => void }) {
+  const { databases } = catalog;
+  const [foldedSearch, setFoldedSearch] = useState<object>();
+  const [opened, setOpened] = useState(false); const [busy, setBusy] = useState(false); const [connected, setConnected] = useState(false);
   const requests = useNodeRequests(profile.id), openedRef = useRef(false);
   const selection = useWorkspace(state => state.selection);
   /** 同轮连续点击也看到最新展开意图，不等待React提交后才撤销加载。 */
@@ -239,14 +274,22 @@ function ConnectionNode({ groupEnd = false, visible = true, starred = false, col
     }
     state.updateSettings({ sidebarView: { ...view, starred: next } });
   }
-  /** 折叠不关闭连接，迟到加载仅失去本节点的状态写入权。 */
-  function toggle() { useWorkspace.getState().select({ connectionId: profile.id }); if (openedRef.current || requests.kind === 'load') { if (requests.collapse()) { expand(false); setBusy(false); } } else void load(); }
+  const searchExpanded = !!(visible && searchToken && searchMatch?.reveal);
+  const displayedOpen = (opened || searchExpanded) && !(searchExpanded && foldedSearch === searchToken);
+  /** 搜索展开是临时状态；点击可折叠当前命中路径，清除搜索恢复原展开。 */
+  function toggle() {
+    useWorkspace.getState().select({ connectionId: profile.id });
+    if (searchExpanded && !busy) { setFoldedSearch(foldedSearch === searchToken ? undefined : searchToken); return; }
+    if (openedRef.current || requests.kind === 'load') {
+      if (requests.collapse()) { expand(false); setBusy(false); }
+    } else void load();
+  }
   useEffect(() => {
     if (locate?.database === undefined || !locate.current() || busy || opened && databases.includes(locate.database)) return;
     void load(locate);
   }, [locate, opened, busy, databases]);
   /** 先验证连接再列出可访问数据库，失败时保留可重试的节点入口。 */
-  async function load(location?: SidebarLocateRequest) {
+  async function load(location?: SidebarLocateRequest, refresh = false) {
     const request = requests.begin('load'); if (!request) return;
     setBusy(true);
     const current = () => requests.current(request) && (!location || location.current());
@@ -261,7 +304,9 @@ function ConnectionNode({ groupEnd = false, visible = true, starred = false, col
       completionServerFacts.complete(ticket, status); setConnected(true);
       const next = await invoke('metadata.databases', { connectionId: profile.id });
       if (!current()) return;
-      setDatabases(next); expand(true);
+      const names = new Set(next);
+      updateCatalog(previous => ({ databases: next, objects: refresh ? new Map() : new Map([...previous.objects].filter(([name]) => names.has(name))) }));
+      expand(true);
       if (location?.database !== undefined && !next.includes(location.database)) location.fail(sidebarLocateZh.missingDatabase(location.database));
     } catch (error) {
       if (location) location.fail(errorMessage(error)); else useWorkspace.getState().notify(errorMessage(error), true);
@@ -274,7 +319,7 @@ function ConnectionNode({ groupEnd = false, visible = true, starred = false, col
     const request = requests.begin('disconnect'); if (!request) { ending.release(); return; }
     setBusy(true);
     completionServerFacts.clear(profile.id);
-    try { await invoke('connections.close', { id: profile.id }); if (requests.current(request)) { setConnected(false); expand(false); } } catch (error) { useWorkspace.getState().notify(errorMessage(error), true); }
+    try { await invoke('connections.close', { id: profile.id }); if (requests.current(request)) { updateCatalog(() => emptySidebarCatalog); setConnected(false); expand(false); } } catch (error) { useWorkspace.getState().notify(errorMessage(error), true); }
     // 后端可能已关闭会话再报告取消收尾错误；仅当前节点清本代事实，不能清除新节点的事实。
     finally { if (requests.current(request)) completionServerFacts.clear(profile.id); ending.release(); if (requests.finish(request)) setBusy(false); }
   }
@@ -288,25 +333,46 @@ function ConnectionNode({ groupEnd = false, visible = true, starred = false, col
     try { await invoke('connections.delete', { id: profile.id }); if (!requests.current(request)) return; const next = await invoke('connections.list', {}); if (requests.current(request)) useWorkspace.getState().setConnections(next); } catch (error) { useWorkspace.getState().notify(errorMessage(error), true); }
     finally { if (requests.current(request)) completionServerFacts.clear(profile.id); ending.release(); if (requests.finish(request)) setBusy(false); }
   }
-  const matches = profile.name.toLowerCase().includes(search.toLowerCase());
-  if (search && !matches && !opened) return null;
-  return <div className="connection-node" hidden={!visible} style={groupEnd ? { marginBottom: 10 } : undefined}><SidebarTreeRow target={{ kind: 'connection', connectionId: profile.id }} label={profile.name} className="connection-row" locate={locate?.database === undefined ? locate : undefined} version={[profile, search, busy, opened, connected, databases, requests.kind]} actions={<><button data-menu-group="favorite" aria-label={starred ? sidebarViewZh.unstar : sidebarViewZh.star} onClick={toggleStar}>
-    <Star size={12}/></button><button data-menu-group="transfer" title={connectionsTransferZh.copy} aria-label={formatText(connectionsTransferZh.copyAction, profile.name)} onClick={onCopy}><Copy size={12}/></button>{profile.dialect === 'sqlite' && <button data-menu-group="transfer" title={sqliteDatabaseCopyZh.backup} aria-label={sqliteDatabaseCopyZh.backup} disabled={!profile.sqlite.filePath || !!profile.pendingFiles?.length} onClick={() => void copySqliteDatabase({ mode: 'backup', connectionId: profile.id })}><HardDriveDownload size={12}/></button>}<button data-menu-group="structure" title={zh.sidebar.text009} aria-label={formatText(zh.sidebar.text010, profile.name)} onClick={onEdit}><Pencil size={12}/></button><button data-menu-group="refresh" title={zh.sidebar.text011} aria-label={zh.sidebar.text011} disabled={busy} onClick={() => void load()}><RefreshCw size={12}/></button>{profile.dialect !== 'sqlite' && <button data-menu-group="create" title={zh.sidebar.text012} aria-label={zh.sidebar.text012} onClick={() => onDdl(profile.id)}><Plus size={12}/></button>}{profile.dialect === 'postgresql' && <button data-menu-group="structure" aria-label={postgresDatabaseManageZh.title} onClick={() => onDdl(profile.id)}><ListChecks size={12}/></button>}{connected && <button data-menu-group="danger" title={zh.sidebar.text013} aria-label={zh.sidebar.text013} disabled={requests.kind === 'disconnect' || requests.kind === 'remove'} onClick={() => void disconnect()}><Unplug size={12}/></button>}<button data-menu-group="danger" title={zh.sidebar.text014} aria-label={zh.sidebar.text014} disabled={requests.kind === 'disconnect' || requests.kind === 'remove'} onClick={() => void remove()}><Trash2 size={12}/></button></>}><button className="tree-label" aria-expanded={opened} aria-busy={busy} disabled={requests.kind === 'disconnect' || requests.kind === 'remove'} onClick={toggle}><span className="tree-chevron">{opened ? <ChevronDown size={13}/> : <ChevronRight size={13}/>}</span><Database size={16} style={{ color: profile.color }}/><span className="truncate">{profile.name}</span>{starred && <Star size={11} className="sidebar-connection-star" aria-hidden="true"/>}{connected && <span className="connection-dot"/>}</button></SidebarTreeRow>{busy && <div className="tree-loading"><Spinner text={zh.sidebar.text015}/></div>}{opened && !busy && databases.map(database => <DatabaseNode refreshVersion={objectRefreshVersions[JSON.stringify([profile.id, database])] ?? 0} key={database} connectionId={profile.id} database={database} locate={locate?.database === database ? locate : undefined} onImportNewTable={onImportNewTable ? () => onImportNewTable(profile.id, database) : undefined} search={matches ? '' : search} onDesignElement={onDesignElement} onColumnPatches={table => onColumnPatches(profile.id, database, table)} onIndexPatches={table => onIndexPatches(profile.id, database, table)} onForeignKeyPatches={table => onForeignKeyPatches(profile.id, database, table)} onTableCopyData={onTableCopyData ? table => onTableCopyData(profile.id, database, table) : undefined} onTableCopyStructure={onTableCopyStructure ? table => onTableCopyStructure(profile.id, database, table) : undefined} onSqliteObjects={onSqliteObjects ? (kind, action, name, sourceView) => onSqliteObjects(profile.id, database, kind, action, name, sourceView) : undefined} onSqliteTableRebuild={onSqliteTableRebuild} onTableMaintenance={onTableMaintenance ? (table, action) => onTableMaintenance(profile.id, database, table, action) : undefined} onTableRename={table => onTableRename(profile.id, database, table)} onTableAutoIncrement={table => onTableAutoIncrement(profile.id, database, table)} onTableChecks={onTableChecks ? table => onTableChecks(profile.id, database, table) : undefined} onTableComment={table => onTableComment(profile.id, database, table)} onTableDefaultEncoding={table => onTableDefaultEncoding(profile.id, database, table)} onDatabaseDefaultEncoding={onDatabaseDefaultEncoding ? () => onDatabaseDefaultEncoding(profile.id, database) : undefined} onDatabaseDrop={onDatabaseDrop ? () => onDatabaseDrop(profile.id, database) : undefined} onDesign={(table, createView) => onDesign(profile.id, database, table, createView)} onRoutineInvocation={onRoutineInvocation} onDdl={(object, management) => onDdl(profile.id, database, object, management)}/>)}</div>;
+  return <div className="connection-node" hidden={!visible} style={groupEnd ? { marginBottom: 10 } : undefined}><SidebarTreeRow target={{ kind: 'connection', connectionId: profile.id }} label={profile.name} className="connection-row" locate={locate?.database === undefined ? locate : undefined} version={[profile, search, busy, displayedOpen, connected, databases, requests.kind]} actions={<><button data-menu-group="favorite" aria-label={starred ? sidebarViewZh.unstar : sidebarViewZh.star} onClick={toggleStar}>
+    <Star size={12}/></button><button data-menu-group="transfer" title={connectionsTransferZh.copy} aria-label={formatText(connectionsTransferZh.copyAction, profile.name)} onClick={onCopy}><Copy size={12}/></button>{profile.dialect === 'sqlite' && <button data-menu-group="transfer" title={sqliteDatabaseCopyZh.backup} aria-label={sqliteDatabaseCopyZh.backup} disabled={!profile.sqlite.filePath || !!profile.pendingFiles?.length} onClick={() => void copySqliteDatabase({ mode: 'backup', connectionId: profile.id })}><HardDriveDownload size={12}/></button>}<button data-menu-group="structure" title={zh.sidebar.text009} aria-label={formatText(zh.sidebar.text010, profile.name)} onClick={onEdit}><Pencil size={12}/></button><button data-menu-group="refresh" title={zh.sidebar.text011} aria-label={zh.sidebar.text011} disabled={busy} onClick={() => void load(undefined, true)}><RefreshCw size={12}/></button>{profile.dialect !== 'sqlite' && <button data-menu-group="create" title={zh.sidebar.text012} aria-label={zh.sidebar.text012} onClick={() => onDdl(profile.id)}><Plus size={12}/></button>}{profile.dialect === 'postgresql' && <button data-menu-group="structure" aria-label={postgresDatabaseManageZh.title} onClick={() => onDdl(profile.id)}><ListChecks size={12}/></button>}{connected && <button data-menu-group="danger" title={zh.sidebar.text013} aria-label={zh.sidebar.text013} disabled={requests.kind === 'disconnect' || requests.kind === 'remove'} onClick={() => void disconnect()}><Unplug size={12}/></button>}<button data-menu-group="danger" title={zh.sidebar.text014} aria-label={zh.sidebar.text014} disabled={requests.kind === 'disconnect' || requests.kind === 'remove'} onClick={() => void remove()}><Trash2 size={12}/></button></>}><button className="tree-label" aria-expanded={displayedOpen} aria-busy={busy} disabled={requests.kind === 'disconnect' || requests.kind === 'remove'} onClick={toggle}><span className="tree-chevron">{displayedOpen ? <ChevronDown size={13}/> : <ChevronRight size={13}/>}</span><Database size={16} style={{ color: profile.color }}/><span className="truncate">{profile.name}</span>{starred && <Star size={11} className="sidebar-connection-star" aria-hidden="true"/>}{connected && <span className="connection-dot"/>}</button></SidebarTreeRow>{busy && <div className="tree-loading"><Spinner text={zh.sidebar.text015}/></div>}{(opened || displayedOpen) && !busy && databases.map(database => {
+    const match = searchMatch?.databases.get(database);
+    if (!opened && searchMatch && !match) return null;
+    const refreshVersion = objectRefreshVersions[JSON.stringify([profile.id, database])] ?? 0;
+    return <DatabaseNode refreshVersion={refreshVersion} key={database} connectionId={profile.id} database={database}
+      visible={displayedOpen && (!searchMatch || !!match)} searchToken={searchToken} searchMatch={match}
+      objects={sidebarCatalogObjects(catalog, database, refreshVersion)} onObjects={items => updateCatalog(previous => ({
+        ...previous, objects: new Map(previous.objects).set(database, { version: refreshVersion, items })
+      }))} locate={locate?.database === database ? locate : undefined} onImportNewTable={onImportNewTable ? () => onImportNewTable(profile.id, database) : undefined} search={search} onDesignElement={onDesignElement} onColumnPatches={table => onColumnPatches(profile.id, database, table)} onIndexPatches={table => onIndexPatches(profile.id, database, table)} onForeignKeyPatches={table => onForeignKeyPatches(profile.id, database, table)} onTableCopyData={onTableCopyData ? table => onTableCopyData(profile.id, database, table) : undefined} onTableCopyStructure={onTableCopyStructure ? table => onTableCopyStructure(profile.id, database, table) : undefined} onSqliteObjects={onSqliteObjects ? (kind, action, name, sourceView) => onSqliteObjects(profile.id, database, kind, action, name, sourceView) : undefined} onSqliteTableRebuild={onSqliteTableRebuild} onTableMaintenance={onTableMaintenance ? (table, action) => onTableMaintenance(profile.id, database, table, action) : undefined} onTableRename={table => onTableRename(profile.id, database, table)} onTableAutoIncrement={table => onTableAutoIncrement(profile.id, database, table)} onTableChecks={onTableChecks ? table => onTableChecks(profile.id, database, table) : undefined} onTableComment={table => onTableComment(profile.id, database, table)} onTableDefaultEncoding={table => onTableDefaultEncoding(profile.id, database, table)} onDatabaseDefaultEncoding={onDatabaseDefaultEncoding ? () => onDatabaseDefaultEncoding(profile.id, database) : undefined} onDatabaseDrop={onDatabaseDrop ? () => onDatabaseDrop(profile.id, database) : undefined} onDesign={(table, createView) => onDesign(profile.id, database, table, createView)} onRoutineInvocation={onRoutineInvocation} onDdl={(object, management) => onDdl(profile.id, database, object, management)}/>;
+  })}</div>;
 }
 
 /** 数据库节点按对象种类选择数据浏览或定义编辑入口。 */
-function DatabaseNode({ connectionId, database, search, locate, onImportNewTable, onDesign, onDesignElement, onColumnPatches, onIndexPatches, onForeignKeyPatches, onTableCopyData, onTableCopyStructure, onSqliteObjects, onSqliteTableRebuild, onTableMaintenance, onTableRename, onTableAutoIncrement, onTableChecks, onTableComment, onTableDefaultEncoding, onDatabaseDefaultEncoding, onDatabaseDrop, onRoutineInvocation, onDdl, refreshVersion = 0 }: { refreshVersion?: number; connectionId: string; database: string; search: string; locate?: SidebarLocateRequest; onImportNewTable?: () => void; onDesign: (table?: string, createView?: PostgresCreateViewKind | 'sequence' | 'routine') => void; onDesignElement?: (target: TableElementsTarget, element: StructureElement) => void; onColumnPatches: (table: string) => void; onIndexPatches: (table: string) => void; onForeignKeyPatches: (table: string) => void; onTableCopyData?: (table: string) => void; onTableCopyStructure?: (table: string) => void; onSqliteObjects?: (kind: SqliteObjectsKind, action: SqliteObjectsAction, name?: string, sourceView?: string) => void; onSqliteTableRebuild?: (target: SqliteTableRebuildTarget) => void; onTableMaintenance?: (table: string, action: SqliteTableMaintenanceAction) => void; onTableRename: (table: string) => void; onTableAutoIncrement: (table: string) => void; onTableChecks?: (table: string) => void; onTableComment: (table: string) => void; onDatabaseDefaultEncoding?: () => void; onDatabaseDrop?: () => void; onTableDefaultEncoding: (table: string) => void; onRoutineInvocation?: (target: RoutineInvocationTarget) => void; onDdl: (object?: DatabaseObject, management?: 'extensions' | 'storage') => void }) {
+function DatabaseNode({ connectionId, database, search, visible = true, searchToken, searchMatch, objects, onObjects, locate, onImportNewTable, onDesign, onDesignElement, onColumnPatches, onIndexPatches, onForeignKeyPatches, onTableCopyData, onTableCopyStructure, onSqliteObjects, onSqliteTableRebuild, onTableMaintenance, onTableRename, onTableAutoIncrement, onTableChecks, onTableComment, onTableDefaultEncoding, onDatabaseDefaultEncoding, onDatabaseDrop, onRoutineInvocation, onDdl, refreshVersion = 0 }: { refreshVersion?: number; connectionId: string; database: string; search: string; visible?: boolean; searchToken?: object; searchMatch?: SidebarDatabaseMatch; objects: DatabaseObject[]; onObjects(items: DatabaseObject[]): void; locate?: SidebarLocateRequest; onImportNewTable?: () => void; onDesign: (table?: string, createView?: PostgresCreateViewKind | 'sequence' | 'routine') => void; onDesignElement?: (target: TableElementsTarget, element: StructureElement) => void; onColumnPatches: (table: string) => void; onIndexPatches: (table: string) => void; onForeignKeyPatches: (table: string) => void; onTableCopyData?: (table: string) => void; onTableCopyStructure?: (table: string) => void; onSqliteObjects?: (kind: SqliteObjectsKind, action: SqliteObjectsAction, name?: string, sourceView?: string) => void; onSqliteTableRebuild?: (target: SqliteTableRebuildTarget) => void; onTableMaintenance?: (table: string, action: SqliteTableMaintenanceAction) => void; onTableRename: (table: string) => void; onTableAutoIncrement: (table: string) => void; onTableChecks?: (table: string) => void; onTableComment: (table: string) => void; onDatabaseDefaultEncoding?: () => void; onDatabaseDrop?: () => void; onTableDefaultEncoding: (table: string) => void; onRoutineInvocation?: (target: RoutineInvocationTarget) => void; onDdl: (object?: DatabaseObject, management?: 'extensions' | 'storage') => void }) {
   const dialect = useWorkspace(state => state.connections.find(profile => profile.id === connectionId)?.dialect);
   const sqlite = dialect === 'sqlite', postgres = dialect === 'postgresql';
   const connectionVersion = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
-  const [open, setOpen] = useState(false); const [objects, setObjects] = useState<DatabaseObject[]>([]); const [busy, setBusy] = useState(false);
-  const requests = useNodeRequests(connectionId), openRef = useRef(false);
+  const [open, setOpen] = useState(false); const [busy, setBusy] = useState(false);
+  const [foldedSearch, setFoldedSearch] = useState<object>();
+  const requests = useNodeRequests(connectionId), openRef = useRef(false), displayedOpenRef = useRef(false);
+  const searchExpanded = !!(visible && searchToken && searchMatch?.reveal);
+  const displayedOpen = (open || searchExpanded) && !(searchExpanded && foldedSearch === searchToken);
+  displayedOpenRef.current = displayedOpen && visible;
   const catalogRevision = useRef(0);
   const selection = useWorkspace(state => state.selection);
   /** 保留同步展开意图，刷新中的折叠立即撤销旧回包。 */
-  function expand(value: boolean) { openRef.current = value; setOpen(value); }
+  function expand(value: boolean) { if (!value) displayedOpenRef.current = false; openRef.current = value; setOpen(value); }
   /** 选择数据库仍走原工作区入口，不重放已取消的目录请求。 */
-  function toggle() { useWorkspace.getState().select({ connectionId, database }); if (openRef.current || requests.kind === 'load') { if (requests.collapse()) { expand(false); setBusy(false); } } else void load(); }
+  function toggle() {
+    useWorkspace.getState().select({ connectionId, database });
+    if (searchExpanded && !busy) {
+      if (displayedOpen) displayedOpenRef.current = false;
+      setFoldedSearch(foldedSearch === searchToken ? undefined : searchToken);
+      return;
+    }
+    if (openRef.current || requests.kind === 'load') {
+      if (requests.collapse()) { expand(false); setBusy(false); }
+    } else void load();
+  }
   const observedRefresh = useRef(refreshVersion);
   // 重命名事件仅重读实际目录，保留当前展开意图；请求归属仍交由统一节点请求门管理。
   useEffect(() => { if (observedRefresh.current !== refreshVersion) { observedRefresh.current = refreshVersion; void load(false); } }, [refreshVersion]);
@@ -329,17 +395,17 @@ function DatabaseNode({ connectionId, database, search, locate, onImportNewTable
       if (!current()) return;
       const next = await invoke('metadata.objects', { connectionId, database });
       if (!current()) return;
-      setObjects(next); if (reveal) expand(true);
+      onObjects(next); if (reveal) expand(true);
       if (location?.relation && !sidebarLocatedObject(next, location.relation)) location.fail(sidebarLocateZh.missingRelation(location.relation));
     } catch (error) {
       if (location) location.fail(errorMessage(error)); else useWorkspace.getState().notify(errorMessage(error), true);
     }
     finally { if (requests.finish(request)) setBusy(false); }
   }
-  const visible = objects.filter(object => object.name.toLowerCase().includes(search.toLowerCase()));
-  return <div><SidebarTreeRow target={{ kind: 'database', connectionId, database }} label={database} className="database-row" locate={locate?.relation === undefined ? locate : undefined} version={[search, refreshVersion, objects, busy, open, requests.kind]} actions={<><FavoriteButton menu target={{ connectionId, database, kind: 'database' }}/>{postgres && <button data-menu-group="create" title={postgresCreateViewZh.title} aria-label={postgresCreateViewZh.title} onClick={() => onDesign(undefined, 'ordinary')}><Plus size={12}/></button>}{postgres && <button data-menu-group="create" title={postgresCreateViewZh.materializedTitle} aria-label={postgresCreateViewZh.materializedTitle} onClick={() => onDesign(undefined, 'materialized')}><Plus size={12}/></button>}{postgres && <button data-menu-group="create" aria-label={postgresSequenceZh.create} onClick={() => onDesign(undefined, 'sequence')}><Plus size={12}/></button>}{postgres && <button data-menu-group="create" aria-label={postgresRoutineZh.create} onClick={() => onDesign(undefined, 'routine')}><Plus size={12}/></button>}{sqlite && database === 'main' && onSqliteObjects && (['view', 'trigger'] as const).map(kind => <button key={kind} data-menu-group="create" title={kind === 'view' ? sqliteObjectsZh.createView : sqliteObjectsZh.createTrigger} aria-label={(kind === 'view' ? sqliteObjectsZh.createView : sqliteObjectsZh.createTrigger) + ' ' + database} onClick={() => onSqliteObjects(kind, 'create')}><Plus size={12}/></button>)}{(!sqlite || database === 'main') && onImportNewTable && <button data-menu-group="transfer" title={importNewTableZh.title} aria-label={`${importNewTableZh.title} ${database}`} onClick={onImportNewTable}><Plus size={12}/></button>}{!postgres && !sqlite && onDatabaseDrop && <button data-menu-group="danger" title={databaseDropZh.title} aria-label={`${databaseDropZh.title} ${database}`} disabled={isProtectedDatabaseDropName(database)} onClick={onDatabaseDrop}><Trash2 size={12}/></button>}{!postgres && !sqlite && onDatabaseDefaultEncoding && <button data-menu-group="structure" title={databaseDefaultEncodingZh.title} aria-label={`${databaseDefaultEncodingZh.entry} ${database}`} onClick={onDatabaseDefaultEncoding}><Pencil size={12}/></button>}<button data-menu-group="create" title={zh.common.newQuery} aria-label={zh.sidebar.text016} onClick={() => useWorkspace.getState().openTab({ title: zh.common.unnamedQuery, kind: 'query', connectionId, database, sql: '' })}><FileCode2 size={12}/></button><button data-menu-group="create" title={zh.sidebar.text017} aria-label={zh.sidebar.text017} disabled={sqlite && database !== 'main'} onClick={() => { if (!sqlite || database === 'main') onDesign(); }}><Plus size={12}/></button><button data-menu-group="refresh" title={zh.sidebar.text018} aria-label={zh.sidebar.text018} disabled={busy} onClick={() => void load()}><RefreshCw size={12}/></button>{postgres && <button data-menu-group="structure" aria-label={postgresSchemaManageZh.title} onClick={() => onDdl()}><ListChecks size={12}/></button>}{postgres && <button data-menu-group="structure" aria-label={postgresExtensionManageZh.title} onClick={() => onDdl(undefined, 'extensions')}><ListChecks size={12}/></button>}{postgres && <button data-menu-group="structure" aria-label={postgresStorageZh.title} onClick={() => onDdl(undefined, 'storage')}><Database size={12}/></button>}{!postgres && !sqlite && <button data-menu-group="structure" title={zh.sidebar.text019} aria-label={zh.sidebar.text019} onClick={() => onDdl()}><Pencil size={12}/></button>}</>}><button className="tree-label" aria-expanded={open} aria-busy={busy} onClick={toggle}><span className="tree-chevron">{open ? <ChevronDown size={12}/> : <ChevronRight size={12}/>}</span><Database size={13}/><span className="truncate">{database}</span></button></SidebarTreeRow>{busy && <div className="tree-loading"><Spinner/></div>}{open && !busy && <div className="object-list">{visible.map(object => {
+  const visibleObjects = searchMatch?.items ?? objects;
+  return <div hidden={!visible}><SidebarTreeRow target={{ kind: 'database', connectionId, database }} label={database} className="database-row" locate={locate?.relation === undefined ? locate : undefined} version={[search, refreshVersion, objects, busy, displayedOpen, requests.kind]} actions={<><FavoriteButton menu target={{ connectionId, database, kind: 'database' }}/>{postgres && <button data-menu-group="create" title={postgresCreateViewZh.title} aria-label={postgresCreateViewZh.title} onClick={() => onDesign(undefined, 'ordinary')}><Plus size={12}/></button>}{postgres && <button data-menu-group="create" title={postgresCreateViewZh.materializedTitle} aria-label={postgresCreateViewZh.materializedTitle} onClick={() => onDesign(undefined, 'materialized')}><Plus size={12}/></button>}{postgres && <button data-menu-group="create" aria-label={postgresSequenceZh.create} onClick={() => onDesign(undefined, 'sequence')}><Plus size={12}/></button>}{postgres && <button data-menu-group="create" aria-label={postgresRoutineZh.create} onClick={() => onDesign(undefined, 'routine')}><Plus size={12}/></button>}{sqlite && database === 'main' && onSqliteObjects && (['view', 'trigger'] as const).map(kind => <button key={kind} data-menu-group="create" title={kind === 'view' ? sqliteObjectsZh.createView : sqliteObjectsZh.createTrigger} aria-label={(kind === 'view' ? sqliteObjectsZh.createView : sqliteObjectsZh.createTrigger) + ' ' + database} onClick={() => onSqliteObjects(kind, 'create')}><Plus size={12}/></button>)}{(!sqlite || database === 'main') && onImportNewTable && <button data-menu-group="transfer" title={importNewTableZh.title} aria-label={`${importNewTableZh.title} ${database}`} onClick={onImportNewTable}><Plus size={12}/></button>}{!postgres && !sqlite && onDatabaseDrop && <button data-menu-group="danger" title={databaseDropZh.title} aria-label={`${databaseDropZh.title} ${database}`} disabled={isProtectedDatabaseDropName(database)} onClick={onDatabaseDrop}><Trash2 size={12}/></button>}{!postgres && !sqlite && onDatabaseDefaultEncoding && <button data-menu-group="structure" title={databaseDefaultEncodingZh.title} aria-label={`${databaseDefaultEncodingZh.entry} ${database}`} onClick={onDatabaseDefaultEncoding}><Pencil size={12}/></button>}<button data-menu-group="create" title={zh.common.newQuery} aria-label={zh.sidebar.text016} onClick={() => useWorkspace.getState().openTab({ title: zh.common.unnamedQuery, kind: 'query', connectionId, database, sql: '' })}><FileCode2 size={12}/></button><button data-menu-group="create" title={zh.sidebar.text017} aria-label={zh.sidebar.text017} disabled={sqlite && database !== 'main'} onClick={() => { if (!sqlite || database === 'main') onDesign(); }}><Plus size={12}/></button><button data-menu-group="refresh" title={zh.sidebar.text018} aria-label={zh.sidebar.text018} disabled={busy} onClick={() => void load()}><RefreshCw size={12}/></button>{postgres && <button data-menu-group="structure" aria-label={postgresSchemaManageZh.title} onClick={() => onDdl()}><ListChecks size={12}/></button>}{postgres && <button data-menu-group="structure" aria-label={postgresExtensionManageZh.title} onClick={() => onDdl(undefined, 'extensions')}><ListChecks size={12}/></button>}{postgres && <button data-menu-group="structure" aria-label={postgresStorageZh.title} onClick={() => onDdl(undefined, 'storage')}><Database size={12}/></button>}{!postgres && !sqlite && <button data-menu-group="structure" title={zh.sidebar.text019} aria-label={zh.sidebar.text019} onClick={() => onDdl()}><Pencil size={12}/></button>}</>}><button className="tree-label" aria-expanded={displayedOpen} aria-busy={busy} onClick={toggle}><span className="tree-chevron">{displayedOpen ? <ChevronDown size={12}/> : <ChevronRight size={12}/>}</span><Database size={13}/><span className="truncate">{database}</span></button></SidebarTreeRow>{busy && <div className="tree-loading"><Spinner/></div>}{displayedOpen && !busy && <div className="object-list">{visibleObjects.map(object => {
     const key = `${object.kind}:${object.name}`;
-    const renderRow = (leading?: ReactNode) => <SidebarTreeRow key={key} leading={leading} target={{ connectionId, database, kind: object.kind, name: object.name }} label={object.name} className="object-row" locate={object === locatedObject ? locate : undefined} allowIdentifierDrag version={[search, refreshVersion, objects, busy, open]} actions={sidebarObjectActions({ connectionId, database, object, onOpen: () => { if (openSqliteObject(connectionId, database, object)) return; if (object.kind === 'table' || object.kind === 'view') useWorkspace.getState().openTab({ kind: 'table', title: object.name, connectionId, database, table: object.name }); else onDdl(object); }, onDesign, onDdl, onColumnPatches, onIndexPatches, onForeignKeyPatches, onTableCopyData, onTableCopyStructure, onSqliteObjects, onSqliteTableRebuild, onTableMaintenance, onTableRename, onTableAutoIncrement, onTableChecks, onTableComment, onTableDefaultEncoding, onRoutineInvocation, onRefresh: () => void load(false) })}><button className="tree-label" title={`${kindLabels[object.kind]} · ${object.name}`} onDoubleClick={() => { if (sqlite) openSqliteObject(connectionId, database, object); }} onClick={() => { useWorkspace.getState().select({ connectionId, database }); if (sqlite) return; if (object.kind === 'table' || object.kind === 'view') useWorkspace.getState().openTab({ kind: 'table', title: object.name, connectionId, database, table: object.name }); else onDdl(object); }}>{object.kind === 'table' ? <Table2 size={13}/> : <FileCode2 size={13}/>}<span className="truncate">{object.name}</span><span className="object-kind">{object.kind === 'table' ? '' : kindLabels[object.kind]}</span></button></SidebarTreeRow>;
+    const renderRow = (leading?: ReactNode) => <SidebarTreeRow key={key} leading={leading} target={{ connectionId, database, kind: object.kind, name: object.name }} label={object.name} className="object-row" locate={object === locatedObject ? locate : undefined} allowIdentifierDrag version={[search, refreshVersion, objects, busy, displayedOpen]} actions={sidebarObjectActions({ connectionId, database, object, onOpen: () => { if (openSqliteObject(connectionId, database, object)) return; if (object.kind === 'table' || object.kind === 'view') useWorkspace.getState().openTab({ kind: 'table', title: object.name, connectionId, database, table: object.name }); else onDdl(object); }, onDesign, onDdl, onColumnPatches, onIndexPatches, onForeignKeyPatches, onTableCopyData, onTableCopyStructure, onSqliteObjects, onSqliteTableRebuild, onTableMaintenance, onTableRename, onTableAutoIncrement, onTableChecks, onTableComment, onTableDefaultEncoding, onRoutineInvocation, onRefresh: () => void load(false) })}><button className="tree-label" title={`${kindLabels[object.kind]} · ${object.name}`} onDoubleClick={() => { if (sqlite) openSqliteObject(connectionId, database, object); }} onClick={() => { useWorkspace.getState().select({ connectionId, database }); if (sqlite) return; if (object.kind === 'table' || object.kind === 'view') useWorkspace.getState().openTab({ kind: 'table', title: object.name, connectionId, database, table: object.name }); else onDdl(object); }}>{object.kind === 'table' ? <Table2 size={13}/> : <FileCode2 size={13}/>}<span className="truncate">{object.name}</span><span className="object-kind">{object.kind === 'table' ? '' : kindLabels[object.kind]}</span></button></SidebarTreeRow>;
     const presetKind = postgres ? 'postgres' : sqlite && database === 'main' ? 'sqlite' : dialect === 'mysql' || dialect === 'mariadb' ? 'mysql' : undefined;
     if (!presetKind || (object.kind !== 'table' && object.kind !== 'view')) return renderRow();
     const withPreset = (structure?: ReactNode) => <TablePresetBranch key={key} kind={presetKind} connectionId={connectionId}
@@ -350,10 +416,10 @@ function DatabaseNode({ connectionId, database, search, locate, onImportNewTable
     const revision = catalogRevision.current;
     return object.kind === 'table' ? <TableElementsBranch key={JSON.stringify([key, revision])} connectionId={connectionId}
       database={database} table={object.name}
-      available={() => openRef.current && catalogRevision.current === revision && !requests.kind &&
+      available={() => displayedOpenRef.current && catalogRevision.current === revision && !requests.kind &&
         (useWorkspace.getState().connectionVersions[connectionId] ?? 0) === connectionVersion}
       onDesign={onDesignElement ? element => onDesignElement({ connectionId, database, table: object.name }, element) : undefined}>
       {withPreset}
     </TableElementsBranch> : withPreset();
-  })}{!visible.length && <span className="tree-hint">{search ? zh.sidebar.text023 : zh.sidebar.text024}</span>}</div>}</div>;
+  })}{!visibleObjects.length && <span className="tree-hint">{search ? zh.sidebar.text023 : zh.sidebar.text024}</span>}</div>}</div>;
 }
