@@ -3,6 +3,14 @@ export const zh = {
   snippets: {
     insertChanged: '原查询或选区已变化，本次插入已失效；请关闭片段库后重新打开。',
     singleTarget: '片段插入需要单一光标或选区。',
+    templateFields: '插入内置模板后，按 Tab 或 Shift+Tab 在字段间移动。',
+    queryTemplateGroup: '结果与参数',
+    resultTitleName: '命名结果页签',
+    resultTitleDescription: '填写结果页签名并替换示例查询。执行后，查询结果使用该名称。',
+    parameterName: '命名参数查询',
+    parameterDescription: '修改参数名和列别名，再用「参数执行」为 [$name] 填写值。',
+    parameterSqlite: '用「参数执行」并勾选「识别 Navicat 命名参数」，即可为 [$name] 填写值。',
+    parameterMariaDb: '用「参数执行」为 [$name] 填写值。MSSQL 模式下请把占位符改写为 :name。',
     title: 'SQL 片段库', search: '搜索片段名称、说明或正文', groupFilter: '筛选片段分组', allGroups: '全部分组', ungrouped: '未分组', builtin: '内置模板', user: '我的片段', new: '新建片段', name: '片段名称', group: '片段分组', description: '片段说明', sql: '片段 SQL 正文', copy: '复制为新片段', insert: '插入查询', edit: '编辑片段', deleteTitle: '删除 SQL 片段', deleteConfirm: '确定删除“{0}”？已插入查询的正文不会被删除。', unsavedTitle: '放弃片段修改', unsavedConfirm: '片段修改尚未保存，确定放弃？', discard: '放弃修改', saved: '片段已保存', empty: '没有符合条件的片段', hint: '插入到选区或光标处，不执行 SQL；请核对模板中的表名。', selectName: '选择片段：{0}', selectColumns: '按条件读取列', selectDescription: '修改表名、列名和条件后执行。', countName: '分组统计', countDescription: '按分类统计记录数，修改表名和分类列。', explainName: '查看查询执行计划', explainDescription: '对 SELECT 查询查看执行计划，不修改数据。', loading: '正在读取片段库…', insertUnavailable: '查询编辑器尚未就绪', suggestion: 'SQL 片段', selectionBlank: '选区只包含空白，无法保存为片段。', selectionTooLong: '选区超过 65,536 个 UTF-16 代码单元，请缩小选区后再试。'
   },
   resultExport: {

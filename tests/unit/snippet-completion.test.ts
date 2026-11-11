@@ -1,7 +1,8 @@
 import { expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import type { SqlSnippet } from '../../src/shared/contracts';
-import { createSnippetCatalog, matchSnippetPrefix, snippetAtStatementStart, snippetPrefix, snippetTemplates, snippetTemplatesForDialect } from '../../src/renderer/snippetCompletion';
+import { builtinSnippetInsertion, createSnippetCatalog, matchSnippetPrefix, snippetAtStatementStart, snippetPrefix, snippetTemplates, snippetTemplatesForDialect } from '../../src/renderer/snippetCompletion';
+import { queryResultTitle } from '../../src/shared/queryResultTitle';
 
 const item = (name: string, group = ''): SqlSnippet => ({ id: name + group, name, group, sql: "SELECT '${name}'\n  ;", description: '', updatedAt: '' });
 
@@ -32,12 +33,26 @@ it('PostgreSQL 内置模板使用双引号且身份稳定，不改旧模板或�
   expect(postgres.map(item => item.id)).toEqual(snippetTemplates.map(item => item.id));
   for (const template of postgres) {
     expect(template.sql).not.toContain('`');
-    expect(template.sql).toContain('"your_table"');
+    if (template.group === postgres[0].group) expect(template.sql).toContain('"your_table"');
   }
   expect(postgres[0].sql).toContain('SELECT "id", "name"');
   expect(snippetTemplates).toEqual(original);
-  for (const dialect of [undefined, 'mysql', 'mariadb'] as const) expect(snippetTemplatesForDialect(dialect)).toBe(snippetTemplates);
+  for (const dialect of [undefined, 'mysql'] as const) expect(snippetTemplatesForDialect(dialect)).toBe(snippetTemplates);
+  expect(snippetTemplatesForDialect('mariadb').map(item => item.sql)).toEqual(snippetTemplates.map(item => item.sql));
   expect(matchSnippetPrefix([user], user.name, 'mysql')).toEqual([user]);
+});
+
+it.each(['mysql', 'mariadb', 'postgresql', 'sqlite'] as const)('%s 的结果名和参数模板保留 SQL 原文，只有内置身份可启用字段', dialect => {
+  const templates = snippetTemplatesForDialect(dialect);
+  const title = templates.find(item => item.id === 'builtin-result-title')!;
+  const parameter = templates.find(item => item.id === 'builtin-named-parameter')!;
+  expect(queryResultTitle(title.sql, dialect === 'mariadb' ? 'mysql' : dialect)).toBe('查询结果');
+  expect(parameter.sql).toBe('SELECT [$value] AS result;');
+  expect(builtinSnippetInsertion(parameter)).toBe('SELECT [\\$${1:value}] AS ${2:result};$0');
+  expect(builtinSnippetInsertion({...parameter})).toBeUndefined();
+  const select = builtinSnippetInsertion(templates[0])!;
+  expect(select.match(/\$\{1:id\}/g)).toHaveLength(3);
+  expect(matchSnippetPrefix([], '命名参数', dialect)).toEqual([parameter]);
 });
 
 it('SQLite片段库和名称补全共用稳定模板，真实SQLite能读取、分组并返回可读计划', () => {

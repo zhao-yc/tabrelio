@@ -25,7 +25,7 @@ import { formatSqlEditor, type SqlFormattingMode } from '../sqlFormatting';
 import { captureQueryFormattingOptions, type QueryFormattingOptions } from '../queryFormattingOptions';
 import { QueryFormattingOptionsDialog } from './QueryFormattingOptionsDialog';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
-import type { DataRow, PostgresResultSource, QueryOutcome, QueryResult, ResultColumn, ResultExportData } from '../../shared/contracts';
+import type { DataRow, PostgresResultSource, QueryOutcome, QueryResult, ResultColumn, ResultExportData, SqlSnippet } from '../../shared/contracts';
 import { queryResultTitle } from '../../shared/queryResultTitle';
 import { ResultArchiveDialog } from './ResultArchiveDialog';
 import { resultArchiveZh as archiveText } from '../locales/resultArchive.zh-CN';
@@ -117,6 +117,7 @@ import type { QueryFailure } from '../../shared/queryFailure';
 import { QueryParameterReuseOwner, type QueryParameterReuseOwnerInput } from '../queryParameterReuseOwner';
 import type { QueryParameterReusePort } from '../queryParameterReusePort';
 import { SnippetsDialog } from './SnippetsDialog';
+import { prepareBuiltinSnippetInsert } from '../snippetInsertion';
 import { SNIPPET_LIMITS } from '../../shared/snippets';
 import { useQueryFileSource } from '../useQueryFileSource';
 import { captureQueryFileSnapshot } from '../queryFileSnapshot';
@@ -1988,7 +1989,7 @@ export function PostgresQueryTab({
     if (create && !selected.trim()) { setError(zh.snippets.selectionBlank); return; }
     const initialSql = selected || (target.model.getValueLength() <= SNIPPET_LIMITS.sql ? target.model.getValue() : '');
     snippetTarget.current?.dispose();
-    snippetTarget.current = captureInsertion(instance, true);
+    snippetTarget.current = captureInsertion(instance, true, 'snippet');
     if (snippetTarget.current) setSnippets({ initialSql, create });
   }
   function closeSnippets() {
@@ -1996,11 +1997,11 @@ export function PostgresQueryTab({
     snippetTarget.current = null;
     setSnippets(undefined);
   }
-  /** 只消费捕获的原选区，沿既有正文桥与单一撤销组插入纯文本，不执行SQL。 */
-  function insertSnippet(sql: string) {
+  /** 只消费原选区和单一撤销组；内置字段可以逐项填写，用户正文按原文插入。 */
+  function insertSnippet(snippet: SqlSnippet) {
     const instance = editor.current, target = snippetTarget.current;
     if (!instance || !target?.current()) throw Error(zh.snippets.insertChanged);
-    target.insert(sql);
+    target.insert(snippet.sql, undefined, prepareBuiltinSnippetInsert(instance, snippet));
     closeSnippets();
     window.setTimeout(() => {
       if (alive.current && editor.current === instance && useWorkspace.getState().settings.activeTabId === tab.id) instance.focus();

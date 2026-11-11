@@ -5,20 +5,68 @@ import { SNIPPET_LIMITS } from '../shared/snippets';
 import { invoke } from './lib';
 import { zh } from './locales/zh-CN';
 
-/** 内置片段与片段库共用同一份正文。 */
-export const snippetTemplates: SqlSnippet[] = [
-  { id: 'builtin-select', name: zh.snippets.selectColumns, group: zh.snippets.builtin, description: zh.snippets.selectDescription, sql: 'SELECT `id`, `name`\nFROM `your_table`\nWHERE `id` > 0\nORDER BY `id`\nLIMIT 100;', updatedAt: '' },
-  { id: 'builtin-count', name: zh.snippets.countName, group: zh.snippets.builtin, description: zh.snippets.countDescription, sql: 'SELECT `category`, COUNT(*) AS `record_count`\nFROM `your_table`\nGROUP BY `category`\nORDER BY `record_count` DESC;', updatedAt: '' },
-  { id: 'builtin-explain', name: zh.snippets.explainName, group: zh.snippets.builtin, description: zh.snippets.explainDescription, sql: 'EXPLAIN\nSELECT *\nFROM `your_table`\nWHERE `id` = 1;', updatedAt: '' },
-];
+const editableTemplates = new WeakMap<SqlSnippet, string>();
+const escapeTemplate = (value: string) => value.replace(/[\\$}]/g, character => '\\' + character);
 
-// 仅转换受控内置模板的标识符占位符；用户片段跨方言共享，正文绝不重写。
-const postgresTemplates = snippetTemplates.map(item => ({ ...item, sql: item.sql.replaceAll('`', '"') }));
-// SQLite计划使用QUERY PLAN返回可读步骤，避免误用MySQL的EXPLAIN结果语义；用户正文不参与转换。
-const sqliteTemplates = postgresTemplates.map(item => ({ ...item, sql: item.id === 'builtin-explain' ? item.sql.replace(/^EXPLAIN\n/, 'EXPLAIN QUERY PLAN\n') : item.sql }));
+/** 预览和插入共用正文。只有本地内置对象可携带 Tab 字段，复制或导入后按普通文本处理。 */
+function builtin(dialect: ConnectionProfile['dialect'], id: string, name: string, description: string, group: string = zh.snippets.builtin) {
+  return (parts: TemplateStringsArray, ...fields: string[]): SqlSnippet => {
+    // 方言转换只作用于受控模板的固定文本；字段不包含引号。
+    const literals = parts.map(part => dialect === 'postgresql' || dialect === 'sqlite' ? part.replaceAll('`', '"') : part);
+    if (dialect === 'sqlite' && id === 'builtin-explain') literals[0] = literals[0].replace(/^EXPLAIN\n/, 'EXPLAIN QUERY PLAN\n');
+    let sql = literals[0], insertion = escapeTemplate(literals[0]);
+    const positions = new Map<string, number>();
+    for (const [index, value] of fields.entries()) {
+      // 同一模板内重复的字段联动编辑，如 SELECT、WHERE、ORDER BY 里的主键名。
+      const position = positions.get(value) ?? positions.size + 1;
+      positions.set(value, position);
+      sql += value + literals[index + 1];
+      insertion += '${' + position + ':' + escapeTemplate(value) + '}' + escapeTemplate(literals[index + 1]);
+    }
+    const snippet = Object.freeze({id, name, group, description, sql, updatedAt: ''});
+    editableTemplates.set(snippet, insertion + '$0');
+    return snippet;
+  };
+}
+
+export function builtinSnippetInsertion(snippet: SqlSnippet): string | undefined {
+  return editableTemplates.get(snippet);
+}
+
+function templatesFor(dialect: ConnectionProfile['dialect']): SqlSnippet[] {
+  const text = zh.snippets;
+  const parameterHelp = dialect === 'sqlite' ? text.parameterSqlite
+    : dialect === 'mariadb' ? text.parameterMariaDb : text.parameterDescription;
+  const select = builtin(dialect, 'builtin-select', text.selectColumns, text.selectDescription)
+    `SELECT \`${'id'}\`, \`${'name'}\`
+FROM \`${'your_table'}\`
+WHERE \`${'id'}\` > ${'0'}
+ORDER BY \`${'id'}\`
+LIMIT ${'100'};`;
+  const count = builtin(dialect, 'builtin-count', text.countName, text.countDescription)
+    `SELECT \`${'category'}\`, COUNT(*) AS \`${'record_count'}\`
+FROM \`${'your_table'}\`
+GROUP BY \`${'category'}\`
+ORDER BY \`${'record_count'}\` DESC;`;
+  const explain = builtin(dialect, 'builtin-explain', text.explainName, text.explainDescription)
+    `EXPLAIN
+SELECT *
+FROM \`${'your_table'}\`
+WHERE \`${'id'}\` = ${'1'};`;
+  const result = builtin(dialect, 'builtin-result-title', text.resultTitleName, text.resultTitleDescription, text.queryTemplateGroup)
+    `-- NAME:${'查询结果'}
+${'SELECT 1 AS value;'}`;
+  const parameter = builtin(dialect, 'builtin-named-parameter', text.parameterName, parameterHelp, text.queryTemplateGroup)
+    `SELECT [$${'value'}] AS ${'result'};`;
+  return [select, count, explain, result, parameter];
+}
+
+export const snippetTemplates = templatesFor('mysql');
+const mariadbTemplates = templatesFor('mariadb'), postgresTemplates = templatesFor('postgresql'), sqliteTemplates = templatesFor('sqlite');
 /** 方言模板使用稳定对象，模态重渲染后仍能识别只读的内置记录。 */
 export function snippetTemplatesForDialect(dialect?: ConnectionProfile['dialect']): SqlSnippet[] {
-  return dialect === 'postgresql' ? postgresTemplates : dialect === 'sqlite' ? sqliteTemplates : snippetTemplates;
+  return dialect === 'postgresql' ? postgresTemplates : dialect === 'sqlite' ? sqliteTemplates
+    : dialect === 'mariadb' ? mariadbTemplates : snippetTemplates;
 }
 
 /** 共享本窗口的单次本地读取；写入后的旧回包不能再次发布。 */

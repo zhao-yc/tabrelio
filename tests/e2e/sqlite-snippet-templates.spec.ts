@@ -9,7 +9,7 @@ import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 test.skip(process.env.DBARK_SQLITE_SNIPPET_TEST !== '1', '仅在隔离的 SQLite 源码验收运行');
 
-test('SQLite片段库与真实名称补全共用专属模板，插入和一次撤销不执行查询', async ({}, info) => {
+test('SQLite片段库和补全插入可逐项填写的模板，执行由用户明确触发', async ({}, info) => {
   if (process.env.DBARK_INTEGRATION_ENABLED !== '0' || process.env.DBARK_DEV_URL || process.env.DBARK_EXECUTABLE_PATH)
     throw Error('SQLite片段验收只使用本例临时文件');
   try {
@@ -65,8 +65,41 @@ test('SQLite片段库与真实名称补全共用专属模板，插入和一次�
     await suggestion.click();
     await expect.poll(sql).toBe(select.sql);
     await page.keyboard.press(`${modifier}+Z`); await expect.poll(sql).toBe(prefix);
+
+    await page.keyboard.press(`${modifier}+A`);
+    await page.keyboard.insertText('命名参数');
+    await page.keyboard.press('Control+Space');
+    await widget.locator('.monaco-list-row .label-name').getByText(zh.snippets.parameterName, {exact: true}).click();
+    await expect.poll(sql).toBe('SELECT [$value] AS result;');
+    await page.keyboard.insertText('needle');
+    await page.keyboard.press('Tab');
+    await page.keyboard.insertText('bound_value');
+    await page.keyboard.press('Tab');
+    await expect.poll(sql).toBe('SELECT [$needle] AS bound_value;');
+
+    await input.focus();
+    await page.keyboard.press(`${modifier}+A`);
+    await (await navigationMenuItem(tab, {name: zh.snippets.title, exact: true})).click();
+    await dialog.getByLabel(zh.snippets.groupFilter).selectOption(':' + zh.snippets.queryTemplateGroup);
+    await dialog.getByRole('button', {name: formatText(zh.snippets.selectName, zh.snippets.resultTitleName), exact: true}).click();
+    await expect(dialog.locator('.monaco-editor .view-lines')).toContainText('-- NAME:查询结果');
+    await dialog.screenshot({path: info.outputPath('内置结果与参数片段.png')});
+    await dialog.getByRole('button', {name: zh.snippets.insert, exact: true}).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(input).toBeFocused();
+    await page.keyboard.insertText('临时结果');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.insertText('样本结果');
+    await page.keyboard.press('Tab');
+    await page.keyboard.insertText('SELECT 41 AS answer;');
+    await page.keyboard.press('Tab');
+    await expect.poll(sql).toBe('-- NAME:样本结果\nSELECT 41 AS answer;');
     expect(await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}),
       snippets: await window.dbark.invoke('snippets.list', {}) }))).toEqual({ tasks: [], history: [], snippets: [] });
+    await page.keyboard.press(`${modifier}+Enter`);
+    await expect(tab.locator('.query-result-tabs').getByText('样本结果', {exact: true})).toBeVisible();
+    await expect(tab.getByRole('gridcell').filter({hasText: /^41$/})).toBeVisible();
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) { retainOwnedDesktopResources(info); throw reason; }

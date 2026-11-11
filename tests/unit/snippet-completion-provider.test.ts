@@ -5,8 +5,8 @@ import { createSnippetCompletionProvider } from '../../src/renderer/snippetCompl
 
 const row: SqlSnippet = {id: 'one', name: 'pg原文', group: '组', description: '', sql: "-- $1 ${name}😀\nSELECT '原样';", updatedAt: ''};
 /** 只替换公开编辑器事件和本地读取端口，正式建议生成器处理范围、失效及普通文本规则。 */
-function fixture() {
-  let text = 'pg', version = 1, current = true, position = {lineNumber: 1, column: 3}, empty = true;
+function fixture(prefix = 'pg') {
+  let text = prefix, version = 1, current = true, position = {lineNumber: 1, column: prefix.length + 1}, empty = true;
   let finish!: (rows: SqlSnippet[] | undefined) => void;
   const events = new Map<string, () => void>();
   const on = (name: string) => (listener: () => void) => { events.set(name, listener); return {dispose: () => events.delete(name)}; };
@@ -16,7 +16,7 @@ function fixture() {
     onDidChangeCursorSelection: on('cursor'), onDidChangeModel: on('model'), onDidDispose: on('dispose')} as unknown as monaco.editor.IStandaloneCodeEditor;
   const list = vi.fn(() => new Promise<SqlSnippet[] | undefined>(resolve => {finish = resolve;}));
   const token = {isCancellationRequested: false} as monaco.CancellationToken;
-  const provider = createSnippetCompletionProvider({editor, dialect: 'postgresql', current: () => current, list, kind: 27, keepWhitespace: 1});
+  const provider = createSnippetCompletionProvider({editor, dialect: 'postgresql', current: () => current, list, kind: 27, keepWhitespace: 1, snippetRule: 4});
   const request = () => Promise.resolve(provider.provideCompletionItems(model, position as monaco.Position, {} as monaco.languages.CompletionContext, token));
   return {provider, request, list, token, events, finish: (rows: SqlSnippet[] | undefined = [row]) => finish(rows),
     change() {text = 'pq'; version++; text = 'pg'; version++;}, block() {current = false;}, selection() {empty = false;},
@@ -28,6 +28,17 @@ it('本地正文按普通文本规则插入准确前缀，不插值美元变量'
   expect(result?.suggestions).toMatchObject([{insertText: row.sql, insertTextRules: 1,
     range: {startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 3}}]);
   expect(f.list).toHaveBeenCalledTimes(1); f.provider.dispose(); expect(f.events.size).toBe(0);
+});
+it('仅内置片段启用 Tab 字段，即使用户记录使用相同 ID 和名称', async () => {
+  const f = fixture('命名参数'), pending = f.request();
+  const custom = {...row, id: 'builtin-named-parameter', name: '命名参数查询'};
+  f.finish([custom]);
+  const result = await pending;
+  expect(result?.suggestions.map(({insertText, insertTextRules}) => ({insertText, insertTextRules}))).toEqual([
+    {insertText: custom.sql, insertTextRules: 1},
+    {insertText: 'SELECT [\\$${1:value}] AS ${2:result};$0', insertTextRules: 5},
+  ]);
+  f.provider.dispose();
 });
 it.each(['cursorABA', 'change', 'block', 'selection', 'invalidate', 'dispose', 'model', 'cancel'] as const)('本地读取期间%s永久撤销迟到建议', async action => {
   const f = fixture(), pending = f.request();

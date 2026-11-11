@@ -443,6 +443,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       },
       list: () => snippetCatalog.list(), kind: monaco.languages.CompletionItemKind.Snippet,
       keepWhitespace: monaco.languages.CompletionItemInsertTextRule.KeepWhitespace,
+      snippetRule: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
     });
     // 导航及连接ABA也要撤销在途本地读取，不能仅靠回包时的同值判断。
     const stop = useWorkspace.subscribe((next, previous) => {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { captureHistoryInsertion, HistoryInsertionRegistry, type HistoryInsertionEditor, type HistoryInsertionScope } from '../../src/renderer/historyInsertion';
+import type { Selection } from 'monaco-editor';
+import { captureHistoryInsertion, HistoryInsertionRegistry, type HistoryInsertionEditor, type HistoryInsertionScope, type QueryInsertionMode } from '../../src/renderer/historyInsertion';
 import { historyInsertionZh as text } from '../../src/renderer/locales/historyInsertion.zh-CN';
 
 /** 最小编辑端口只记录普通编辑及undo边界，不模拟或宣称原生Monaco撤销已验。 */
@@ -14,7 +15,7 @@ function fixture() {
   const edit = vi.fn<HistoryInsertionEditor['executeEdits']>(() => { calls.push('edit'); version++; for (const listener of [...changes]) listener(); return true; });
   const editor: HistoryInsertionEditor = { getModel: () => attached, getSelection: () => range, onDidChangeModel: event(models), onDidChangeCursorSelection: event(cursors), onDidDispose: event(deaths), pushUndoStop: () => { calls.push('undo-stop'); return true; }, executeEdits: edit };
   let state: HistoryInsertionScope = { tab: { id: 'q', kind: 'query', title: '原查询', connectionId: 'c', database: 'original', sql: 'SELECT 1;' }, activeTabId: 'q', connection: {}, connectionVersion: 1, selection: {}, session: 'session', execution: 'execution', alive: true, busy: false, closing: false };
-  const capture = () => captureHistoryInsertion(editor, () => state, listener => { workspace.add(listener); return () => { workspace.delete(listener); }; });
+  const capture = (mode?: QueryInsertionMode) => captureHistoryInsertion(editor, () => state, listener => { workspace.add(listener); return () => { workspace.delete(listener); }; }, mode);
   const update = (patch: Partial<HistoryInsertionScope>) => { state = { ...state, ...patch }; for (const listener of [...workspace]) listener(); };
   return { capture, update, edit, editor, model, calls, state: () => state,
     content: () => { version++; for (const listener of [...changes]) listener(); },
@@ -67,6 +68,24 @@ describe('历史正文插入原查询的单次编辑权限', () => {
   it('编辑器拒绝时明确失败，原权限已消费，不能自动重放', () => {
     const f = fixture(), target = f.capture()!; f.edit.mockReturnValueOnce(false);
     expect(() => target.insert('SQL')).toThrow(text.failed); expect(() => target.insert('SQL')).toThrow(text.changed); expect(f.edit).toHaveBeenCalledTimes(1);
+  });
+  it('内置字段编辑只消费一次有效的片段选区；模型改动或历史入口不能启动字段会话', () => {
+    const f = fixture(), apply = vi.fn();
+    f.editor.getDomNode = () => ({getClientRects: () => [1]}) as unknown as HTMLElement;
+    f.editor.getSelections = () => [f.editor.getSelection() as Selection];
+    const history = f.capture()!;
+    expect(() => history.insert('SELECT 1;', undefined, apply)).toThrow(text.changed);
+    history.dispose();
+    const stale = f.capture('snippet')!;
+    f.content();
+    expect(() => stale.insert('SELECT 1;', undefined, apply)).toThrow(text.changed);
+    stale.dispose();
+    const current = f.capture('snippet')!;
+    current.insert('SELECT 1;', undefined, apply);
+    expect(() => current.insert('SELECT 1;', undefined, apply)).toThrow(text.changed);
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(f.edit).not.toHaveBeenCalled();
+    expect(f.listeners()).toBe(0);
   });
   it('注册清理按工厂身份，旧StrictMode清理不能删除新工厂，也不回退到其它标签', () => {
     const registry = new HistoryInsertionRegistry(), first = fixture(), second = fixture();

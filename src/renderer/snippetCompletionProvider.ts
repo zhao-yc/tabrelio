@@ -1,6 +1,6 @@
 import type * as monaco from 'monaco-editor';
 import type { ConnectionProfile, SqlSnippet } from '../shared/contracts';
-import { matchSnippetPrefix, snippetAtStatementStart, snippetPrefix } from './snippetCompletion';
+import { builtinSnippetInsertion, matchSnippetPrefix, snippetAtStatementStart, snippetPrefix } from './snippetCompletion';
 import { zh } from './locales/zh-CN';
 
 /** 单一编辑器的本地片段补全；读取期间发生光标、模型、导航或会话变化即永久撤销。 */
@@ -12,6 +12,7 @@ export function createSnippetCompletionProvider(options: {
   list(): Promise<readonly SqlSnippet[] | undefined>;
   kind: monaco.languages.CompletionItemKind;
   keepWhitespace: monaco.languages.CompletionItemInsertTextRule;
+  snippetRule: monaco.languages.CompletionItemInsertTextRule;
 }): monaco.languages.CompletionItemProvider & { invalidate(): void; dispose(): void } {
   const { editor } = options;
   let active = true, generation = 0;
@@ -33,11 +34,15 @@ export function createSnippetCompletionProvider(options: {
       const cursor = editor.getPosition();
       if (!rows || !current() || model.getVersionId() !== version || cursor?.lineNumber !== position.lineNumber || cursor.column !== position.column) return;
       const range = { startLineNumber: position.lineNumber, startColumn: position.column - prefix.length, endLineNumber: position.lineNumber, endColumn: position.column };
-      return { incomplete: true, suggestions: matchSnippetPrefix(rows, prefix, options.dialect).map((item, index) => ({
-        label: { label: item.name, description: item.group || zh.snippets.ungrouped }, detail: zh.snippets.suggestion,
-        documentation: item.description || item.sql.slice(0, 256), kind: options.kind, range, insertText: item.sql,
-        insertTextRules: options.keepWhitespace, sortText: '1' + String(index).padStart(2, '0'),
-      })) };
+      return { incomplete: true, suggestions: matchSnippetPrefix(rows, prefix, options.dialect).map((item, index) => {
+        const template = builtinSnippetInsertion(item);
+        return {
+          label: { label: item.name, description: item.group || zh.snippets.ungrouped }, detail: zh.snippets.suggestion,
+          documentation: item.description || item.sql.slice(0, 256), kind: options.kind, range, insertText: template ?? item.sql,
+          insertTextRules: template ? options.keepWhitespace | options.snippetRule : options.keepWhitespace,
+          sortText: '1' + String(index).padStart(2, '0'),
+        };
+      }) };
     },
   };
 }

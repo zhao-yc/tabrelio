@@ -11,7 +11,7 @@ export interface HistoryInsertionTarget {
   readonly title: string;
   readonly connectionId: string;
   current(): boolean;
-  insert(sql: string, drop?: ObjectIdentifierDrop): void;
+  insert(sql: string, drop?: ObjectIdentifierDrop, applyBuiltin?: () => void): void;
   dispose(): void;
   subscribe(listener: () => void): () => void;
 }
@@ -37,7 +37,7 @@ export interface HistoryInsertionEditor {
   executeEdits(source: string, edits: monaco.editor.IIdentifiedSingleEditOperation[], cursor?: monaco.editor.ICursorStateComputer): boolean;
 }
 
-export type QueryInsertionMode = 'object-identifier';
+export type QueryInsertionMode = 'object-identifier' | 'snippet';
 
 /** 注册只删除自身工厂；StrictMode的旧清理不能撤销后来注册的编辑器。 */
 export class HistoryInsertionRegistry {
@@ -53,9 +53,9 @@ export class HistoryInsertionRegistry {
 export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: () => HistoryInsertionScope, subscribe: (listener: () => void) => () => void, mode?: QueryInsertionMode): HistoryInsertionTarget | null {
   const initial = read(), model = editor.getModel(), selected = editor.getSelection();
   if (!initial.alive || initial.busy || initial.closing || initial.tab?.kind !== 'query' || initial.activeTabId !== initial.tab.id || !initial.connection || !model || model.isDisposed() || !selected) return null;
-  // 侧栏只能插入可见的单一选区，不对结果专注模式、只读正文或多光标作隐式编辑。
+  // 侧栏和片段只接受可见的单一选区，不对结果专注模式、只读正文或多光标作隐式编辑。
   const cursor = mode === 'object-identifier' ? editor.getSelections?.()?.[0] : undefined;
-  const editable = () => mode !== 'object-identifier' || (!!cursor && editor.getSelections?.()?.length === 1 &&
+  const editable = () => !mode || (editor.getSelections?.()?.length === 1 &&
     !!editor.getDomNode?.()?.getClientRects().length && !editor.getRawOptions?.().readOnly);
   if (!editable()) return null;
   const version = model.getVersionId();
@@ -86,8 +86,8 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
     current,
     subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     dispose,
-    insert(sql, drop) {
-      if (!current() || (drop && (!cursor || drop.editor !== editor))) throw Error(text.changed);
+    insert(sql, drop, applyBuiltin) {
+      if (!current() || (drop && (!cursor || drop.editor !== editor)) || (applyBuiltin && mode !== 'snippet')) throw Error(text.changed);
       // 拖入的位置来自原编辑器的命中测试，只插入文本，保留拖动前已选中的文字。
       const destination = drop ? {
         startLineNumber: drop.position.lineNumber, startColumn: drop.position.column,
@@ -95,6 +95,7 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
       } : range;
       if (typeof sql !== 'string' || sql.length > 20_000_000 || model.getValueLength() - model.getValueLengthInRange(destination) + sql.length > 20_000_000) throw Error(text.tooLarge);
       dispose();
+      if (applyBuiltin) { applyBuiltin(); return; }
       editor.pushUndoStop();
       const edit = snippetEdit(destination, sql);
       const accepted = cursor
