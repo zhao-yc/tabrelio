@@ -3,6 +3,11 @@ import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
 export const objectInformationZh = {
   title: uiCommandLabels['object-information'],
   close: '关闭对象信息',
+  expand: '展开对象信息窗格',
+  restoreSize: '恢复对象信息窗格大小',
+  resize: '调整对象信息窗格宽度',
+  resizeHint: '拖动或按左右方向键调整宽度，双击恢复默认宽度',
+  width: (value: number) => `${value} 像素`,
   modes: '信息类别',
   general: '常规',
   structure: '表结构',

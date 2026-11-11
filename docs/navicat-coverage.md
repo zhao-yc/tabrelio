@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。对象信息窗格可拖动或用键盘调整宽度，正常宽度随本机设置恢复。可一键展开整个窗格，恢复时保留原宽度、信息页和只读定义。W02 增加信息窗格尺寸控制。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#expand-and-collapse-pane)
+
 2026-11-12 源码增量。对象信息窗格可直接预览依赖目录项的只读定义，返回时恢复原列表、页码和焦点。PostgreSQL 的定义读取核对目录 OID 及关系类型。W02 增加依赖对象定义的就地查看。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#information-pane)
 
 2026-11-12 源码增量。对象信息窗格增加双向依赖。四种数据库支持表和视图，MySQL、MariaDB 和 SQLite 的表展示已声明的外键，MySQL 和 MariaDB 的入向外键可翻页。PostgreSQL 还支持例程和序列的目录依赖。W02 增加依赖读取及原对象切换保护。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#information-pane)

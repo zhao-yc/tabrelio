@@ -74,3 +74,18 @@ it('对象树分组偏好和星标 ID 可经设置重开；损坏配置只回退
   }
   expect(fs.writes).toBe(1);
 });
+
+it('信息窗格普通宽度通过 IPC 和存储恢复，旧记录缺项及非法值回退', () => {
+  const store = open();
+  const settings = { ...defaultSettings, objectInformationWidth: 560 };
+  expect(store.settings().objectInformationWidth).toBeUndefined();
+  store.saveSettings(validateCommand('settings.save', settings) as AppSettings);
+  expect(open(undefined, fs.files.get('ram-object-browser-settings')).settings()).toEqual(settings);
+  for (const objectInformationWidth of ['560', 299, 1001, 560.5, null]) {
+    const malformed = { ...settings, objectInformationWidth };
+    expect(() => validateCommand('settings.save', malformed)).toThrow();
+    expect(() => store.saveSettings(malformed as AppSettings)).toThrow();
+    expect(open(malformed).settings()).toEqual(defaultSettings);
+  }
+  expect(fs.writes).toBe(1);
+});

@@ -542,8 +542,61 @@ function register(): void {
     await find.getByRole('textbox', { name: 'Find', exact: true }).fill('parent_id');
     await expect(find.locator('.matchesCount')).toContainText('1 of 1');
     await runtime.page.keyboard.press('Escape');
+    await expect(find).toHaveCount(0);
+
+    const resize = pane.getByRole('separator', { name: t.resize, exact: true });
+    const readsBeforeLayout = (await audit()).calls;
+    await expect(pane).toHaveAttribute('data-layout', 'docked');
+    await expect(resize).toHaveAttribute('aria-valuenow', '340');
+    await resize.press('Shift+ArrowLeft');
+    await expect(resize).toHaveAttribute('aria-valuenow', '390');
+    await expect.poll(async () => (await settings()).objectInformationWidth).toBe(390);
+    const mouse = runtime.page.mouse;
+    async function dragWider() {
+      const bounds = (await resize.boundingBox())!;
+      const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
+      await mouse.move(x, y);
+      await mouse.down();
+      await mouse.move(x - 120, y, { steps: 6 });
+      await expect(resize).toHaveAttribute('aria-valuenow', '510');
+    }
+    await dragWider();
+    expect((await settings()).objectInformationWidth).toBe(390);
+    await runtime.page.keyboard.press('Escape');
+    await mouse.up();
+    await expect(resize).toHaveAttribute('aria-valuenow', '390');
+    await dragWider();
+    await mouse.up();
+    await expect.poll(async () => (await settings()).objectInformationWidth).toBe(510);
+
+    const expand = pane.getByRole('button', { name: t.expand, exact: true });
+    const restore = pane.getByRole('button', { name: t.restoreSize, exact: true });
+    const work = runtime.page.locator('.main-workspace');
+    await expand.press('Enter');
+    await expect(pane).toHaveAttribute('data-layout', 'expanded');
+    await expect(restore).toBeFocused();
+    await expect(resize).toHaveCount(0);
+    await expect(work).toHaveAttribute('inert', '');
+    await expect.poll(() => pane.evaluate(element => element.clientWidth - element.parentElement!.clientWidth)).toBe(0);
+    await expect(preview.locator('.view-lines')).toContainText('第二个子表');
+    await runtime.page.screenshot({ path: info.outputPath('展开依赖对象定义.png') });
+    await restore.press('Enter');
+    await expect(expand).toBeFocused();
+    await expect(work).not.toHaveAttribute('inert', '');
+    await expect(resize).toHaveAttribute('aria-valuenow', '510');
+
+    await main(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setContentSize(1140, 680); });
+    await expect.poll(() => runtime.page.evaluate(() => innerWidth)).toBe(1140);
+    await expect(pane).toHaveAttribute('data-layout', 'docked');
+    const clamped = Number(await resize.getAttribute('aria-valuemax'));
+    expect(clamped).toBeLessThan(510);
+    await expect(resize).toHaveAttribute('aria-valuenow', String(clamped));
     await main(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(1024, 680); });
-    await expect.poll(() => runtime.page.evaluate(() => innerWidth)).toBeLessThanOrEqual(1130);
+    await expect(pane).toHaveAttribute('data-layout', 'overlay');
+    await expect(resize).toHaveAttribute('aria-valuenow', '510');
+    await expect(preview.locator('.view-lines')).toContainText('第二个子表');
+    expect((await settings()).objectInformationWidth).toBe(510);
+    expect((await audit()).calls).toEqual(readsBeforeLayout);
     await runtime.page.screenshot({ path: info.outputPath('窄窗口依赖对象定义.png') });
     await back.press('Enter');
     await expect(open).toBeFocused();
@@ -569,6 +622,12 @@ function register(): void {
     expect((await audit()).calls.filter(call => call.command === 'table.incomingReferences').map(call => call.cursor))
       .toEqual([undefined, '原父表第二页', undefined]);
     expect((await settings()).tabs.map(tab => tab.id)).toEqual(ids);
+    await pane.getByRole('button', { name: t.close, exact: true }).click();
+    await native('object-information');
+    await expect(resize).toHaveAttribute('aria-valuenow', '510');
+    await resize.dblclick();
+    await expect(resize).toHaveAttribute('aria-valuenow', '340');
+    await expect.poll(async () => (await settings()).objectInformationWidth).toBe(340);
     await originalPreserved();
   });
 

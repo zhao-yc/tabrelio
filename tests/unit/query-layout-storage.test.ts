@@ -67,13 +67,50 @@ function populate(store:LocalStore){
  store.saveTableApplyReceipt({version:1,operationId:randomUUID(),taskId:'receipt-task',previewId:randomUUID(),target:{connectionId:'ram',connectionRevision:1,database:'db',table:'t'},intent:{insert:0,update:0,delete:0,statementCount:0},phase:'terminal',outcome:'not-sent',reason:'none',startedAt:'2026-10-18T00:00:00Z',finishedAt:'2026-10-18T00:00:01Z',sequence:0,committedReportedRows:0,scope:'target-transaction-only',evidence:emptyTableApplyEvidence()});
  const target={connectionId:'ram',database:'db',table:'t'},snapshot=store.tablePresets(target);store.saveTablePreset({...target,source:snapshot.source,expectedRevision:snapshot.revision,bindingToken:randomUUID(),name:'原方案',configuration:{filters:[],filterMode:'all',sort:[]}});
 }
-/** 生成与基线DDL相同的真实schema7；先移除后来新增的来源及可选查询元数据，保留原11表逐字比对。 */
-function oldSeven(file:string){edit(file,db=>{db.run('DROP TABLE IF EXISTS record_templates');db.run('DROP TABLE IF EXISTS table_layouts_sqlite');db.run('DROP TABLE IF EXISTS table_layouts_postgres');db.run('DROP TABLE IF EXISTS table_presets_sqlite');db.run('DROP TABLE IF EXISTS table_presets_postgres');db.run('DROP TABLE IF EXISTS table_preset_layouts');db.run('DROP TABLE IF EXISTS table_preset_layouts_sqlite');db.run('DROP TABLE IF EXISTS table_preset_layouts_postgres');db.run('DROP TABLE IF EXISTS query_file_sources');db.run('DROP TABLE IF EXISTS query_file_recents');db.run('DROP TABLE IF EXISTS query_result_presets');db.run('DROP TRIGGER IF EXISTS manual_join_designs_cleanup');db.run('DROP TABLE IF EXISTS manual_join_designs');db.run('DROP TABLE IF EXISTS import_presets');db.run('DROP TABLE IF EXISTS saved_query_memberships');db.run('DROP TABLE IF EXISTS saved_query_organization');db.run('DROP TRIGGER IF EXISTS saved_query_favorites_cleanup');db.run('DROP TRIGGER IF EXISTS saved_query_recent_opens_cleanup');db.run('DROP TABLE IF EXISTS saved_query_favorites');db.run('DROP TABLE IF EXISTS saved_query_recent_opens');db.run('INSERT INTO secrets VALUES(?,?,?)',['ram','password','NON_SECRET_CIPHERTEXT_MARKER']);db.run('PRAGMA user_version=7');});const db=new SQL.Database(readFileSync(file));try{const tables=db.exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")[0].values.map(([name])=>String(name));return tables.map(name=>({name,rows:db.exec('SELECT * FROM '+name)}));}finally{db.close();}}
-/** 新增组织元数据只建空表；不能靠扩张旧表数量掩盖原11表的迁移回归。 */
-function expectEmptyQueryOrganization(db:Database){expect(db.exec('SELECT * FROM saved_query_organization')).toEqual([]);expect(db.exec('SELECT * FROM saved_query_memberships')).toEqual([]);expect(db.exec('SELECT * FROM saved_query_favorites')).toEqual([]);expect(db.exec('SELECT * FROM saved_query_recent_opens')).toEqual([]);}
-it('真实旧schema7的11张表逐表原文保留原子升9，不读取合成秘密槽',async()=>{
- const {file,store}=await fixture();populate(store);close(store);const before=oldSeven(file);expect(before).toHaveLength(11);expect(before.every(table=>table.rows[0]?.values.length>0)).toBe(true);
- const restored=await reopen(file);expect(restored.settings()).toEqual(original());const db=new SQL.Database(readFileSync(file));expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(9);expect(before.map(({name})=>({name,rows:db.exec('SELECT * FROM '+name)}))).toEqual(before);expect(db.exec('SELECT * FROM query_file_recents')).toEqual([]);expect(db.exec('SELECT * FROM query_result_presets')).toEqual([]);expect(db.exec('SELECT * FROM manual_join_designs')).toEqual([]);expect(db.exec('SELECT * FROM import_presets')).toEqual([]);expectEmptyQueryOrganization(db);expect(db.exec('SELECT * FROM table_presets_sqlite')).toEqual([]);expect(db.exec('SELECT * FROM table_presets_postgres')).toEqual([]);expect(db.exec('SELECT * FROM table_preset_layouts')).toEqual([]);expect(db.exec('SELECT * FROM table_preset_layouts_sqlite')).toEqual([]);expect(db.exec('SELECT * FROM table_preset_layouts_postgres')).toEqual([]);expect(db.exec('SELECT * FROM table_layouts_sqlite')).toEqual([]);expect(db.exec('SELECT * FROM table_layouts_postgres')).toEqual([]);expect(db.exec('SELECT * FROM record_templates')).toEqual([]);db.close();
+const laterSettingsTables = [
+  'record_templates', 'table_layouts_sqlite', 'table_layouts_postgres', 'table_presets_sqlite', 'table_presets_postgres',
+  'table_preset_layouts', 'table_preset_layouts_sqlite', 'table_preset_layouts_postgres', 'query_file_sources', 'query_file_recents',
+  'query_result_presets', 'manual_join_designs', 'single_table_query_designs', 'single_relation_query_designs', 'import_presets',
+  'saved_query_memberships', 'saved_query_organization', 'saved_query_favorites', 'saved_query_recent_opens',
+] as const;
+
+/** 从当前配置库移除后续版本新增的对象，得到旧 schema 7 的原始 11 张表。 */
+function oldSeven(file: string) {
+  edit(file, db => {
+    for (const trigger of ['manual_join_designs_cleanup', 'single_table_query_designs_cleanup', 'single_relation_query_designs_cleanup',
+      'saved_query_favorites_cleanup', 'saved_query_recent_opens_cleanup']) db.run('DROP TRIGGER IF EXISTS ' + trigger);
+    for (const table of laterSettingsTables) db.run('DROP TABLE IF EXISTS ' + table);
+    db.run('INSERT INTO secrets VALUES(?,?,?)', ['ram', 'password', 'NON_SECRET_CIPHERTEXT_MARKER']);
+    db.run('PRAGMA user_version=7');
+  });
+  const db = new SQL.Database(readFileSync(file));
+  try {
+    const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")[0].values.map(([name]) => String(name));
+    return tables.map(name => ({ name, rows: db.exec('SELECT * FROM ' + name) }));
+  } finally { db.close(); }
+}
+
+/** 新增组织元数据应由迁移建为空表，失败回滚后的重试同样核验。 */
+function expectEmptyQueryOrganization(db: Database) {
+  for (const table of ['saved_query_organization', 'saved_query_memberships', 'saved_query_favorites', 'saved_query_recent_opens'])
+    expect(db.exec('SELECT * FROM ' + table)).toEqual([]);
+}
+
+it('真实旧schema7的11张表逐表原文保留原子升9，不读取合成秘密槽', async () => {
+  const { file, store } = await fixture();
+  populate(store);
+  close(store);
+  const before = oldSeven(file);
+  expect(before).toHaveLength(11);
+  expect(before.every(table => table.rows[0]?.values.length > 0)).toBe(true);
+  const restored = await reopen(file);
+  expect(restored.settings()).toEqual(original());
+  const db = new SQL.Database(readFileSync(file));
+  try {
+    expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(9);
+    expect(before.map(({ name }) => ({ name, rows: db.exec('SELECT * FROM ' + name) }))).toEqual(before);
+    for (const table of laterSettingsTables) expect(db.exec('SELECT * FROM ' + table)).toEqual([]);
+  } finally { db.close(); }
 });
 it('旧7迁移真实写盘失败保持旧文件和版本，故障消除后可重试且旧11表内容不变',async()=>{
  const {file,store}=await fixture();populate(store);close(store);const old=oldSeven(file),before=readFileSync(file);mkdirSync(file+'.tmp');

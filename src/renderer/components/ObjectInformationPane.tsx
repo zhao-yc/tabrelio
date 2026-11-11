@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Info, RefreshCw, Search, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
+import { Info, Maximize2, Minimize2, RefreshCw, Search, X } from 'lucide-react';
 import type { editor } from 'monaco-editor';
 import type { ConnectionProfile } from '../../shared/contracts';
+import { objectInformationWidthLimits as size } from '../../shared/objectInformationLayout';
 import { postgresDefinitionTargetSchema } from '../../shared/databaseSearch';
 import type { TableElements } from '../../shared/tableElements';
 import { invoke, errorMessage, kindLabels } from '../lib';
@@ -107,13 +108,95 @@ interface Source {
 }
 type Result = { source: Source; value: string | TableElements | ObjectDependencies } | { source: Source; error: string };
 
+/** 拖动只预览显示宽度，放开才保存。窗口变窄时临时限宽，保留原偏好。 */
+function useInformationPaneWidth(expanded: boolean) {
+  const pane = useRef<HTMLElement>(null);
+  const [available, setAvailable] = useState(() => window.innerWidth);
+  const [draft, setDraft] = useState<number>();
+  const drag = useRef<{ node: HTMLDivElement; pointerId: number; x: number; width: number } | undefined>(undefined);
+  const saved = useWorkspace(state => state.settings.objectInformationWidth ?? size.initial);
+  const sidebarWidth = useWorkspace(state => state.settings.sidebarWidth);
+  const dockedLimit = available - sidebarWidth - 3 - 420;
+  const overlay = available <= 1130 || dockedLimit < size.min;
+  const max = Math.min(size.max, overlay ? Math.max(0, available - 240) : dockedLimit);
+  const min = Math.min(size.min, max);
+  const clamp = (width: number) => Math.max(min, Math.min(max, Math.round(width)));
+  const width = clamp(draft ?? saved);
+
+  useLayoutEffect(() => {
+    const body = pane.current?.parentElement;
+    if (!body) return;
+    const measure = () => setAvailable(body.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, []);
+
+  function cancel() {
+    const current = drag.current;
+    if (!current) return;
+    drag.current = undefined;
+    if (current.node.hasPointerCapture(current.pointerId)) current.node.releasePointerCapture(current.pointerId);
+    setDraft(undefined);
+  }
+  useLayoutEffect(cancel, [expanded, min, max, saved]);
+  useEffect(() => {
+    window.addEventListener('blur', cancel);
+    return () => window.removeEventListener('blur', cancel);
+  }, []);
+
+  function save(next: number) {
+    const state = useWorkspace.getState();
+    if (next !== (state.settings.objectInformationWidth ?? size.initial)) state.updateSettings({ objectInformationWidth: next });
+  }
+  function start(event: PointerEvent<HTMLDivElement>) {
+    if (drag.current || event.button !== 0 || !event.isPrimary) return;
+    const node = event.currentTarget, pointerId = event.pointerId;
+    node.setPointerCapture(pointerId);
+    drag.current = { node, pointerId, x: event.clientX, width };
+    node.focus({ preventScroll: true });
+    event.preventDefault();
+  }
+  function move(event: PointerEvent<HTMLDivElement>, commit = false) {
+    const current = drag.current;
+    if (!current || event.pointerId !== current.pointerId) return;
+    const next = clamp(current.width + current.x - event.clientX);
+    if (!commit) { setDraft(next); return; }
+    cancel();
+    if (next !== current.width) save(next);
+  }
+  function keydown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'Escape' && drag.current) { event.preventDefault(); cancel(); return; }
+    if (drag.current || event.altKey || event.ctrlKey || event.metaKey) return;
+    const visual = clamp(useWorkspace.getState().settings.objectInformationWidth ?? size.initial);
+    const step = event.shiftKey ? 50 : 10;
+    const next = event.key === 'ArrowLeft' ? clamp(visual + step) : event.key === 'ArrowRight' ? clamp(visual - step)
+      : event.key === 'Home' ? min : event.key === 'End' ? max : undefined;
+    if (next === undefined) return;
+    event.preventDefault();
+    if (next !== visual) save(next);
+  }
+  const handle = !expanded && <div className="object-info-resize" role="separator" tabIndex={0} aria-orientation="vertical"
+    aria-label={text.resize} aria-controls="object-information-pane" aria-valuemin={min} aria-valuemax={max} aria-valuenow={width}
+    aria-valuetext={text.width(width)} aria-keyshortcuts="ArrowLeft ArrowRight Home End Escape" title={text.resizeHint}
+    onPointerDown={start} onPointerMove={event => move(event)} onPointerUp={event => move(event, true)}
+    onPointerCancel={event => { if (drag.current?.pointerId === event.pointerId) cancel(); }}
+    onLostPointerCapture={event => { if (drag.current?.pointerId === event.pointerId) cancel(); }}
+    onDoubleClick={() => { cancel(); save(size.initial); }} onKeyDown={keydown}/>;
+  return { pane, width, overlay, handle };
+}
+
 /** 原对象行、连接修订及目录代次共同约束发布，旧选择不能继续连库或交付原定义。 */
-export function ObjectInformationPane({ refresh, connectionRefresh, objectRefresh, onClose }: {
+export function ObjectInformationPane({ refresh, connectionRefresh, objectRefresh, expanded, onToggleSize, onClose }: {
   refresh: number;
   connectionRefresh: Record<string, number>;
   objectRefresh: Record<string, number>;
+  expanded: boolean;
+  onToggleSize(): void;
   onClose(): void;
 }) {
+  const { pane, width, overlay, handle } = useInformationPaneWidth(expanded);
   const { target, current } = useSidebarSelection();
   const profile = useWorkspace(state => state.connections.find(item => item.id === target?.connectionId));
   const version = useWorkspace(state => target ? state.connectionVersions[target.connectionId] ?? 0 : 0);
@@ -223,7 +306,10 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
       if (live.current === definitionEditor.source) useWorkspace.getState().notify(errorMessage(reason), true);
     });
   }
-  return <aside className="object-information-pane" aria-labelledby="object-information-heading">
+  const sizeLabel = expanded ? text.restoreSize : text.expand;
+  return <aside ref={pane} id="object-information-pane" className="object-information-pane" aria-labelledby="object-information-heading"
+    data-layout={expanded ? 'expanded' : overlay ? 'overlay' : 'docked'} style={{ '--object-info-width': `${width}px` } as CSSProperties}>
+    {handle}
     <header className="object-info-heading">
       <Info size={16}/><h2 id="object-information-heading" ref={heading} tabIndex={-1}>{text.title}</h2>
       <span className="grow"/>
@@ -232,6 +318,9 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
       {shownMode !== 'general' && <button type="button" className="icon-button" title={text.refresh} aria-label={text.refresh} onClick={() => {
         live.current = undefined; setResult(undefined); setPage(undefined); retryRead(value => value + 1);
       }}><RefreshCw size={14}/></button>}
+      <button type="button" className="icon-button" title={sizeLabel} aria-label={sizeLabel} onClick={onToggleSize}>
+        {expanded ? <Minimize2 size={14}/> : <Maximize2 size={14}/>}
+      </button>
       <button type="button" className="icon-button" title={text.close} aria-label={text.close} onClick={onClose}><X size={16}/></button>
     </header>
     {target && profile ? <>

@@ -1,4 +1,5 @@
 import { sidebarViewSchema } from '../shared/sidebarView';
+import { objectInformationWidthSchema } from '../shared/objectInformationLayout';
 import { manualJoinDesignLimits, manualJoinDesignSchema, manualJoinDesignSaveSchema, singleTableQueryDesignSchema, type QueryBuilderDesign, type ManualJoinDesignScope, type ManualJoinDesignSelect, type ManualJoinDesignSave, type ManualJoinDesignSummary } from '../shared/manualJoinDesigns';
 import { singleQueryDesignSaveSchema, singleQueryDraftSchema, type SingleQueryDraft, type SingleQueryDesignScope,
   type SingleQueryDesignSelect, type SingleQueryDesignSave } from '../shared/singleQueryDesigns';
@@ -1652,9 +1653,11 @@ export class LocalStore {
   settings(): AppSettings {
     const raw = this.records<AppSettings>('SELECT data FROM settings WHERE id=1')[0];
     // 损坏的视图偏好只在读取时回退，保留原配置库中的标签和其它设置。
-    const { sidebarView, ...settings } = raw ?? {};
+    const { sidebarView, objectInformationWidth, ...settings } = raw ?? {};
     const view = sidebarViewSchema.safeParse(sidebarView);
-    const stored = { ...settings, ...(view.success ? { sidebarView: view.data } : {}) };
+    const width = objectInformationWidthSchema.safeParse(objectInformationWidth);
+    const stored = { ...settings, ...(view.success ? { sidebarView: view.data } : {}),
+      ...(width.success ? { objectInformationWidth: width.data } : {}) };
     // 布局偏好只属于查询标签，读取时兼容旧记录并局部回退，不写回。
     const tabs = Array.isArray(stored?.tabs) ? stored.tabs.map(storedTab => {
       if (!storedTab || typeof storedTab !== 'object') return storedTab;
@@ -1704,6 +1707,7 @@ export class LocalStore {
     assertObjectBrowserTabs(settings);
     assertQueryTabPinWrite(settings);
     if (settings.sidebarView !== undefined) sidebarViewSchema.parse(settings.sidebarView);
+    if (settings.objectInformationWidth !== undefined) objectInformationWidthSchema.parse(settings.objectInformationWidth);
     // 直接存储入口同样拒绝非布尔值；未指定的旧调用仍兼容默认关闭。
     if (settings.dataTypeColors !== undefined && typeof settings.dataTypeColors !== 'boolean') throw new Error('类型颜色偏好必须是布尔值');
     // 兼容缺项的旧调用；显式字号不得越界或借字符串/小数绕过IPC。
