@@ -27,6 +27,11 @@ function distinctCheckbox() { const node = document.body.querySelectorAll('input
 async function toggleDistinct() { const node = distinctCheckbox(); expect(node.disabled).toBe(false); await act(async () => { node.checked = !node.checked; node.dispatchEvent(new MemoryEvent('click')); }); }
 /** 捕获已提交真实DOM的旧事件函数，专门核验禁用属性以外的同步版本门。 */
 function callback(node: unknown, name: 'onChange' | 'onClick'): (event?: any) => void { const target = node as Record<string, any>, key = Object.keys(target).find(key => key.startsWith('__reactProps$')); if (!key || typeof target[key][name] !== 'function') throw Error('缺少真实React事件'); return target[key][name]; }
+function control(label: string) {
+  const node = document.body.querySelector('[aria-label="' + label + '"]');
+  expect(node, label).toBeDefined();
+  return node!;
+}
 /** 按实际结果行读取列，标题与类型解释不混入单元格数量断言。 */
 function resultCells(name: string) { const row = document.body.querySelectorAll('tr').find(row => row.querySelector('th')?.textContent === name); expect(row).toBeDefined(); return row!.querySelectorAll('td'); }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
@@ -37,22 +42,21 @@ function histogramReceipt(bins: 5 | 10 | 20 = 5): TableHistogram {
 }
 /** 使用真实select事件，只改变分布草稿，不替代正式开始按钮。 */
 async function selectHistogram(column: string, bins: string): Promise<void> {
-  const nodes = document.body.querySelectorAll('select'); expect(nodes).toHaveLength(2);
-  await act(async () => callback(nodes[0], 'onChange')({ target: { value: column } }));
-  await act(async () => callback(nodes[1], 'onChange')({ target: { value: bins } }));
+  await act(async () => callback(control(histogramText.column), 'onChange')({ target: { value: column } }));
+  await act(async () => callback(control(histogramText.bins), 'onChange')({ target: { value: bins } }));
 }
 /** 合成服务是RAM观察端；真实服务器聚合、事务隔离、权限与耗时由实库另验。 */
 async function mount(options: { initialColumn?: string; statistics?: TableStatisticsServices['statistics']; objectKind?: 'table' | 'view'; services?: TableStatisticsServices } = {}) {
   const base = { connectionId: 'connection', database: 'db', table: 'items' }, types = [['id', 'bigint unsigned'], ['amount', 'decimal(30,6)'], ['score', 'double'], ['doc', 'json'], ['payload', 'blob'], ...Array.from({ length: 9 }, (_, index) => ['extra' + index, 'int'])];
   const source: TableInfo = { database: base.database, name: base.table, objectKind: options.objectKind ?? 'table', engine: options.objectKind === 'view' ? '' : 'InnoDB', columns: types.map(([name, type]) => ({ name, type, nullable: true, defaultValue: null, extra: '', generated: false, comment: '' })), primaryKey: ['id'], editableKey: ['id'], foreignKeys: [], indexes: [], ddl: options.objectKind === 'view' ? 'CREATE VIEW items AS SELECT 1 AS id' : 'CREATE TABLE items (`id` bigint unsigned)' };
   const conditions: TableStatisticsConditions = { filters: [{ column: 'amount', operator: '>=', value: '9007199254740993.000001' }, { column: 'doc', operator: 'IS NULL', enabled: false }], filterMode: 'all', filterGroup: { mode: 'all', children: [0, { mode: 'any', children: [1] }] } };
-  const intent = new TableStatisticsIntent(source, conditions, [source, conditions], () => true);
+  const intent = new TableStatisticsIntent(source, conditions, [source, conditions], () => true, [{ column: 'id', direction: 'DESC' }]);
   function output(input: TableStatisticsInput): TableStatisticsOutput { return { source, sourceDigest: 'a'.repeat(64), rowCount: '3', columns: input.columns.map(name => {
     const type = source.columns.find(column => column.name === name)!.type, counts = { name, type, nonNull: '2', nulls: '1' };
     if (name === 'doc') return { ...counts, kind: 'count-only', reason: 'JSON只提供实际数量' };
     if (name === 'payload') return { ...counts, kind: 'ordered', min: { type: 'binary', base64: 'AP8=' }, max: { type: 'binary', base64: '//8=' }, ...(input.distinct ? { distinct: '2' } : {}) };
     return { ...counts, kind: 'numeric', min: name === 'score' ? 1.25 : '9007199254740993.000001', max: name === 'score' ? 2.5 : '999999999999999999.999999', sum: '1234567890123456789012345.123456', avg: '1234567890123456789.0123456789', approximate: name === 'score', ...(input.distinct ? { distinct: '2' } : {}) };
-  }) as TableColumnStatistics[], warnings: [] }; }
+  }) as TableColumnStatistics[], warnings: [], ...(input.sample ? { sample: input.sample } : {}) }; }
   const statistics = vi.fn<TableStatisticsServices['statistics']>(options.statistics ?? (async input => output(input))), cancel = vi.fn(async () => {}), close = vi.fn(), activity = vi.fn(), services = options.services ?? { statistics, cancel };
   const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any); await act(async () => { root!.render(<Dialog base={base} intent={intent} initialColumn={options.initialColumn} onClose={close} onActivity={activity} services={services}/>); });
   return { base, source, conditions, intent, statistics, cancel, close, activity, services, output, async render(nextBase = base) { await act(async () => { root!.render(<Dialog base={nextBase} intent={intent} onClose={close} onActivity={activity} services={services}/>); }); } };
@@ -73,7 +77,7 @@ it('分布字段和区间只改草稿，独立于统计选列；大整数边界�
   await selectHistogram('id', '20'); expect(f.statistics).toHaveBeenCalledTimes(1); expect(document.body.textContent).not.toContain('9007199254740997'); await click(text.start); expect(f.statistics.mock.calls[1][0].histogram).toEqual({ column: 'id', bins: 20 }); expect(document.body.textContent).toContain(histogramText.actual(5, 20));
 });
 it('旧开始闭包不能借同轮选择改换分布目标，未显式选择不发送histogram字段', async () => {
-  const f = await mount(), old = callback(button(text.start), 'onClick'), select = document.body.querySelectorAll('select')[0];
+  const f = await mount(), old = callback(button(text.start), 'onClick'), select = control(histogramText.column);
   await act(async () => { callback(select, 'onChange')({ target: { value: 'id' } }); old(); }); expect(f.statistics).not.toHaveBeenCalled();
   await selectHistogram('', '10'); await click(text.start); expect(f.statistics.mock.calls[0][0]).not.toHaveProperty('histogram');
 });
@@ -84,7 +88,19 @@ it.each(['read-first', 'ack-first'] as const)('分布%s取消在两侧终态前�
   if (order === 'read-first') await act(async () => ack.resolve()); else await act(async () => pending.resolve(output)); expect(f.activity.mock.calls).toEqual([[1], [-1]]); expect(document.body.textContent).not.toContain('9007199254740997');
 });
 it('视图不提供可能重复求值的分布字段', async () => {
-  const f = await mount({ objectKind: 'view' }), nodes = document.body.querySelectorAll('select'); expect(nodes[0].querySelectorAll('option')).toHaveLength(1); await act(async () => callback(nodes[0], 'onChange')({ target: { value: 'id' } })); await click(text.start); expect(f.statistics.mock.calls[0][0]).not.toHaveProperty('histogram');
+  const f = await mount({ objectKind: 'view' }), select = control(histogramText.column); expect(select.querySelectorAll('option')).toHaveLength(1); await act(async () => callback(select, 'onChange')({ target: { value: 'id' } })); await click(text.start); expect(f.statistics.mock.calls[0][0]).not.toHaveProperty('histogram');
+});
+it('抽样选项只改变本地范围，冻结排序后回显真实样本数量', async () => {
+  const f = await mount(), old = callback(button(text.start), 'onClick');
+  await act(async () => { callback(control(text.scopeMode), 'onChange')({ target: { value: 'first' } }); old(); });
+  expect(f.statistics).not.toHaveBeenCalled();
+  await act(async () => callback(control(text.sampleLimit), 'onChange')({ target: { value: '7' } }));
+  await click(text.start);
+  expect(f.statistics.mock.calls[0][0].sample).toEqual({ limit: 7, sort: [{ column: 'id', direction: 'DESC' }] });
+  expect(control(text.sampledRows).textContent).toBe('3');
+  await act(async () => callback(control(text.scopeMode), 'onChange')({ target: { value: 'all' } }));
+  expect(document.body.querySelector('[aria-label="' + text.sampledRows + '"]')).toBeNull();
+  expect(f.statistics).toHaveBeenCalledTimes(1);
 });
 it('旧极值对应的第一箱已空，即使总数量不变也拒绝整份分布', async () => {
   const f = await mount(); await selectHistogram('id', '5'); f.statistics.mockImplementation(async input => { const histogram = histogramReceipt(); histogram.ranges[0].count = '0'; histogram.ranges[1].count = '1'; return { ...f.output(input), histogram }; });

@@ -79,6 +79,7 @@ import { sqliteSchemaScriptSchema } from './sqliteSchemaScript';
 import { sqliteRelationshipsInputSchema } from './sqliteRelationships';
 import { sqliteReferenceInputSchema } from './sqliteReference';
 import { tableCalendarRequestSchema } from './tableCalendar';
+import { tableStatisticsSampleSchema } from './tableStatistics';
 import { tableHistogramSchema } from './tableHistogram';
 import { sqliteImportSourceInspectSchema, sqliteImportSourceReleaseSchema } from './sqliteImportSource';
 import { sqliteIndexesInspectSchema, sqliteIndexesPreviewSchema, sqliteIndexesApplySchema, sqliteIndexesReleaseSchema } from './sqliteIndexes';
@@ -670,7 +671,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     const markup = dataMarkupText(input.format);
     if (markup && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: markup.utf8 });
   })),
-  'table.statistics': guardedTablePage(z.object({ ...target, taskId: id, columns: z.array(name).max(12).refine(value => new Set(value).size === value.length, '统计字段不能重复'), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional(), distinct: z.boolean().optional(), histogram: tableHistogramSchema.optional(), calendar: tableCalendarRequestSchema.optional() }).strict().superRefine((input, context) => {
+  'table.statistics': guardedTablePage(z.object({ ...target, taskId: id, columns: z.array(name).max(12).refine(value => new Set(value).size === value.length, '统计字段不能重复'), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional(), distinct: z.boolean().optional(), histogram: tableHistogramSchema.optional(), calendar: tableCalendarRequestSchema.optional(), sample: tableStatisticsSampleSchema.optional() }).strict().superRefine((input, context) => {
     if (input.calendar && (input.columns.length || input.distinct || input.histogram)) context.addIssue({ code: 'custom', path: ['calendar'], message: '日期分布须单独统计一个日期或时间戳字段' });
     try { validateFilterGroup(input.filters, input.filterMode, input.filterGroup); } catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '统计筛选无效' }); }
   })),

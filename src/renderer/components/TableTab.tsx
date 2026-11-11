@@ -991,7 +991,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     intent = new TableStatisticsIntent(source, statisticsConditions.current, childReferenceValues, () => {
       const state = useWorkspace.getState();
       return mounted.current && tableStatisticsIntent.current === intent && state.settings.activeTabId === tab.id && JSON.stringify(state.settings.tabs.find(item => item.id === tab.id)) === currentTab && state.connections.find(item => item.id === tab.connectionId) === profile && (state.connectionVersions[tab.connectionId] ?? 0) === version && recordContextRef.current.info === source && loadGeneration.current === generation && rowsRef.current === originalRows && selectionRef.current === originalSelection && recordPageSource.current === originalPage && !recordControllerRef.current?.hasInput() && !activeGridEditor.current && JSON.stringify(source) === JSON.stringify(intent.source) && JSON.stringify(statisticsConditions.current) === JSON.stringify(intent.conditions);
-    });
+    }, sort);
     // 仅快速计数回填原页；新读取代次、换页和外部结构刷新都会隐藏旧计数。
     const onCount = countOnly ? (count: string) => {
       if (intent.current()) setPageCount({ generation, refreshVersion, count });

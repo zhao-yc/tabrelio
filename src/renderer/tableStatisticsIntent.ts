@@ -1,13 +1,14 @@
-import type { FilterGroup, FilterMode, FilterRule, TableInfo } from '../shared/contracts';
+import type { FilterGroup, FilterMode, FilterRule, SortRule, TableInfo } from '../shared/contracts';
 
 export interface TableStatisticsConditions { filters: FilterRule[]; filterMode: FilterMode; filterGroup?: FilterGroup; }
 /** 统计只冻结来源与条件，不持有第二份可写父行，也不使用已加载页计算结果。 */
 export class TableStatisticsIntent {
-  readonly source: TableInfo; readonly conditions: TableStatisticsConditions;
+  readonly source: TableInfo; readonly conditions: TableStatisticsConditions; readonly sampleOrder: readonly SortRule[];
   private readonly sourceIdentity: string; private readonly conditionIdentity: string; private dead = false;
   private readonly values: readonly unknown[]; private listeners = new Set<() => void>();
-  constructor(source: TableInfo, conditions: TableStatisticsConditions, values: readonly unknown[], private guard: () => boolean) {
+  constructor(source: TableInfo, conditions: TableStatisticsConditions, values: readonly unknown[], private guard: () => boolean, sampleOrder: readonly SortRule[] = []) {
     this.source = freeze(structuredClone(source)); this.conditions = freeze(structuredClone(conditions)); this.values = [...values];
+    this.sampleOrder = freeze(structuredClone(sampleOrder));
     this.sourceIdentity = JSON.stringify(this.source); this.conditionIdentity = JSON.stringify(this.conditions);
   }
   /** 原页面/行/条件曾离开一次即撤销，不允许A→B→A复活统计意图。 */

@@ -4,6 +4,7 @@ import type { StructureTaskContext } from '../../src/engine/structureDefinition'
 import { buildPageSql, buildTableFilterSql } from '../../src/engine/sql';
 import { decodeTableStatistics, planTableStatistics, tableStatisticsColumnCapability, tableStatisticsSourceIdentity } from '../../src/engine/tableStatistics';
 import { decodeTableCalendar, planTableCalendar, tableCalendarMaxRows } from '../../src/engine/tableCalendar';
+import { planTableHistogramBounds } from '../../src/engine/tableHistogram';
 import { validateCommand } from '../../src/shared/validation';
 
 const column = (name: string, type: string): ColumnInfo => ({ name, type, nullable: true, defaultValue: null, generated: false, extra: '', comment: '' });
@@ -14,6 +15,37 @@ function source(): TableInfo {
 const request = (columns: string[]) => ({ columns, filters: [] });
 /** 按固定服务端别名投影原数据，不由实现重新计算预期统计值。 */
 function values(plan: ReturnType<typeof planTableStatistics>, row: Record<string, CellValue>): CellValue[] { return plan.aliases.map(alias => Object.hasOwn(row, alias) ? row[alias] : null); }
+
+describe('表数据统计按应用筛选和排序取前 N 条', () => {
+  const base = { connectionId: 'test', database: 'db', table: 'events', taskId: 'test', ...request(['amount']) };
+  const sample = { limit: 7, sort: [{ column: 'label', direction: 'DESC' as const, nulls: 'LAST' as const }] };
+  it('概况、日期、数值分布复用原筛选和补序，在聚合之前限制原始行', () => {
+    const info = source();
+    info.editableKey = ['__proto__'];
+    const input = { ...base, sample, filters: [{ column: 'label', operator: '=' as const, value: '待筛选值' }] };
+    for (const { sql } of [
+      planTableStatistics(info, input),
+      planTableCalendar(info, { ...input, columns: [], calendar: { column: 'created', unit: 'month' } }),
+      planTableHistogramBounds(info, { ...input, histogram: { column: 'amount', bins: 10 } }),
+    ]) {
+      expect(sql).toContain('FROM (SELECT');
+      expect(sql).toContain('FROM `库``名`.`表``名` WHERE');
+      expect(sql).toContain('ORDER BY (`label` IS NULL) ASC, `label` DESC, `__proto__` ASC LIMIT 7) AS `dbark_stat_sample`');
+      expect(sql).not.toContain('OFFSET');
+    }
+    expect(planTableStatistics(info, { ...input, columns: [] }).sql).toContain('SELECT 1 AS `sample_row` FROM');
+    expect(planTableStatistics(info, base).sql).not.toContain('LIMIT');
+  });
+
+  it('拒绝超界范围和伪造排序，缺少可靠顺序的多语句直方图拒绝抽样', () => {
+    const info = source();
+    expect(validateCommand('table.statistics', { ...base, sample })).toEqual({ ...base, sample });
+    for (const limit of [0, 1.5, 100001, '7']) expect(() => validateCommand('table.statistics', { ...base, sample: { ...sample, limit } })).toThrow();
+    expect(() => validateCommand('table.statistics', { ...base, sample: { ...sample, sql: 'SELECT 1' } })).toThrow();
+    expect(() => planTableStatistics(info, { ...base, sample: { ...sample, sort: [{ column: '不存在', direction: 'ASC' }] } })).toThrow();
+    expect(() => planTableHistogramBounds(info, { ...base, sample, histogram: { column: 'amount', bins: 10 } })).toThrow('非空唯一键');
+  });
+});
 
 describe('全筛选日期分布', () => {
   const calendar = { column: 'created', unit: 'day' } as const;

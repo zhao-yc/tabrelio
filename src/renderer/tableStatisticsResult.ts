@@ -1,5 +1,5 @@
 import type { CellValue } from '../shared/contracts';
-import { tableStatisticsColumnKind, type TableStatisticsOutput } from '../shared/tableStatistics';
+import { tableStatisticsColumnKind, tableStatisticsSampleSchema, type TableStatisticsOutput, type TableStatisticsSample } from '../shared/tableStatistics';
 import { TableStatisticsIntent } from './tableStatisticsIntent';
 import { cellPreview } from './lib';
 import { tableStatisticsZh as text } from './locales/tableStatistics.zh-CN';
@@ -15,9 +15,13 @@ function cell(value: CellValue): void {
   throw Error(text.mismatch);
 }
 /** 对象、所选字段顺序及总量全部核对后才展示，不能接纳旧源或另列的成功回包。 */
-export function checkTableStatisticsOutput(intent: TableStatisticsIntent, columns: readonly string[], output: TableStatisticsOutput, distinct = false, histogram?: TableHistogramRequest, calendar?: TableCalendarRequest): void {
+export function checkTableStatisticsOutput(intent: TableStatisticsIntent, columns: readonly string[], output: TableStatisticsOutput, distinct = false, histogram?: TableHistogramRequest, calendar?: TableCalendarRequest, sample?: TableStatisticsSample): void {
   if (!intent.current() || JSON.stringify(output.source) !== JSON.stringify(intent.source) || !/^[a-f0-9]{64}$/.test(output.sourceDigest) || !Array.isArray(output.columns) || output.columns.length !== columns.length || !Array.isArray(output.warnings) || output.warnings.some(warning => typeof warning !== 'string')) throw Error(text.mismatch);
   const total = count(output.rowCount);
+  if (sample) {
+    const scope = tableStatisticsSampleSchema.safeParse(output.sample);
+    if (!scope.success || JSON.stringify(scope.data) !== JSON.stringify(sample) || total > BigInt(sample.limit)) throw Error(text.mismatch);
+  } else if (Object.hasOwn(output, 'sample')) throw Error(text.mismatch);
   if (!histogram && Object.hasOwn(output, 'histogram') || histogram && intent.source.objectKind !== 'table') throw Error(text.mismatch);
   assertTableHistogram(output.histogram, histogram, histogram ? intent.source.columns.find(column => column.name === histogram.column) : undefined, output.rowCount);
   if (calendar) assertTableCalendar(output.calendar, calendar, intent.source.columns.find(column => column.name === calendar.column), output.rowCount);

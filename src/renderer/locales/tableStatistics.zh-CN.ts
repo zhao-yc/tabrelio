@@ -1,5 +1,10 @@
 export const tableStatisticsZh = {
-  title: '表数据统计', scope: '统计服务器上符合当前筛选的全部已提交记录。',
+  title: '表数据统计', scope: '统计服务器上符合当前筛选的已提交记录。',
+  scopeMode: '统计范围', allRows: '全部匹配行', firstRows: '前 N 条匹配行', sampleLimit: '抽样行数',
+  sampleLimitInvalid: '抽样行数须为 1 到 100000 的整数。',
+  sampleHint: '按表页当前排序取前 N 条，从筛选结果的第一页起算。排序并列时沿用表页补序规则。',
+  sampledRows: '实际统计的样本行数', sampledScope: (limit: number) => `范围为前 ${limit} 条匹配行`,
+  sampledHistogram: '数值分布按本次样本计算。字段和区间选择在开始统计后生效。',
   countTitle: '统计匹配行数', recentCount: (count: string) => `最近统计 ${count} 行`,
   countHint: '统计符合当前筛选的全部服务器记录，包含字段为 NULL 的行，不受当前页条数限制。',
   recentCountHint: '统计完成时的匹配数。刷新、翻页或更改筛选排序后需要重新统计。',

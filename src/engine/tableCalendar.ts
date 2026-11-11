@@ -3,7 +3,8 @@ import { tableStatisticsLimits, tableStatisticsMessages, type TableStatisticsInp
 import { calendarLabelLength } from '../shared/civilDate';
 import { calendarDistributionLimit, calendarTimeZoneSchema, summarizeCalendarGroups } from '../shared/calendarDistribution';
 import { assertTableCalendar, tableCalendarKind, tableCalendarRequestSchema, type TableCalendar } from '../shared/tableCalendar';
-import { buildTableFilterSql, identifier, inlineParameters, qualified } from './sql';
+import { identifier, inlineParameters } from './sql';
+import { tableStatisticsSource } from './tableStatisticsSource';
 
 export const tableCalendarMaxRows = calendarDistributionLimit + 3;
 
@@ -19,10 +20,9 @@ export function planTableCalendar(source: TableInfo, input: TableStatisticsInput
   const valid = `${year} BETWEEN 1 AND 9999 AND ${month} BETWEEN 1 AND 12 AND ${day} BETWEEN 1 AND (${days})`;
   const period = `CASE WHEN ${name} IS NULL THEN NULL WHEN ${valid}
     THEN LEFT(CAST(${name} AS CHAR CHARACTER SET ascii),${calendarLabelLength[request.unit]}) ELSE '' END`;
-  const filter = buildTableFilterSql(source, input.filters, input.filterMode, input.filterGroup);
-  const where = filter.where ? ' WHERE ' + filter.where : '';
+  const from = tableStatisticsSource(source, input, [column.name]);
   const sql = inlineParameters(`SELECT ${period} AS calendar_label,CAST(COUNT(*) AS CHAR) AS calendar_count
-    FROM ${qualified(source.database, source.name)}${where} GROUP BY 1 ORDER BY 1 LIMIT ${tableCalendarMaxRows}`, filter.params);
+    FROM ${from.sql} GROUP BY 1 ORDER BY 1 LIMIT ${tableCalendarMaxRows}`, from.params);
   if (Buffer.byteLength(sql) > tableStatisticsLimits.bytes) throw Error(tableStatisticsMessages.budget);
   return { sql, aliases: ['calendar_label', 'calendar_count'], column, request, kind };
 }

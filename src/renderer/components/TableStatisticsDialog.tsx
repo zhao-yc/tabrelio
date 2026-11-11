@@ -9,7 +9,7 @@ import { tableStatisticsZh as text } from '../locales/tableStatistics.zh-CN';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import '../tableStatistics.css';
 import { TableHistogramChart } from './TableHistogramChart';
-import { tableStatisticsColumnKind } from '../../shared/tableStatistics';
+import { tableStatisticsCanSampleHistogram, tableStatisticsColumnKind, tableStatisticsMessages, tableStatisticsSampleMax, tableStatisticsSampleSchema } from '../../shared/tableStatistics';
 import { tableHistogramZh as histogramText } from '../locales/tableHistogram.zh-CN';
 import type { TableHistogramRequest } from '../../shared/tableHistogram';
 import { tableCalendarKind, type TableCalendarRequest } from '../../shared/tableCalendar';
@@ -35,6 +35,8 @@ export function TableStatisticsDialog({ base, intent, initialColumn, onClose, on
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set(initialColumn === undefined ? [] : [initialColumn]));
   const selectedRef = useRef(selected); selectedRef.current = selected;
   const [distinct, setDistinct] = useState(false), distinctRef = useRef(distinct); distinctRef.current = distinct;
+  const [scope, setScope] = useState({ sampled: false, limit: '1000' }), scopeRef = useRef(scope); scopeRef.current = scope;
+  const histogramAvailable = !scope.sampled || tableStatisticsCanSampleHistogram(origin.intent.source);
   const [histogram, setHistogram] = useState({ column: '', bins: 10 as TableHistogramRequest['bins'] }), histogramRef = useRef(histogram); histogramRef.current = histogram;
   const calendarColumns = origin.intent.source.columns.filter(column => tableCalendarKind(column.type));
   const [calendar, setCalendar] = useState<TableCalendarRequest & { enabled: boolean }>(() => ({
@@ -59,19 +61,24 @@ export function TableStatisticsDialog({ base, intent, initialColumn, onClose, on
   }
   /** 原选择同步占门并固定taskId，连点以及取消ACK均不能提前启动下一次统计。 */
   function start(): void {
-    if (!editable() || selectedRef.current !== selected || distinctRef.current !== distinct || histogramRef.current !== histogram || calendarRef.current !== calendar) return;
+    if (!editable() || selectedRef.current !== selected || distinctRef.current !== distinct || histogramRef.current !== histogram || calendarRef.current !== calendar || scopeRef.current !== scope) return;
+    const sample = scope.sampled && !origin.countOnly ? tableStatisticsSampleSchema.safeParse({
+      limit: /^[0-9]+$/.test(scope.limit) ? Number(scope.limit) : NaN, sort: origin.intent.sampleOrder,
+    }) : undefined;
+    if (sample && !sample.success) { setError(text.sampleLimitInvalid); return; }
     const calendarRequest = calendar.enabled && !origin.countOnly ? { column: calendar.column, unit: calendar.unit } : undefined;
     const names = calendarRequest ? [] : origin.intent.source.columns.filter(column => selected.has(column.name)).map(column => column.name);
     if (!calendarRequest && (names.length !== selected.size || names.length > 12)) { setError(text.tooMany); return; }
     const taskId = uid(), generation = ++revision.current, includeDistinct = !calendarRequest && distinct;
-    const distribution = !calendarRequest && histogram.column ? { ...histogram } : undefined;
+    const distribution = !calendarRequest && histogramAvailable && histogram.column ? { ...histogram } : undefined;
     let active: Operation;
     const promise = Promise.resolve().then(async () => {
       if (!current() || operation.current !== active || active.cancelled) return;
       const output = await origin.services.statistics({ ...origin.base, taskId, columns: names, ...structuredClone(origin.intent.conditions),
-        ...(includeDistinct ? { distinct: true } : {}), ...(distribution ? { histogram: distribution } : {}), ...(calendarRequest ? { calendar: calendarRequest } : {}) });
+        ...(includeDistinct ? { distinct: true } : {}), ...(distribution ? { histogram: distribution } : {}), ...(calendarRequest ? { calendar: calendarRequest } : {}),
+        ...(sample ? { sample: sample.data } : {}) });
       if (!current() || operation.current !== active || generation !== revision.current || active.cancelled) return;
-      checkTableStatisticsOutput(intent, names, output, includeDistinct, distribution, calendarRequest);
+      checkTableStatisticsOutput(intent, names, output, includeDistinct, distribution, calendarRequest, sample?.data);
       setReceipt({ output, distinct: includeDistinct });
       if (origin.countOnly) countCallback.current?.(output.rowCount);
     }).catch(reason => { if (alive.current && !closingRef.current && operation.current === active && generation === revision.current) setError(errorMessage(reason)); }).finally(async () => {
@@ -94,9 +101,14 @@ export function TableStatisticsDialog({ base, intent, initialColumn, onClose, on
   }
   /** 分布字段与区间只改本地草稿；同步身份门阻止旧DOM代投递新范围。 */
   function selectHistogram(column: string, bins: TableHistogramRequest['bins']): void {
-    if (!editable() || calendar.enabled || calendarRef.current !== calendar || histogramRef.current !== histogram || ![5, 10, 20].includes(bins) || column && (origin.intent.source.objectKind !== 'table' || !origin.intent.source.columns.some(field => field.name === column && tableStatisticsColumnKind(field.type) === 'numeric'))) return;
+    if (!editable() || !histogramAvailable || scopeRef.current !== scope || calendar.enabled || calendarRef.current !== calendar || histogramRef.current !== histogram || ![5, 10, 20].includes(bins) || column && (origin.intent.source.objectKind !== 'table' || !origin.intent.source.columns.some(field => field.name === column && tableStatisticsColumnKind(field.type) === 'numeric'))) return;
     if (column === histogram.column && bins === histogram.bins) return;
     const next = { column, bins }; revision.current++; histogramRef.current = next; setHistogram(next); setReceipt(undefined); setError(''); setMessage('');
+  }
+  /** 范围变动撤下旧结果，只有显式开始才按新范围取样。 */
+  function selectScope(next: typeof scope): void {
+    if (!editable() || origin.countOnly || scopeRef.current !== scope) return;
+    revision.current++; scopeRef.current = next; setScope(next); setReceipt(undefined); setError(''); setMessage('');
   }
   /** 分组改变仅更新本地选项，清除原图并等待显式开始。 */
   function selectCalendar(next: typeof calendar): void {
@@ -120,10 +132,22 @@ export function TableStatisticsDialog({ base, intent, initialColumn, onClose, on
   const disabled = busy || closing || invalid || !intent.current();
   const renderedOperation = operation.current;
   const result = receipt?.output;
+  const countLabel = result?.sample ? text.sampledRows : text.rowCount;
   const conditions = origin.intent.conditions;
   return <Modal title={countOnly ? text.countTitle : text.title} wide={!countOnly} onClose={close}><div className="modal-content" aria-busy={busy || closing}>
     <p>{countOnly ? text.countHint : text.scope}</p><p className="warning-text">{text.drafts}</p><p>{origin.intent.source.database}.{origin.intent.source.name}</p>
     <section aria-label={text.conditions}><strong>{text.conditions}</strong><div className="table-statistics-conditions">{conditions.filters.length ? <ul>{conditions.filters.map((filter, index) => <li key={index}>{filter.enabled === false ? text.disabledPrefix : ''}{filterRuleSummary(filter)}</li>)}</ul> : <p>{text.noFilters}</p>}{conditions.filterGroup ? <p>{tableFilterGroupSummary(conditions.filterGroup)}</p> : <p>{conditions.filterMode === 'any' ? text.anyMode : text.allMode}</p>}</div></section>
+    {!countOnly && <>
+      <div className="table-histogram-controls">
+        <label>{text.scopeMode}<select aria-label={text.scopeMode} value={scope.sampled ? 'first' : 'all'} disabled={disabled} onChange={event => {
+          const value = event.target.value;
+          if (value === 'all' || value === 'first') selectScope({ ...scope, sampled: value === 'first' });
+        }}><option value="all">{text.allRows}</option><option value="first">{text.firstRows}</option></select></label>
+        {scope.sampled && <label>{text.sampleLimit}<input type="number" aria-label={text.sampleLimit} min={1} max={tableStatisticsSampleMax}
+          step={1} value={scope.limit} disabled={disabled} onChange={event => selectScope({ ...scope, limit: event.target.value })}/></label>}
+      </div>
+      {scope.sampled && <p>{text.sampleHint}</p>}
+    </>}
     {!countOnly && calendarColumns.length > 0 && <div className="table-histogram-controls">
       <label>{text.analysis}<select aria-label={text.analysis} value={calendar.enabled ? 'calendar' : 'summary'} disabled={disabled}
         onChange={event => selectCalendar({ ...calendar, enabled: event.target.value === 'calendar' })}>
@@ -141,10 +165,25 @@ export function TableStatisticsDialog({ base, intent, initialColumn, onClose, on
       </>}
     </div>}
     {!countOnly && !calendar.enabled && <><fieldset disabled={disabled}><legend>{text.selection}</legend><UsageHelp><p>{text.countOnly}</p><p>{text.disabledFilters}</p><p>{text.distinctScope}</p><p>{text.distinctSemantics}</p><p>{text.bounded}</p></UsageHelp><p>{text.selected(selected.size)}</p><div className="table-statistics-columns">{origin.intent.source.columns.map(column => <label key={column.name}><input type="checkbox" aria-label={text.selectColumn(column.name)} checked={selected.has(column.name)} disabled={disabled} onChange={event => select(column.name, event.target.checked)}/><span>{column.name} · {column.type}</span></label>)}</div><label><input type="checkbox" aria-label={text.distinctOption} checked={distinct} disabled={disabled} onChange={event => selectDistinct(event.target.checked)}/>{text.distinctOption}</label></fieldset>
-    <fieldset disabled={disabled}><legend>{histogramText.optional}</legend><p>{histogramText.hint}</p><div className="table-histogram-controls"><label>{histogramText.column}<select aria-label={histogramText.column} value={histogram.column} disabled={disabled} onChange={event => selectHistogram(event.target.value, histogram.bins)}><option value="">{histogramText.none}</option>{origin.intent.source.objectKind === 'table' && origin.intent.source.columns.filter(column => tableStatisticsColumnKind(column.type) === 'numeric').map(column => <option key={column.name} value={column.name}>{column.name} · {column.type}</option>)}</select></label><label>{histogramText.bins}<select aria-label={histogramText.bins} value={histogram.bins} disabled={disabled || !histogram.column} onChange={event => selectHistogram(histogram.column, Number(event.target.value) as TableHistogramRequest['bins'])}>{[5, 10, 20].map(bins => <option key={bins} value={bins}>{bins}</option>)}</select></label></div></fieldset>
+    <fieldset disabled={disabled || !histogramAvailable}>
+      <legend>{histogramText.optional}</legend>
+      <p>{scope.sampled ? histogramAvailable ? text.sampledHistogram : tableStatisticsMessages.sampleHistogram : histogramText.hint}</p>
+      <div className="table-histogram-controls">
+        <label>{histogramText.column}<select aria-label={histogramText.column} value={histogram.column} disabled={disabled || !histogramAvailable}
+          onChange={event => selectHistogram(event.target.value, histogram.bins)}>
+          <option value="">{histogramText.none}</option>
+          {origin.intent.source.objectKind === 'table' && origin.intent.source.columns.filter(column => tableStatisticsColumnKind(column.type) === 'numeric')
+            .map(column => <option key={column.name} value={column.name}>{column.name} · {column.type}</option>)}
+        </select></label>
+        <label>{histogramText.bins}<select aria-label={histogramText.bins} value={histogram.bins} disabled={disabled || !histogramAvailable || !histogram.column}
+          onChange={event => selectHistogram(histogram.column, Number(event.target.value) as TableHistogramRequest['bins'])}>
+          {[5, 10, 20].map(bins => <option key={bins} value={bins}>{bins}</option>)}
+        </select></label>
+      </div>
+    </fieldset>
     </>}
     <ErrorBox message={invalid || !intent.current() ? text.changed : error}/>{message && <p role="status">{message}</p>}{busy && <Spinner text={text.loading}/>}{closing && <p>{text.closing}</p>}
-    {result && !disabled && <section aria-label={text.result} className="table-statistics-results"><dl><dt>{text.rowCount}</dt><dd aria-label={text.rowCount}>{result.rowCount}</dd></dl>{result.rowCount === '0' && !result.calendar && <p>{text.empty}</p>}{result.warnings.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}{result.columns.length > 0 && <table><caption>{text.result}</caption><thead><tr>{[text.column, text.type, text.nonNull, text.nulls, ...(receipt?.distinct ? [text.distinctColumn] : []), text.min, text.max, text.sum, text.average].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{result.columns.map(column => <tr key={column.name}><th scope="row">{column.name}</th><td>{column.type}{column.kind === 'numeric' && column.approximate && <p>{text.approximate}</p>}</td><td>{column.nonNull}</td><td>{column.nulls}</td>{receipt?.distinct && <td>{column.kind === 'count-only' ? text.distinctUnsupported : column.distinct}</td>}{column.kind === 'count-only' ? <td colSpan={4}>{text.unavailable}：{column.reason}</td> : <><td>{tableStatisticsCellPreview(column.min)}</td><td>{tableStatisticsCellPreview(column.max)}</td><td>{column.kind === 'numeric' ? tableStatisticsCellPreview(column.sum) : '—'}</td><td>{column.kind === 'numeric' ? tableStatisticsCellPreview(column.avg) : '—'}</td></>}</tr>)}</tbody></table>}{result.histogram && <TableHistogramChart histogram={result.histogram}/>}
+    {result && !disabled && <section aria-label={text.result} className="table-statistics-results">{result.sample && <p>{text.sampledScope(result.sample.limit)}</p>}<dl><dt>{countLabel}</dt><dd aria-label={countLabel}>{result.rowCount}</dd></dl>{result.rowCount === '0' && !result.calendar && <p>{text.empty}</p>}{result.warnings.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}{result.columns.length > 0 && <table><caption>{text.result}</caption><thead><tr>{[text.column, text.type, text.nonNull, text.nulls, ...(receipt?.distinct ? [text.distinctColumn] : []), text.min, text.max, text.sum, text.average].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{result.columns.map(column => <tr key={column.name}><th scope="row">{column.name}</th><td>{column.type}{column.kind === 'numeric' && column.approximate && <p>{text.approximate}</p>}</td><td>{column.nonNull}</td><td>{column.nulls}</td>{receipt?.distinct && <td>{column.kind === 'count-only' ? text.distinctUnsupported : column.distinct}</td>}{column.kind === 'count-only' ? <td colSpan={4}>{text.unavailable}：{column.reason}</td> : <><td>{tableStatisticsCellPreview(column.min)}</td><td>{tableStatisticsCellPreview(column.max)}</td><td>{column.kind === 'numeric' ? tableStatisticsCellPreview(column.sum) : '—'}</td><td>{column.kind === 'numeric' ? tableStatisticsCellPreview(column.avg) : '—'}</td></>}</tr>)}</tbody></table>}{result.histogram && <TableHistogramChart histogram={result.histogram}/>}
       {result.calendar && <>{result.calendar.timeZone && <p>{text.calendarZone(result.calendar.timeZone)}</p>}
         <QueryResultCalendarChart distribution={result.calendar}/></>}</section>}
   </div><footer className="modal-footer">{busy && <button disabled={closing} onClick={() => { if (committed.current === ticket) cancel(renderedOperation); }}>{text.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={close}>{text.close}</button><button className="primary" disabled={disabled} onClick={start}>{result ? text.refresh : text.start}</button></footer></Modal>;

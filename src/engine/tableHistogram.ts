@@ -1,7 +1,8 @@
 import type { TableInfo } from '../shared/contracts';
-import { tableStatisticsLimits, tableStatisticsMessages, type TableStatisticsInput } from '../shared/tableStatistics';
+import { tableStatisticsCanSampleHistogram, tableStatisticsLimits, tableStatisticsMessages, type TableStatisticsInput } from '../shared/tableStatistics';
 import { assertTableHistogram, tableHistogramMessages as text, tableHistogramRanges, tableHistogramSchema, tableHistogramType, type TableHistogram, type TableHistogramRequest } from '../shared/tableHistogram';
-import { buildTableFilterSql, identifier, inlineParameters, qualified } from './sql';
+import { identifier, inlineParameters } from './sql';
+import { tableStatisticsSource } from './tableStatisticsSource';
 
 export interface TableHistogramPlan { sql: string; aliases: string[]; }
 /** 元数据列白名单决定唯一表达式；BIT先转无符号，不能把二进制字节隐式当小浮点数。 */
@@ -12,16 +13,17 @@ function target(source: TableInfo, request: TableHistogramRequest): { value: str
   return { type, approximate, value: /^BIT\b/i.test(type.trim()) ? `CAST(${value} AS UNSIGNED)` : value };
 }
 /** 固定聚合投影复用原筛选编译器，不接受渲染层SQL、类型正文或自定义边界。 */
-function sql(source: TableInfo, input: TableStatisticsInput, selectors: string[]): string {
-  const filter = buildTableFilterSql(source, input.filters, input.filterMode, input.filterGroup);
-  const statement = inlineParameters(`SELECT ${selectors.join(',')} FROM ${qualified(source.database, source.name)}${filter.where ? ' WHERE ' + filter.where : ''}`, filter.params);
+function sql(source: TableInfo, input: TableStatisticsInput, column: string, selectors: string[]): string {
+  if (input.sample && !tableStatisticsCanSampleHistogram(source)) throw Error(tableStatisticsMessages.sampleHistogram);
+  const from = tableStatisticsSource(source, input, [column]);
+  const statement = inlineParameters(`SELECT ${selectors.join(',')} FROM ${from.sql}`, from.params);
   if (Buffer.byteLength(statement) > tableStatisticsLimits.bytes) throw Error(tableStatisticsMessages.budget); return statement;
 }
 /** MIN/MAX原十进制文本与非空数在原只读事务取得，不计算可能溢出的SUM/AVG。 */
 export function planTableHistogramBounds(source: TableInfo, input: TableStatisticsInput): TableHistogramPlan {
   const request = tableHistogramSchema.parse(input.histogram), { value, approximate } = target(source, request), aliases = ['h_nonNull', 'h_nulls', 'h_min', 'h_max'];
   // FLOAT的CHAR显示可能只保留较少位；浮点极值使用原binary协议数值，再生成可往返的DOUBLE字面量。
-  return { aliases, sql: sql(source, input, [`CAST(COUNT(${value}) AS CHAR) AS h_nonNull`, `CAST(COUNT(*)-COUNT(${value}) AS CHAR) AS h_nulls`, `${approximate ? `MIN(${value})` : `CAST(MIN(${value}) AS CHAR)`} AS h_min`, `${approximate ? `MAX(${value})` : `CAST(MAX(${value}) AS CHAR)`} AS h_max`]) };
+  return { aliases, sql: sql(source, input, request.column, [`CAST(COUNT(${value}) AS CHAR) AS h_nonNull`, `CAST(COUNT(*)-COUNT(${value}) AS CHAR) AS h_nulls`, `${approximate ? `MIN(${value})` : `CAST(MIN(${value}) AS CHAR)`} AS h_min`, `${approximate ? `MAX(${value})` : `CAST(MAX(${value}) AS CHAR)`} AS h_max`]) };
 }
 /** 只用本轮极值产生的有限数值字面量；浮点边界显式为近似字面量，绝不把精确列改成浮点运算。 */
 function literal(value: string, approximate: boolean): string {
@@ -37,7 +39,7 @@ export function planTableHistogramCounts(source: TableInfo, input: TableStatisti
   const expressions = [`COUNT(${value})`, `COUNT(*)-COUNT(${value})`, `COUNT(CASE WHEN ${value}<${literal(histogram.min, approximate)} OR ${value}>${literal(histogram.max, approximate)} THEN 1 END)`];
   for (const range of histogram.ranges) expressions.push(`COUNT(CASE WHEN ${value}>=${literal(range.lower, approximate)} AND ${value}${range.upperInclusive ? '<=' : '<'}${literal(range.upper, approximate)} THEN 1 END)`);
   const aliases = ['h_nonNull', 'h_nulls', 'h_outside', ...histogram.ranges.map((_, index) => 'h_bin' + index)];
-  return { aliases, sql: sql(source, input, expressions.map((expression, index) => `CAST(${expression} AS CHAR) AS ${identifier(aliases[index])}`)) };
+  return { aliases, sql: sql(source, input, request.column, expressions.map((expression, index) => `CAST(${expression} AS CHAR) AS ${identifier(aliases[index])}`)) };
 }
 const count = (value: unknown): string => { if (typeof value !== 'string' || !/^(?:0|[1-9]\d{0,19})$/.test(value)) throw Error(text.invalid); return value; };
 /** 完整极值先绑定准确列及模式；零非空值保留NULL，不生成假零区间。 */

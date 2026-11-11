@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import { planTableHistogramBounds, planTableHistogramCounts, decodeTableHistogramBounds, decodeTableHistogramCounts, type TableHistogramPlan } from './tableHistogram';
 import { tableHistogramMessages, assertTableHistogram, type TableHistogram } from '../shared/tableHistogram';
 import type { CellValue, ColumnInfo, TableInfo } from '../shared/contracts';
-import { tableStatisticsColumnKind, tableStatisticsLimits as limits, tableStatisticsMessages as text, type TableColumnStatistics, type TableStatisticsInput, type TableStatisticsOutput } from '../shared/tableStatistics';
-import { buildTableFilterSql, identifier, inlineParameters, qualified } from './sql';
+import { tableStatisticsColumnKind, tableStatisticsLimits as limits, tableStatisticsMessages as text, tableStatisticsSampleSchema, type TableColumnStatistics, type TableStatisticsInput, type TableStatisticsOutput } from '../shared/tableStatistics';
+import { identifier, inlineParameters } from './sql';
+import { tableStatisticsSource } from './tableStatisticsSource';
 import { incomingReferenceSourceDigest, readIncomingReferenceTable } from './incomingReferences';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
@@ -21,7 +22,7 @@ export function tableStatisticsColumnCapability(column: ColumnInfo): Capability 
   return { kind, representation, approximate: kind === 'numeric' && /^(?:FLOAT|DOUBLE|REAL)\b/i.test(type) };
 }
 /** 只生成一个派生聚合SELECT；外层先证明实际输出字节再回传原值，绝不截断大文本/二进制。 */
-export function planTableStatistics(source: TableInfo, input: Pick<TableStatisticsInput, 'columns' | 'filters' | 'filterMode' | 'filterGroup' | 'distinct'>): TableStatisticsPlan {
+export function planTableStatistics(source: TableInfo, input: Pick<TableStatisticsInput, 'columns' | 'filters' | 'filterMode' | 'filterGroup' | 'distinct' | 'sample'>): TableStatisticsPlan {
   if (input.distinct !== undefined && typeof input.distinct !== 'boolean') throw Error(text.invalid);
   if (!Array.isArray(input.columns) || input.columns.length > limits.columns || new Set(input.columns).size !== input.columns.length) throw Error(text.invalid);
   const columns: TableStatisticsPlan['columns'] = input.columns.map(name => { const matches = source.columns.filter(column => column.name === name); if (matches.length !== 1) throw Error(text.invalid); const capability = tableStatisticsColumnCapability(matches[0]); return { column: matches[0], capability, ...(input.distinct && capability.kind !== 'count-only' ? { distinct: true as const } : {}) }; });
@@ -42,8 +43,8 @@ export function planTableStatistics(source: TableInfo, input: Pick<TableStatisti
     }
     if (capability.kind === 'numeric') for (const operation of ['sum', 'avg'] as const) { const alias = `${base}_${operation}`; inner.push(`${operation.toUpperCase()}(${aggregateValue}) AS ${identifier(alias)}`); outer.push(`CAST(${identifier(alias)} AS CHAR) AS ${identifier(alias)}`); aliases.push(alias); }
   }
-  const filter = buildTableFilterSql(source, input.filters, input.filterMode, input.filterGroup), where = filter.where ? ' WHERE ' + filter.where : '';
-  const sql = inlineParameters(`SELECT ${outer.join(',')} FROM (SELECT ${inner.join(',')} FROM ${qualified(source.database, source.name)}${where}) AS \`dbark_statistics\``, filter.params);
+  const from = tableStatisticsSource(source, input, input.columns);
+  const sql = inlineParameters(`SELECT ${outer.join(',')} FROM (SELECT ${inner.join(',')} FROM ${from.sql}) AS \`dbark_statistics\``, from.params);
   if (Buffer.byteLength(sql) > limits.bytes) throw Error(text.budget); return { sql, aliases, columns };
 }
 /** 任意合法表SHOW无法完整解析时绑定全部DDL；视图始终绑定完整定义，绝不丢掉定义校验。 */
@@ -118,12 +119,13 @@ async function readAggregate(context: StructureTaskContext, aggregate: TableHist
 
 /** 原真实binary流逐行消费；过限停止当前代命令，原终包和strict关闭前绝不发布回包。 */
 export async function readTableStatistics(context: StructureTaskContext, input: TableStatisticsInput, stop: () => Promise<void>): Promise<TableStatisticsOutput> {
+  const sample = tableStatisticsSampleSchema.optional().parse(input.sample);
   // 视图可能调用存储函数；服务器只读事务保护可见表，并固定RR隔离，不依赖全局READ-UNCOMMITTED设置。
   await structureTaskQuery(context, 'SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
   await structureTaskQuery(context, 'START TRANSACTION READ ONLY');
   const source = await readIncomingReferenceTable(context, input, true), identity = tableStatisticsSourceIdentity(source, context);
   let computed: Pick<TableStatisticsOutput, 'rowCount' | 'columns' | 'histogram' | 'calendar'>;
-  const warnings: string[] = [text.scope];
+  const warnings: string[] = [sample ? text.sampleScope : text.scope];
   if (input.calendar) {
     const calendarPlan = planTableCalendar(source, input);
     let timeZone: string | undefined;
@@ -143,7 +145,7 @@ export async function readTableStatistics(context: StructureTaskContext, input: 
       histogram = decodeTableHistogramBounds(source, input.histogram, await readAggregate(context, boundsPlan, stop), result.rowCount);
       if (histogram.nonNull !== '0') histogram = decodeTableHistogramCounts(histogram, await readAggregate(context, planTableHistogramCounts(source, input, histogram), stop), result.rowCount);
       assertTableHistogram(histogram, input.histogram, source.columns.find(column => column.name === input.histogram!.column), result.rowCount);
-      warnings.push(tableHistogramMessages.scope);
+      if (!sample) warnings.push(tableHistogramMessages.scope);
     }
     if (plan.columns.some(column => column.capability.approximate)) warnings.push(text.approximate);
     if (plan.columns.some(column => column.distinct)) warnings.push(text.distinct);
@@ -152,7 +154,8 @@ export async function readTableStatistics(context: StructureTaskContext, input: 
   const after = await readIncomingReferenceTable(context, input, true), afterIdentity = tableStatisticsSourceIdentity(after, context);
   if (identity.digest !== afterIdentity.digest || identity.conservative !== afterIdentity.conservative) throw Error(text.stale);
   if (identity.conservative) warnings.push(text.conservative);
-  const output: TableStatisticsOutput = { source, sourceDigest: identity.digest, ...computed, warnings };
+  if (sample && BigInt(computed.rowCount) > BigInt(sample.limit)) throw Error(text.invalid);
+  const output: TableStatisticsOutput = { source, sourceDigest: identity.digest, ...computed, warnings, ...(sample ? { sample } : {}) };
   if (Buffer.byteLength(JSON.stringify(output)) > limits.bytes) throw Error(text.budget);
   // 正常路径显式结束本独立只读事务；失败/取消只由原物理连接收尾，不开新连接回滚或重放。
   await structureTaskQuery(context, 'ROLLBACK AND NO CHAIN NO RELEASE'); context.checkCancelled(); return output;
