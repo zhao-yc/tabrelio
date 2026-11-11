@@ -1,6 +1,7 @@
 import type * as monaco from 'monaco-editor';
+import type { SqlSnippet } from '../shared/contracts';
 import type { WorkspaceTab } from './store';
-import { snippetEdit } from './snippetInsertion';
+import { prepareBuiltinSnippetInsert, snippetEdit } from './snippetInsertion';
 import { historyInsertionZh as text } from './locales/historyInsertion.zh-CN';
 
 export interface HistoryInsertionScope {
@@ -12,6 +13,7 @@ export interface HistoryInsertionTarget {
   readonly connectionId: string;
   current(): boolean;
   insert(sql: string, drop?: ObjectIdentifierDrop, applyBuiltin?: () => void): void;
+  insertSnippet?(snippet: SqlSnippet): void;
   dispose(): void;
   subscribe(listener: () => void): () => void;
 }
@@ -29,6 +31,7 @@ export interface HistoryInsertionEditor {
   getSelections?(): monaco.Selection[] | null;
   getDomNode?(): HTMLElement | null;
   getRawOptions?(): { readOnly?: boolean };
+  getContribution?: monaco.editor.IStandaloneCodeEditor['getContribution'];
   focus?(): void;
   onDidChangeModel(listener: () => void): monaco.IDisposable;
   onDidChangeCursorSelection(listener: () => void): monaco.IDisposable;
@@ -80,7 +83,7 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
   }
   /** 消费前解除监听，随后的一次真实编辑不能被自己的store通知误当作外部变化。 */
   const dispose = () => { if (disposed) return; disposed = true; invalidate(); for (const release of cleanup.splice(0)) release(); listeners.clear(); };
-  return {
+  const target: HistoryInsertionTarget = {
     title: initial.tab.title,
     connectionId: initial.tab.connectionId,
     current,
@@ -108,4 +111,9 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
       if (cursor) editor.focus?.();
     },
   };
+  if (mode === 'snippet') target.insertSnippet = snippet => {
+    target.insert(snippet.sql, undefined, prepareBuiltinSnippetInsert(editor, snippet));
+    editor.focus?.();
+  };
+  return target;
 }

@@ -20,12 +20,15 @@ import { sidebarNodeKey, useSidebarSelection, type SidebarNodeTarget } from './S
 import { SqlEditor } from './SqlEditor';
 import { DependencyDefinition } from './DependencyDefinition';
 import { ObjectIdentifierList } from './ObjectIdentifierList';
+import { SnippetInformationPane } from './SnippetInformationPane';
+import { snippetCatalog } from '../snippetCompletion';
+import type { HistoryInsertionRegistry } from '../historyInsertion';
 import { ErrorBox, Spinner } from './ui';
 import '../objectInformation.css';
 
-type Mode = 'general' | 'structure' | 'ddl' | 'dependencies' | 'identifiers';
+type Mode = 'general' | 'structure' | 'ddl' | 'dependencies' | 'identifiers' | 'snippets';
 type NamedTarget = Extract<SidebarNodeTarget, { name: string }>;
-type ReadMode = Exclude<Mode, 'general'>;
+type ReadMode = Exclude<Mode, 'general' | 'snippets'>;
 
 /** 能力随真实对象种类变化，只有已接入定义读取的类型才提供 DDL。 */
 function canReadDdl(profile: ConnectionProfile, target: SidebarNodeTarget): target is NamedTarget {
@@ -191,13 +194,14 @@ function useInformationPaneWidth(expanded: boolean) {
 }
 
 /** 原对象行、连接修订及目录代次共同约束发布，旧选择不能继续连库或交付原定义。 */
-export function ObjectInformationPane({ refresh, connectionRefresh, objectRefresh, expanded, onToggleSize, onOpenObject, onClose }: {
+export function ObjectInformationPane({ refresh, connectionRefresh, objectRefresh, expanded, onToggleSize, onOpenObject, insertion, onClose }: {
   refresh: number;
   connectionRefresh: Record<string, number>;
   objectRefresh: Record<string, number>;
   expanded: boolean;
   onToggleSize(): void;
   onOpenObject: OpenWorkbenchTarget;
+  insertion: HistoryInsertionRegistry;
   onClose(): void;
 }) {
   const { pane, width, overlay, handle } = useInformationPaneWidth(expanded);
@@ -222,13 +226,14 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
   if (supportsDdl) modes.push('ddl');
   if (supportsDependencies) modes.push('dependencies');
   if (target && profile && supportsObjectIdentifiers(profile, target)) modes.push('identifiers');
+  modes.push('snippets');
   const shownMode = modes.includes(mode) ? mode : 'general';
   const latestRefresh = useRef(refreshKey); latestRefresh.current = refreshKey;
   useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); return () => { live.current = undefined; }; }, []);
   useEffect(() => {
     setDefinitionEditor(undefined);
     setPreview(undefined);
-    if (!target || target.kind === 'connection' || !profile || shownMode === 'general') return;
+    if (!target || target.kind === 'connection' || !profile || shownMode === 'general' || shownMode === 'snippets') return;
     const source: Source = { target, profile, version, refreshKey, mode: shownMode, retry, dependencyPage };
     live.current = source;
     let taskId: string | undefined;
@@ -329,6 +334,7 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
       {shownMode === 'ddl' && <button type="button" className="icon-button" title={text.find} aria-label={text.find} disabled={!findReady}
         onClick={findDefinition}><Search size={14}/></button>}
       {shownMode !== 'general' && <button type="button" className="icon-button" title={text.refresh} aria-label={text.refresh} onClick={() => {
+        if (shownMode === 'snippets') { snippetCatalog.invalidate(); return; }
         live.current = undefined; setResult(undefined); setPage(undefined); retryRead(value => value + 1);
       }}><RefreshCw size={14}/></button>}
       <button type="button" className="icon-button" title={sizeLabel} aria-label={sizeLabel} onClick={onToggleSize}>
@@ -336,12 +342,12 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
       </button>
       <button type="button" className="icon-button" title={text.close} aria-label={text.close} onClick={onClose}><X size={16}/></button>
     </header>
-    {target && profile ? <>
-      <div className="object-info-subject"><strong title={name}>{name}</strong><span>{kind}</span></div>
-      {modes.length > 1 && <div className="object-info-modes" role="group" aria-label={text.modes}>
-        {modes.map(item =>
-          <button type="button" key={item} aria-pressed={shownMode === item} onClick={() => choose(item)}>{text[item]}</button>)}
-      </div>}
+    {target && profile && shownMode !== 'snippets' && <div className="object-info-subject"><strong title={name}>{name}</strong><span>{kind}</span></div>}
+    <div className="object-info-modes" role="group" aria-label={text.modes}>
+      {modes.map(item => <button type="button" key={item} aria-pressed={shownMode === item} onClick={() => choose(item)}>{text[item]}</button>)}
+    </div>
+    {shownMode === 'snippets' ? <SnippetInformationPane insertion={insertion} selectedProfile={profile} expanded={expanded}/> :
+      target && profile ?
       <div ref={content} className={`object-info-content${shownMode === 'ddl' ? ' object-info-ddl' : ''}${shownMode === 'identifiers' ? ' object-info-identifier-content' : ''}`}>
         {shownMode === 'general' ? <dl>
           {target.kind !== 'connection' && <><dt>{text.connection}</dt><dd>{profile.name}</dd></>}
@@ -371,7 +377,6 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
             owned.value ? <SqlEditor key={JSON.stringify([sidebarNodeKey(target), refreshKey, retry])} value={owned.value} dialect={profile.dialect} readOnly
               onReady={instance => { if (live.current === owned.source) setDefinitionEditor({ source: owned.source, instance }); }}/> :
               <p role="status">{text.noDefinition}</p>}
-      </div>
-    </> : <p className="object-info-empty">{text.select}</p>}
+      </div> : <p className="object-info-empty">{text.select}</p>}
   </aside>;
 }

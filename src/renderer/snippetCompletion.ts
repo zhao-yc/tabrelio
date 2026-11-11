@@ -72,6 +72,8 @@ export function snippetTemplatesForDialect(dialect?: ConnectionProfile['dialect'
 /** 共享本窗口的单次本地读取；写入后的旧回包不能再次发布。 */
 export function createSnippetCatalog(read: () => Promise<SqlSnippet[]>) {
   let pending: Promise<SqlSnippet[] | undefined> | undefined;
+  let revision = 0;
+  const listeners = new Set<() => void>();
   return {
     list() {
       if (pending) return pending;
@@ -81,7 +83,16 @@ export function createSnippetCatalog(read: () => Promise<SqlSnippet[]>) {
       });
       return pending = request;
     },
-    invalidate() { pending = undefined; },
+    revision: () => revision,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    invalidate() {
+      pending = undefined;
+      revision++;
+      for (const listener of listeners) listener();
+    },
   };
 }
 export const snippetCatalog = createSnippetCatalog(() => invoke('snippets.list', {}));

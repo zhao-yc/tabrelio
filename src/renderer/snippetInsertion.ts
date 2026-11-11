@@ -13,10 +13,10 @@ interface EditorSnippetController extends monaco.editor.IEditorContribution {
 }
 
 /** 只给本地内置模板启用 Monaco 的 Tab 字段；旧字段会话结束后再开启新会话。 */
-export function prepareBuiltinSnippetInsert(editor: monaco.editor.IStandaloneCodeEditor, snippet: SqlSnippet): (() => void) | undefined {
+export function prepareBuiltinSnippetInsert(editor: Partial<Pick<monaco.editor.IStandaloneCodeEditor, 'getContribution'>>, snippet: SqlSnippet): (() => void) | undefined {
   const template = builtinSnippetInsertion(snippet);
   if (!template) return;
-  const controller = editor.getContribution<EditorSnippetController>('snippetController2');
+  const controller = editor.getContribution?.<EditorSnippetController>('snippetController2');
   if (!controller) return;
   return () => {
     controller.cancel();

@@ -1,5 +1,7 @@
 import { test, expect, page, desktop, pageErrors, quitDesktop, launchDesktop, startSnippetsNativeDiagnostics, snippetsDiagnostics } from './desktop-fixture';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
+import { objectInformationZh as paneText } from '../../src/renderer/locales/objectInformation.zh-CN';
+import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const source = "-- 原样保留 $1 ${name} 和注释\nSELECT JSON_OBJECT('a', '$&'), '${1:值}', '🚢';\n";
@@ -59,6 +61,67 @@ test('编辑器名称补全只替换片段前缀，保留正文原样并能一�
   await expectSql(editorText(prefix + sql));
   await page.keyboard.press(`${modifier}+Z`);
   await expectSql(editorText(prefix + 'temp'));
+  await noExecution();
+});
+
+test('信息窗格浏览和插入片段，内置字段可编辑，管理器保存后同步更新', async ({}, info) => {
+  const name = '窗格原文片段', group = 'JSON 诊断', original = 'SELECT 0;';
+  await page.evaluate(({ name, group, source }) => window.dbark.invoke('snippets.save', {
+    id: 'information-fixture', name, group, description: '原样美元符号', sql: source, updatedAt: '',
+  }), { name, group, source });
+  await page.getByRole('button', { name: paneText.title, exact: true }).click();
+  const pane = page.getByRole('complementary', { name: paneText.title, exact: true });
+  const snippets = pane.getByRole('region', { name: paneText.snippets, exact: true });
+  const select = (item: string) => snippets.getByRole('button', { name: formatText(zh.snippets.selectName, item), exact: true });
+  const insert = (item: string) => snippets.getByRole('button', { name: paneText.insertSnippet(item), exact: true });
+  const filter = snippets.getByRole('combobox', { name: zh.snippets.groupFilter, exact: true });
+  const search = snippets.getByRole('searchbox', { name: zh.snippets.search, exact: true });
+  const preview = snippets.getByRole('region', { name: zh.snippets.sql, exact: true });
+  await pane.getByRole('button', { name: paneText.snippets, exact: true }).click();
+  await expect(insert(name)).toBeDisabled();
+  await filter.selectOption(':' + group);
+  await search.fill('美元');
+  await expect(snippets.getByRole('listitem')).toHaveCount(1);
+  await select(name).click();
+  await expect(preview.locator('.view-lines')).toContainText('${name}');
+  await offlineQuery();
+  await writeSql(original);
+  const input = query().locator('.monaco-editor').getByRole('textbox');
+  const selectDraft = async () => { await input.focus(); await page.keyboard.press(`${modifier}+A`); };
+  await selectDraft();
+  await insert(name).press('Enter');
+  await expect(input).toBeFocused();
+  await expectSql(editorSource);
+  await page.keyboard.press(`${modifier}+Z`);
+  await expectSql(original);
+
+  await filter.selectOption('');
+  await search.fill(zh.snippets.resultTitleName);
+  await selectDraft();
+  await select(zh.snippets.resultTitleName).dblclick();
+  await expect(input).toBeFocused();
+  await page.keyboard.insertText('新标题');
+  await page.keyboard.press('Tab');
+  await page.keyboard.insertText('SELECT 9;');
+  await expectSql(process.platform === 'win32' ? '-- NAME:新标题\r\nSELECT 9;' : '-- NAME:新标题\nSELECT 9;');
+
+  await openLibrary();
+  await selectSnippet(name);
+  await dialog().getByRole('button', { name: zh.snippets.edit, exact: true }).click();
+  await dialog().getByRole('textbox', { name: zh.snippets.sql, exact: true }).fill('SELECT 17;');
+  await dialog().getByRole('button', { name: zh.common.save, exact: true }).click();
+  await expect(dialog().getByRole('button', { name: zh.snippets.edit, exact: true })).toBeVisible();
+  await dialog().getByRole('button', { name: zh.common.close, exact: true }).click();
+  await search.fill('SELECT 17');
+  await select(name).click();
+  await expect(preview.locator('.view-lines')).toContainText('SELECT 17;');
+  await pane.getByRole('button', { name: paneText.expand, exact: true }).click();
+  await expect(insert(name)).toBeDisabled();
+  await pane.getByRole('button', { name: paneText.restoreSize, exact: true }).click();
+  await desktop.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(1024, 680); });
+  await expect(pane).toHaveAttribute('data-layout', 'overlay');
+  await expect.poll(() => snippets.evaluate(element => element.scrollWidth - element.clientWidth)).toBe(0);
+  await page.screenshot({ path: info.outputPath('信息窗格片段预览.png') });
   await noExecution();
 });
 

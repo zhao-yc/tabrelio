@@ -109,6 +109,8 @@ it('共享在途读取，失效后的迟到结果不能覆盖新片段，失败�
     .mockRejectedValueOnce(Error('本地读取失败'))
     .mockResolvedValueOnce([item('retry')]);
   const cache = createSnippetCatalog(read);
+  const updates = vi.fn(() => cache.revision());
+  const unsubscribe = cache.subscribe(updates);
   const previous = cache.list();
   expect(cache.list()).toBe(previous);
   cache.invalidate();
@@ -119,4 +121,8 @@ it('共享在途读取，失效后的迟到结果不能覆盖新片段，失败�
   cache.invalidate();
   await expect(cache.list()).resolves.toBeUndefined();
   await expect(cache.list()).resolves.toEqual([item('retry')]);
+  expect(updates.mock.results.map(result => result.value)).toEqual([1, 2]);
+  unsubscribe();
+  cache.invalidate();
+  expect(updates).toHaveBeenCalledTimes(2);
 });
