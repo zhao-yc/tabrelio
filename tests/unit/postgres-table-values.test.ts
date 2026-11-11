@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { postgresTableValuesSchema, type PostgresTableColumn } from '../../src/shared/postgresTable';
+import { assertPostgresValueDistribution, postgresTableValuesSchema, type PostgresTableColumn } from '../../src/shared/postgresTable';
 import { appendPostgresValueFilter, postgresSelectedTableValues } from '../../src/renderer/postgresTableValues';
 import { filterDraftFromRule, filterRuleFromDraft } from '../../src/renderer/tableFilters';
 
@@ -54,5 +54,17 @@ describe('PostgreSQL 不同值筛选草稿', () => {
     expect(postgresTableValuesSchema.safeParse({ ...input, filter: {} }).success).toBe(false);
     expect(postgresTableValuesSchema.safeParse({ ...input, search: '\0' }).success).toBe(false);
     expect(postgresTableValuesSchema.safeParse({ ...input, column: '字段名' }).success).toBe(false);
+    expect(postgresTableValuesSchema.parse({ ...input, distribution: true }).distribution).toBe(true);
+    expect(postgresTableValuesSchema.safeParse({ ...input, distribution: 'true' }).success).toBe(false);
+  });
+
+  it('普通候选保持原回包，类别分布必须守恒并对应读取请求', () => {
+    const plain = { options: [{ value: null, count: '8', clipped: false }], truncated: false };
+    const result = { ...plain, distribution: { rows: '8', groups: '1' } };
+    expect(assertPostgresValueDistribution(plain)).toEqual(plain);
+    expect(assertPostgresValueDistribution(result, true)).toEqual(result);
+    expect(() => assertPostgresValueDistribution(plain, true)).toThrow();
+    expect(() => assertPostgresValueDistribution(result)).toThrow();
+    expect(() => assertPostgresValueDistribution({ ...result, truncated: true }, true)).toThrow();
   });
 });

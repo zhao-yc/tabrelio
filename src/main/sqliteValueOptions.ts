@@ -3,6 +3,11 @@ import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
 import { readSqliteTableCatalogue, verifySqliteTableScope, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 
+function integer(value: SqliteValue): string {
+  if (!value || typeof value !== 'object' || value.type !== 'integer') throw Error('SQLite不同值计数无效');
+  return value.value;
+}
+
 /** 一个只读事务内先核准确结构，再对完整匹配集分组；500+1用于判断截断，不COUNT整表或循环分页。 */
 export async function readSqliteValueOptions(driver: SqliteDriverSession, raw: SqliteValueOptionsInput, control: SqliteTableBrowseControl): Promise<SqliteValueOptionsOutput> {
   const input = sqliteValueOptionsInputSchema.parse(raw); let output: SqliteValueOptionsOutput | undefined, failed = false, failure: unknown;
@@ -20,18 +25,24 @@ export async function readSqliteValueOptions(driver: SqliteDriverSession, raw: S
     const projected = sqliteExactTextProjection(column);
     // 在数据库完整分组后按数值次数排序，再取500+1；同次数沿原类型／列序，不重排已返回的500组。
     const countOrder = input.order === 'count-desc' ? 'count(*) DESC, ' : input.order === 'count-asc' ? 'count(*) ASC, ' : '';
-    const sql = 'SELECT typeof(' + column + '), ' + projected + ', count(*) FROM (' + source.sql + ') AS "__dbark_values"' + search + ' GROUP BY typeof(' + column + '), ' + column + ' ORDER BY ' + countOrder + 'typeof(' + column + '), ' + column + ' LIMIT ' + (limits.groups + 1), rows: SqliteValue[][] = [];
+    // 窗口计数覆盖搜索后的全部分组，和实际返回候选共享同一快照与原生分组。
+    const totals = input.distribution ? ', sum(count(*)) OVER (), count(*) OVER ()' : '';
+    const width = input.distribution ? 5 : 3;
+    const sql = 'SELECT typeof(' + column + '), ' + projected + ', count(*)' + totals + ' FROM (' + source.sql + ') AS "__dbark_values"' + search + ' GROUP BY typeof(' + column + '), ' + column + ' ORDER BY ' + countOrder + 'typeof(' + column + '), ' + column + ' LIMIT ' + (limits.groups + 1), rows: SqliteValue[][] = [];
     const result = await driver.execute(sql, { parameters, maxRows: limits.groups + 1, batchRows: 100, maxBytes: limits.bytes,
-      onStatement: statement => { control.check(); if (statement.index !== 0 || statement.columns.length !== 3) throw Error('SQLite不同值返回了非预期列'); },
+      onStatement: statement => { control.check(); if (statement.index !== 0 || statement.columns.length !== width) throw Error('SQLite不同值返回了非预期列'); },
       onBatch: batch => { control.check(); if (batch.index !== 0 || rows.length + batch.rows.length > limits.groups + 1) throw Error('SQLite不同值超过候选上限'); rows.push(...batch.rows); },
     });
     control.check(); if (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== rows.length) throw Error('SQLite不同值结果超出完整读取预算，请缩小搜索范围');
+    const distribution = input.distribution ? { rows: rows[0] ? integer(rows[0][3]) : '0', groups: rows[0] ? integer(rows[0][4]) : '0' } : undefined;
+    if (rows.some(row => row.length !== width || distribution && (integer(row[3]) !== distribution.rows || integer(row[4]) !== distribution.groups)))
+      throw Error('SQLite不同值列或类别分布回包不一致');
     const values = rows.slice(0, limits.groups).map(row => {
-      const [kind, value, count] = row; if (row.length !== 3 || !count || typeof count !== 'object' || count.type !== 'integer') throw Error('SQLite不同值计数无效');
+      const [kind, value, count] = row;
       const item = value === null ? { kind: 'null' as const } : typeof value === 'string' ? { kind: 'text' as const, value } : value.type === 'integer' ? { kind: 'integer' as const, value: value.value } : value.type === 'real' ? { kind: 'real' as const, value: value.value } : { kind: 'blob' as const, value: Buffer.from(value.base64, 'base64').toString('hex') };
-      if (kind !== item.kind) throw Error('SQLite不同值存储类型不一致'); return { value: item, count: count.value };
+      if (kind !== item.kind) throw Error('SQLite不同值存储类型不一致'); return { value: item, count: integer(count) };
     });
-    output = assertSqliteValueOptions({ request: input, values, truncated: rows.length > limits.groups }, input);
+    output = assertSqliteValueOptions({ request: input, values, truncated: rows.length > limits.groups, ...(distribution ? { distribution } : {}) }, input);
   } catch (reason) { failed = true; failure = reason; }
   control.beginCleanup();
   if (driver.isUsable && driver.transaction === true) try { await driver.execute('ROLLBACK'); } catch (reason) { control.cleanupFailed(reason); failure = failed ? new AggregateError([failure, reason], 'SQLite不同值失败且回滚未确认', { cause: failure }) : reason; failed = true; }

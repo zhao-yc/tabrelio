@@ -19,6 +19,7 @@ import { postgresIdentifier, postgresRelationName } from './postgresSql';
 import { dataFileFormats, dataMarkupText, dataExportExtension } from './dataMarkupExport';
 import { postgresTableLimits } from './postgresTableLimits';
 import { referenceCandidateSortSchema } from './referenceCandidateSort';
+import { valueDistributionRemainder, type ValueDistribution } from './valueDistribution';
 
 export { postgresTableLimits } from './postgresTableLimits';
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
@@ -169,11 +170,24 @@ export const postgresTableValueLimits = { groups: 500, page: 50, search: 256 } a
 export const postgresTableValuesSchema = postgresTableColumnReadSchema.extend({
   search: z.string().max(postgresTableValueLimits.search).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)),
   order: z.enum(['value', 'count-desc', 'count-asc']).optional(),
+  distribution: z.literal(true).optional(),
 }).strict();
 export type PostgresTableValuesInput = z.infer<typeof postgresTableValuesSchema>;
 export interface PostgresTableValues {
   options: { value: string | null; count: string; clipped: boolean }[];
   truncated: boolean;
+  distribution?: ValueDistribution;
+}
+
+/** 类别分布必须对应本次显式读取，普通候选沿用原回包。 */
+export function assertPostgresValueDistribution(output: PostgresTableValues, requested?: true): PostgresTableValues {
+  if (requested) {
+    if (!Array.isArray(output.options) || output.options.length > postgresTableValueLimits.groups ||
+        typeof output.truncated !== 'boolean' || output.truncated && output.options.length !== postgresTableValueLimits.groups)
+      throw Error('PostgreSQL 类别分布回包无效');
+    valueDistributionRemainder(output.distribution, output.options, output.truncated);
+  } else if (Object.hasOwn(output, 'distribution')) throw Error('PostgreSQL 类别分布与原请求不符');
+  return output;
 }
 
 export const postgresTableReferenceLimits = { page: 40, offset: 100_000, search: 256, constraints: 128, columns: 16 } as const;

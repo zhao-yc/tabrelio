@@ -9,6 +9,8 @@ import { sqlitePresetDraft } from '../../src/renderer/sqliteTablePresetDraft';
 import { persistedTaskMessage } from '../../src/main/taskPrivacy';
 import { SqliteFilteredSelectIntent } from '../../src/renderer/sqliteFilteredSelectUi';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
+import { valueDistributionRemainder } from '../../src/shared/valueDistribution';
+import { statisticsPercentage } from '../../src/renderer/statisticsPercentage';
 
 const request: SqliteValueOptionsInput = { connectionId: 'c', database: 'main', table: 'subject', column: 'v', schemaKey: 'a'.repeat(64), taskId: 'values', mode: 'and', filters: [], search: '' };
 const options = [{ value: { kind: 'integer' as const, value: '9223372036854775807' }, count: '2' }, { value: { kind: 'text' as const, value: '前\0🚢' }, count: '1' }, { value: { kind: 'null' as const }, count: '3' }];
@@ -17,6 +19,21 @@ it.each(['value', 'count-desc', 'count-asc'] as const)('声明的分组排序%s�
   const input = { ...request, order }; expect(assertSqliteValueOptions({ request: input, values: [], truncated: false }, input).request).toEqual(input);
 });
 it.each(['', 'COUNT-DESC', 'desc', null, 1, {}])('拒绝非声明排序%j', order => { expect(sqliteValueOptionsInputSchema.safeParse({ ...request, order }).success).toBe(false); });
+it('类别分布绑定显式请求，使用精确计数核对剩余组和剩余行', () => {
+  const input = { ...request, distribution: true as const };
+  const distribution = { rows: '6', groups: '3' };
+  const output = { request: input, values: options, truncated: false, distribution };
+  expect(assertSqliteValueOptions(output, input)).toEqual(output);
+  expect(() => assertSqliteValueOptions({ ...output, request }, request)).toThrow('原请求');
+  expect(() => assertSqliteValueOptions({ ...output, distribution: undefined }, input)).toThrow();
+  expect(() => assertSqliteValueOptions({ ...output, distribution: { ...distribution, rows: '7' } }, input)).toThrow('计数不完整');
+  const count = '9007199254740993';
+  expect(valueDistributionRemainder({ rows: '9007199254741002', groups: '3' }, [{ count }], true))
+    .toEqual({ hiddenRows: '9', hiddenGroups: '2' });
+  expect(() => valueDistributionRemainder({ rows: '9007199254740994', groups: '3' }, [{ count }], true)).toThrow('计数不完整');
+  expect(statisticsPercentage('100', '640')).toBe('15.63%');
+  expect(statisticsPercentage('9007199254740995', '18014398509481991')).toBe('50.00%');
+});
 it('整份回包绑定排序，次数使用64位原整数核单调性，不接受错序或串序', () => {
   const input = { ...request, order: 'count-desc' as const }, values = [
     { value: { kind: 'null' as const }, count: '9007199254740993' },

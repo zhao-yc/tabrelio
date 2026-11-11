@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { FILTER_LIMITS } from '../../shared/filtering';
-import { postgresTableValueLimits as limits, type PostgresTableValues, type PostgresTableValuesInput } from '../../shared/postgresTable';
+import { assertPostgresValueDistribution, postgresTableValueLimits as limits, type PostgresTableValues, type PostgresTableValuesInput } from '../../shared/postgresTable';
 import { readTableValueOptionsOrder, type TableValueOptionsOrder } from '../../shared/tableValueOptions';
 import { errorMessage, invoke } from '../lib';
 import { postgresTableZh } from '../locales/postgresTable.zh-CN';
 import { usePostgresColumnRead, type PostgresColumnReadSource } from '../postgresColumnRead';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { ValueDistributionCells, ValueDistributionSummary } from './ValueDistribution';
+import { valueDistributionZh as distributionText } from '../locales/valueDistribution.zh-CN';
 
 const text = postgresTableZh.valueOptions;
 /** 读取仅使用打开时的原页能力，翻阅已读候选和加入筛选草稿均不访问数据库。 */
@@ -18,23 +20,24 @@ export function PostgresTableValueOptions({ source, onAdd, onClose }: {
   const [column, setColumn] = useState(origin.initialColumn ?? origin.columns[0]?.key ?? '');
   const [search, setSearch] = useState('');
   const [order, setOrder] = useState<TableValueOptionsOrder>('value');
-  const [request, setRequest] = useState<Pick<PostgresTableValuesInput, 'column' | 'search' | 'order'>>();
+  const [distribution, setDistribution] = useState<true>();
+  const [request, setRequest] = useState<Pick<PostgresTableValuesInput, 'column' | 'search' | 'order' | 'distribution'>>();
   const [confirmRead, setConfirmRead] = useState(false);
   const [selected, setSelected] = useState<readonly number[]>([]);
   const [exclude, setExclude] = useState(false);
   const [offset, setOffset] = useState(0);
-  const matches = !!result && request?.column === column && request.search === search && request.order === order;
+  const matches = !!result && request?.column === column && request.search === search && request.order === order && request.distribution === distribution;
 
   /** 只在明确读取时更换候选身份。调整输入或取消确认时保留旧勾选，旧结果不能提交为新字段。 */
   function readValues(confirmed = false) {
     if (!column || reading.current || confirmRead && !confirmed) return;
     if (selected.length && !confirmed) { setConfirmRead(true); return; }
-    const next = { column, search, order };
+    const next = { column, search, order, ...(distribution ? { distribution } : {}) };
     setConfirmRead(false);
     setSelected([]);
     setOffset(0);
     setRequest(next);
-    void read(() => invoke('postgres.table.values', { ...origin.input, ...next }));
+    void read(async () => assertPostgresValueDistribution(await invoke('postgres.table.values', { ...origin.input, ...next }), next.distribution));
   }
 
   function add() {
@@ -48,6 +51,7 @@ export function PostgresTableValueOptions({ source, onAdd, onClose }: {
   }
 
   const visible = result?.options.slice(offset, offset + limits.page) ?? [];
+  const totals = result?.distribution;
   return <Modal title={text.open} onClose={onClose} wide>
     <div className="modal-content">
       <p className="muted small">{text.hint}</p>
@@ -66,6 +70,8 @@ export function PostgresTableValueOptions({ source, onAdd, onClose }: {
           <option value="value">{text.orderValue}</option><option value="count-desc">{text.orderMost}</option>
           <option value="count-asc">{text.orderLeast}</option>
         </select></Field>
+        <label className="check"><input type="checkbox" checked={distribution === true} disabled={busy || confirmRead}
+          onChange={event => setDistribution(event.target.checked ? true : undefined)}/>{distributionText.enable}</label>
         <button type="submit" disabled={busy || confirmRead || !column}>{text.read}</button>
       </form>
       {busy && <Spinner text={postgresTableZh.waiting}/>}
@@ -76,11 +82,14 @@ export function PostgresTableValueOptions({ source, onAdd, onClose }: {
         <button type="button" onClick={() => setConfirmRead(false)}>{text.keep}</button>
         <button type="button" onClick={() => readValues(true)}>{text.confirmRead}</button>
       </div>}
-      {result?.truncated && <p className="warning-text">{text.truncated}</p>}
+      {result && totals && <ValueDistributionSummary totals={totals} options={result.options} truncated={result.truncated}/>}
+      {result?.truncated && !totals && <p className="warning-text">{text.truncated}</p>}
       {result && !visible.length && <p>{text.empty}</p>}
       {result && !!visible.length && <>
-        <div className="pg-reference-candidates pg-value-options">
-          <table><thead><tr><th>{text.label}</th><th>{text.frequency}</th></tr></thead>
+        <div className={totals ? 'pg-reference-candidates pg-value-options query-result-frequency' : 'pg-reference-candidates pg-value-options'}>
+          <table aria-label={totals ? distributionText.title : undefined}><thead><tr><th scope="col">{text.label}</th><th scope="col">{text.frequency}</th>
+            {totals && <><th scope="col">{distributionText.percent}</th><th scope="col">{distributionText.bar}</th></>}
+          </tr></thead>
             <tbody>{visible.map((option, index) => {
               const position = offset + index, checked = selected.includes(position);
               const label = option.value === null ? 'NULL' : option.value === '' ? text.emptyString : JSON.stringify(option.value);
@@ -90,6 +99,7 @@ export function PostgresTableValueOptions({ source, onAdd, onClose }: {
                   onChange={() => setSelected(checked ? selected.filter(item => item !== position) : [...selected, position])}/>
                 <span title={option.clipped ? text.clipped : undefined}>{label}{option.clipped && ' …'}</span></label></td>
                 <td>{option.count}</td>
+                {totals && <ValueDistributionCells count={option.count} total={totals.rows}/>}
               </tr>;
             })}</tbody></table>
         </div>

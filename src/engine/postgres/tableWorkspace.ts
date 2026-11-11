@@ -12,7 +12,7 @@ import { FILTER_LIMITS } from '../../shared/filtering';
 import { tableReadStatements, withTableReadTrace, type RecordTableRead } from '../../shared/tableReadStatements';
 import { TableWriteTraceCapture } from '../../shared/tableWriteTrace';
 import {
-  isPostgresSqlExportColumn, isPostgresSqlExportRelation, isPostgresFilteredUpdateColumn, isPostgresTableFiltered, postgresCountedWindow, postgresFilteredWriteMaxRows,
+  assertPostgresValueDistribution, isPostgresSqlExportColumn, isPostgresSqlExportRelation, isPostgresFilteredUpdateColumn, isPostgresTableFiltered, postgresCountedWindow, postgresFilteredWriteMaxRows,
   postgresFilteredUpdateSchema, postgresTableLimits, postgresTableSortRules, postgresTableSortSchema, postgresTableValueLimits,
   type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
@@ -36,6 +36,7 @@ import { readPostgresColumnStatistics } from './tableStatistics';
 import { hasPostgresRoundtripFloatText, readPostgresTableHistogram } from './tableHistogram';
 import { readPostgresTableCalendar } from './tableCalendar';
 import { readTableValueOptionsOrder } from '../../shared/tableValueOptions';
+import { valueDistributionSchema } from '../../shared/valueDistribution';
 import {
   postgresDraftSchema, type PostgresDraftDocument, type PostgresDraftRestored,
 } from '../../shared/postgresTableDraft';
@@ -867,9 +868,11 @@ export class PostgresTableWorkspace {
       const maximum = postgresTableValueLimits.groups + 1;
       const order = readTableValueOptionsOrder(input.order);
       const frequencyOrder = order === 'value' ? '' : order === 'count-desc' ? 'grouped_values.frequency DESC, ' : 'grouped_values.frequency ASC, ';
+      // 窗口计算在原代表值搜索之后、LIMIT 之前。同一次读取内保留全部匹配行和分组数。
+      const totals = input.distribution ? ', (pg_catalog.sum(frequency) OVER ())::text, (pg_catalog.count(*) OVER ())::text' : '';
       // 次数使用原 bigint 排序，搜索与排序覆盖所有分组；同次数沿用原显示顺序。
       const rows = await connection.query(`
-        SELECT pg_catalog.left(display, ${FILTER_LIMITS.valueLength + 1}), frequency::text
+        SELECT pg_catalog.left(display, ${FILTER_LIMITS.valueLength + 1}), frequency::text${totals}
         FROM (SELECT pg_catalog.min(${name}::text COLLATE pg_catalog."C") AS display,
                      pg_catalog.count(*) AS frequency
               FROM ${only(relation)} ${condition ? 'WHERE ' + condition : ''}
@@ -878,6 +881,10 @@ export class PostgresTableWorkspace {
         ORDER BY ${frequencyOrder}display NULLS FIRST LIMIT ${maximum}
       `, args, { rows: maximum, bytes: 12 * 1024 * 1024 });
       if (rows.truncated) throw Error('PostgreSQL 不同值超过读取预算，请缩小搜索范围');
+      const first = rows.rows[0], distribution = input.distribution ?
+        valueDistributionSchema.parse({ rows: first ? first.c2 : '0', groups: first ? first.c3 : '0' }) : undefined;
+      if (distribution && rows.rows.some(row => row.c2 !== distribution.rows || row.c3 !== distribution.groups))
+        throw Error('PostgreSQL 类别分布回包不一致');
       const options = rows.rows.slice(0, postgresTableValueLimits.groups).map(row => {
         const value = row.c0, count = row.c1;
         if ((value !== null && typeof value !== 'string') || typeof count !== 'string' || !/^[1-9]\d{0,18}$/.test(count))
@@ -885,7 +892,9 @@ export class PostgresTableWorkspace {
         const clipped = value !== null && value.length > FILTER_LIMITS.valueLength;
         return { value: clipped ? Array.from(value).slice(0, 200).join('') : value, count, clipped };
       });
-      return { options, truncated: rows.rows.length > postgresTableValueLimits.groups };
+      return assertPostgresValueDistribution({ options, truncated: rows.rows.length > postgresTableValueLimits.groups,
+        ...(distribution ? { distribution } : {}),
+      }, input.distribution);
     });
   }
 

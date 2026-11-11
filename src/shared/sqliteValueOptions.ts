@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { sqliteTablePageSchema, sqliteFilterSelectionSchema, type SqliteFilterSelection } from './sqliteTableBrowse';
+import { valueDistributionRemainder, valueDistributionSchema } from './valueDistribution';
 
 export const sqliteValueOptionsLimits = { groups: 500, pageSize: 50, selected: 128, bytes: 8 * 1024 * 1024, search: 256 } as const;
 export const sqliteValueOptionsOrderSchema = z.enum(['value', 'count-desc', 'count-asc']);
@@ -12,6 +13,7 @@ export const sqliteValueOptionsInputSchema = z.object({
   relation: sqliteTablePageSchema.shape.relation, mode: sqliteTablePageSchema.shape.mode, filters: sqliteTablePageSchema.shape.filters,
   search: z.string().max(sqliteValueOptionsLimits.search).refine(value => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)),
   order: sqliteValueOptionsOrderSchema.optional(),
+  distribution: z.literal(true).optional(),
 }).strict().superRefine((input, context) => {
   const parsed = sqliteTablePageSchema.safeParse({ connectionId: input.connectionId, database: input.database, table: input.table, taskId: input.taskId, mode: input.mode, filters: input.filters, ...(input.relation ? { relation: input.relation } : {}), sort: [], offset: 0, limit: 1 });
   if (!parsed.success) for (const issue of parsed.error.issues) context.addIssue({ code: 'custom', path: issue.path, message: issue.message });
@@ -21,7 +23,8 @@ export const sqliteValueOptionSchema = z.object({
   value: z.union([sqliteFilterSelectionSchema, z.object({ kind: z.literal('real'), value: z.enum(['Infinity', '-Infinity']) }).strict()]),
   count: z.string().regex(/^[1-9][0-9]{0,18}$/).refine(value => /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= 9223372036854775807n),
 }).strict();
-export const sqliteValueOptionsOutputSchema = z.object({ request: sqliteValueOptionsInputSchema, values: z.array(sqliteValueOptionSchema).max(sqliteValueOptionsLimits.groups), truncated: z.boolean() }).strict();
+export const sqliteValueOptionsOutputSchema = z.object({ request: sqliteValueOptionsInputSchema, values: z.array(sqliteValueOptionSchema).max(sqliteValueOptionsLimits.groups), truncated: z.boolean(),
+  distribution: valueDistributionSchema.optional() }).strict();
 export type SqliteValueOptionsInput = z.infer<typeof sqliteValueOptionsInputSchema>;
 export type SqliteValueOptionsOutput = z.infer<typeof sqliteValueOptionsOutputSchema>;
 export type SqliteValueOption = z.infer<typeof sqliteValueOptionSchema>;
@@ -29,6 +32,8 @@ export type SqliteValueOption = z.infer<typeof sqliteValueOptionSchema>;
 export function assertSqliteValueOptions(raw: unknown, request: SqliteValueOptionsInput): SqliteValueOptionsOutput {
   const value = sqliteValueOptionsOutputSchema.parse(raw);
   if (JSON.stringify(value.request) !== JSON.stringify(sqliteValueOptionsInputSchema.parse(request)) || value.truncated && value.values.length !== sqliteValueOptionsLimits.groups || new TextEncoder().encode(JSON.stringify(value)).length > sqliteValueOptionsLimits.bytes) throw Error('SQLite不同值回包与原请求不符或超过预算');
+  if (request.distribution !== true && Object.hasOwn(value, 'distribution')) throw Error('SQLite类别分布与原请求不符');
+  if (request.distribution) valueDistributionRemainder(value.distribution, value.values, value.truncated);
   const seen = new Set<string>(), order = value.request.order;
   let previous: bigint | undefined;
   for (const option of value.values) {
