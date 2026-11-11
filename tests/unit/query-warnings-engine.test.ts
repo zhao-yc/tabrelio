@@ -99,6 +99,43 @@ function engineFixture() {
 }
 
 describe('显式警告采集Engine集成', () => {
+  it('取消保持原拒绝并交付有界状态，停止后续语句且释放采集端口', async () => {
+    const f = engineFixture();
+    let released = 0;
+    Object.assign(f.native, { dbarkStartQueryTraffic: () => () => { released++; return { sent: 19, received: 117 }; } });
+    f.state.user = (sql, query) => {
+      if (sql === 'SELECT one') f.ok(query);
+      else { (f.engine as any).tasks.get('t').cancelled = true; f.fail(query); }
+    };
+    await expect(f.run('SELECT one;SELECT slow;INSERT tail;', { collectStatus: true })).rejects.toThrow();
+    const terminal = f.events.at(-1)!;
+    expect(terminal.status).toBe('cancelled');
+    expect(terminal.mysqlQueryStatus).toMatchObject({ termination: 'cancelled', omitted: 0,
+      entries: [{ ordinal: 1, status: 'completed' }, { ordinal: 2, status: 'failed' }] });
+    expect(released).toBe(2);
+    expect(f.sent).toEqual(['SELECT one', 'SELECT slow']);
+    expect(f.diagnostics).toEqual([]);
+    expect(f.session.busy).toBe(false);
+    expect((f.engine as any).tasks.size).toBe(0);
+  });
+
+  it('收到完成回执后的晚取消保留完成状态，取消收尾失败仍交付诊断', async () => {
+    const f = engineFixture();
+    f.state.user = (_sql, query) => {
+      f.ok(query);
+      const task = (f.engine as any).tasks.get('t');
+      task.cancelled = true;
+      task.cancelPending = Promise.reject(Error('原取消连接清理异常'));
+      void task.cancelPending.catch(() => undefined);
+    };
+    await expect(f.run('SELECT one;INSERT tail;', { collectStatus: true })).rejects.toThrow('取消收尾失败');
+    expect(f.events.at(-1)).toMatchObject({ status: 'cancelled', mysqlQueryStatus: {
+      termination: 'cancelled', entries: [{ ordinal: 1, status: 'completed' }],
+    } });
+    expect(f.sent).toEqual(['SELECT one']);
+    expect((f.engine as any).tasks.size).toBe(0);
+  });
+
   it('执行状态只采集用户命令，不发送额外SQL，并在真实命令终态释放观测', async () => {
     const f = engineFixture();
     let released = 0;

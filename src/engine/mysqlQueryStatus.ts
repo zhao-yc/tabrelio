@@ -7,6 +7,11 @@ type TrafficPort = { dbarkStartQueryTraffic?(): (() => Traffic | undefined) | un
 export class MysqlQueryStatusCollector {
   readonly report: MysqlQueryStatusReport = { entries: [], omitted: 0 };
 
+  /** 终态独立复制，后续清理或复用连接不能改变已交付的诊断。 */
+  terminal(termination: NonNullable<MysqlQueryStatusReport['termination']>): MysqlQueryStatusReport {
+    return { ...structuredClone(this.report), termination };
+  }
+
   begin(connection: object): (status: MysqlQueryStatusEntry['status'], submitted: boolean) => void {
     let stop: (() => Traffic | undefined) | undefined;
     try {

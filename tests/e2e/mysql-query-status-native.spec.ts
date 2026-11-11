@@ -5,6 +5,7 @@ import { queryContinueOnErrorZh } from '../../src/renderer/locales/queryContinue
 import { queryWarningsZh } from '../../src/renderer/locales/queryWarnings.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import type { NetworkConnectionProfile } from '../../src/shared/contracts';
+import { createConnection, type RowDataPacket } from 'mysql2/promise';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
@@ -113,6 +114,44 @@ test('查询状态按语句记录真实协议字节，诊断及参数不会进�
     expect(await numeric(0, 2)).toBeGreaterThan(0);
     await expect(panel).not.toContainText('内部测试值');
     expect((await history())[0].sql).toBe(parameterSql);
+
+    // 按已核实的服务器回执区分两种路径。MySQL 单独的 SLEEP 正常回包，MariaDB 返回中断错误。
+    for (const { slow, expected } of [
+      { slow: 'SELECT SLEEP(25)', expected: dialect === 'mysql' ? text.completed : text.failed },
+      { slow: 'SELECT id FROM status_cancel_wait WHERE SLEEP(25)=id', expected: text.failed },
+    ]) {
+      const prefix = 'SELECT 10 AS completed_prefix';
+      const cancelledSql = [prefix, slow, 'SELECT 99 AS cancelled_tail'].join(';');
+      const knownTasks = new Set((await tasks()).map(item => item.id));
+      await write(cancelledSql);
+      await editor.press(modifier + '+r');
+      await expect.poll(async () => (await tasks()).find(item => !knownTasks.has(item.id) && item.kind === 'query.execute')?.status).toBe('running');
+      await expect(query.getByRole('gridcell', { name: '10', exact: true })).toBeVisible();
+      const observer = await createConnection({ host: '127.0.0.1', port, database, user: database, password });
+      try {
+        await expect.poll(async () => {
+          const [processes] = await observer.query<RowDataPacket[]>('SHOW FULL PROCESSLIST');
+          return processes.some(item => item.User === database && item.Info === slow);
+        }).toBe(true);
+      } finally { await observer.end(); }
+      const running = (await tasks()).find(item => !knownTasks.has(item.id) && item.kind === 'query.execute')!;
+      await (await navigationMenuItem(query, { name: '停止', exact: true })).click();
+      await expect.poll(async () => (await tasks()).find(item => item.id === running.id)?.status).toBe('cancelled');
+      await expect(panel).toBeVisible();
+      await panel.locator('summary').click();
+      await expect(panel.getByRole('status')).toHaveText(text.cancelled);
+      await expect(rows).toHaveCount(2);
+      await expect(cell(0, 0)).toHaveText(text.completed);
+      await expect(cell(1, 0)).toHaveText(expected);
+      expect(await numeric(0, 2)).toBe(sent(prefix));
+      expect(await numeric(1, 2)).toBe(sent(slow));
+      await expect(query.getByRole('gridcell', { name: '99', exact: true })).toHaveCount(0);
+      expect((await tasks()).find(item => item.id === running.id)).not.toHaveProperty('mysqlQueryStatus');
+      const cancelledHistory = await history(), cancelledTasks = await tasks();
+      if (slow.includes('status_cancel_wait')) await panel.screenshot({ path: info.outputPath('取消后保留执行状态.png') });
+      expect(await history()).toEqual(cancelledHistory);
+      expect(await tasks()).toEqual(cancelledTasks);
+    }
 
     await (await option(text.collect)).uncheck();
     await run('SELECT 2 AS disabled_again');

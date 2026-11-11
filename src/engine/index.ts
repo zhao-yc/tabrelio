@@ -1493,6 +1493,9 @@ export class Engine {
       } else if (task.collectWarningsMode) {
         try { await task.cancelPending; }
         catch (cancelError) { error = new AggregateError([error, cancelError], '警告采集任务与取消收尾失败；原语句可能已执行，不会自动重试'); }
+      } else if (task.queryStatus) {
+        try { await task.cancelPending; }
+        catch (cancelError) { error = new AggregateError([error, cancelError], '查询状态采集任务与取消收尾失败，请核对原会话'); }
       } else await task.cancelPending;
       if (task.autocommitSubmitted) error = queryAutocommitMayHaveChanged(error);
       else if (task.transactionSettingsChangeSubmitted) error = queryTransactionSettingsMayHaveChanged(error);
@@ -1500,7 +1503,10 @@ export class Engine {
         if (!task.databaseSwitchConfirmed) invalidateCompletionDatabase(managed);
         error = queryDatabaseSwitchMayHaveChanged(error);
       }
-      this.emit({ taskId: id, status: task.cancelled && !task.fileCommitStarted ? 'cancelled' : 'failed', progress: 0, message: this.errorMessage(error), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
+      const termination = task.cancelled && !task.fileCommitStarted ? 'cancelled' : 'failed';
+      this.emit({ taskId: id, status: termination, progress: 0, message: this.errorMessage(error),
+        ...(task.queryStatus ? { mysqlQueryStatus: task.queryStatus.terminal(termination) } : {}),
+        ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       throw error;
     } finally {
       // 取消连接仍在建立时，不能放开会话给下一条查询，以免 KILL 误伤复用线程。
@@ -1510,6 +1516,7 @@ export class Engine {
       else if (task.transactionSettingsChangeSubmitted || task.databaseSwitchSubmitted) await task.cancelPending?.catch(() => undefined);
       else if (task.continueOnErrorMode) await task.cancelPending?.catch(() => undefined);
       else if (task.collectWarningsMode) await task.cancelPending?.catch(() => undefined);
+      else if (task.queryStatus) await task.cancelPending?.catch(() => undefined);
       else await task.cancelPending;
       this.tasks.delete(id); task.finish();
     }

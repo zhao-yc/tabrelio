@@ -1,8 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { MysqlQueryStatusCollector } from '../../src/engine/mysqlQueryStatus';
-import { mysqlQueryStatusLimit } from '../../src/shared/mysqlQueryStatus';
+import { mysqlQueryStatusLimit, mysqlQueryStatusReportSchema } from '../../src/shared/mysqlQueryStatus';
 
 describe('MySQL 查询状态', () => {
+  it('终态快照保留成功事实，拒绝额外正文和无界事件', () => {
+    const collector = new MysqlQueryStatusCollector();
+    collector.begin({})('completed', true);
+    const terminal = collector.terminal('cancelled');
+    collector.begin({})('failed', true);
+    expect(terminal.entries).toHaveLength(1);
+    expect(terminal.entries[0].status).toBe('completed');
+    expect(mysqlQueryStatusReportSchema.safeParse(terminal).success).toBe(true);
+    expect(mysqlQueryStatusReportSchema.safeParse({ ...terminal, sql: '秘密正文' }).success).toBe(false);
+    expect(mysqlQueryStatusReportSchema.safeParse({ ...terminal, entries: Array(201).fill(terminal.entries[0]) }).success).toBe(false);
+    expect(mysqlQueryStatusReportSchema.safeParse({ ...terminal, entries: [{ ...terminal.entries[0], elapsedMs: Infinity }] }).success).toBe(false);
+    expect(mysqlQueryStatusReportSchema.safeParse({ ...terminal, entries: [{ ...terminal.entries[0], ordinal: 2 }] }).success).toBe(false);
+  });
   it('逐条结束且只发布一次，未投递命令不占序号', () => {
     const collector = new MysqlQueryStatusCollector();
     let stopped = 0;

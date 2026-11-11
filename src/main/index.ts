@@ -1,3 +1,4 @@
+import { mysqlQueryStatusReportSchema } from '../shared/mysqlQueryStatus';
 import { listExcelWorkbookSource } from '../engine/excelFiles';
 import { TableReadFailure } from '../shared/tableReadStatements';
 import { csvRangeOption } from '../shared/csvImport';
@@ -668,6 +669,14 @@ function taskEvent(event: TaskEvent, deliverInsert=true): void {
   const structure = event.tableCreate ?? event.tableCopyData ?? event.tableCopyStructure ?? event.databaseDrop ?? event.databaseDefaultEncoding ?? event.databaseCreate ?? event.tableDrop ?? event.tableTruncate ?? event.tableAutoIncrement ?? event.tableRename ?? event.tableDefaultEncoding ?? event.tableChecks ?? event.tableComment ?? event.foreignKeyPatch ?? event.indexPatch ?? event.columnPatch;
   if (structure) structureProgress.set(event.taskId, { ...structure });
   const current = tasks.get(event.taskId);
+  if (event.mysqlQueryStatus) {
+    const { mysqlQueryStatus, ...ordinary } = event;
+    const parsed = mysqlQueryStatusReportSchema.safeParse(mysqlQueryStatus);
+    const allowed = (current?.kind === 'query.execute' || current?.kind === 'query.executeParameterized') &&
+      (event.status === 'cancelled' || event.status === 'failed');
+    event = allowed && parsed.success && parsed.data.termination === event.status
+      ? { ...ordinary, mysqlQueryStatus: parsed.data } : ordinary;
+  }
   // 新建表事件的类别和回执只从本Main已登记任务取出，不能由utility进度补造。
   const { sqliteTableRebuild: _untrustedRebuild, sqliteTableRebuildOperation: _untrustedRebuildOperation, sqliteObjects: _untrustedObjects, sqliteObjectsOperation: _untrustedObjectsOperation, sqliteTableMaintenance: _untrustedMaintenance, sqliteTableMaintenanceOperation: _untrustedMaintenanceOperation, sqliteTableRename: _untrustedRename, sqliteTableRenameOperation: _untrustedRenameOperation, sqliteColumns: _untrustedColumns, sqliteColumnsOperation: _untrustedColumnsOperation, sqliteIndexes: _untrustedIndexes, sqliteIndexesOperation: _untrustedIndexesOperation, sqliteWrite: _untrustedWrite, sqliteImportOperation: _untrustedImportOperation, sqliteCreate: _untrustedCreate, sqliteCreateOperation: _untrustedCreateOperation, ...ordinaryEvent } = event; event = ordinaryEvent;
   if (current?.kind === 'sqlite.tableCreate.preview' || current?.kind === 'sqlite.tableCreate.apply') event = { ...event, sqliteCreateOperation: current.kind === 'sqlite.tableCreate.preview' ? 'preview' : 'apply' };

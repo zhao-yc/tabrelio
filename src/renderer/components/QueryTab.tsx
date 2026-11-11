@@ -113,6 +113,7 @@ import { queryAnalyzeZh } from '../locales/queryAnalyze.zh-CN';
 import { QueryPartialOutcomeNotice } from './QueryPartialOutcomeNotice';
 import { QueryContinueOnErrorNotice, confirmedQueryContinueRange } from './QueryContinueOnErrorNotice';
 import { MysqlQueryStatus } from './MysqlQueryStatus';
+import type { MysqlQueryStatusReport } from '../../shared/mysqlQueryStatus';
 import { mysqlQueryStatusZh } from '../locales/mysqlQueryStatus.zh-CN';
 import { queryContinueOnErrorZh } from '../locales/queryContinueOnError.zh-CN';
 import { QueryWarningsDialog } from './QueryWarningsDialog';
@@ -289,6 +290,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const [sqliteStatementTimeoutMs, setSqliteStatementTimeoutMs] = useState(0);
   const [collectWarnings, setCollectWarnings] = useState(false);
   const [collectStatus, setCollectStatus] = useState(false);
+  const [interruptedStatus, setInterruptedStatus] = useState<{ taskId: string; report: MysqlQueryStatusReport }>();
   const parameterCollectWarnings = useRef(false);
   const parameterContinueOnError = useRef(false), scriptFailureRanges = useRef(new Set<QueryFailure>());
   const [, refreshFailureSource] = useState(0);
@@ -555,7 +557,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     return()=>{alive=false;};
   },[sessionId,busy,connectionVersion,databaseSwitchDialog]);
   useEffect(() => window.dbark?.onTask(event => {
-    if (event.taskId !== task.current || event.resultIndex === undefined) return;
+    if (event.taskId !== task.current) return;
+    if (event.mysqlQueryStatus && (event.status === 'cancelled' || event.status === 'failed'))
+      setInterruptedStatus({ taskId: event.taskId, report: event.mysqlQueryStatus });
+    if (event.resultIndex === undefined) return;
     setStream(previous => {
       const updated = previous.slice(); const index = event.resultIndex!;
       const result = updated[index] ?? { columns: [], rows: [], elapsedMs: 0, truncated: false, statement: '' };
@@ -1103,6 +1108,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if (!source.trim()) { locator?.dispose(); setError(zh.query.text001); return false; }
     if (sqlite && parameters) { try { assertSqliteParameterForm(parameterForm, true); if (source !== (parameterForm!.intent?.source ?? parameterForm!.source)) throw Error(parameterZh.sqliteSourceChanged); } catch (reason) { locator?.dispose(); setError(errorMessage(reason)); return false; } }
     clearFailureSource(); let retainLocator = false;
+    setInterruptedStatus(undefined);
     invalidateResultSelection(); busyRef.current = true; setBusy(true); setQueryRunning(true); setError(''); setSelectedPin(''); setShowPinSql(null); setOutcome(null); setStream([]); setResultIndex(0); task.current = uid();cancelledQuery.current=''; useWorkspace.getState().setBusy(tab.id, true);
     let warningReceipt: { scope: QueryWarningsViewScope; valid: boolean } | undefined;
     try {
@@ -2920,7 +2926,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           <ActionMenuSection label={menuText.snapshots}>{snapshotActions}</ActionMenuSection>
         </>}/>
 
-    </div>}/>{pins.length > 0 && <div className="pinned-results" role="group" aria-label={zh.query.pinSection}><span>{zh.query.pinSection}</span><button className={`current-results ${!pin ? 'selected' : ''}`} aria-pressed={!pin} onClick={() => selectPinnedResult()}>{zh.query.currentResults}</button>{pins.map(item => <div key={item.id} className={`pinned-result ${pin?.id === item.id ? 'selected' : ''}`}><button aria-pressed={pin?.id === item.id} title={pinnedResultTooltip(item)} onClick={() => selectPinnedResult(item)}><Pin size={11}/>{item.label}</button><button aria-label={formatText(zh.query.releasePin, item.label)} onClick={() => releasePin(item.id)}><X size={11}/></button></div>)}</div>}<ErrorBox message={error}/>{outcome?.mysqlQueryStatus && <MysqlQueryStatus key={task.current} report={outcome.mysqlQueryStatus}/>}
+    </div>}/>{pins.length > 0 && <div className="pinned-results" role="group" aria-label={zh.query.pinSection}><span>{zh.query.pinSection}</span><button className={`current-results ${!pin ? 'selected' : ''}`} aria-pressed={!pin} onClick={() => selectPinnedResult()}>{zh.query.currentResults}</button>{pins.map(item => <div key={item.id} className={`pinned-result ${pin?.id === item.id ? 'selected' : ''}`}><button aria-pressed={pin?.id === item.id} title={pinnedResultTooltip(item)} onClick={() => selectPinnedResult(item)}><Pin size={11}/>{item.label}</button><button aria-label={formatText(zh.query.releasePin, item.label)} onClick={() => releasePin(item.id)}><X size={11}/></button></div>)}</div>}<ErrorBox message={error}/>{!queryRunning && (outcome?.mysqlQueryStatus || interruptedStatus?.taskId === task.current && interruptedStatus.report) &&
+        <MysqlQueryStatus key={task.current} report={outcome?.mysqlQueryStatus ?? interruptedStatus!.report}/>}
       {outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length} locateAvailable={failure => scriptFailureRanges.current.has(failure) && !!failureLocator?.available()} onLocate={locateScriptFailure}/>}{outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length} locateAvailable={!!failureLocator?.available()} onLocate={() => { failureLocator?.locate(); }}/>}<div className="query-result-filter-bar">{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><span>{filterText.counts(sourceResult.rows.length,filterView?.result.rows.length??sourceResult.rows.length)}</span>{sourceResult.truncated&&<strong>{filterText.truncated}</strong>}</>:null}{resultMemory&&<span role="status" title={memoryText.hint}>{memoryText.saved}</span>}</div>{activeFilterLease&&<QueryResultFilterPanel binding={activeFilterLease.binding} initial={activeFilterLease.view} seed={activeFilterLease.seed} isCurrent={()=>filterPanelCurrent(activeFilterLease)} onApply={expression=>applyFilterRules(activeFilterLease,expression)} onClose={()=>closeFilterPanel(activeFilterLease)}/>}{activeSortLease&&<QueryResultSortPanel binding={activeSortLease.binding} initial={activeSortLease.view} isCurrent={()=>sortPanelCurrent(activeSortLease)} onApply={rules=>applySortPanel(activeSortLease,rules)} onClose={()=>closeSortPanel(activeSortLease)}/>}<div className="query-result-sort-scope">{result?.columns.length && (pin || !(outcome?.explain || outcome?.analysis)) && (!!sortView?.rules.length || !sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal) ? <>{!sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal && <strong>{sortText.budget}</strong>}<button disabled={!sortView?.rules.length || !selectionBinding || !!activeColumnLease || !!activeFilterLease} onClick={() => sortResult([])}>{sortText.clear}</button>{!!sortView?.rules.length && <ol className="query-result-sort-priorities" aria-label={sortText.priorities}>{sortView.rules.map((rule,index)=>{
     const column=sourceResult?.columns.find(column=>column.key===rule.column),name=column?.name ?? rule.column;
     return <li key={rule.column}>

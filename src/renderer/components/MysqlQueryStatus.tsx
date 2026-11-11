@@ -17,6 +17,7 @@ export function MysqlQueryStatus({ report }: { report: MysqlQueryStatusReport })
   return <details className="mysql-query-status" onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>{text.title}{total ? <span> · {text.total(integer.format(total.sent), integer.format(total.received))}</span> : null}</summary>
     {open && <div className="mysql-query-status-body">
+      {report.termination && <p role="status">{report.termination === 'cancelled' ? text.cancelled : text.interrupted}</p>}
       <p className="muted">{text.hint}</p>
       {entries.length ? <table aria-label={text.title}>
         <thead><tr>{text.columns.map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
