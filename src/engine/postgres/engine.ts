@@ -20,7 +20,7 @@ import { connectionTransportChanged } from '../../shared/connectionProfile';
 import { queryFailureMessage } from '../../shared/queryFailure';
 import type { QueryParameter } from '../../shared/queryParameters';
 import { postgresParameterBindings } from './parameters';
-import { postgresParameterPlan, postgresParameterStatement } from '../../shared/postgresParameters';
+import { postgresParameterBoundaryMatches, postgresParameterPlan, postgresQueryParameterSource } from '../../shared/postgresParameters';
 import { PostgresNoticeCollector } from './notices';
 import { readPostgresTransactionSettings, applyPostgresTransactionSettings } from './transactionSettings';
 import { readPostgresSearchPath, applyPostgresSearchPath } from './searchPath';
@@ -32,7 +32,6 @@ import {
   currentPostgresStatement,
   postgresIdentifier,
   postgresSqlContentStart,
-  splitPostgresParameterSql,
 } from '../../shared/postgresSql';
 import { PostgresConnection } from './connection';
 import { readRelation, PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
@@ -1045,6 +1044,7 @@ export class PostgresEngine {
     let offset = 0,
       count = 0,
       activeOrdinal: number | undefined,
+      parameterFailure: string | undefined,
       failure: QueryOutcome['failure'],
       sourceRange: NonNullable<QueryOutcome['failure']>['sourceRange'],
       explain: QueryOutcome['explain'],
@@ -1059,11 +1059,26 @@ export class PostgresEngine {
         throw Error('PostgreSQL会话正在关闭或已失效，未发送用户 SQL');
       const source = String(input.sql);
       const parameterized = input.parameters !== undefined;
-      const nextStatement = (sql: string) => parameterized
-        ? splitPostgresParameterSql(sql, session.managed.standardStrings, true)[0]
-        : firstPostgresStatement(sql, session.managed.standardStrings);
-      const selected = !estimate && input.currentStatement
-        ? currentPostgresStatement(source, input.currentStatement.offset, session.managed.standardStrings, parameterized)
+      const standardStrings = session.managed.standardStrings;
+      const prepareParameters = () => {
+        try {
+          const statements = postgresQueryParameterSource(source, standardStrings, input.currentStatement?.offset);
+          // 单条模板仍可定位本地校验失败。整组脚本校验失败时没有实际投递的语句序号。
+          if (statements.length === 1) {
+            const [statement] = statements;
+            sourceRange = {start: statement.start + postgresSqlContentStart(statement.sql), end: statement.end};
+          }
+          const plan = postgresParameterPlan(statements);
+          return { statements: plan.statements, bindings: postgresParameterBindings(plan.names, input.parameters as QueryParameter[])! };
+        } catch (reason) {
+          // 本地计划仅产生固定校验文案；服务器报错仍走整份参数执行的脱敏路径。
+          parameterFailure = reason instanceof Error ? reason.message : 'PostgreSQL 参数计划无效';
+          throw reason;
+        }
+      };
+      const program = parameterized && !estimate && !analysisSql ? prepareParameters() : undefined;
+      const selected = !program && !estimate && input.currentStatement
+        ? currentPostgresStatement(source, input.currentStatement.offset, standardStrings)
         : undefined;
       let boundSql: string | undefined;
       if (estimate) {
@@ -1087,12 +1102,10 @@ export class PostgresEngine {
         sourceRange = undefined;
         activeOrdinal = undefined;
         if (task.cancelled) throw Error('PostgreSQL任务已取消，已执行语句未重放');
-        const part = selected ?? nextStatement(source.slice(offset));
-        if (!part) {
-          if (parameterized) throw Error('PostgreSQL 参数执行需要一条语句');
-          break;
-        }
-        const statementOffset = selected ? 0 : offset;
+        const parameterPlan = program?.statements[count];
+        const part = program ? parameterPlan?.statement : selected ?? firstPostgresStatement(source.slice(offset), session.managed.standardStrings);
+        if (!part) break;
+        const statementOffset = selected || program ? 0 : offset;
         // 定位从正文起始，避免前导换行和长注释占住窄编辑区；执行仍保留原文。
         sourceRange = { start: statementOffset + part.start + postgresSqlContentStart(part.sql), end: statementOffset + part.end };
         if (++count > 1000) throw Error('PostgreSQL脚本最多1000条语句');
@@ -1100,6 +1113,11 @@ export class PostgresEngine {
         if (report) report.statementsAttempted = count;
         if (part.keyword === 'COPY')
           throw Error('PostgreSQL COPY数据流需专用导入导出接口，当前SQL执行未发送此语句');
+        if (program && standardStrings !== session.managed.standardStrings &&
+            !postgresParameterBoundaryMatches(source, offset, part, session.managed.standardStrings)) {
+          parameterFailure = 'PostgreSQL 字符串模式已变化，后续语句或参数边界与原模板不一致，已停止';
+          throw Error(parameterFailure);
+        }
         this.emit({
           taskId: task.id,
           status: 'running',
@@ -1108,12 +1126,7 @@ export class PostgresEngine {
           executionSql: part.sql,
           executionDatabase: { state: 'known', database: session.managed.database },
         });
-        // 绑定校验失败沿用刚扫描的原范围。完整确认只有一条语句后才发送。
-        const parameterPlan = parameterized ? postgresParameterPlan([part]).statements[0] : undefined;
-        const bindings = parameterPlan && postgresParameterBindings(parameterPlan.names, input.parameters as QueryParameter[]);
-        const values = bindings && parameterPlan?.names.map(name => bindings.get(name));
-        if (parameterized && !selected && nextStatement(source.slice(part.end + 1)))
-          throw Error('PostgreSQL 参数执行一次只接受一条语句');
+        const values = parameterPlan?.names.length ? parameterPlan.names.map(name => program!.bindings.get(name)!) : undefined;
         boundSql = parameterPlan?.sql;
         task.sent = true;
         const index = results.length, ordinal = count, statementRange = sourceRange;
@@ -1129,7 +1142,8 @@ export class PostgresEngine {
               columns,
               batch,
             }),
-            undefined, (notice, redact) => notices.record(ordinal, statementRange, notice, redact),
+            // 包括无绑定值的脚本语句，仍由原生 Parse 确认单语句边界。
+            program ? 'extended' : undefined, (notice, redact) => notices.record(ordinal, statementRange, notice, redact),
             fields => { origins = postgresColumnReferences(fields); });
           // 绑定 SQL 只用于协议发送，用户可见来源始终对应编辑器的原模板。
           results.push(parameterPlan ? { ...result, statement: part.sql } : result);
@@ -1155,7 +1169,7 @@ export class PostgresEngine {
             report.stopReason = '错误记录已达到100条上限，已停止后续语句'; break;
           }
         }
-        if (selected || parameterized) break;
+        if (selected) break;
         offset = statementOffset + part.end + 1;
         if (offset >= source.length) break;
       }
@@ -1196,7 +1210,7 @@ export class PostgresEngine {
       }
     } catch (reason) {
       const detail = session.managed.error(reason);
-      const message = postgresQueryErrorMessage(detail, !!input.parameters);
+      const message = parameterFailure ?? postgresQueryErrorMessage(detail, !!input.parameters);
       if (report) {
         const stopReason = truncateQueryScriptMessage(message);
         report.errors.push({kind: 'stopped', statementOrdinal: activeOrdinal ?? report.statementsAttempted + 1,
@@ -1838,9 +1852,9 @@ export class PostgresEngine {
       }
       case 'query.parameterNames':
         return this.session(input.sessionId, async (s) => {
-          const part = postgresParameterStatement(input.sql, s.managed.standardStrings, input.currentStatement?.offset);
+          const plan = postgresParameterPlan(postgresQueryParameterSource(input.sql, s.managed.standardStrings, input.currentStatement?.offset));
           return {
-            names: part.names,
+            names: plan.names,
             warnings: [],
             maxDecimalScale: 38,
             allowTimeEndpointFraction: false,

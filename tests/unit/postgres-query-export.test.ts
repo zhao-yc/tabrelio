@@ -5,11 +5,12 @@ import { validateCommand } from '../../src/shared/validation';
 import { exportPostgresQuery } from '../../src/engine/postgres/queryExport';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import { postgresParameterBindings } from '../../src/engine/postgres/parameters';
-import { postgresParameterStatement } from '../../src/shared/postgresParameters';
+import { postgresParameterPlan, postgresQueryParameterSource } from '../../src/shared/postgresParameters';
 import { splitPostgresSql } from '../../src/shared/postgresSql';
 import { postgresCurrentQueryExportSource, postgresExportParameterNames, postgresQueryExportStatements, postgresQueryInsertColumnsForResult } from '../../src/shared/postgresQueryExport';
 
 const base = {connectionId: 'pg', database: 'postgres', fileToken: 'choice', taskId: 'task', format: 'csv', encoding: 'utf8'} as const;
+const queryPlan = (sql: string, offset?: number) => postgresParameterPlan(postgresQueryParameterSource(sql, true, offset));
 
 it('导出参数名称只按词法识别，忽略 dollar 正文、注释和字符串内的位置文字', () => {
   expect(postgresExportParameterNames("SELECT $1, $2, $1, '$3', $$ $4 $$ /* $5 */;").names).toEqual(['p1', 'p2']);
@@ -28,7 +29,7 @@ it('工作簿按语句校验位置编号，同编号复用且总页数有界', (
 it('命名模板保留原范围，重复名同序绑定，字符串、数组、嵌套注释和 dollar 正文各守原义', () => {
   const source = "-- [$line]\r\nSELECT [$Id]::bigint, [$id]::text, [$Id], ARRAY[[$Id]], ARRAY[$tag$[$raw]$tag$], " +
     "E'a'\n'\\'[$continued];', '[$literal]', 0 AS \"[$column]\" /* [$block] /* [$nested] */ */;";
-  const plan = postgresParameterStatement(source, true);
+  const [plan] = queryPlan(source).statements;
   expect(plan.names).toEqual(['Id', 'id']);
   expect(plan.statement.sql).toBe(source.slice(0, -1));
   expect(plan.statement.start).toBe(0);
@@ -36,8 +37,8 @@ it('命名模板保留原范围，重复名同序绑定，字符串、数组、�
   expect(plan.sql).toBe(source.slice(0, -1).replaceAll('[$Id]', ' $1 ').replace('[$id]', ' $2 '));
   expect(splitPostgresSql('SELECT [$Id]')).toEqual([{sql: 'SELECT [$Id]', keyword: 'SELECT', start: 0, end: 12, parameters: []}]);
   const full = 'SELECT 0;\r\n' + source + '\nSELECT 2;';
-  expect(postgresParameterStatement(full, true, full.indexOf('[$Id]')).statement.start).toBe(9);
-  expect(() => postgresParameterStatement(full, true)).toThrow('一条语句');
+  expect(queryPlan(full, full.indexOf('[$Id]')).statements[0].statement.start).toBe(9);
+  expect(queryPlan(full).statements).toHaveLength(3);
 });
 
 it('命名工作簿按首见顺序收集全局参数，各条语句独立排位', () => {
@@ -49,7 +50,7 @@ it('命名工作簿按首见顺序收集全局参数，各条语句独立排位'
   for (const mixed of ['SELECT [$id], $1', 'SELECT [$p1]; SELECT $1'])
     expect(() => postgresExportParameterNames(mixed, true)).toThrow('混用');
   const over = 'SELECT ' + Array.from({length: 201}, (_, i) => '[$p' + i + ']').join(',');
-  expect(() => postgresParameterStatement(over, true)).toThrow('200');
+  expect(() => queryPlan(over)).toThrow('200');
   expect(() => postgresExportParameterNames("SELECT 'a\\'; SELECT [$id]; -- '", true)).toThrow();
 });
 
@@ -75,7 +76,7 @@ it('PostgreSQL 绑定保留38位小数原文、精确整数、NULL及字节', ()
   expect(() => postgresParameterBindings(['p1'])).toThrow();
   expect(() => postgresParameterBindings(['p1'], [{name: 'p2', type: 'text', value: '值'}])).toThrow();
   expect(() => postgresParameterBindings(['id', 'note'], [{name: 'note', type: 'null'}, {name: 'id', type: 'null'}])).toThrow();
-  expect(() => postgresParameterStatement('SELECT $1, $3', true)).toThrow('连续');
+  expect(() => queryPlan('SELECT $1, $3')).toThrow('连续');
 });
 
 it('参数导出IPC接纳严格类型，拒绝附加字段、重复名称及超预算', () => {

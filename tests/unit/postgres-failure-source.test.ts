@@ -8,19 +8,21 @@ import { queryScriptReportSchema } from '../../src/shared/queryContinueOnError';
 import { canContinuePostgresQueryError } from '../../src/engine/postgres/queryContinue';
 import { postgresNoticeReportSchema } from '../../src/shared/postgresNotices';
 
-let engine: PostgresEngine, sent: string[], events: TaskEvent[], next: number;
+let engine: PostgresEngine, sent: string[], protocols: unknown[], events: TaskEvent[], next: number;
 type Notice = (value: unknown, redact: (value: string) => string) => void;
 let scenario: (sql: string, values?: unknown[], notice?: Notice) => Promise<unknown>;
 let managed: PostgresConnection, session: {id: string; connectionId: string; managed: PostgresConnection; completion?: Promise<any>};
 const ok = (statement: string) => ({columns: [], rows: [], statement, postgresCommand: 'SELECT', elapsedMs: 1});
 
 beforeEach(() => {
-  sent = []; events = []; next = 0; scenario = async () => { throw Error('预期失败'); };
+  sent = []; protocols = []; events = []; next = 0; scenario = async () => { throw Error('预期失败'); };
   // 仅替换物理连接，实际驱动分发、逐句扫描、终态和 sourceRange 均由产品引擎产生。
   managed = {broken: false, standardStrings: true, database: 'db', close: vi.fn(async () => {}),
     state: () => ({transactionOpen: false, transactionKnown: true, broken: false}),
     error: (reason: unknown) => reason instanceof Error ? reason : Error('未知错误'),
-    query: async (sql: string, values?: unknown[], _budget?: unknown, _rows?: unknown, _protocol?: unknown, notice?: Notice) => { sent.push(sql); return scenario(sql, values, notice); },
+    query: async (sql: string, values?: unknown[], _budget?: unknown, _rows?: unknown, protocol?: unknown, notice?: Notice) => {
+      sent.push(sql); protocols.push(protocol); return scenario(sql, values, notice);
+    },
   } as unknown as PostgresConnection;
   engine = new PostgresEngine(event => events.push(event));
   session = {id: 's', connectionId: 'c', managed};
@@ -75,10 +77,54 @@ describe('PostgreSQL 失败范围沿用实际执行的原文偏移', () => {
     for (const sql of ['SELECT $2;', 'SELECT [$id], $1;', 'SELECT [$id];', 'COPY subject TO STDOUT;']) {
       const output = await execute(sql, {parameters: []}); expect(output.failure?.sourceRange).toEqual({start: 0, end: sql.length - 1});
     }
-    const script = 'SELECT [$id]; SELECT 2';
-    const output = await execute(script, {parameters: [{name: 'id', type: 'text', value: '原值'}]});
-    expect(output.failure?.sourceRange).toEqual({start: 0, end: script.indexOf(';')});
+    for (const tail of ['SELECT [$missing]', 'COPY subject TO STDOUT', 'SELECT $2', "SELECT '未闭合"]) {
+      const output = await execute('INSERT INTO subject VALUES ([$id]); ' + tail,
+        {parameters: [{name: 'id', type: 'text', value: '原值'}], continueOnError: true});
+      expect(output.scriptReport).toMatchObject({statementsAttempted: 0, statementsCompleted: 0, reachedEnd: false});
+    }
     expect(sent).toEqual([]);
+  });
+  it('多语句全局去重，每句独立排序并走扩展协议，回执保留原模板', async () => {
+    const sql = 'BEGIN;\r\nSELECT [$id]::bigint;\r\n/* 🧭 */ SELECT [$word], [$id], [$word]; ROLLBACK;';
+    const valuesByStatement: unknown[] = [];
+    scenario = async (statement, values) => { valuesByStatement.push(values); return ok(statement); };
+    const info = await engine.handle('query.parameterNames', {sessionId: 's', sql});
+    expect(info.names).toEqual(['id', 'word']);
+    expect(sent).toEqual([]);
+    const result = await execute(sql, {parameters: [{name: 'id', type: 'integer', value: '9007199254740993'}, {name: 'word', type: 'text', value: "值'😀"}]});
+    expect(result.failure).toBeUndefined();
+    expect(valuesByStatement).toEqual([undefined, ['9007199254740993'], ["值'😀", '9007199254740993'], undefined]);
+    expect(protocols).toEqual(Array(4).fill('extended'));
+    expect(sent[2]).toContain('SELECT  $1 ,  $2 ,  $1 ');
+    expect(result.results[2].statement).toContain('SELECT [$word], [$id], [$word]');
+    expect(result.postgresResultSources?.map(({sourceRange: {start, end}}) => sql.slice(start, end))).toEqual(
+      ['BEGIN', 'SELECT [$id]::bigint', 'SELECT [$word], [$id], [$word]', 'ROLLBACK']);
+  });
+  it('参数当前语句只读取与执行光标范围，按原全文提供回执', async () => {
+    const sql = "INSERT INTO subject VALUES ([$before]);\r\n/* 🧭 */ SELECT [$value]::text;\r\nSELECT [$after];";
+    const currentStatement = {offset: sql.indexOf('[$value]')};
+    const info = await engine.handle('query.parameterNames', {sessionId: 's', sql, currentStatement});
+    expect(info.names).toEqual(['value']);
+    scenario = async (statement, values) => { expect(values).toEqual(['原值']); return ok(statement); };
+    const result = await execute(sql, {currentStatement, parameters: [{name: 'value', type: 'text', value: '原值'}]});
+    expect(sent).toEqual(['\r\n/* 🧭 */ SELECT  $1 ::text']);
+    expect(result.postgresResultSources?.[0].sourceRange).toEqual({start: sql.indexOf('SELECT'), end: sql.indexOf(';', currentStatement.offset)});
+  });
+  it('会话字符串模式变化后放行一致语句，遇到不同边界时保留前句回执并停止', async () => {
+    scenario = async statement => {
+      if (statement.startsWith('SET')) managed.standardStrings = false;
+      return ok(statement);
+    };
+    const parameters = [{name: 'id', type: 'integer' as const, value: '42'}];
+    const same = await execute('SET standard_conforming_strings=off; SELECT [$id]::int;', {parameters});
+    expect(same.failure).toBeUndefined();
+    expect(sent).toHaveLength(2);
+    sent = []; managed.standardStrings = true;
+    const sql = "SET standard_conforming_strings=off; SELECT 'a\\'; SELECT [$id]::int; -- '";
+    const changed = await execute(sql, {parameters});
+    expect(sent).toHaveLength(1);
+    expect(changed.failure).toMatchObject({statementOrdinal: 2, statementsCompleted: 1,
+      message: expect.stringContaining('字符串模式已变化')});
   });
   it('每句按实际字符串模式重新扫描，范围来自同一轮解析', async () => {
     const sql = String.raw`SET standard_conforming_strings=off; SELECT 'a\';b'; SELECT missing;`;

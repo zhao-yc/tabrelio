@@ -1356,9 +1356,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if ((command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.explain') &&
       input.sqliteStatementTimeoutMs !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('SQLite 语句超时只能用于原 SQLite 查询会话');
-  if ((command === 'query.parameterNames' || command === 'query.executeParameterized' || command === 'query.explain') &&
-      input.currentStatement !== undefined && !broker.isSqliteSession(input.sessionId))
-    throw Error('此当前语句操作只用于原 SQLite 查询会话');
+  if ((command === 'query.parameterNames' || command === 'query.executeParameterized') &&
+      input.currentStatement !== undefined && !broker.isSqliteSession(input.sessionId)) {
+    const postgres = sessions.get(input.sessionId)?.postgres;
+    if (shuttingDown || !postgres || postgres.closing || !columns || !columnsMain.sharesDocumentOwner(postgres.owner, columns))
+      throw Error('此当前语句操作需要原窗口的 PostgreSQL 或 SQLite 查询会话');
+  }
+  if (command === 'query.explain' && input.currentStatement !== undefined && !broker.isSqliteSession(input.sessionId))
+    throw Error('此当前语句计划操作只用于原 SQLite 查询会话');
   if ((command === 'query.parameterNames' || command === 'query.executeParameterized') &&
       input.sqliteNavicatParameters !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('此 Navicat 参数模式只用于原 SQLite 查询会话');
@@ -3896,6 +3901,8 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         if (payload.command.startsWith('postgres.queryBuilder.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
+        if ((payload.command === 'query.parameterNames' || payload.command === 'query.executeParameterized') &&
+            (input as {currentStatement?: unknown}).currentStatement !== undefined) columns = columnsMain.capture(event);
         if ((payload.command === 'table.page' || payload.command === 'sqlite.tablePage' || payload.command === 'postgres.table.page' ||
             payload.command === 'postgres.table.presets.open') && (input as { includeReadStatements?: true }).includeReadStatements)
           tableReadRevision = store.connectionRevision();

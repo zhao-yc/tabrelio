@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。PostgreSQL 参数执行支持多语句及光标当前语句。脚本同名值共用一组输入，逐条原生绑定，结果和失败范围保留原模板。Q02、Q06 仍为部分覆盖。[Navicat 查询参数手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html#query-parameters)
+
 2026-11-11 源码增量。数据网格、文本字段及严格解码的二进制值可在隔离框中静态预览 HTML，支持常见排版和内嵌图片。字段写入沿用原草稿与集中提交。D07 仍为部分覆盖。[Navicat 单元格编辑器](https://www.navicat.com/manual/pdf_manual/en/navicat_17/win_manual/navicat_en.pdf)
 
 2026-11-11 源码增量。四种查询方言的 SQL 片段库及名称补全支持结果命名和运行时命名参数模板。内置模板可用 Tab 和 Shift+Tab 逐项填写，重复字段联动，用户片段按原文插入。Q06 仍为部分覆盖。[Navicat 内置片段示例](https://www.navicat.com/en/company/aboutus/blog/2834-query-customization-using-navicat-only-syntax)

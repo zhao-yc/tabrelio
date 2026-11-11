@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Plus, Play, Trash2 } from 'lucide-react';
+import type { ConnectionProfile } from '../../shared/contracts';
 import { queryParameterTypes, validateQueryParametersForInfo, type QueryParameter, type QueryParameterNames, type QueryParameterType } from '../../shared/queryParameters';
 import { queryParameterInfo } from '../queryParameterReuse';
 import { errorMessage } from '../lib';
@@ -14,9 +15,11 @@ import { queryParameterReuseZh as reuseText } from '../locales/queryParameterReu
 interface ParameterRow { id: number; parameter: QueryParameter; manual: boolean; }
 
 /** 仅识别和填写参数；真正执行由拥有固定会话的查询标签统一管理。 */
-export function QueryParametersDialog({ source, loadNames, onExecute, onClose, submitLabel, syntaxHint, initialParameters = [], reuse, ownerId,
+export function QueryParametersDialog({ source, previewSql, previewDialect, loadNames, onExecute, onClose, submitLabel, syntaxHint, initialParameters = [], reuse, ownerId,
   allowSqliteNavicat = false, initialSqliteNavicatParameters }: {
   source: string; loadNames: (sqliteNavicatParameters?: true) => Promise<QueryParameterNames>;
+  previewSql?: (info: QueryParameterNames) => string;
+  previewDialect?: ConnectionProfile['dialect'];
   onExecute: (parameters: QueryParameter[], sqliteNavicatParameters?: true) => void; onClose: () => void;
   submitLabel?: string; syntaxHint?: string; initialParameters?: QueryParameter[]; reuse?: QueryParameterReusePort; ownerId?: string;
   allowSqliteNavicat?: boolean; initialSqliteNavicatParameters?: true;
@@ -24,6 +27,7 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose, s
   const [rows, setRows] = useState<ParameterRow[]>([]); const [loading, setLoading] = useState(true); const loadingRef = useRef(false);
   const [navicat, setNavicat] = useState(allowSqliteNavicat && initialSqliteNavicatParameters === true);
   const [info, setInfo] = useState<QueryParameterNames | null>(null); const [error, setError] = useState('');
+  const [preview, setPreview] = useState<string>();
   const sequence = useRef(0); const ready = useRef(false); const alive = useRef(true); const loader = useRef(loadNames); loader.current = loadNames;
   const original = useRef({ source, reuse }), invalid = useRef(false), live = useRef<object | undefined>(undefined), ticket = {};
   const loadGeneration = useRef(0), infoRef = useRef<QueryParameterNames | null>(null), rememberRef = useRef(false), closing = useRef(false);
@@ -80,6 +84,7 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose, s
       if (loadGeneration.current !== generation || !actionCurrent(action)) return;
       const next = queryParameterInfo(raw);
       if (next.sqliteNavicatParameters !== (useNavicat ? true : undefined)) throw Error(text.sqliteNavicatChanged);
+      const displayed = previewSql?.(next);
       let available = !!reuse && reuseCurrent() && reuse.has(next); if (loadGeneration.current !== generation || !actionCurrent(action)) return;
       if (reuse && !reuseCurrent()) available = false;
       if (loadGeneration.current !== generation || !actionCurrent(action)) return;
@@ -89,6 +94,7 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose, s
         return [...next.names.map(name => { const old = existing.get(name); return { id: old?.id ?? ++sequence.current, parameter: old?.parameter ?? { name, type: 'text' as const, value: '' }, manual: false }; }), ...existingRows.filter(row => row.manual && !next.names.includes(row.parameter.name))];
       });
       infoRef.current = next; setInfo(next); ready.current = true;
+      setPreview(displayed);
       setReusable(available);
     } catch (reason) { if (loadGeneration.current === generation && actionCurrent(action)) setError(errorMessage(reason)); }
     finally { if (loadGeneration.current === generation) { loadingRef.current = false; if (alive.current) setLoading(false); } }
@@ -170,12 +176,13 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose, s
   function close(): void { if (!alive.current || live.current !== ticket || closing.current) return; closing.current = true; ready.current = false; revokeFrame(); onClose(); }
   const templateHint = syntaxHint ?? (info?.bracketQuotes === true ? text.mariadbBracketHint :
     info && info.dialect !== 'sqlite' ? text.mysqlHint : text.hint);
+  const previewSource = previewSql ? info && preview !== undefined ? preview : '' : source;
   const hint = (type: QueryParameterType) => type === 'boolean' ? text.booleanHint : type === 'binary' ? text.binaryHint : type === 'date' ? text.dateHint : type === 'datetime' ? text.datetimeHint : type === 'time' ? text.timeHint : info?.dialect === 'sqlite' && type === 'integer' ? text.sqliteIntegerHint : info?.dialect === 'sqlite' && type === 'decimal' ? text.sqliteDecimalHint : type === 'integer' || type === 'decimal' ? text.numericHint : text.textHint;
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content parameter-content" data-query-parameter-owner={ownerId}><UsageHelp><p>{templateHint}</p><p>{info?.dialect === 'sqlite' ? text.sqliteDateNote : text.dateNote}</p>{reuse && <p>{reuseText.hint}</p>}</UsageHelp><p className="muted small">{reuse ? reuseText.privacy : text.privacy}</p>{info?.dialect === 'sqlite' && <><p className="warning-text" role="note" aria-label={text.sqliteTypeTitle}>{text.sqliteTypeHint}</p><p className="muted small">{text.sqliteNamesHint}</p></>}
       {allowSqliteNavicat && <div><label><input type="checkbox" checked={navicat} disabled={loading} onChange={event => changeNavicat(event.target.checked)}/>{text.sqliteNavicatMode}</label><p className="muted small">{text.sqliteNavicatHint}</p></div>}
       {reuse && <section aria-label={reuseText.title}><p>{reuseText.overwrite}</p><label><input type="checkbox" checked={remember} disabled={loading || !info} onChange={event => changeRemember(event.target.checked)}/>{reuseText.remember}</label><div className="parameter-actions"><button type="button" disabled={loading || !info || !reusable} onClick={fillPrevious}>{reuseText.fill}</button><button type="button" disabled={loading || !info || !reusable && !remember} onClick={forgetPrevious}>{reuseText.forget}</button></div>{notice && <p role="status">{notice}</p>}</section>}
-      <h3>{text.source}</h3>{source.length > 65536 && <p className="warning-text">{text.sourceTruncated}</p>}<SqlEditor value={source.slice(0, 65536)} dialect={info?.dialect} readOnly height={160}/>
+      <h3>{text.source}</h3>{previewSource.length > 65536 && <p className="warning-text">{text.sourceTruncated}</p>}<SqlEditor value={previewSource.slice(0, 65536)} dialect={previewDialect ?? info?.dialect} readOnly height={160}/>
       <div className="parameter-actions">{loading ? <Spinner text={text.namesLoading}/> : !rows.length && <span className="muted small">{info?.dialect === 'sqlite' ? text.sqliteNoParameters : text.noParameters}</span>}<span className="grow"/><button disabled={loading} onClick={() => void reload()}>{text.retry}</button><button disabled={loading || rows.length >= 200} onClick={() => { if (frame() && !loadingRef.current) setRows(previous => previous.length >= 200 ? previous : [...previous, { id: ++sequence.current, parameter: { name: '', type: 'text', value: '' }, manual: true }]); }}><Plus size={13}/>{text.add}</button></div>
       {!!info?.warnings?.length && <div className="info-strip">{text.namesDynamic}<ul>{info.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div>}
       <div className="parameter-list">{rows.map(row => <div className="parameter-row" key={row.id}>

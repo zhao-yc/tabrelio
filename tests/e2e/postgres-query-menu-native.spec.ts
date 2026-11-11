@@ -577,6 +577,79 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
   await quitDesktop();
 });
 
+test('PostgreSQL 多语句参数执行与光标当前语句保留原模板', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535)
+    throw Error('仅允许本轮隔离的回环 PostgreSQL');
+
+  const id = '9007199254740993', value = "参数脚本样本'😀";
+  const sql = [
+    'CREATE TEMP TABLE parameter_script_probe(n bigint, note text);',
+    'INSERT INTO parameter_script_probe VALUES ([$id]::bigint, [$note]::text);',
+    'SELECT [$note]::text AS shared_note, [$id]::bigint AS shared_id, n, note FROM parameter_script_probe;',
+  ].join('\n');
+  await prepare({id: '', name: '隔离 PostgreSQL 参数脚本', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port, user, password, database: user}, sql);
+  const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
+  const result = tab().getByLabel('PostgreSQL结果集', {exact: true});
+  const grid = tab().locator('.postgres-results .rdg');
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  const fill = async (name: string, value: string, type = 'text') => {
+    await form.getByLabel(parameterZh.type + ' ' + name, {exact: true}).selectOption(type);
+    await form.getByLabel(parameterZh.value + ' ' + name, {exact: true}).fill(value);
+  };
+  const submit = async () => {
+    await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
+    await expect(form).toBeHidden();
+  };
+  await tab().getByRole('button', {name: postgresZh.parameters, exact: true}).click();
+  await fill('id', id, 'integer');
+  await fill('note', value);
+  await expect(form.locator('.parameter-row')).toHaveCount(2);
+  expect(await history()).toEqual([]);
+  await submit();
+  await result.selectOption('2');
+  await expect(grid).toContainText(id);
+  await expect(grid).toContainText(value);
+  await expect.poll(async () => (await history()).some(entry => entry.sql === sql && entry.success)).toBe(true);
+
+  const current = '/* 光标内参数 */ SELECT [$here]::bigint AS current_value, COUNT(*)::int AS total FROM parameter_script_probe';
+  const script = 'INSERT INTO parameter_script_probe VALUES ([$before], NULL);\n' + current +
+    ';\nINSERT INTO parameter_script_probe VALUES ([$after], NULL);';
+  await replaceDraft(script);
+  await modelSelection(2, current.indexOf('[$here]') + 1);
+  await tab().getByRole('button', {name: postgresZh.parameterCurrent, exact: true}).click();
+  await fill('here', '42', 'integer');
+  await expect(form.locator('.parameter-row')).toHaveCount(1);
+  await expect(form.locator('.view-lines')).toContainText('current_value');
+  await expect(form.locator('.view-lines')).not.toContainText('[$before]');
+  await form.screenshot({path: info.outputPath('PostgreSQL参数执行当前语句.png')});
+  await submit();
+  await expect(grid.getByRole('gridcell', {name: '42', exact: true})).toBeVisible();
+  await expect(grid.getByRole('gridcell', {name: '1', exact: true})).toBeVisible();
+  await expect.poll(async () => (await history()).some(entry => entry.sql.trim() === current && entry.success)).toBe(true);
+
+  const continuing = 'SELECT [$n]::int AS before_error;\nSELECT [$bad]::int AS expected_error;\nSELECT [$n]::int + 1 AS recovered;';
+  await replaceDraft(continuing);
+  await tab().getByRole('checkbox', {name: continueText.option, exact: true}).check();
+  await tab().getByRole('button', {name: postgresZh.parameters, exact: true}).click();
+  await fill('n', '70', 'integer');
+  await fill('bad', value);
+  await submit();
+  await result.selectOption('1');
+  await expect(grid.getByRole('gridcell', {name: '71', exact: true})).toBeVisible();
+  await expect(tab()).toContainText('SQLSTATE 22P02');
+  await expect(tab()).not.toContainText(value);
+  await expect.poll(async () => (await history()).some(entry => entry.sql === continuing && !entry.success)).toBe(true);
+  expect(JSON.stringify(await history())).not.toContain(value);
+  expect(JSON.stringify(await page.evaluate(() => window.dbark.invoke('tasks.list', {})))).not.toContain(value);
+  expect(pageErrors).toEqual([]);
+  await quitDesktop();
+});
+
 test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保持提交事实和原事务', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);

@@ -4,7 +4,7 @@ import { sqlClipboardStackAction } from '../sqlClipboardStack';
 import { sqlQuotedCopyAction } from '../sqlQuotedCopy';
 import { PostgresSearchRecordEditDialog, type PostgresQueryCellEdit, type PostgresQueryRangeEdit,
   type PostgresQueryRecordIntent } from './PostgresSearchRecordEditDialog';
-import { postgresIdentifier } from '../../shared/postgresSql';
+import { currentPostgresStatement, postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresResultOrigin } from '../../shared/postgresResultOrigins';
 import { postgresResultOriginsZh as originsText } from '../locales/postgresResultOrigins.zh-CN';
 import { PostgresResultOriginsDialog } from './PostgresResultOriginsDialog';
@@ -167,6 +167,7 @@ interface ParameterOwner {
   scope: Scope;
   model: monaco.editor.ITextModel;
   version: number;
+  currentStatement?: {offset: number};
   valid: boolean;
   session?: string;
   reuse: QueryParameterReusePort | null;
@@ -398,7 +399,11 @@ export function PostgresQueryTab({
     if (!editorInstance) return;
     const changed = () => parameterReuse.current?.observe();
     const subscriptions = [editorInstance.onDidChangeModel(changed), editorInstance.onDidChangeModelContent(changed),
-      editorInstance.onDidChangeCursorSelection(changed), editorInstance.onDidDispose(() => {
+      editorInstance.onDidChangeCursorSelection(() => {
+        const owner = parameters.current;
+        if (owner?.currentStatement && !parameterCurrent(owner)) owner.valid = false;
+        changed();
+      }), editorInstance.onDidDispose(() => {
         parameterReuse.current?.dispose(); parameterReuse.current = null;
       })];
     return () => subscriptions.forEach(item => item.dispose());
@@ -452,6 +457,7 @@ export function PostgresQueryTab({
   /** 参数弹窗绑定准确的模型和活动标签，选区正文无需与整份脚本相等。 */
   function parameterCurrent(owner: ParameterOwner) {
     const current = useWorkspace.getState();
+    const instance = editor.current, position = owner.currentStatement && instance?.getPosition();
     return (
       owner.valid &&
       parameters.current === owner &&
@@ -460,7 +466,9 @@ export function PostgresQueryTab({
       !closeRef.current &&
       editor.current?.getModel() === owner.model &&
       !owner.model.isDisposed() &&
-      owner.model.getVersionId() === owner.version
+      owner.model.getVersionId() === owner.version &&
+      (!owner.currentStatement || !!position && instance?.getSelections()?.length === 1 &&
+        owner.model.getOffsetAt(position) === owner.currentStatement.offset)
     );
   }
   const files = useQueryFileSource(
@@ -646,6 +654,7 @@ export function PostgresQueryTab({
               taskId: owner.taskId,
               sql,
               parameters: values,
+              ...(parameter?.currentStatement ? {currentStatement: parameter.currentStatement} : {}),
               ...(continuing ? {continueOnError: true} : {}),
               maxRows: useWorkspace.getState().settings.resultLimit,
             })
@@ -713,7 +722,8 @@ export function PostgresQueryTab({
       try {
         const id = await ensure(operation);
         if (!parameterCurrent(owner)) throw Error(text.changed);
-        const result = await invoke('query.parameterNames', { sessionId: id, sql: owner.source });
+        const result = await invoke('query.parameterNames', { sessionId: id, sql: owner.source,
+          ...(owner.currentStatement ? {currentStatement: owner.currentStatement} : {}) });
         if (!parameterCurrent(owner)) throw Error(text.changed);
         owner.session = id;
         await readState(id, operation);
@@ -733,18 +743,20 @@ export function PostgresQueryTab({
   }
 
   /** 记录所选正文和模型版本，表单存续期间禁止借用其他标签或模型。 */
-  function openParameters() {
-    if (!available()) return;
+  function openParameters(current = false) {
+    if (!available() || current && resultsOnly) return;
     const model = editor.current?.getModel(),
       selection = editor.current?.getSelection();
-    if (!model) return;
+    if (!model || !selection) return;
     if (editor.current?.getSelections()?.length !== 1) return;
     const selected = selection && !selection.isEmpty() ? model.getValueInRange(selection) : '';
-    const sql = selected.trim() ? selected : model.getValue();
-    const reuse = (parameterReuse.current ??= new QueryParameterReuseOwner(parameterReuseInput)).begin(sql);
+    const sql = !current && selected.trim() ? selected : model.getValue();
+    if (!sql.trim()) { setError(text.noSql); return; }
+    const currentStatement = current ? {offset: model.getOffsetAt(selection.getPosition())} : undefined;
+    const reuse = current ? null : (parameterReuse.current ??= new QueryParameterReuseOwner(parameterReuseInput)).begin(sql);
     clearFailureSource();
-    setParameterOwner({ source: sql, scope, model, version: model.getVersionId(), valid: true, reuse,
-      failureSource: captureFailureSource(sql), continueOnError });
+    setParameterOwner({ source: sql, scope, model, version: model.getVersionId(), valid: true, reuse, currentStatement,
+      failureSource: captureFailureSource(sql, current), continueOnError: !current && continueOnError });
   }
   /** 会话设置绑定原标签、数据库及会话。草稿编辑不改变设置目标。 */
   function openSessionSetting(mode: NonNullable<typeof sessionSetting>['mode']) {
@@ -2105,7 +2117,7 @@ export function PostgresQueryTab({
     stop: { enabled: canStop, run: stop },
     explain: { enabled: canPlan, run: () => run('explain') },
     analyze: { enabled: canPlan, run: () => run('analyzePreview') },
-    parameters: { enabled: canRun, run: openParameters },
+    parameters: { enabled: canRun, run: () => openParameters() },
     format: { enabled: editable, run: formatQuery },
     'compact-sql': { enabled: editable, run: () => formatQuery('compact') },
     'sql-format-options': { enabled: editable, run: openFormattingOptions },
@@ -2245,8 +2257,11 @@ export function PostgresQueryTab({
             <button disabled={!canPlan} onClick={() => run('analyzePreview')}>
               {queryAnalyzeZh.open}
             </button>
-            <button disabled={!canRun} onClick={openParameters}>
+            <button disabled={!canRun} onClick={() => openParameters()}>
               {text.parameters}
+            </button>
+            <button disabled={!canRun || resultsOnly} onClick={() => openParameters(true)}>
+              {text.parameterCurrent}
             </button>
             <button disabled={!canStop} onClick={stop}>
               {text.stop}
@@ -2610,8 +2625,11 @@ export function PostgresQueryTab({
       )}
       {parameterOwner && (
         <QueryParametersDialog
-          syntaxHint={text.parameterHint}
+          syntaxHint={parameterOwner.currentStatement ? text.parameterCurrentHint : text.parameterHint}
           source={parameterOwner.source}
+          previewDialect="postgresql"
+          previewSql={parameterOwner.currentStatement ? info => currentPostgresStatement(
+            parameterOwner.source, parameterOwner.currentStatement!.offset, info.noBackslashEscapes, true).sql : undefined}
           reuse={parameterOwner.reuse ?? undefined}
           loadNames={() => names(parameterOwner)}
           onExecute={(values) => run('normal', values, parameterOwner)}

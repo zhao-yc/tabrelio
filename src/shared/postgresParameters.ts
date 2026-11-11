@@ -3,6 +3,9 @@ import { currentPostgresStatement, splitPostgresParameterSql, type PostgresState
 
 /** 每条命名语句独立编号，跨工作表的同名值共用一次输入。 */
 export function postgresParameterPlan(source: readonly PostgresStatement[]) {
+  if (!source.length) throw Error('PostgreSQL 参数执行需要至少一条语句');
+  if (source.some(statement => statement.keyword === 'COPY'))
+    throw Error('PostgreSQL COPY 数据流需要专用导入导出接口');
   const names = new Set<string>();
   const hasNamed = source.some(statement => statement.namedParameters?.length);
   if (hasNamed && source.some(statement => statement.parameters.length))
@@ -35,10 +38,18 @@ export function postgresParameterPlan(source: readonly PostgresStatement[]) {
   return { statements, names: [...names] };
 }
 
-/** 识别与执行共用同一计划；保留原始语句范围供结果、历史和错误定位使用。 */
-export function postgresParameterStatement(sql: string, standardStrings: boolean, offset?: number) {
-  const statements = offset === undefined ? splitPostgresParameterSql(sql, standardStrings) :
+/** 参数表单和执行共用原会话词法，保留完整脚本或光标处原语句的 UTF-16 范围。 */
+export function postgresQueryParameterSource(sql: string, standardStrings: boolean, offset?: number) {
+  return offset === undefined ? splitPostgresParameterSql(sql, standardStrings) :
     [currentPostgresStatement(sql, offset, standardStrings, true)];
-  if (statements.length !== 1) throw Error('PostgreSQL 参数执行一次只接受一条语句');
-  return postgresParameterPlan(statements).statements[0];
+}
+
+/** 会话改变字符串模式后，只核对下一条已确认范围；不读入或发送范围之外的正文。 */
+export function postgresParameterBoundaryMatches(source: string, from: number, expected: PostgresStatement, standardStrings: boolean): boolean {
+  try {
+    const [actual] = splitPostgresParameterSql(source.slice(from, expected.end + 1), standardStrings, true);
+    return !!actual && actual.start + from === expected.start && actual.end + from === expected.end &&
+      JSON.stringify(actual.parameters) === JSON.stringify(expected.parameters) &&
+      JSON.stringify(actual.namedParameters) === JSON.stringify(expected.namedParameters);
+  } catch { return false; }
 }
