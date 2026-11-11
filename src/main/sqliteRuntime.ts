@@ -33,8 +33,8 @@ import { sqliteCompletionInputSchema, sqliteCompletionLimits, sqliteCompletionTa
 import { sqliteQueryRecordIndices, sqliteTablePageSchema, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import { readSqliteTableCatalogue, readSqliteTablePage, SqliteTableBrowseCancelled, withSqliteReadSnapshot } from './sqliteTableBrowse';
 import { readSqliteValueOptions } from './sqliteValueOptions';
-import { readSqliteRowCount, readSqliteStatistics } from './sqliteStatistics';
-import { sqliteRowCountInputSchema, sqliteStatisticsInputSchema, sqliteStatisticsLimits, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput } from '../shared/sqliteStatistics';
+import { readSqliteCalendar, readSqliteRowCount, readSqliteStatistics } from './sqliteStatistics';
+import { sqliteCalendarInputSchema, sqliteRowCountInputSchema, sqliteStatisticsInputSchema, sqliteStatisticsLimits, type SqliteCalendarInput, type SqliteCalendarOutput, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput } from '../shared/sqliteStatistics';
 import { readSqliteQueryBuilderJoinKeys } from './sqliteQueryBuilderJoinKeys';
 import { readSqliteRelationships } from './sqliteRelationships';
 import { readSqliteReference } from './sqliteReference';
@@ -222,7 +222,7 @@ export class SqliteRuntime {
     void work.then(() => connection.pending.delete(work), () => connection.pending.delete(work)); return work;
   }
   /** 工厂产生的每个准确对象都登记到真实exit，打开失败也不能只清理Promise。 */
-  private async driver(connection: Connection, profile: SqliteConnectionProfile, readOnly = profile.sqlite.readOnly, register?: (resource: Resource) => void, rebuild = false, sourcePath?: string, dataSearch = false): Promise<SqliteDriverSession> {
+  private async driver(connection: Connection, profile: SqliteConnectionProfile, readOnly = profile.sqlite.readOnly, register?: (resource: Resource) => void, rebuild = false, sourcePath?: string, readonlyMode?: 'data-search' | 'calendar-statistics'): Promise<SqliteDriverSession> {
     const owned: { resource?: Resource } = {};
     try {
       const create = () => {
@@ -233,7 +233,7 @@ export class SqliteRuntime {
         return transport;
       };
       const options = { path: profile.sqlite.filePath!, readOnly, busyTimeoutMs: profile.sqlite.busyTimeoutMs };
-      const driver = await (sourcePath ? SqliteDriverSession.openTableCopy(create, options, sourcePath) : rebuild ? SqliteDriverSession.openRebuild(create, options) : dataSearch ? SqliteDriverSession.openDataSearch(create, options) : SqliteDriverSession.open(create, options));
+      const driver = await (sourcePath ? SqliteDriverSession.openTableCopy(create, options, sourcePath) : rebuild ? SqliteDriverSession.openRebuild(create, options) : readonlyMode === 'data-search' ? SqliteDriverSession.openDataSearch(create, options) : readonlyMode === 'calendar-statistics' ? SqliteDriverSession.openCalendarStatistics(create, options) : SqliteDriverSession.open(create, options));
       // 并发open始终绑定各自工厂闭包中的原对象，不能依赖资源集合顺序或PID。
       if (!owned.resource || !connection.resources.has(owned.resource)) {
         await driver.close(); throw new SqliteDriverError('SQLite打开期间准确资源已退出', 'SQLITE_PROCESS_EXIT', null, 0, driver.isClosed);
@@ -372,7 +372,7 @@ export class SqliteRuntime {
     let value!: T, failed = false, failure: unknown;
     try {
       check();
-      task.driver = await this.driver(connection, profile, true, resource => { task.resource = resource; }, false, undefined, dataSearch);
+      task.driver = await this.driver(connection, profile, true, resource => { task.resource = resource; }, false, undefined, dataSearch ? 'data-search' : undefined);
       check();
       value = await action(task.driver);
     } catch (reason) {
@@ -553,8 +553,9 @@ export class SqliteRuntime {
     const retire = () => { task.active = undefined; this.retireBrowse(input.taskId, task); }; void work.then(retire, retire); return work;
   }
   /** 字段概况沿原只读资源账本；准确任务结束且资源退出后才归还并发槽。 */
-  private statistics(source: unknown, countRows = false): Promise<SqliteStatisticsOutput | SqliteRowCountOutput> {
-    const input = countRows ? sqliteRowCountInputSchema.parse(source) : sqliteStatisticsInputSchema.parse(source);
+  private statistics(source: unknown, kind: 'summary' | 'count' | 'calendar' = 'summary'): Promise<SqliteStatisticsOutput | SqliteRowCountOutput | SqliteCalendarOutput> {
+    const schema = kind === 'calendar' ? sqliteCalendarInputSchema : kind === 'count' ? sqliteRowCountInputSchema : sqliteStatisticsInputSchema;
+    const input = schema.parse(source);
     const profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id);
     this.assertTarget(connection, profile);
     if (this.tasks.has(input.taskId)) return Promise.reject(Error('SQLite任务编号已经使用'));
@@ -607,13 +608,13 @@ export class SqliteRuntime {
   private browse(task: BrowseTask, input: SqliteTablePageInput, profile: SqliteConnectionProfile, recordReadAttempt?: RecordTableRead): Promise<SqliteTablePage>;
   private browse(task: BrowseTask, input: SqliteValueOptionsInput, profile: SqliteConnectionProfile): Promise<SqliteValueOptionsOutput>;
   private browse(task: BrowseTask, input: SqliteRelationshipsInput, profile: SqliteConnectionProfile): Promise<SqliteRelationshipsOutput>;
-  private browse(task: BrowseTask, input: SqliteStatisticsInput | SqliteRowCountInput, profile: SqliteConnectionProfile): Promise<SqliteStatisticsOutput | SqliteRowCountOutput>;
+  private browse(task: BrowseTask, input: SqliteStatisticsInput | SqliteRowCountInput | SqliteCalendarInput, profile: SqliteConnectionProfile): Promise<SqliteStatisticsOutput | SqliteRowCountOutput | SqliteCalendarOutput>;
   private browse(task: BrowseTask, input: SqliteReferenceInput, profile: SqliteConnectionProfile): Promise<SqliteReferenceOutput>;
   private browse(task: BrowseTask, input: SqliteIncomingInput, profile: SqliteConnectionProfile): Promise<SqliteIncomingOutput>;
   private browse(task: BrowseTask, input: DraftRestoreInput, profile: SqliteConnectionProfile): Promise<SqliteDraftRestored>;
   private browse(task: BrowseTask, input: QueryRowSqlInput, profile: SqliteConnectionProfile): Promise<QueryRowSqlOutput>;
-  private async browse(task: BrowseTask, input: SqliteTablePageInput | SqliteValueOptionsInput | SqliteRelationshipsInput | SqliteStatisticsInput | SqliteRowCountInput | SqliteReferenceInput | SqliteIncomingInput | DraftRestoreInput | QueryRowSqlInput, profile: SqliteConnectionProfile, recordReadAttempt?: RecordTableRead): Promise<SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored | QueryRowSqlOutput> {
-    let value: SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored | QueryRowSqlOutput | undefined, failed = false, failure: unknown;
+  private async browse(task: BrowseTask, input: SqliteTablePageInput | SqliteValueOptionsInput | SqliteRelationshipsInput | SqliteStatisticsInput | SqliteRowCountInput | SqliteCalendarInput | SqliteReferenceInput | SqliteIncomingInput | DraftRestoreInput | QueryRowSqlInput, profile: SqliteConnectionProfile, recordReadAttempt?: RecordTableRead): Promise<SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteCalendarOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored | QueryRowSqlOutput> {
+    let value: SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteCalendarOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored | QueryRowSqlOutput | undefined, failed = false, failure: unknown;
     const searchPage = 'searchRecordRef' in input ? input : undefined;
     const recordRef = searchPage?.searchRecordRef;
     const recordInput = recordRef ? { connectionId: input.connectionId, taskId: input.taskId, recordRef } : undefined;
@@ -630,7 +631,7 @@ export class SqliteRuntime {
         session.query.queryRecord(queryInput!.taskId, queryPage!.table, queryPage!.editing === true,
           'operation' in queryInput! ? queryInput!.operation : undefined);
     };
-    const aggregate = task.purpose === 'statistics' ? ('column' in input ? 'SQLite字段概况' : 'SQLite匹配行数') : undefined;
+    const aggregate = task.purpose === 'statistics' ? ('calendarUnit' in input ? 'SQLite日期分布' : 'column' in input ? 'SQLite字段概况' : 'SQLite匹配行数') : undefined;
     try {
       this.options.emit({ taskId: input.taskId, status: 'running', progress: 0, message: rowSql ? '正在核对 SQLite 查询记录来源' : 'draft' in input ? '正在只读核验SQLite草稿完整原行' : 'incoming' in input ? input.incoming === 'catalog' ? '正在读取SQLite反向外键目录' : '正在读取SQLite关联子记录' : 'reference' in input ? input.reference === 'catalog' ? '正在读取SQLite外键目录' : '正在读取SQLite父记录' : aggregate ? '正在读取' + aggregate : 'tables' in input ? '正在读取SQLite表关系快照' : 'column' in input ? '正在读取SQLite不同值快照' : '正在读取SQLite只读分页快照' });
       this.browseCheck(task);
@@ -644,7 +645,7 @@ export class SqliteRuntime {
         task.resource = resource;
         // 原Promise先拒绝而exit迟到时，直到真实exit才可解除任务对utility对象的重引用。
         void resource.transport.exited.then(() => this.retireBrowse(input.taskId, task), () => {});
-      }, false, undefined, !!searchEntry);
+      }, false, undefined, searchEntry ? 'data-search' : 'calendarUnit' in input ? 'calendar-statistics' : undefined);
       this.browseCheck(task);
       const control = { check: () => this.browseCheck(task), beginCleanup: () => { task.cleaning = true; }, cleanupFailed: (reason: unknown) => { task.cleanupFailure = reason; } };
       if ('draft' in input) value = await this.edits.restoreDraft(task.driver, input.draft, profile, control);
@@ -653,6 +654,7 @@ export class SqliteRuntime {
       else if ('reference' in input) value = await readSqliteReference(task.driver, input, control);
       else if ('tables' in input) value = await readSqliteRelationships(task.driver, input, control);
       else if ('search' in input) value = await readSqliteValueOptions(task.driver, input, control);
+      else if ('calendarUnit' in input) value = await readSqliteCalendar(task.driver, input, control);
       else if ('column' in input) value = await readSqliteStatistics(task.driver, input, control);
       else if ('limit' in input) value = await readSqliteTablePage(task.driver, input, {
         ...control, recordReadAttempt, prepareEdit: (catalogue, driver) => this.edits.preparePage(driver, input, profile, catalogue, { ...control, beginCleanup: () => {} }),
@@ -1425,7 +1427,8 @@ export class SqliteRuntime {
       case 'sqlite.queryRowSql': return this.queryRowSql(input);
       case 'sqlite.valueOptions': return this.valueOptions(input);
       case 'sqlite.statistics': return this.statistics(input);
-      case 'sqlite.countRows': return this.statistics(input, true);
+      case 'sqlite.countRows': return this.statistics(input, 'count');
+      case 'sqlite.calendar': return this.statistics(input, 'calendar');
       case 'sqlite.schemaScript': {
         const source = sqliteSchemaScriptSchema.parse(input);
         // 短读自行确认 driver 关闭；边界检查只中止读取，不干预回滚或用户事务。

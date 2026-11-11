@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。SQLite 表和视图的「字段概况」支持已应用筛选范围的日期分布。独立只读快照在数据库内按日、月或年聚合，保留原存储类型和日期语义。D09 增加表级日期分布。
+
 2026-11-11 源码增量。查询结果和固定快照的列统计可按日、月、年查看日历分布，沿用当前筛选及勾选范围。MySQL、MariaDB、PostgreSQL 日期和时间戳以及 SQLite 的 ISO 日期文本参与分组，NULL 与无法归组的值单独计数。D09 增加结果日期分布。[Navicat 数据剖析](https://help.navicat.com/hc/en-us/articles/46711325532697-How-to-use-the-Data-Profiling-feature-to-analyze-data)
 
 2026-11-11 源码增量。MySQL 和 MariaDB 查询页可按实际执行的命令查看 Performance Schema 阶段与耗时。通过独立连接核对物理线程及当前语句事件，不改动服务器采集配置。Q02 增加服务端阶段诊断。[Navicat 查询结果](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html#show-query-profiling-and-status)

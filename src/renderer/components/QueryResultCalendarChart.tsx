@@ -1,14 +1,21 @@
 import { useState } from 'react';
 import type { QueryResultCalendarDistribution } from '../queryResultCalendar';
-import { queryResultPercentage } from '../queryResultStatistics';
 import { queryResultStatisticsZh as text } from '../locales/queryResultStatistics.zh-CN';
 import { zh } from '../locales/zh-CN';
 import '../tableHistogram.css';
 
 const pageSize = 50;
 
+/** 表级聚合可能超过 JS 安全整数。比例舍入前始终用精确计数。 */
+function percentage(count: string | number, total: string | number): string {
+  const denominator = BigInt(total);
+  if (!denominator) return text.unavailable;
+  const basis = (BigInt(count) * 10000n + denominator / 2n) / denominator;
+  return `${basis / 100n}.${String(basis % 100n).padStart(2, '0')}%`;
+}
+
 /** 分页只限制绘制数量，所有区间的原计数仍可逐页核对。 */
-export function QueryResultCalendarChart({ distribution }: { distribution: QueryResultCalendarDistribution }) {
+export function QueryResultCalendarChart({ distribution }: { distribution: QueryResultCalendarDistribution<number | string> }) {
   const [page, setPage] = useState(0);
   const { column, buckets, grouped, peak, nulls, ungrouped } = distribution;
   const pages = Math.ceil(buckets.length / pageSize);
@@ -24,8 +31,8 @@ export function QueryResultCalendarChart({ distribution }: { distribution: Query
     {!pages ? <p>{text.calendarEmpty}</p> : <table aria-label={text.calendar}>
       <thead><tr>{[text.calendarPeriod, text.frequencyRows, text.frequencyPercent, text.frequencyBar].map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
       <tbody>{current.map(bucket => <tr key={bucket.label}>
-        <th scope="row">{bucket.label}</th><td>{bucket.count}</td><td>{queryResultPercentage(bucket.count, grouped)}</td>
-        <td className="table-histogram-plot"><div aria-hidden="true" style={{ width: queryResultPercentage(bucket.count, peak) }}/></td>
+        <th scope="row">{bucket.label}</th><td>{bucket.count}</td><td>{percentage(bucket.count, grouped)}</td>
+        <td className="table-histogram-plot"><div aria-hidden="true" style={{ width: percentage(bucket.count, peak) }}/></td>
       </tr>)}</tbody>
     </table>}
     {pages > 1 && <div className="table-histogram-controls">

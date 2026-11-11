@@ -103,6 +103,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.referencePage': true,
   'sqlite.incomingPage': true,
   'sqlite.valueOptions': true,
+  'sqlite.calendar': true,
   'sqlite.statistics': true,
   'sqlite.compareData': true, 'sqlite.compareData.cancel': true,
   'sqlite.compareSync.batchPreview': true, 'sqlite.compareSync.batchApply': true, 'sqlite.compareSync.preview': true, 'sqlite.compareSync.apply': true,

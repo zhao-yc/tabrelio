@@ -1,4 +1,4 @@
-import { isCivilDate } from '../shared/civilDate';
+import { isCivilDate, readCivilClock, splitCivilDatetime } from '../shared/civilDate';
 
 export type RecordTemporalDialect = 'mysql' | 'postgresql' | 'sqlite';
 export interface RecordTemporalSpec {
@@ -32,8 +32,6 @@ export function recordTemporalSpec(type: string, dialect: RecordTemporalDialect)
   };
 }
 
-const dateTime = /^(\d{4}-\d\d-\d\d)([ T])(.+)$/;
-const clock = /^(\d{2}:[0-5]\d(?::[0-5]\d)?)(?:\.(\d{1,6}))?(Z|[+-]\d{2}(?::[0-5]\d(?::[0-5]\d)?)?)?$/;
 const duration = /^(-?)(\d{2,3}:[0-5]\d:[0-5]\d)(?:\.(\d{1,6}))?$/;
 
 /** 只切分原文。无法可靠切分的零日期、特殊年份或数据库字面量仍交给原文本框。 */
@@ -47,17 +45,14 @@ export function readRecordTemporal(value: string, spec: RecordTemporalSpec): Rec
     return { ...parts, clock: match[2], negative: match[1] === '-', fraction: match[3] ?? '' };
   }
   if (spec.kind === 'datetime') {
-    const match = dateTime.exec(value);
-    if (!match || !isCivilDate(match[1], spec.minimumYear)) return;
-    parts.date = match[1];
-    parts.separator = match[2] === 'T' ? 'T' : ' ';
-    value = match[3];
+    const match = splitCivilDatetime(value, spec.minimumYear);
+    if (!match) return;
+    parts.date = match.date;
+    parts.separator = match.separator;
+    value = match.time;
   }
-  const match = clock.exec(value);
-  if (!match || match[3] && !spec.zoned || match[2] && match[1].length !== 8) return;
-  const hours = Number(match[1].slice(0, 2));
-  if (hours > 24 || hours === 24 && /[1-9]/.test(match[1].slice(3) + (match[2] ?? ''))) return;
-  return { ...parts, clock: match[1], fraction: match[2] ?? '', offset: match[3] ?? '' };
+  const time = readCivilClock(value, spec.zoned);
+  return time && { ...parts, ...time };
 }
 
 /** 只替换由用户编辑的分量，日期改变时连分隔符和偏移原文都保留。 */

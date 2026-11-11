@@ -8,7 +8,8 @@ import { captureQueryResultCellFilter, queryResultCellFilterRule } from './query
 import { queryResultFilterLimits, queryResultFilterOperators, type QueryResultFilterGroup, type QueryResultFilterRule } from './queryResultFilter';
 import { sqliteResultCellMatches } from '../shared/sqliteResultStorage';
 import { QueryResultHistogramCounter, type QueryResultHistogram, type QueryResultHistogramBins } from './queryResultHistogram';
-import { QueryResultCalendarCounter, type QueryResultCalendarDistribution, type QueryResultCalendarUnit } from './queryResultCalendar';
+import { QueryResultCalendarCounter, type QueryResultCalendarDistribution } from './queryResultCalendar';
+import type { CalendarUnit } from '../shared/civilDate';
 
 export interface QueryResultStatisticsCapture {
   readonly column: Readonly<ResultColumn>;
@@ -340,7 +341,7 @@ export class QueryResultStatisticsScan {
   private readonly numericColumn: boolean;
   private readonly floatingColumn: boolean;
   /** 私有WeakMap拒绝伪造capture；声明为字节的列即使返回字符串也不参加值聚合。 */
-  constructor(capture: QueryResultStatisticsCapture, mode: boolean | 'quality' | { histogram: QueryResultHistogramBins } | { calendar: QueryResultCalendarUnit } = false) {
+  constructor(capture: QueryResultStatisticsCapture, mode: boolean | 'quality' | { histogram: QueryResultHistogramBins } | { calendar: CalendarUnit } = false) {
     const binding = bindings.get(capture);
     if (!binding || !currentQueryResultStatistics(capture, binding.columns, binding.rows)) throw Error(text.stale);
     this.binding = binding; this.capture = capture; this.total = capture.rowCount; this.kind = queryResultSortKind(capture.column.type, binding.dialect);

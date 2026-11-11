@@ -15,6 +15,7 @@ export const sqliteDriverLimits = {
 } as const;
 /** 仅Main生成导出/编辑投影使用；纯校验且禁止schema间接调用，不授予任何写能力。 */
 export const sqliteExportTextFunction = 'dbark_sqlite_export_text_exact_v1';
+export const sqliteCalendarDateFunction = 'dbark_sqlite_calendar_date_v1';
 
 /** 仅Main对象管理编译器注入；不属于Renderer IPC，不能授予TEMP、附加库或任意DDL权限。 */
 export interface SqliteCreateGuard { kind: 'view' | 'trigger'; name: string; allowedRelations: string[]; }
@@ -75,7 +76,7 @@ export interface SqliteExecutionResult { statements: SqliteStatementResult[]; tr
 export interface SqliteOpenOptions { path: string; readOnly: boolean; busyTimeoutMs: number; }
 export const sqliteCopySourceSchema = 'dbark_copy_source';
 /** 固定模式由 Main 独立任务注入，普通查询不能附加文件。 */
-export interface SqliteWorkerOpenOptions extends SqliteOpenOptions { mode?: 'table-rebuild' | 'table-copy' | 'data-search'; sourcePath?: string; }
+export interface SqliteWorkerOpenOptions extends SqliteOpenOptions { mode?: 'table-rebuild' | 'table-copy' | 'data-search' | 'calendar-statistics'; sourcePath?: string; }
 /** 纯自有数据复制，普通入口即使mode为undefined也拒绝，避免扩展字段被透传到特权writer。 */
 function copyOpenOptions(input: unknown, allowRebuild: boolean): SqliteWorkerOpenOptions {
   const fail = () => Error('SQLite连接参数或私有模式无效');
@@ -88,7 +89,7 @@ function copyOpenOptions(input: unknown, allowRebuild: boolean): SqliteWorkerOpe
   if (typeof values.path !== 'string' || !values.path || values.path.includes('\0') || typeof values.readOnly !== 'boolean' || !Number.isInteger(values.busyTimeoutMs) || Number(values.busyTimeoutMs) < 0 || Number(values.busyTimeoutMs) > 5000) throw fail();
   const base = { path: values.path, readOnly: values.readOnly, busyTimeoutMs: values.busyTimeoutMs as number };
   if (mode === 'table-copy' && typeof values.sourcePath === 'string' && values.sourcePath && !values.sourcePath.includes('\0')) return { ...base, mode, sourcePath: values.sourcePath };
-  if (mode === 'data-search' && values.readOnly && !keys.includes('sourcePath')) return { ...base, mode };
+  if ((mode === 'data-search' || mode === 'calendar-statistics') && values.readOnly && !keys.includes('sourcePath')) return { ...base, mode };
   if (mode === 'table-rebuild' && !values.readOnly && !keys.includes('sourcePath')) return { ...base, mode };
   if (keys.includes('mode') || keys.includes('sourcePath')) throw fail();
   return base;

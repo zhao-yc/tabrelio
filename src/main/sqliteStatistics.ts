@@ -1,6 +1,7 @@
-import { sqliteStatisticsInputSchema, assertSqliteStatistics, sqliteStatisticsLimits as limits, sqliteRowCountInputSchema, assertSqliteRowCount, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput, type SqliteStatisticsValue } from '../shared/sqliteStatistics';
+import { sqliteStatisticsInputSchema, assertSqliteStatistics, sqliteStatisticsLimits as limits, sqliteRowCountInputSchema, assertSqliteRowCount, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput, type SqliteStatisticsValue, assertSqliteCalendar, sqliteCalendarInputSchema, sqliteCalendarLimits, type SqliteCalendarInput, type SqliteCalendarOutput } from '../shared/sqliteStatistics';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
-import type { SqliteValue } from '../engine/sqlite/protocol';
+import { sqliteCalendarDateFunction, type SqliteValue } from '../engine/sqlite/protocol';
+import { calendarLabelLength, calendarTextLength } from '../shared/civilDate';
 import { withSqliteReadSnapshot, readSqliteTableCatalogue, verifySqliteTableScope, countSqliteMatchingRows, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 
 /** 原生聚合结果按真实存储类型传输；64位整数、REAL无穷和BLOB不经显示文本猜测。 */
@@ -39,5 +40,55 @@ export async function readSqliteRowCount(driver: SqliteDriverSession, raw: Sqlit
     const catalogue = await readSqliteTableCatalogue(driver, input.table, control);
     if (catalogue.schemaKey !== input.schemaKey) throw Error('SQLite表结构已变化，请刷新后重新统计');
     return assertSqliteRowCount({ request: input, rows: await countSqliteMatchingRows(driver, input, catalogue.columns, control) }, input);
+  });
+}
+
+/** 在数据库内聚合全部匹配行。只传出日期区间与计数，长文本和非 TEXT 值无需送入解析函数。 */
+export async function readSqliteCalendar(driver: SqliteDriverSession, raw: SqliteCalendarInput, control: SqliteTableBrowseControl): Promise<SqliteCalendarOutput> {
+  const input = sqliteCalendarInputSchema.parse(raw);
+  return withSqliteReadSnapshot(driver, control, async () => {
+    const catalogue = await readSqliteTableCatalogue(driver, input.table, control);
+    if (catalogue.schemaKey !== input.schemaKey || !catalogue.columns.some(field => field.name === input.column))
+      throw Error('SQLite表结构或字段已变化，请刷新后重新统计');
+    await verifySqliteTableScope(driver, input, control);
+    const source = buildSqliteTableSelect({
+      connectionId: input.connectionId, database: 'main', table: input.table, taskId: input.taskId, mode: input.mode,
+      filters: input.filters, ...(input.relation ? { relation: input.relation } : {}), sort: [], offset: 0, limit: 1,
+    }, catalogue.columns, [input.column], true);
+    const column = '"__dbark_calendar".' + quoteSqliteIdentifier(input.column), bytes = 'CAST(' + column + ' AS BLOB)';
+    const period = `CASE WHEN ${column} IS NULL THEN NULL ELSE coalesce(CASE WHEN typeof(${column}) = 'text'
+      AND length(${bytes}) <= ${calendarTextLength * 2} THEN substr(${sqliteCalendarDateFunction}(${bytes}), 1, ${calendarLabelLength[input.calendarUnit]}) END, '') END`;
+    // 两个特殊区间区分 NULL 与未分组，多读一行用于拒绝超限回包。
+    const maxRows = sqliteCalendarLimits.buckets + 3;
+    const sql = `SELECT ${period} AS "__dbark_period", count(*) FROM (${source.sql}) AS "__dbark_calendar"
+      GROUP BY 1 ORDER BY "__dbark_period" COLLATE BINARY LIMIT ${maxRows}`;
+    const rows: SqliteValue[][] = [];
+    const result = await driver.execute(sql, {
+      parameters: source.parameters, maxRows, batchRows: 200, maxBytes: limits.bytes, statementTimeoutMs: sqliteCalendarLimits.statementMs,
+      onStatement: statement => { control.check(); if (statement.index !== 0 || statement.columns.length !== 2) throw Error('SQLite日期分布返回非预期列'); },
+      onBatch: batch => { control.check(); if (batch.index !== 0 || rows.length + batch.rows.length > maxRows) throw Error('SQLite日期分布回包超过预算'); rows.push(...batch.rows); },
+    });
+    control.check();
+    if (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== rows.length)
+      throw Error('SQLite日期分布未完整读取');
+    let nulls: bigint | undefined, ungrouped: bigint | undefined, grouped = 0n, peak = 0n;
+    const buckets: SqliteCalendarOutput['buckets'] = [];
+    for (const row of rows) {
+      const [label, count] = row;
+      if (row.length !== 2 || label !== null && typeof label !== 'string' || !count || typeof count !== 'object' || count.type !== 'integer')
+        throw Error('SQLite日期分布原生计数无效');
+      const size = BigInt(count.value);
+      if (size <= 0n) throw Error('SQLite日期分布原生计数无效');
+      if (label === null && nulls === undefined) nulls = size;
+      else if (label === '' && ungrouped === undefined) ungrouped = size;
+      else if (label) {
+        grouped += size;
+        if (size > peak) peak = size;
+        buckets.push({ label, count: count.value });
+      } else throw Error('SQLite日期分布包含重复计数');
+    }
+    if (buckets.length > sqliteCalendarLimits.buckets) throw Error('日期区间超过 4096 个，请改用更大的分组单位或缩小筛选范围');
+    return assertSqliteCalendar({ request: input, rows: (grouped + (nulls ?? 0n) + (ungrouped ?? 0n)).toString(),
+      grouped: grouped.toString(), peak: peak.toString(), nulls: (nulls ?? 0n).toString(), ungrouped: (ungrouped ?? 0n).toString(), buckets }, input);
   });
 }

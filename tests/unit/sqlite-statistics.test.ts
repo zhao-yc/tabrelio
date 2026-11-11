@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { assertSqliteRowCount, assertSqliteStatistics, sqliteRowCountInputSchema, sqliteStatisticsInputSchema, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput } from '../../src/shared/sqliteStatistics';
+import { assertSqliteCalendar, assertSqliteRowCount, assertSqliteStatistics, sqliteCalendarInputSchema, sqliteRowCountInputSchema, sqliteStatisticsInputSchema, type SqliteCalendarInput, type SqliteCalendarOutput, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput } from '../../src/shared/sqliteStatistics';
 import { SqliteStatisticsController } from '../../src/renderer/sqliteStatistics';
 import { persistedTaskMessage } from '../../src/main/taskPrivacy';
 
@@ -10,6 +10,22 @@ it('行数请求拒绝列、SQL和分页，精确回包绑定原任务和条件'
   expect(assertSqliteRowCount({ request: input, rows: '9223372036854775807' }, input).rows).toBe('9223372036854775807');
   expect(() => assertSqliteRowCount({ request: input, rows: '9223372036854775808' }, input)).toThrow();
   expect(() => assertSqliteRowCount({ request: { ...input, mode: 'or' }, rows: '0' }, input)).toThrow('原请求');
+});
+const calendarInput: SqliteCalendarInput = { ...request, calendarUnit: 'day' };
+const calendarOutput: SqliteCalendarOutput = { request: calendarInput, rows: '9007199254740995', grouped: '9007199254740993',
+  peak: '9007199254740992', nulls: '1', ungrouped: '1', buckets: [
+    { label: '2024-02-29', count: '9007199254740992' }, { label: '2024-03-01', count: '1' },
+  ] };
+it('日期回包绑定分组与筛选，64位计数和区间顺序完整守恒', () => {
+  expect(assertSqliteCalendar(calendarOutput, calendarInput)).toEqual(calendarOutput);
+  for (const patch of [{ rows: '9007199254740994' }, { peak: '9007199254740993' },
+    { buckets: calendarOutput.buckets.slice().reverse() }, { buckets: [{ ...calendarOutput.buckets[0], label: '2024-02-30' }, calendarOutput.buckets[1]] },
+    { request: { ...calendarInput, mode: 'or' } }, { request: { ...calendarInput, calendarUnit: 'month' } }]) {
+    expect(() => assertSqliteCalendar({ ...calendarOutput, ...patch }, calendarInput)).toThrow();
+  }
+  expect(sqliteCalendarInputSchema.safeParse({ ...calendarInput, sql: 'SELECT 1' }).success).toBe(false);
+  expect(sqliteCalendarInputSchema.safeParse({ ...calendarInput, calendarUnit: 'week' }).success).toBe(false);
+  expect(persistedTaskMessage('sqlite.calendar', { taskId: 'stats', status: 'failed', progress: 0, message: '敏感筛选' })).not.toContain('敏感');
 });
 const output = (): SqliteStatisticsOutput => ({ request: structuredClone(request), declaredType: '', rows: '4', nulls: '1', nonNull: '3', groups: [
   { kind: 'integer', count: '3', distinct: '2', min: { kind: 'integer', value: '-9223372036854775808' }, max: { kind: 'integer', value: '9223372036854775807' } },
@@ -56,9 +72,23 @@ function fixture() {
   const reading = deferred<SqliteStatisticsOutput>(), cancel = deferred<void>(), state = { current: true, owns: true }, release = vi.fn(), read = vi.fn(async (_request: SqliteStatisticsInput) => reading.promise), cancelPort = vi.fn(async () => cancel.promise), changed = vi.fn(), cleanup = vi.fn();
   const base = { connectionId: request.connectionId, database: request.database, table: request.table, schemaKey: request.schemaKey, mode: request.mode, filters: request.filters };
   const counting = deferred<SqliteRowCountOutput>(), countRows = vi.fn(async (_input: SqliteRowCountInput) => counting.promise);
-  const controller = new SqliteStatisticsController({ base, current: () => state.current, acquire: () => ({ owns: () => state.owns, release }), read, countRows, cancel: cancelPort, id: () => 'stats', changed, cleanup });
-  return { controller, base, state, reading, cancel, release, read, counting, countRows, cancelPort, changed, cleanup };
+  const calendar = deferred<SqliteCalendarOutput>(), readCalendar = vi.fn(async (_input: SqliteCalendarInput) => calendar.promise);
+  const controller = new SqliteStatisticsController({ base, current: () => state.current, acquire: () => ({ owns: () => state.owns, release }), read, readCalendar, countRows, cancel: cancelPort, id: () => 'stats', changed, cleanup });
+  return { controller, base, state, reading, cancel, release, read, calendar, readCalendar, counting, countRows, cancelPort, changed, cleanup };
 }
+it('日期分布与原概况互斥，已取消的分组回包不能发布', async () => {
+  const f = fixture(), work = f.controller.readCalendar('v', 'day');
+  await f.controller.read('v');
+  expect(f.readCalendar).toHaveBeenCalledExactlyOnceWith(calendarInput);
+  expect(f.read).not.toHaveBeenCalled();
+  const stop = f.controller.stop();
+  f.calendar.resolve(calendarOutput);
+  await Promise.resolve();
+  expect(f.release).not.toHaveBeenCalled();
+  f.cancel.resolve(); await stop; await work;
+  expect(f.controller.view.calendar).toBeUndefined();
+  expect(f.release).toHaveBeenCalledOnce();
+});
 it('行数与字段统计互斥，完成后保留精确总数原文', async () => {
   const f = fixture(), work = f.controller.countRows(); await f.controller.read('v');
   const input = { ...f.base, taskId: 'stats' };

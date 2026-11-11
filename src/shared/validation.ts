@@ -74,7 +74,7 @@ import { sqliteTablePageSchema } from './sqliteTableBrowse';
 import { networkSchemaScriptSchema } from './networkSchemaScript';
 import { maxTablePage } from './tableLastPage';
 import { sqliteValueOptionsInputSchema } from './sqliteValueOptions';
-import { sqliteRowCountInputSchema, sqliteStatisticsInputSchema } from './sqliteStatistics';
+import { sqliteCalendarInputSchema, sqliteRowCountInputSchema, sqliteStatisticsInputSchema } from './sqliteStatistics';
 import { sqliteSchemaScriptSchema } from './sqliteSchemaScript';
 import { sqliteRelationshipsInputSchema } from './sqliteRelationships';
 import { sqliteReferenceInputSchema } from './sqliteReference';
@@ -445,6 +445,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.table.release': postgresTableReleaseSchema,
   'sqlite.tablePage': sqliteTablePageSchema,
   'sqlite.valueOptions': sqliteValueOptionsInputSchema,
+  'sqlite.calendar': sqliteCalendarInputSchema,
   'sqlite.statistics': sqliteStatisticsInputSchema,
   'postgres.compareData.batchPreview': postgresBatchSyncPreviewSchema,
   'postgres.compareData.batchApply': postgresBatchSyncApplySchema,

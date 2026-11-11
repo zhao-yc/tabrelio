@@ -113,6 +113,10 @@ export class SqliteDriverSession {
   static async openDataSearch(create: () => SqliteProcessTransport, options: SqliteOpenOptions): Promise<SqliteDriverSession> {
     return this.openOwned(create, copySqliteWorkerOpenOptions({ ...copySqliteOpenOptions(options), mode: 'data-search' }));
   }
+  /** 日期解析函数仅在 Main 开启的独立只读统计连接上注册。 */
+  static async openCalendarStatistics(create: () => SqliteProcessTransport, options: SqliteOpenOptions): Promise<SqliteDriverSession> {
+    return this.openOwned(create, copySqliteWorkerOpenOptions({ ...copySqliteOpenOptions(options), mode: 'calendar-statistics' }));
+  }
   private static async openOwned(create: () => SqliteProcessTransport, options: SqliteWorkerOpenOptions): Promise<SqliteDriverSession> {
     const session = new SqliteDriverSession(create(), options);
     try { await session.openResult.promise; return session; }

@@ -504,6 +504,7 @@ export interface CommandMap {
   'postgres.table.release': { input: import('./postgresTable').PostgresTableReleaseInput; output: void };
   'sqlite.tablePage': { input: import('./sqliteTableBrowse').SqliteTablePageInput; output: import('./sqliteTableBrowse').SqliteTablePage };
   'sqlite.valueOptions': { input: import('./sqliteValueOptions').SqliteValueOptionsInput; output: import('./sqliteValueOptions').SqliteValueOptionsOutput };
+  'sqlite.calendar': { input: import('./sqliteStatistics').SqliteCalendarInput; output: import('./sqliteStatistics').SqliteCalendarOutput };
   'sqlite.statistics': { input: import('./sqliteStatistics').SqliteStatisticsInput; output: import('./sqliteStatistics').SqliteStatisticsOutput };
   'mysql.compareData.batchPreview': { input: import('./mysqlBatchSync').MysqlBatchSyncPreviewInput; output: import('./dataCompareBatchSync').BatchSyncPreview<CellValue> | null };
   'mysql.compareData.batchApply': { input: import('./dataCompareBatchSync').BatchSyncApplyInput; output: import('./postgresTable').PostgresTableOutcome };

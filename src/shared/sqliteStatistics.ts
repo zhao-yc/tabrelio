@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sqliteRowCountSchema as count, sqliteTablePageSchema } from './sqliteTableBrowse';
 import { sqliteValueOptionSchema } from './sqliteValueOptions';
+import { calendarLabelLength, calendarUnits, isCivilDate } from './civilDate';
 
 export const sqliteStatisticsLimits = { groups: 5, bytes: 1024 * 1024, cellBytes: 65536, active: 2 } as const;
 export const sqliteStorageKinds = ['blob', 'integer', 'null', 'real', 'text'] as const;
@@ -15,6 +16,8 @@ function validateConditions(input: z.infer<typeof sqliteRowCountInputBase>, cont
 const sqliteRowCountInputBase = z.object(aggregateSource).strict();
 export const sqliteRowCountInputSchema = sqliteRowCountInputBase.superRefine(validateConditions);
 export const sqliteStatisticsInputSchema = sqliteRowCountInputBase.extend({ column: page.table }).superRefine(validateConditions);
+export const sqliteCalendarInputSchema = sqliteStatisticsInputSchema.safeExtend({ calendarUnit: z.enum(calendarUnits) });
+export const sqliteCalendarLimits = { buckets: 4096, statementMs: 30000 } as const;
 const sqliteRowCountOutputSchema = z.object({ request: sqliteRowCountInputSchema, rows: count }).strict();
 export type SqliteRowCountInput = z.infer<typeof sqliteRowCountInputSchema>;
 export type SqliteRowCountOutput = z.infer<typeof sqliteRowCountOutputSchema>;
@@ -32,6 +35,30 @@ export const sqliteStatisticsOutputSchema = z.object({ request: sqliteStatistics
 export type SqliteStatisticsInput = z.infer<typeof sqliteStatisticsInputSchema>;
 export type SqliteStatisticsOutput = z.infer<typeof sqliteStatisticsOutputSchema>;
 export type SqliteStatisticsValue = z.infer<typeof sqliteStatisticsValueSchema>;
+export type SqliteCalendarInput = z.infer<typeof sqliteCalendarInputSchema>;
+const sqliteCalendarOutputSchema = z.object({
+  request: sqliteCalendarInputSchema, rows: count, grouped: count, nulls: count, ungrouped: count, peak: count,
+  buckets: z.array(z.object({ label: z.string().max(10), count }).strict()).max(sqliteCalendarLimits.buckets),
+}).strict();
+export type SqliteCalendarOutput = z.infer<typeof sqliteCalendarOutputSchema>;
+
+/** 只发布与原筛选、字段、分组单位相符且完整守恒的日历计数。 */
+export function assertSqliteCalendar(raw: unknown, request: SqliteCalendarInput): SqliteCalendarOutput {
+  const value = sqliteCalendarOutputSchema.parse(raw);
+  const input = sqliteCalendarInputSchema.parse(request);
+  if (JSON.stringify(value.request) !== JSON.stringify(input)) throw Error('SQLite日期分布回包与原请求不符');
+  let grouped = 0n, peak = 0n, previous = '';
+  for (const { label, count: countText } of value.buckets) {
+    const date = input.calendarUnit === 'year' ? label + '-01-01' : input.calendarUnit === 'month' ? label + '-01' : label;
+    const size = BigInt(countText);
+    if (label.length !== calendarLabelLength[input.calendarUnit] || !isCivilDate(date) || label <= previous || size === 0n)
+      throw Error('SQLite日期区间或计数无效');
+    grouped += size; if (size > peak) peak = size; previous = label;
+  }
+  if (grouped !== BigInt(value.grouped) || peak !== BigInt(value.peak) || grouped + BigInt(value.nulls) + BigInt(value.ungrouped) !== BigInt(value.rows))
+    throw Error('SQLite日期分布数量不完整');
+  return value;
+}
 /** 回包整份绑定原任务；类型、数量恒等式、非空极值和预算不符时拒绝，不发布部分统计。 */
 export function assertSqliteStatistics(raw: unknown, request: SqliteStatisticsInput): SqliteStatisticsOutput {
   const parsed = sqliteStatisticsOutputSchema.safeParse(raw);

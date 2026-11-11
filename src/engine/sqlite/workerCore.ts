@@ -2,7 +2,8 @@ import { closeSync, fstatSync, openSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { constants, DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteWorkerOpenOptions, sqliteCopySourceSchema, sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteCreateGuard, type SqliteColumn, type SqliteExecutionOptions, type SqliteWorkerOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
+import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteWorkerOpenOptions, sqliteCalendarDateFunction, sqliteCopySourceSchema, sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteCreateGuard, type SqliteColumn, type SqliteExecutionOptions, type SqliteWorkerOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
+import { calendarTextLength, readCalendarTextDate } from '../../shared/civilDate';
 import { queryResultTitle, queryResultTitlePrefixLimit } from '../../shared/queryResultTitle';
 import { copySqliteRebuildComparisonInput, copySqliteRebuildComparisonResult, compareSqliteRebuildTables, SqliteRebuildComparisonError } from './rebuildComparison';
 import { queryParameterLimits } from '../../shared/queryParameters';
@@ -239,6 +240,13 @@ export class SqliteWorkerCore {
           if (this.active) this.active.fault = failure;
           throw failure;
         });
+        if (options.mode === 'calendar-statistics') {
+          // 只解码有界源字节。坏编码、长文本和非日期都落在未分组计数中。
+          opened.function(sqliteCalendarDateFunction, { deterministic: true, directOnly: true }, bytes => {
+            if (!(bytes instanceof Uint8Array) || bytes.byteLength > calendarTextLength * 2) return null;
+            try { return readCalendarTextDate(decoder.decode(bytes), 'sqlite') ?? null; } catch { return null; }
+          });
+        }
         opened.function(sqliteExportTextFunction, { deterministic: true, directOnly: true, useBigIntArguments: true }, (text, bytes) => {
           try {
             // 内部record预算不授权复制或导出超量单格；原库编码与UTF8输出表示均保留原1MiB门。

@@ -11,7 +11,7 @@ import { QueryResultFrequencyChart } from './QueryResultFrequencyChart';
 import { TableHistogramChart } from './TableHistogramChart';
 import { QueryResultQualityOverview } from './QueryResultQualityOverview';
 import { QueryResultCalendarChart } from './QueryResultCalendarChart';
-import { queryResultCalendarUnits, type QueryResultCalendarUnit } from '../queryResultCalendar';
+import { calendarUnits, type CalendarUnit } from '../../shared/civilDate';
 import { queryResultHistogramBins, type QueryResultHistogramBins } from '../queryResultHistogram';
 import { tableHistogramZh as histogramText } from '../locales/tableHistogram.zh-CN';
 
@@ -24,7 +24,7 @@ interface Props {
   onFilter?(node: QueryResultFilterRule | QueryResultFilterGroup): void;
 }
 const modes = ['summary', 'frequency', 'histogram', 'calendar', 'overview'] as const;
-type Request = { column: string; scope: 'all' | 'selected'; mode: typeof modes[number]; bins: QueryResultHistogramBins; calendarUnit: QueryResultCalendarUnit };
+type Request = { column: string; scope: 'all' | 'selected'; mode: typeof modes[number]; bins: QueryResultHistogramBins; calendarUnit: CalendarUnit };
 type Operation = { request: Request; capture: QueryResultStatisticsCapture; scan: QueryResultStatisticsScan; timer?: ReturnType<typeof setTimeout> };
 type View = { request: Request; processed: number; total: number; binning?: true; result?: QueryResultStatisticsResult; error?: string };
 
@@ -174,9 +174,9 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
     </label></div>}
     {request.mode === 'calendar' && <div className="filter-inputs"><label>{text.calendarUnit}
       <select aria-label={text.calendarUnit} value={request.calendarUnit} disabled={!valid || !prepared.capture} onChange={event => {
-        const calendarUnit = queryResultCalendarUnits.find(unit => unit === event.target.value);
+        const calendarUnit = calendarUnits.find(unit => unit === event.target.value);
         if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && calendarUnit) change({ ...request, calendarUnit });
-      }}>{queryResultCalendarUnits.map(unit => <option key={unit} value={unit}>{text.calendarUnits[unit]}</option>)}</select>
+      }}>{calendarUnits.map(unit => <option key={unit} value={unit}>{text.calendarUnits[unit]}</option>)}</select>
     </label></div>}
     {!valid && !closed.current && <ErrorBox message={text.stale}/>}<ErrorBox message={current ? view.error : undefined}/>
     {valid && current && request.mode !== 'overview' && !view.result && !view.error && <p role="status">{scanning[request.mode]} {text.progress(view.processed, view.total)}</p>}

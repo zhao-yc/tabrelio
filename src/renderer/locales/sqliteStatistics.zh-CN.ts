@@ -1,5 +1,6 @@
 export const sqliteStatisticsZh = {
   entry: '字段概况', title: 'SQLite 全筛选字段概况', column: '统计字段', read: '开始统计', stop: '取消统计', close: '关闭',
+  analysis: '统计方式', summary: '字段概况',
   readRowCount: '只统计匹配行数', rowCountResult: (rows: string) => `匹配总行数：${rows}`,
   countEntry: '统计匹配行数', countTitle: 'SQLite 统计匹配行数', recentCount: (rows: string) => `最近统计 ${rows} 行`,
   hint: '统计已应用筛选的全部数据库记录，使用独立只读快照。当前页、未应用条件、未提交草稿和查询事务不参与统计。',

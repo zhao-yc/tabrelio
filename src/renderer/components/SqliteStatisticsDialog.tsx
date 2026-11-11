@@ -5,6 +5,9 @@ import { sqliteStatisticsZh as text } from '../locales/sqliteStatistics.zh-CN';
 import { acquireWorkspaceBusy } from '../store';
 import { invoke, uid, errorMessage } from '../lib';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
+import { QueryResultCalendarChart } from './QueryResultCalendarChart';
+import { queryResultStatisticsZh as calendarText } from '../locales/queryResultStatistics.zh-CN';
+import { calendarUnits, type CalendarUnit } from '../../shared/civilDate';
 import '../sqliteStatistics.css';
 
 interface Props { tabId: string; base: Omit<SqliteStatisticsInput, 'column' | 'taskId'>; columns: readonly string[]; initialColumn?: string; current(): boolean; onClose(): void; onCleanup(reason: unknown): void; onCount?(rows: string): void; }
@@ -14,9 +17,11 @@ function preview(value: SqliteStatisticsValue): string { return value.kind === '
 export function SqliteStatisticsDialog(props: Props) {
   const origin = useRef(props).current, latest = useRef(props); latest.current = props;
   const [view, setView] = useState<SqliteStatisticsView>({ busy: false, stopping: false, error: '' }), [column, setColumn] = useState(origin.initialColumn ?? origin.columns[0] ?? ''), [closing, setClosing] = useState(false), [problem, setProblem] = useState('');
+  const [analysis, setAnalysis] = useState<'summary' | 'calendar'>('summary');
+  const [unit, setUnit] = useState<CalendarUnit>('month');
   const mounted = useRef(true), closingRef = useRef(false), closed = useRef(false), render = {}, committed = useRef<object | undefined>(undefined);
   useLayoutEffect(() => { committed.current = render; return () => { if (committed.current === render) committed.current = undefined; }; });
-  const [controller] = useState(() => new SqliteStatisticsController({ base: origin.base, current: () => latest.current.base === origin.base && latest.current.columns === origin.columns && latest.current.tabId === origin.tabId && origin.current(), acquire: () => acquireWorkspaceBusy(origin.tabId), read: input => invoke('sqlite.statistics', input), countRows: input => invoke('sqlite.countRows', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: setView, cleanup: reason => origin.onCleanup(reason) }));
+  const [controller] = useState(() => new SqliteStatisticsController({ base: origin.base, current: () => latest.current.base === origin.base && latest.current.columns === origin.columns && latest.current.tabId === origin.tabId && origin.current(), acquire: () => acquireWorkspaceBusy(origin.tabId), read: input => invoke('sqlite.statistics', input), readCalendar: input => invoke('sqlite.calendar', input), countRows: input => invoke('sqlite.countRows', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: setView, cleanup: reason => origin.onCleanup(reason) }));
   useEffect(() => { controller.observe(); });
   useEffect(() => { mounted.current = true; controller.activate(); return () => { mounted.current = false; controller.dispose(); }; }, [controller]);
   function current(): boolean { return committed.current === render && !closed.current && !closingRef.current && !controller.view.busy && controller.current(); }
@@ -32,14 +37,29 @@ export function SqliteStatisticsDialog(props: Props) {
     if (committed.current !== render || closed.current || closingRef.current) return; closingRef.current = true; setClosing(true);
     try { await controller.stop(); if (mounted.current && !closed.current) { closed.current = true; origin.onClose(); } } catch (reason) { if (mounted.current) { closingRef.current = false; setProblem(errorMessage(reason)); setClosing(false); } }
   }
-  const output = view.output;
+  const output = view.output, calendar = view.calendar;
   const countOnly = !!origin.onCount, disabled = view.busy || closing || !controller.current();
   return <Modal title={countOnly ? text.countTitle : text.title} onClose={() => { void close(); }} wide><div className="modal-content sqlite-statistics-content">
-    <p>{text.hint}</p>{!countOnly && <UsageHelp><p className="muted small">{text.types}</p></UsageHelp>}<p className="muted small">{origin.base.database} / {origin.base.table}</p>
+    <p>{text.hint}</p>{!countOnly && analysis === 'summary' && <UsageHelp><p className="muted small">{text.types}</p></UsageHelp>}<p className="muted small">{origin.base.database} / {origin.base.table}</p>
     <div className="sqlite-statistics-controls">{!countOnly && <><label>{text.column}<select aria-label={text.column} value={column} disabled={view.busy || closing} onChange={event => { if (!current() || !origin.columns.includes(event.target.value)) return; controller.clear(); setColumn(event.target.value); setProblem(''); }}>{origin.columns.map(name => <option key={name}>{name}</option>)}</select></label>
-    <button disabled={disabled} onClick={() => { if (current()) void controller.read(column); }}>{text.read}</button></>}<button disabled={disabled} onClick={() => void countRows()}>{countOnly ? text.read : text.readRowCount}</button>{view.busy && <><button disabled={view.stopping || closing} onClick={() => { if (committed.current === render) void controller.stop(); }}>{text.stop}</button><Spinner text={view.stopping ? text.stopping : text.loading}/></>}</div>
+    <label>{text.analysis}<select aria-label={text.analysis} value={analysis} disabled={disabled} onChange={event => {
+      const value = event.target.value;
+      if (!current() || value !== 'summary' && value !== 'calendar') return;
+      controller.clear(); setAnalysis(value); setProblem('');
+    }}><option value="summary">{text.summary}</option><option value="calendar">{calendarText.calendar}</option></select></label>
+    {analysis === 'calendar' && <label>{calendarText.calendarUnit}<select aria-label={calendarText.calendarUnit} value={unit} disabled={disabled} onChange={event => {
+      const value = calendarUnits.find(choice => choice === event.target.value);
+      if (!current() || !value) return;
+      controller.clear(); setUnit(value); setProblem('');
+    }}>{calendarUnits.map(value => <option value={value} key={value}>{calendarText.calendarUnits[value]}</option>)}</select></label>}
+    <button disabled={disabled} onClick={() => {
+      if (!current()) return;
+      if (analysis === 'calendar') void controller.readCalendar(column, unit);
+      else void controller.read(column);
+    }}>{text.read}</button></>}<button disabled={disabled} onClick={() => void countRows()}>{countOnly ? text.read : text.readRowCount}</button>{view.busy && <><button disabled={view.stopping || closing} onClick={() => { if (committed.current === render) void controller.stop(); }}>{text.stop}</button><Spinner text={view.stopping ? text.stopping : text.loading}/></>}</div>
     <ErrorBox message={problem || view.error || (!controller.current() ? text.stale : '')}/>
     {view.rowCount !== undefined && controller.current() && <p className="sqlite-statistics-summary" role="status">{text.rowCountResult(view.rowCount)}</p>}
+    {calendar && controller.current() && <QueryResultCalendarChart distribution={{ ...calendar, column: calendar.request.column }}/>}
     {output && <div className="sqlite-statistics-result" aria-label={text.entry}><p className="muted small">{text.declared}：{output.declaredType || text.dynamic}</p><p className="sqlite-statistics-summary" role="status">{text.rows}：{output.rows} · {text.nonNull}：{output.nonNull} · {text.nulls}：{output.nulls}</p>{!output.groups.length ? <p>{text.empty}</p> : <div className="sqlite-statistics-scroll"><table><thead><tr>{[text.kind, text.count, text.distinct, text.min, text.max].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{output.groups.map(group => <tr key={group.kind}><th scope="row">{group.kind.toUpperCase()}</th><td>{group.count}</td><td>{group.distinct}</td><td className="sqlite-statistics-bound">{preview(group.min)}</td><td className="sqlite-statistics-bound">{preview(group.max)}</td></tr>)}</tbody></table></div>}</div>}
   </div><footer className="modal-footer"><button disabled={closing} onClick={() => { void close(); }}>{text.close}</button></footer></Modal>;
 }
