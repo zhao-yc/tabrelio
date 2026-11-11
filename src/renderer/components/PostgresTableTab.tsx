@@ -22,6 +22,7 @@ import {
 import { cellPreview, cellText, errorMessage, invoke, ownCell, uid } from '../lib';
 import { postgresStructureZh } from '../locales/postgresStructure.zh-CN';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
+import { tableFilterEnabledZh as filterToggleText } from '../locales/tableFilterEnabled.zh-CN';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab } from '../store';
 import { ResultsGrid, type GridFindTarget } from './ResultsGrid';
 import { PostgresTableExportDialog } from './PostgresTableExportDialog';
@@ -256,6 +257,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const [filterColumn, setFilterColumn] = useState('');
   const [filterText, setFilterText] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState(false);
+  const [filterPause, setFilterPause] = useState<{ scope: object; filter: NonNullable<PageOptions['filter']> }>();
   const [columnDialog, setColumnDialog] = useState<{ kind: 'values' | 'statistics'; source: PostgresColumnReadSource }>();
   const [cellFilterSeed, setCellFilterSeed] = useState<FilterDraft>();
   const [columnFilterRequest, setColumnFilterRequest] = useState<ColumnFilterRequest>();
@@ -283,6 +285,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const presetTab = isPostgresPresetTabId(tab.id);
   const layoutTarget = useMemo(() => ({ connectionId: target.connectionId, database: target.database, table: target.table }), [target.connectionId, target.database, target.table]);
   const layoutKey = useMemo(() => ({}), [layoutTarget, connectionVersion]);
+  const pausedFilter = filterPause?.scope === layoutKey ? filterPause.filter : undefined;
   const columnNames = useMemo(() => page?.columns.map(column => column.name) ?? [], [page?.columns]);
   const layoutScope = useRef<TableLayoutScope<PostgresLayoutTarget>>(null!);
   layoutScope.current = { key: layoutKey, target: layoutTarget, names: columnNames, current: () => {
@@ -405,7 +408,10 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   function applyQuickFilter() {
     if (frozenPage || !filterColumn) return;
     const filter = filterText ? { column: filterColumn, text: filterText } : undefined;
-    navigate({ ...firstPage, filter }, false, {}, closeAdvancedFilters);
+    navigate({ ...firstPage, filter }, false, {}, () => {
+      setFilterPause(undefined);
+      closeAdvancedFilters();
+    });
   }
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
@@ -677,6 +683,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   }
   const firstPage = { ...options, offset: 0, limit: pageSize };
   const appliedAdvanced = options.filter && 'rules' in options.filter ? options.filter : undefined;
+  const editableFilter = pausedFilter ?? options.filter;
+  const editableAdvanced = editableFilter && 'rules' in editableFilter ? editableFilter : undefined;
   const sortRules = postgresTableSortRules(options.sort);
   const sorted = sortRules.flatMap(rule => {
     const column = page?.columns.find(column => column.name === rule.column);
@@ -1328,10 +1336,24 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     setSelectedFilter(undefined);
     if (columnDialog?.kind === 'values') setColumnDialog(undefined);
   }
+  const canToggleFilterPause = active && !!page && pageConnectionVersion === connectionVersion && !frozenPage && !requiresRefresh &&
+    (!!pausedFilter || isPostgresTableFiltered(options.filter));
+
+  /** 暂停记录完整原条件，只读第一页成功后切换。排序、页长和输入草稿沿原显示。 */
+  function toggleFilterPause(): void {
+    if (!canToggleFilterPause || !page?.exportToken || issued.current !== page.exportToken ||
+        !layoutScope.current.current() || layoutScope.current.key !== layoutKey || lease.current ||
+        recordDirty.current || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    const original = options.filter;
+    navigate({ ...options, offset: 0, filter: pausedFilter }, false, {}, () => {
+      setFilterPause(pausedFilter || !original ? undefined : { scope: layoutKey, filter: original });
+    });
+  }
   /** 读回新页前保持原筛选输入；失败、忙碌或草稿阻挡时仍可核对旧条件。 */
   function clearTableFilters(): void {
-    if (!active || frozenPage || !options.filter) return;
+    if (!active || frozenPage || !(options.filter || pausedFilter)) return;
     navigate({ ...options, offset: 0, filter: undefined }, false, {}, () => {
+      setFilterPause(undefined);
       closeAdvancedFilters(); setFilterText('');
     });
   }
@@ -1426,6 +1448,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     await run(async isCurrent => {
       applied = await read({ ...options, ...conditions, offset: 0 }, isCurrent, { checkFilterColumns: true, presetLayout: configuration.layout });
       if (!applied) return;
+      setFilterPause(undefined);
       closeAdvancedFilters();
       setFilterText(configuration.quickFilter?.text ?? '');
       if (configuration.quickFilter) setFilterColumn(configuration.quickFilter.column);
@@ -1802,7 +1825,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       </div>
       <button disabled={frozenPage} aria-expanded={advancedFilters}
         onClick={() => advancedFilters ? closeAdvancedFilters() : setAdvancedFilters(true)}>{text.advancedFilter}</button>
-      <button disabled={frozenPage || !options.filter} onClick={clearTableFilters}>{text.clearFilter}</button>
+      <button type="button" title={filterToggleText.pauseAppliedHint} disabled={!canToggleFilterPause}
+        onClick={toggleFilterPause}>{pausedFilter ? filterToggleText.resume : filterToggleText.pause}</button>
+      <button disabled={frozenPage || !(options.filter || pausedFilter)} onClick={clearTableFilters}>{text.clearFilter}</button>
       <button disabled={frozenPage || !page?.exportToken || !columnNames.length} onClick={() => setSortPageToken(page?.exportToken)}>{tableSortZh.entry}</button>
       <button disabled={!canFind} aria-expanded={!!findRequest && !findRequest.replace} onClick={() => openFind(false)}>{findText.title}</button>
       <button disabled={!canEditGrid} aria-expanded={findRequest?.replace === true} onClick={() => openFind(true)}>{findText.replaceTitle}</button>
@@ -1821,13 +1846,13 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       </div>
     </div>
     {advancedFilters && <PostgresTableFilterPanel columns={page?.columns.map(column => column.name) ?? []}
-      initial={appliedAdvanced} seed={cellFilterSeed} onSeedAdded={() => setCellFilterSeed(undefined)}
+      initial={editableAdvanced} seed={cellFilterSeed} onSeedAdded={() => setCellFilterSeed(undefined)}
       columnRequest={columnFilterRequest} onColumnRequestHandled={request => setColumnFilterRequest(current => current === request ? undefined : current)}
       selected={selectedFilter?.scope === cellScope ? selectedFilter : undefined} onCloseSelected={() => setSelectedFilter(undefined)}
       values={columnDialog?.kind === 'values' ? columnDialog.source : undefined} canReadValues={canReadValues}
       onOpenValues={() => openColumnReader('values')} onCloseValues={() => setColumnDialog(undefined)}
-      replacesQuick={!!(options.filter && 'text' in options.filter && options.filter.text)}
-      disabled={frozenPage} onApply={filter => navigate({ ...firstPage, filter })}/>}
+      replacesQuick={!!(editableFilter && 'text' in editableFilter && editableFilter.text)}
+      disabled={frozenPage} onApply={filter => navigate({ ...firstPage, filter }, false, {}, () => setFilterPause(undefined))}/>}
     {columnDialog?.kind === 'statistics' && <PostgresColumnStatisticsDialog source={columnDialog.source} onClose={() => setColumnDialog(undefined)}/>}
     {message && <div className="info-strip" role="status">{message}</div>}
     <ErrorBox message={error}/>

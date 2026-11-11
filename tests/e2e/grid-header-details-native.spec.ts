@@ -258,7 +258,9 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await expect(tab.getByLabel(sqlite.filterColumn(2), { exact: true })).toHaveValue('id');
     await expect(tab.getByLabel(sqlite.filterValue(2), { exact: true })).toBeFocused();
     await expect(filter).toHaveValue('row B');
-    await tab.getByRole('button', { name: sqlite.removeFilter(2), exact: true }).click();
+    await tab.getByLabel(sqlite.filterValue(2), { exact: true }).fill('1');
+    const secondFilter = tab.getByRole('checkbox', { name: sqlite.filterEnabled(2), exact: true });
+    await secondFilter.uncheck();
     expect(await reads()).toEqual(beforeHeaderFilter);
     await expect(rowLabels(tab)).toHaveCount(2);
     await filter.dispatchEvent('keydown', {
@@ -300,6 +302,12 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     expect(applyConfirmation.message()).toBe(sqliteWorkspace.confirmDiscard);
     await expect(clearDraft).toBeVisible();
     expect(await reads()).toEqual(beforeDeclinedClear);
+    const pause = await navigationMenuItem(tab, { name: tableFilterEnabledZh.pause, exact: true });
+    await answerDialogs([1]);
+    const [pauseConfirmation] = await Promise.all([page.waitForEvent('dialog', { timeout: 5000 }), pause.click()]);
+    expect(pauseConfirmation.message()).toBe(sqliteWorkspace.confirmDiscard);
+    await expect(clearDraft).toBeVisible();
+    expect(await reads()).toEqual(beforeDeclinedClear);
     const clear = await navigationMenuItem(tab, { name: tableFilterEnabledZh.clear, exact: true });
     await answerDialogs([1]);
     const [clearConfirmation] = await Promise.all([page.waitForEvent('dialog', { timeout: 5000 }), clear.click()]);
@@ -313,8 +321,23 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     const beforeSort = (await reads()).length;
     await direction.press(applyKey);
     await expect.poll(async () => (await reads()).length).toBe(beforeSort + 1);
-    const beforeClear = await reads();
+    const beforePause = await reads();
+    expect(beforePause.at(-1)?.filters).toEqual([expect.objectContaining({ column: 'label' }), expect.objectContaining({ column: 'id', enabled: false })]);
     await direction.selectOption('asc');
+    await toggle(tableFilterEnabledZh.pause);
+    await expect(rowLabels(tab)).toHaveCount(2);
+    await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+    await expect(filter).toHaveValue('row B');
+    await expect(secondFilter).not.toBeChecked();
+    await expect(direction).toHaveValue('asc');
+    expect((await reads()).slice(beforePause.length)).toEqual([{ ...beforePause.at(-1), filters: [], offset: 0 }]);
+    await page.screenshot({ path: info.outputPath('SQLite暂停筛选.png') });
+    await toggle(tableFilterEnabledZh.resume);
+    await expect(rowLabels(tab)).toHaveCount(1);
+    await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+    await expect(secondFilter).not.toBeChecked();
+    expect((await reads()).slice(beforePause.length + 1)).toEqual([{ ...beforePause.at(-1), offset: 0 }]);
+    const beforeClear = await reads();
     await (await navigationMenuItem(tab, { name: tableFilterEnabledZh.clear, exact: true })).click();
     await expect(rowLabels(tab)).toHaveCount(2);
     await expect(rowLabels(tab).first()).toHaveText(/row B$/);
@@ -400,6 +423,19 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await expect(tab.getByLabel(sqlite.filterColumn(1), { exact: true })).toHaveValue('label');
     await expect(tab.getByLabel(sqlite.filterValue(1), { exact: true })).toBeFocused();
     expect(await reads()).toEqual(beforeViewFilter);
+    const viewFilter = tab.getByLabel(sqlite.filterValue(1), { exact: true });
+    await viewFilter.fill('row A');
+    await applyFilterWithEnter(viewFilter, reads);
+    await expect(rowLabels(tab)).toHaveCount(1);
+    await toggle(tableFilterEnabledZh.pause);
+    await expect(rowLabels(tab)).toHaveCount(2);
+    await toggle(tableFilterEnabledZh.resume);
+    await expect(rowLabels(tab)).toHaveCount(1);
+    await expect(rowLabels(tab).first()).toHaveText(/row A$/);
+    await toggle(tableFilterEnabledZh.pause);
+    await expect(rowLabels(tab)).toHaveCount(2);
+    await toggle(tableFilterEnabledZh.clear);
+    await expect(tab.getByRole('button', { name: tableFilterEnabledZh.pause, exact: true })).toBeDisabled();
     await (await navigationMenuItem(tab, { name: sqlite.conditions, exact: true })).click();
     await (await navigationMenuItem(tab, { name: readHistory.title, exact: true })).click();
     await expect(visibleHistory.locator('pre')).toContainText('"subject_view"');
@@ -575,10 +611,25 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
       await applyFilterWithEnter(quick, reads);
       await expect(rowLabels(tab)).toHaveCount(1);
       await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+      const beforePause = await reads();
+      await toggle(tableFilterEnabledZh.pause);
+      await expect(rowLabels(tab)).toHaveCount(3);
+      await expect(rowLabels(tab).first()).toHaveText(/row C$/);
+      await expect(quick).toHaveValue('row B');
+      expect((await reads()).slice(beforePause.length)).toEqual([{ ...beforePause.at(-1), filter: undefined, offset: 0 }]);
+      await refreshFromGrid(tab, reads, 'F5');
+      await page.screenshot({ path: info.outputPath('PostgreSQL暂停筛选.png') });
+      await toggle(tableFilterEnabledZh.resume);
+      await expect(rowLabels(tab)).toHaveCount(1);
+      await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+      expect((await reads()).slice(beforePause.length + 2)).toEqual([{ ...beforePause.at(-1), offset: 0 }]);
+      await toggle(tableFilterEnabledZh.pause);
+      await expect(rowLabels(tab)).toHaveCount(3);
       await quick.fill('');
       await applyFilterWithEnter(quick, reads);
       await expect(rowLabels(tab)).toHaveCount(3);
       await expect(tab.getByRole('button', { name: postgres.clearFilter, exact: true })).toBeDisabled();
+      await expect(tab.getByRole('button', { name: tableFilterEnabledZh.pause, exact: true })).toBeDisabled();
     }
     const form = tab.locator('.filter-rule-form'), field = form.getByLabel(zh.table.text009, { exact: true });
     const value = form.getByLabel(zh.table.text011, { exact: true });
@@ -613,6 +664,17 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     } else await applyFilterWithEnter(value, reads);
     await expect(rowLabels(tab)).toHaveCount(1);
     await expect(rowLabels(tab).first()).toHaveText(/row C$/);
+    if (dialect === 'postgresql') {
+      const beforePause = await reads();
+      expect(beforePause.at(-1)?.filter).toEqual(expect.objectContaining({ rules: expect.any(Array) }));
+      await toggle(tableFilterEnabledZh.pause);
+      await expect(rowLabels(tab)).toHaveCount(3);
+      await toggle(tableFilterEnabledZh.resume);
+      await expect(rowLabels(tab)).toHaveCount(1);
+      expect((await reads()).slice(beforePause.length)).toEqual([
+        { ...beforePause.at(-1), filter: undefined, offset: 0 }, { ...beforePause.at(-1), offset: 0 },
+      ]);
+    }
     await refreshFromGrid(tab, reads, 'F5');
     if (process.platform === 'darwin') await refreshFromGrid(tab, reads, 'Meta+r');
     await expect(rowLabels(tab)).toHaveCount(1);

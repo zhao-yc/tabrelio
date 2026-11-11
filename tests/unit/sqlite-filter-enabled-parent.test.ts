@@ -8,14 +8,20 @@ import { sqliteTableDraft, type SqliteFilterDraft } from '../../src/renderer/sql
 /** 执行真实父组件的应用/刷新/放弃确认函数，外部端口用RAM观察，不冒称窗口或实库。 */
 function fixture() {
   const source = ts.createSourceFile('parent.tsx', readFileSync(new URL('../../src/renderer/components/SqliteTableTab.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const names = ['apply', 'prepareRead', 'read'], methods: string[] = [];
+  const names = ['apply', 'prepareRead', 'read', 'toggleFilterPause'], methods: string[] = [];
   function walk(node: ts.Node): void { if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? '')) methods.push(node.getText(source)); ts.forEachChild(node, walk); } walk(source); expect(methods).toHaveLength(names.length);
   const filters: SqliteFilterDraft[] = [{ id: 'a', column: 'id', operator: 'gte', kind: 'integer', value: '9007199254740993', enabled: false }];
   const old = { limit: 10, mode: 'and', filters: [], sort: [] }, applied = { current: old }, editor = { busy: false, dirty: false }, confirm = vi.fn(() => true), dropEditor = vi.fn(), load = vi.fn(), setValidation = vi.fn(), state = { current: true };
   const checkedExport = { clear: vi.fn() };
   const context: any = createContext({ workspaceText, checkedExport, drafts: { get protected() { return !!context.editorRef.current?.dirty; }, get busy() { return !!context.editorRef.current?.busy; } }, tab: { connectionId: 'owned', database: 'main', table: 'subject' }, limit: 5, mode: 'or', filters, sort: [{ id: 'sort', column: 'id', direction: 'desc' }], sqliteTableDraft, applied, controller: { load }, editorRef: { current: editor }, window: { confirm }, editText: { confirmDiscard: '放弃原草稿？' }, automaticReads: { current: { blocked: true } }, available: () => state.current, dropEditor, setValidation, errorMessage: (value: Error) => value.message });
+  Object.assign(context, {
+    pendingPresetLayout: undefined, layout: { view: { preferences: {} } }, filterScope: {}, pausedFilters: undefined,
+    setFilterPause: (value?: { filters: unknown[] }) => { context.pausedFilters = value?.filters; },
+    useWorkspace: { subscribe: () => () => {} },
+    appliedFilterCurrent: (original: unknown) => state.current && applied.current === original,
+  });
   runInContext(ts.transpileModule(methods.join('\n') + '\nglobalThis.api={' + names.join(',') + '};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
-  return { filters, applied, old, editor, confirm, dropEditor, load, setValidation, state, checkedExport, api: context.api as { apply(): void; read(offset: number): void } };
+  return { filters, applied, old, editor, confirm, dropEditor, load, setValidation, state, checkedExport, api: context.api as { apply(): void; read(offset: number): void; toggleFilterPause(): void } };
 }
 it('只有明确应用才捕获停用条件，偏移回0且原整数不转Number，刷新继续使用已应用配置', () => {
   const f = fixture(); f.api.read(10); expect(f.load).toHaveBeenCalledExactlyOnceWith(f.old, 10); expect(f.applied.current).toBe(f.old); expect(f.checkedExport.clear).toHaveBeenCalledOnce();
@@ -33,4 +39,31 @@ it('停用的非法整数仍在放弃草稿确认之前拒绝，不丢行草稿�
 it.each(['busy', 'target'] as const)('%s时旧应用回调不更改已应用配置或读取', kind => {
   const f = fixture(); if (kind === 'busy') f.editor.busy = true; else f.state.current = false; f.api.apply();
   expect(f.load).not.toHaveBeenCalled(); expect(f.dropEditor).not.toHaveBeenCalled(); expect(f.applied.current).toBe(f.old);
+});
+
+it('暂停或恢复仅在接受新页后切换，保留原值、启停、排序和页长', () => {
+  const f = fixture();
+  f.filters.push({ id: 'b', column: 'label', operator: 'eq', kind: 'text', value: 'row B' });
+  f.api.apply();
+  const original = f.applied.current;
+  f.load.mockClear();
+  f.api.toggleFilterPause();
+  const [unfiltered, offset, accept] = f.load.mock.calls[0];
+  expect(unfiltered).toEqual({ ...original, filters: [] });
+  expect(offset).toBe(0);
+  // 失败、取消或过期不调用接受回包的回调，刷新仍用原条件。
+  expect(f.applied.current).toBe(original);
+  f.api.read(0);
+  expect(f.load.mock.lastCall).toEqual([original, 0]);
+  f.api.toggleFilterPause();
+  f.load.mock.lastCall![2]();
+  expect(f.applied.current).toEqual(unfiltered);
+  expect(accept).toBeTypeOf('function');
+  f.api.toggleFilterPause();
+  const [restored, restoreOffset, acceptRestore] = f.load.mock.lastCall!;
+  expect(restored).toEqual(original);
+  expect(restoreOffset).toBe(0);
+  expect(f.applied.current).toEqual(unfiltered);
+  acceptRestore();
+  expect(f.applied.current).toEqual(original);
 });

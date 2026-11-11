@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。PostgreSQL 和 SQLite 表页支持暂停、恢复已应用的筛选，保留原条件和启停状态，沿用已应用的排序与页长，从第一页重读。D01 增加两种数据库的暂时停用与恢复操作。[Navicat 筛选记录手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#filter-records)
+
 2026-11-11 源码增量。四种数据库的表页可放弃当前记录草稿，已有行恢复读取时的原值及删除状态，本地新增行从草稿移除。操作沿用本地撤销和重做，保留其它记录及保留页草稿。D02 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#use-navigation-bar)
 
 2026-11-11 源码增量。MySQL 和 MariaDB 的「参数执行当前语句」使用原会话的词法模式和客户端分隔符识别光标所在语句，只显示该句所需参数，发送前重新核对范围及参数。结果和历史保留原模板。Q02、Q06 仍为部分覆盖。[Navicat 查询结果手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html#execution-options)

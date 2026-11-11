@@ -6,6 +6,7 @@ export const tableFilterEnabledZh = {
   pause: '暂停筛选', resume: '恢复筛选',
   clear: '清除筛选',
   pauseHint: '暂时查看全部记录。恢复时还原每条条件原来的启停状态，保留分组和排序。手动改动条件列表后结束暂停。',
+  pauseAppliedHint: '暂时停用已应用的筛选。暂停和恢复都从第一页读取，保留排序及页长。应用新条件或清除筛选会结束暂停。',
   hint: '切换会保留原条件及精确值，从第一页重新读取服务器；未提交数据仍需确认。全部停用时不限制记录，排序保持。',
   status: (enabled: number, total: number) => `生效条件 ${enabled} / 保留条件 ${total}`,
   invalid: '筛选启用状态或条件编号无效，原筛选保持。',

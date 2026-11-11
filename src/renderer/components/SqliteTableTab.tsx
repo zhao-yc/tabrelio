@@ -203,6 +203,9 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   const [cellFilterReason, setCellFilterReason] = useState('');
   const [exportData, setExportData] = useState<{ result: GridRangeExportData; scope: 'table' | 'collected' | 'rectangle' } | null>(null);
   const applied = useRef(initialQuery());
+  const filterScope = useMemo(() => ({}), [profile, version, tab.connectionId, tab.database, tab.table]);
+  const [filterPause, setFilterPause] = useState<{ scope: object; filters: SqliteTableQuery['filters'] }>();
+  const pausedFilters = filterPause?.scope === filterScope ? filterPause.filters : undefined;
   const [filterFocusId, setFilterFocusId] = useState<string>();
   const [fullExport, setFullExport] = useState<FullExportOwner | null>(null), fullExportRef = useRef<FullExportOwner | null>(null);
   const [tableImport, setTableImport] = useState<ImportOwner | null>(null), importRef = useRef<ImportOwner | null>(null);
@@ -652,7 +655,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
         if (!layoutUiCurrent() || layout.view.preferences !== preferences) throw Error(presetText.changed);
       }
       if (!prepareRead()) return;
-      applied.current = next; setValidation('');
+      applied.current = next; setFilterPause(undefined); setValidation('');
       // 布局与这一次第一页的真实回包一起验收；失败或取消保留原布局和待用方案。
       if (!draft) { void controller.load(next, 0); return; }
       void controller.load(next, 0, received => {
@@ -675,15 +678,37 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     const editor = editorRef.current;
     return editor ? editor === renderedEditor && editor.page === page && editor.view.rows === editRows && editor.canEdit() : !renderedEditor && controller.pageCurrent(page);
   }
+  function appliedFilterCurrent(original: SqliteTableQuery): boolean {
+    return applied.current === original && !browserViewRef.current.busy && (page ? browseNavigationCurrent() :
+      editRender.current === editRenderTicket && latest.current.refreshVersion === refreshVersion && available() &&
+      !!browserViewRef.current.error && !editorRef.current);
+  }
+  /** 暂停不带入未应用的筛选、排序及页长；成功回包才切换已应用配置和恢复来源。 */
+  function toggleFilterPause(): void {
+    const original = applied.current;
+    if (!pausedFilters && !original.filters.some(rule => rule.enabled !== false)) return;
+    let valid = true;
+    const current = () => valid && appliedFilterCurrent(original);
+    if (!current()) return;
+    const stop = useWorkspace.subscribe(() => { if (!current()) valid = false; });
+    try {
+      if (!prepareRead(current)) return;
+    } finally { stop(); }
+    const next = { ...original, filters: pausedFilters ?? [] };
+    checkedExport.clear();
+    setValidation('');
+    void controller.load(next, 0, () => {
+      if (applied.current !== original) throw Error(workspaceText.stale);
+      applied.current = next;
+      setFilterPause(pausedFilters ? undefined : { scope: filterScope, filters: original.filters });
+    });
+  }
   /** 清除只以当前已应用配置为基础，未应用的排序或页长输入不参与这次读取。 */
   function clearTableFilters(): void {
     const original = applied.current;
-    const current = () => applied.current === original && (page ? browseNavigationCurrent() :
-      editRender.current === editRenderTicket && latest.current.refreshVersion === refreshVersion && available() &&
-      !browserViewRef.current.busy && !!browserViewRef.current.error && !editorRef.current);
-    if (!original.filters.length || !prepareRead(current)) return;
+    if (!(original.filters.length || pausedFilters) || !prepareRead(() => appliedFilterCurrent(original))) return;
     const next = { ...original, filters: [] };
-    applied.current = next; checkedExport.clear(); setValidation(''); setFilters([]); setPresetLayoutDraft(undefined);
+    applied.current = next; setFilterPause(undefined); checkedExport.clear(); setValidation(''); setFilters([]); setPresetLayoutDraft(undefined);
     void controller.load(next, 0);
   }
   /** 翻页与调整页长沿用已应用条件，确认返回时复核原页和记录草稿。 */
@@ -1062,7 +1087,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     if (editRender.current !== editRenderTicket || !conditions || !available() || view.busy || externalBusy || latest.current.refreshVersion !== refreshVersion) return;
     try {
       if (action === 'restore') {
-        if (draftChanged && page && controller.pageCurrent(page)) loadPreset(applied.current);
+        if (draftChanged && page && controller.pageCurrent(page)) loadPreset(editableQuery);
         return;
       }
       if (action === 'filters') setFilters([]);
@@ -1809,7 +1834,10 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     renderedEditor?.canDiscardRow(editRows.find(item => item.id === selectedRow));
   const headerSort: SqliteHeaderSort = page ? sqliteHeaderSortToGrid(applied.current.sort, page) : [];
   const shownQuery = applied.current;
-  const draftChanged = useMemo(() => conditions && (!!pendingPresetLayout || sqliteTableDraftChanged(shownQuery, { connectionId: tab.connectionId, database: tab.database, table: tab.table }, limit, mode, filters, sort)), [conditions, pendingPresetLayout, shownQuery, tab.connectionId, tab.database, tab.table, limit, mode, filters, sort]);
+  const editableQuery = useMemo(() => pausedFilters ? { ...shownQuery, filters: pausedFilters } : shownQuery, [pausedFilters, shownQuery]);
+  const draftChanged = useMemo(() => conditions && (!!pendingPresetLayout || sqliteTableDraftChanged(editableQuery, { connectionId: tab.connectionId, database: tab.database, table: tab.table }, limit, mode, filters, sort)), [conditions, pendingPresetLayout, editableQuery, tab.connectionId, tab.database, tab.table, limit, mode, filters, sort]);
+  const filterActionsDisabled = (!page && !view.error) || !active || invalidTarget || view.busy || externalBusy ||
+    restoredDraftView || drafts.busy || !!cellInput;
   const draftActionsDisabled = !active || invalidTarget || view.busy || externalBusy;
   const fieldOptions = (page?.columns ?? view.columns).map((column, index) => <option key={index} value={column.name}>{column.name} · {column.declaredType || text.dynamic}</option>);
   const cellFilterReady = !!cellFilterOwner && cellFilterRef.current === cellFilterOwner && cellFilterOwner.source.current();
@@ -1846,13 +1874,15 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     <div className="context-bar"><span className="connection-dot" style={{ background: profile?.color }}/><strong>{profile?.name ?? tab.connectionId}</strong><span>/</span><span>{tab.database}</span><span>/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">SQLite · {text.title}</span></div>
     {/* 只展示放得下的完整操作，其余沿原菜单回调展开，不让应用根容器被横向撑开。 */}
     <AdaptiveToolbar className="toolbar" ariaLabel={text.toolbar} moreLabel={navigationZh.more}
-      moreDisabled={!page || !active || invalidTarget || view.busy || externalBusy}
+      moreDisabled={(!page && !(view.error && (pausedFilters || applied.current.filters.length))) || !active || invalidTarget || view.busy || externalBusy}
       contextKey={JSON.stringify([tab.id, version, refreshVersion, page?.schemaKey, page?.offset, editView?.page.edit?.kind === 'editable' ? editView.page.edit.snapshotId : undefined, drafts.changes, view.busy, externalBusy, !!editView?.dirty, checkedRows?.id, rangeCell?.row.id, rangeCell?.column, cellFilterOwner?.id, checkedReadRows?.id])}
-      isCurrent={() => !!page && available() && (controller.pageCurrent(page) || editActionCurrent())}
+      isCurrent={() => page ? available() && (controller.pageCurrent(page) || editActionCurrent()) : appliedFilterCurrent(shownQuery)}
       items={[
         { key: 'refresh', content: (<button data-table-refresh title={navigationZh.tableRefreshShortcut} aria-label={text.refresh} disabled={refreshDisabled} onClick={refreshTable}>{text.refresh}</button>) },
-        { key: 'clear-filter', content: <button type="button" disabled={(!page && !view.error) || !active || invalidTarget || view.busy || externalBusy ||
-          restoredDraftView || drafts.busy || !!cellInput || !applied.current.filters.length}
+        { key: 'pause-filter', content: <button type="button" title={tableFilterEnabledZh.pauseAppliedHint}
+          disabled={filterActionsDisabled || !(pausedFilters || shownQuery.filters.some(rule => rule.enabled !== false))}
+          onClick={toggleFilterPause}>{pausedFilters ? tableFilterEnabledZh.resume : tableFilterEnabledZh.pause}</button> },
+        { key: 'clear-filter', content: <button type="button" disabled={filterActionsDisabled || !(pausedFilters || shownQuery.filters.length)}
           onClick={clearTableFilters}>{tableFilterEnabledZh.clear}</button> },
         { key: 'column-chooser', content: <button type="button" disabled={columnChooserBlocked} {...columnChooser.toggleProps}>{tableColumnChooserZh.title}</button> },
         { key: 'read-history', content: <button type="button" disabled={!active || view.busy || externalBusy} {...readHistory.toggleProps}>{tableReadHistoryZh.title}</button> },
