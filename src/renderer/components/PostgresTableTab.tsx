@@ -639,12 +639,25 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const historyStatus = history.status;
   const historyEnabled = active && writable && pageConnectionVersion === connectionVersion;
 
-  /** 只在当前表页的草稿账本移动，不执行查询或提交，也不接管输入控件的撤销。 */
-  function moveDraftHistory(direction: 'undo' | 'redo') {
+  /** 草稿账本操作只接管当前渲染及原页，期间不能有输入、任务或预览。 */
+  function draftHistoryCurrent(): boolean {
     if (!historyEnabled || issued.current !== page?.pageToken || !layoutScope.current.current() ||
         draftRef.current !== draft || lease.current || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || templateOwner.current ||
         inlineOwner.current || pasteOwner.current || recordInput.current ||
-        document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+        useWorkspace.getState().activeJobs[tab.id] || document.querySelector('[role="dialog"], [role="alertdialog"]')) return false;
+    return true;
+  }
+
+  /** 单项用原草稿对象定位，支持本页原行和清单中的新增或其它页草稿。 */
+  function discardDraftEntry(entry: DraftEntry): void {
+    if (!draftHistoryCurrent() || !draft.includes(entry)) return;
+    setChanges(draft.filter(item => item !== entry));
+    setMessage('');
+    setError('');
+  }
+
+  function moveDraftHistory(direction: 'undo' | 'redo') {
+    if (!draftHistoryCurrent()) return;
     const next = history.move(direction);
     if (!next) return;
     publishChanges(next);
@@ -1425,7 +1438,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const formKey = form?.row == null ? undefined : page?.rowKeys?.[form.row];
   const stagedChange = formKey ? draft.find(entry => entry.rowKey === formKey)?.change : undefined;
   const viewKey = row === null ? undefined : page?.rowKeys?.[row];
-  const viewDraft = viewKey ? draft.find(entry => entry.rowKey === viewKey)?.change : undefined;
+  const viewDraftEntry = viewKey ? draft.find(entry => entry.rowKey === viewKey) : undefined;
+  const viewDraft = viewDraftEntry?.change;
   const canDuplicate = active && writable && pageConnectionVersion === connectionVersion && !!page?.capabilities.insert &&
     !page.truncated && row !== null && !!page.rows[row] && viewDraft?.kind !== 'delete';
   const canEditInsertDraft = active && writable && pageConnectionVersion === connectionVersion && !!page?.capabilities.insert;
@@ -1747,6 +1761,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         if (row === null) return;
         try { stage({ kind: 'delete', row }); } catch (reason) { setError(errorMessage(reason)); }
       }}>{text.remove}</button>
+      <button type="button" disabled={!historyEnabled || !viewDraftEntry} title={draftHistoryText.discardRowHint}
+        onClick={() => { if (viewDraftEntry) discardDraftEntry(viewDraftEntry); }}>{draftHistoryText.discardRow}</button>
       <button className="primary" disabled={blocked || requiresRefresh || !page?.exportToken || !draft.length} onClick={prepare}>{text.preview}</button>
       {busy && <Spinner text={text.waiting}/>}
     </div>
@@ -2043,7 +2059,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
             return name + '=' + value;
           }).join('，')}</span>}
           {change.kind === 'insert' && <button disabled={!canEditInsertDraft} onClick={() => openInsertDraft(entry)}>{text.editInsertDraft}</button>}
-          <button disabled={blocked || requiresRefresh} onClick={() => { setChanges(draft.filter((_, other) => index !== other)); setMessage(''); }}>{text.undo}</button>
+          <button disabled={!historyEnabled} title={draftHistoryText.discardRowHint}
+            onClick={() => discardDraftEntry(entry)}>{draftHistoryText.discardEntry}</button>
         </li>;
       })}</ol>
     </div>}

@@ -368,6 +368,23 @@ export class SqliteTableEditor {
     if (!changed) return;
     return { count: changed, changes, check: current, stage: () => this.replaceRows(next), publish: () => this.emit() };
   }
+  /** 原行必须属于本页当前草稿。保持原动态类型、完整原值和行编号。 */
+  canDiscardRow(row: SqliteDraftRow | undefined): boolean {
+    if (!row || !this.rows.includes(row) || this.page.edit?.kind !== 'editable') return false;
+    if (row.index === undefined) return true;
+    const original = this.page.edit.rows[row.index];
+    return !!original && (row.deleted || original.some((value, index) => !sameDraftValue(value, row.values[index])));
+  }
+
+  discardRow(row: SqliteDraftRow): boolean {
+    if (!this.canEdit() || this.input || this.previewValue || !this.canDiscardRow(row)) return false;
+    const edit = this.page.edit;
+    if (edit?.kind !== 'editable') return false;
+    this.replace(row.index === undefined ? this.rows.filter(item => item !== row) :
+      this.rows.map(item => item === row ? { ...row, values: structuredClone(edit.rows[row.index!]), deleted: false } : item));
+    return true;
+  }
+
   undo(): void { if (!this.canEdit() || !this.past.length) return; this.invalidatePreview(); this.future.push(this.rows); this.setDraftRows(this.past.pop()!); this.emit(); }
   redo(): void { if (!this.canEdit() || !this.future.length) return; this.invalidatePreview(); this.past.push(this.rows); this.setDraftRows(this.future.pop()!); this.emit(); }
   /** 明确放弃只处理本地草稿；未知提交仍不可重放，必须重新读取新快照。 */

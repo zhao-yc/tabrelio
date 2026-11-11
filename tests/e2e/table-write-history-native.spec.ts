@@ -5,6 +5,7 @@ import { navigationMenuItem } from './navigation-menu';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 import { postgresTableZh as pgText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { tableReadHistoryZh as historyText } from '../../src/renderer/locales/tableReadHistory.zh-CN';
+import { draftHistoryZh as draftText } from '../../src/renderer/locales/draftHistory.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -114,6 +115,21 @@ test('网络数据库表页按真实事务结果记录 SQL 模板', async ({}, i
 
     expect(await storedLabel()).toBe('row A');
     await stage('row A', accepted);
+    await stage('row B', '待单独放弃的行');
+    const rowB = tab.getByRole('gridcell', { name: 'row B', exact: true });
+    const changedB = tab.getByRole('gridcell', { name: '待单独放弃的行', exact: true });
+    await changedB.click();
+    const tasksBefore = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+    await (await button(draftText.discardRow)).click();
+    await expect(rowB).toBeVisible();
+    await expect(tab.getByRole('gridcell', { name: accepted, exact: true })).toBeVisible();
+    await (await button(draftText.undo)).click();
+    await expect(changedB).toBeVisible();
+    await (await button(draftText.redo)).click();
+    await expect(rowB).toBeVisible();
+    expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual(tasksBefore);
+    expect(await storedLabel()).toBe('row A');
+    await tab.screenshot({ path: info.outputPath('放弃单行保留其他草稿.png') });
     await openPreview();
     await backToEdit();
     await checkHistory();

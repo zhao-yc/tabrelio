@@ -45,7 +45,7 @@ import { cellPreview, cellText, errorMessage, invoke, ownCell, rowEqual, uid } f
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceBusyLease, type WorkspaceTab } from '../store';
 import { SqlEditor } from './SqlEditor';
 import { ErrorBox, Modal, Spinner } from './ui';
-import { collectChanges, newDraftRow, type DraftRow } from '../dataChanges';
+import { collectChanges, discardDraftRow, draftRowChanged, newDraftRow, type DraftRow } from '../dataChanges';
 import { cellClipboardType, copyGridCells, copyGridCellValue, copyGridColumnNames, decodeClipboard, encodeClipboard, encodeGridCsv, encodeGridJson, maxClipboardCells, pasteCells, writeTableClipboardEvent } from '../gridClipboard';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
 import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.zh-CN';
@@ -591,16 +591,31 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   function moveHistory(direction: 'undo' | 'redo') {
     if (!historyAvailable()) return;
     const next = history.move(rowsRef.current, direction); if (!next) { if (history.notice) setError(history.notice); return; }
+    publishDraftRows(next, 'replay');
+  }
+
+  /** 放弃单行和历史回放共用选区及表单恢复。其余行、勾选和保留页沿用原身份。 */
+  function publishDraftRows(next: DraftRow[], mode: 'record' | 'replay') {
     const recordRowId = record.draft?.rowId;
+    setRows(next, mode);
     pasteInsertIntent.current?.invalidate(); pendingPaste.current = null; recordPages.cancel(); record.reset();
-    setRows(next, 'replay'); setError(''); setDuplicateNotice('');
+    setError(''); setDuplicateNotice('');
     const liveIds = new Set(next.map(row => row.id));
-    setSelectedRows(new Set([...selectedRows].filter(id => liveIds.has(id))));
+    setSelectedRows(new Set([...selectedRowsRef.current].filter(id => liveIds.has(id))));
     const selected = selectionRef.current;
     if (selected && !next.some(row => row.id === selected.rowId)) { selectionRef.current = undefined; setSelection(undefined); }
     const formRowId = selected?.rowId ?? recordRowId;
     if (record.formOpen && formRowId && next.some(row => row.id === formRowId)) record.select(formRowId);
     restoreGridFocus(false);
+  }
+
+  function discardCurrentRow(): void {
+    if (historyBlocked || !tableToolbarCurrent() || !historyAvailable() ||
+        rowsRef.current !== rows || selectionRef.current !== selection || !referenceRow) return;
+    const next = discardDraftRow(rows, referenceRow);
+    if (next === rows) return;
+    try { publishDraftRows(next, 'record'); }
+    catch (reason) { setError(errorMessage(reason)); }
   }
   /** 布局即时生效但明确保持未保存状态，异步读取不能覆盖用户刚调整的布局。 */
   function updatePreferences(next: TablePreferences) { if (preferencesLock.current) return; rowTransferIntent.current?.invalidate(); layoutRevision.current++; preferencesRef.current = next; setPreferences(next); setPreferencesDirty(true); setPreferencesError(''); }
@@ -2488,6 +2503,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
 <button aria-label={recordBatchFillZh.action} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={() => openBatchFill('page')}>{recordBatchFillZh.action}</button>
 {gridQuickValueKinds.map(kind => <button key={kind} type="button" title={quickValueText[`${kind}Hint`]}
   disabled={!canSetQuickValue(kind)} onClick={() => setQuickValue(kind)}>{quickValueText[kind]}</button>)}
+<button type="button" title={draftHistoryZh.discardRowHint} disabled={historyBlocked || !draftRowChanged(referenceRow)}
+  onClick={discardCurrentRow}>{draftHistoryZh.discardRow}</button>
 <button aria-label={draftHistoryZh.undo} title={draftHistoryZh.limit} disabled={!history.status.undo || historyBlocked} onClick={() => moveHistory("undo")}>{draftHistoryZh.undo} ({history.status.undo})</button>
 <button aria-label={draftHistoryZh.redo} title={draftHistoryZh.limit} disabled={!history.status.redo || historyBlocked} onClick={() => moveHistory("redo")}>{draftHistoryZh.redo} ({history.status.redo})</button>
 <button aria-label={savedDraftText.save} disabled={historyBlocked || !changes.length} onClick={() => openSavedDraft('save')}>{savedDraftText.save}</button>

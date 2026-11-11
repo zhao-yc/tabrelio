@@ -31,6 +31,44 @@ function unchanged(f: ReturnType<typeof fixture>, before: ReturnType<typeof capt
   expect(f.editor.view.rows).toBe(before.rows); expect(inner.past).toBe(before.past); expect(inner.past).toHaveLength(before.pastLength); expect(inner.future).toBe(before.future); expect(inner.future).toHaveLength(before.futureLength); expect(inner.input).toBe(before.input); expect(f.editor.view.preview).toBe(before.preview); expect(f.editor.changes).toEqual(before.changes); expect(f.id).toHaveBeenCalledTimes(before.ids); expect(f.release).toHaveBeenCalledTimes(before.releases); expect(f.preview).toHaveBeenCalledTimes(before.previews); expect(f.apply).toHaveBeenCalledTimes(before.applies); expect(f.changed).toHaveBeenCalledTimes(before.changed); expect(f.dirty).toHaveBeenCalledTimes(before.dirty);
 }
 
+describe('SQLite 放弃当前记录草稿', () => {
+  it('恢复已修改并标记删除的准确原行，一步撤销，另一条新增保持', () => {
+    const f = fixture();
+    f.save(0, '本地编辑');
+    const [id] = f.editor.appendRows([[cell('新增'), undefined]]);
+    f.editor.remove('original-0');
+    const before = f.editor.view.rows;
+    expect(f.editor.discardRow(before[0])).toBe(true);
+    const after = f.editor.view.rows;
+    expect(after[0]).toMatchObject({ id: 'original-0', values: [cell('原0:0'), cell('原0:1')], deleted: false });
+    expect(after[1]).toBe(before[1]);
+    expect(after.at(-1)).toBe(before.at(-1));
+    expect(f.editor.discardRow(before[0])).toBe(false);
+    f.editor.undo();
+    expect(f.editor.view.rows).toBe(before);
+    f.editor.redo();
+    expect(f.editor.view.rows).toBe(after);
+    expect(f.editor.discardRow(after.find(row => row.id === id)!)).toBe(true);
+    expect(f.editor.changes).toEqual([]);
+    f.editor.undo();
+    expect(f.editor.view.rows).toBe(after);
+    expect(f.preview).not.toHaveBeenCalled();
+    expect(f.apply).not.toHaveBeenCalled();
+  });
+  it('原预览或字段输入存在时拒绝放弃，保留原账本', async () => {
+    const f = fixture();
+    await f.ready();
+    const before = capture(f);
+    expect(f.editor.discardRow(before.rows[0])).toBe(false);
+    unchanged(f, before);
+    f.editor.closePreview();
+    f.editor.inputOpen(true);
+    const input = capture(f);
+    expect(f.editor.discardRow(input.rows[0])).toBe(false);
+    unchanged(f, input);
+  });
+});
+
 describe('SQLite勾选批量删除只形成一个本地撤销步骤', () => {
   it('混合原行/新增行整批删除，未选行引用和typed值保持；undo恢复原更新，redo恢复整组', () => {
     const f = fixture(); f.save(0, '本地更新\0🚢'); const [inserted] = f.editor.appendRows([[cell('新增'), undefined]]), original = f.editor.view.rows, calls = f.changed.mock.calls.length, ids = f.id.mock.calls.length;

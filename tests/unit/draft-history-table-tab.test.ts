@@ -32,6 +32,9 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
   const effects: (() => void)[] = [];
   const equal = (a: any[], b: any[]) => !!a && !!b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
   const hooks = {
+    createContext<T>(defaultValue: T) { return { defaultValue, Provider: 'ContextProvider' }; },
+    useContext<T>(context: { defaultValue: T }) { return context.defaultValue; },
+    useId() { return 'RAM-' + cursor++; },
     useState(initial: any) { const index = cursor++; if (!Object.hasOwn(slots, index)) slots[index] = typeof initial === 'function' ? initial() : initial; return [slots[index], (value: any) => { const next = typeof value === 'function' ? value(slots[index]) : value; if (!Object.is(next, slots[index])) { slots[index] = next; dirty = true; } }]; },
     useRef(initial: any) { const index = cursor++; if (!Object.hasOwn(slots, index)) slots[index] = { current: initial }; return slots[index]; },
     useMemo(fn: () => any, deps: any[]) { const index = cursor++; if (!slots[index] || !equal(slots[index].deps, deps)) slots[index] = { value: fn(), deps }; return slots[index].value; },
@@ -95,6 +98,8 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
       if (target === path.join(renderer, 'uiCommands')) return navigationMenuVmPort;
       if (target === path.join(renderer, 'lib')) return { ...lib, invoke, uid: vi.fn(() => 'UUID-' + ++counter) };
       if (target === path.join(renderer, 'components/GridCellActionMenu')) return { useGridCellActionMenu: () => ({ menu: null }), isGridContextKey: () => false };
+      if (['GridHeaderMenu', 'TableReadHistory', 'TableColumnChooser', 'TableFieldFind', 'GridRowSelectionActions', 'GridRowJump', 'GridColumnJump'].some(component => target === path.join(renderer, 'components', component)))
+        return load(target + '.tsx');
       if (target.startsWith(path.join(renderer, 'components') + path.sep)) return new Proxy({}, { get: (_, key) => String(key) });
       for (const extension of ['.ts', '.tsx']) if (existsSync(target + extension)) return load(target + extension);
       throw Error('纯组件不允许未知依赖：' + name);
@@ -120,7 +125,9 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
   async function click(label: string) { const found = button(label); expect(found.props.disabled).not.toBe(true); await found.props.onClick(); await render(); }
   async function change(value: string) { const rows = grid().rows; grid().onRowsChange(rows.map((row: any, index: number) => index ? row : { ...row, data: { ...row.data, note: value } })); await render(); }
   async function press(key: string, patch: Record<string, any> = {}, kind = 'grid', mode = 'ACTIVE') {
-    const event = { key, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, nativeEvent: {}, target: new Node(kind), preventGridDefault: vi.fn(), preventDefault: vi.fn(), ...patch };
+    let gridDefaultPrevented = false;
+    const event = { key, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, nativeEvent: {}, target: new Node(kind),
+      isGridDefaultPrevented: () => gridDefaultPrevented, preventGridDefault: vi.fn(() => { gridDefaultPrevented = true; }), preventDefault: vi.fn(), ...patch };
     grid().onCellKeyDown({ mode, row: grid().rows[0], column: { key: 'note' } }, event); await render(); return event;
   }
   await render(); expect(grid().rows).toHaveLength(options.batch || options.pages ? 2 : 1);
@@ -267,6 +274,33 @@ describe('完整TableTab及记录控制器的RAM编辑历史', () => {
   it('一次单格编辑及往返保持original/字节/JSON，撤销重做零额外IPC', async () => {
     const f = await fixture(), original = f.grid().rows[0].original; await f.change('精度900719925474099312345'); const calls = f.invoke.mock.calls.length;
     await f.click(text.undo); expect(f.grid().rows[0].data.note).toBe('原值'); await f.click(text.redo); expect(f.grid().rows[0].data.note).toBe('精度900719925474099312345'); expect(f.grid().rows[0].original).toBe(original); expect(f.grid().rows[0].data.bytes).toEqual({ type: 'binary', base64: 'AAH/' }); expect(f.invoke).toHaveBeenCalledTimes(calls);
+  });
+  it('只放弃当前记录的更新和删除，恢复原行值，一步撤销且不清除其他草稿', async () => {
+    const f = await fixture();
+    const select = async (index: number) => {
+      f.grid().onActivePositionChange({ row: f.grid().rows[index], column: { key: 'note' } });
+      await f.render();
+    };
+    await f.change('原行已改');
+    await f.click(zh.common.add);
+    const [updated, inserted] = f.grid().rows;
+    await select(0);
+    await f.click(zh.common.delete);
+    const deleted = f.grid().rows[0];
+    const count = f.invoke.mock.calls.length;
+    await f.click(text.discardRow);
+    expect(f.grid().rows[0]).toMatchObject({ id: updated.id, data: updated.original, deleted: false });
+    expect(f.grid().rows[1]).toBe(inserted);
+    expect(f.button(text.discardRow).props.disabled).toBe(true);
+    await f.click(text.undo);
+    expect(f.grid().rows[0]).toEqual(deleted);
+    await f.click(text.redo);
+    await select(1);
+    await f.click(text.discardRow);
+    expect(f.grid().rows.map((row: {id: string}) => row.id)).toEqual([updated.id]);
+    await f.click(text.undo);
+    expect(f.grid().rows[1]).toEqual(inserted);
+    expect(f.invoke).toHaveBeenCalledTimes(count);
   });
   it('新增、复制新增和批量新增各为一步，重做保留全部原UUID且不调用复制或连接', async () => {
     const f = await fixture(); f.grid().onActivePositionChange({ row: f.grid().rows[0], column: { key: 'note' } }); await f.render();

@@ -6,6 +6,20 @@ export interface DraftRow { id: string; data: DataRow; original?: DataRow; inser
 /** 单行和批量新增共用同一草稿语义；省略字段保持DEFAULT，不自动填入NULL或服务器默认值。 */
 export function newDraftRow(id: string, data: DataRow = {}): DraftRow { return { id, data, inserted: true, deleted: false }; }
 
+export function draftRowChanged(row: DraftRow | undefined): boolean {
+  return !!row && (row.inserted || !!row.original && (row.deleted || !rowEqual(row.original, row.data)));
+}
+
+/** 按原行对象定位。新增只移除本地行，已有行恢复读取时的完整原值及删除状态。 */
+export function discardDraftRow(rows: DraftRow[], row: DraftRow): DraftRow[] {
+  const index = rows.indexOf(row);
+  if (index < 0 || !draftRowChanged(row)) return rows;
+  if (row.inserted) return rows.filter(item => item !== row);
+  const next = [...rows];
+  next[index] = { ...row, data: row.original!, deleted: false };
+  return next;
+}
+
 /** 保留载入时的完整快照用于乐观锁，只把实际修改字段发送给数据库。 */
 export function collectChanges(rows: DraftRow[]): RowChange[] {
   return rows.flatMap<RowChange>(row => {
