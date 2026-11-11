@@ -60,3 +60,17 @@ it('过滤活动坏对象页仅修复返回活动ID，保留可用原标签或�
   const empty = open({ ...defaultSettings, activeTabId: 'bad', tabs: [invalid] }).settings();
   expect(empty.tabs).toEqual([]); expect(empty.activeTabId).toBeUndefined(); expect(fs.writes).toBe(0);
 });
+
+it('对象树分组偏好和星标 ID 可经设置重开；损坏配置只回退该字段', () => {
+  const settings: AppSettings = { ...defaultSettings, sidebarView: { flat: true, starred: ['原连接', 'c'] } };
+  const store = open();
+  store.saveSettings(validateCommand('settings.save', settings) as AppSettings);
+  expect(open(undefined, fs.files.get('ram-object-browser-settings')).settings()).toEqual(settings);
+  for (const sidebarView of [{ flat: 'true', starred: [] }, { flat: true, starred: ['c', 'c'] }, { flat: true, starred: [], password: '无效字段' }]) {
+    const malformed = { ...settings, sidebarView };
+    expect(() => validateCommand('settings.save', malformed)).toThrow();
+    expect(() => store.saveSettings(malformed as AppSettings)).toThrow();
+    expect(open(malformed).settings()).toEqual(defaultSettings);
+  }
+  expect(fs.writes).toBe(1);
+});

@@ -6,6 +6,7 @@ import { tableElementsZh as text } from '../../src/renderer/locales/tableElement
 import { tablePresetsZh } from '../../src/renderer/locales/tablePresets.zh-CN';
 import { sidebarContextMenuZh } from '../../src/renderer/locales/sidebarContextMenu.zh-CN';
 import { sidebarLocateZh } from '../../src/renderer/locales/sidebarLocate.zh-CN';
+import { sidebarViewZh } from '../../src/renderer/locales/sidebarView.zh-CN';
 import { columnPatchZh } from '../../src/renderer/locales/columnPatches.zh-CN';
 import { indexPatchZh } from '../../src/renderer/locales/indexPatches.zh-CN';
 import { foreignKeyPatchZh } from '../../src/renderer/locales/foreignKeyPatches.zh-CN';
@@ -245,6 +246,23 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();
     expect((await settings()).tabs).toEqual(tableTabs);
     await page.screenshot({ path: info.outputPath('对象树定位表页.png') });
+    if (sqlite) {
+      const trigger = tree.getByRole('button', { name: sidebarViewZh.controls, exact: true });
+      await trigger.click();
+      const panel = tree.getByRole('group', { name: sidebarViewZh.controls, exact: true });
+      const [panelBounds, treeBounds] = await Promise.all([panel.boundingBox(), tree.boundingBox()]);
+      expect(panelBounds!.x).toBeGreaterThanOrEqual(treeBounds!.x);
+      expect(panelBounds!.x + panelBounds!.width).toBeLessThanOrEqual(treeBounds!.x + treeBounds!.width);
+      await panel.getByRole('combobox', { name: sidebarViewZh.vendor, exact: true }).selectOption('sqlite');
+      await panel.getByRole('checkbox', { name: sidebarViewZh.flat, exact: true }).check();
+      await expect(row).toBeVisible();
+      await page.screenshot({ path: info.outputPath('最窄侧栏视图菜单.png') });
+      await panel.getByRole('button', { name: sidebarViewZh.collapse, exact: true }).click();
+      await expect(row).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+      await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();
+      expect((await settings()).tabs).toEqual(tableTabs);
+    }
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(pageErrors).toEqual([]);
     if (before && !rename) expect(await readFile(file)).toEqual(before);

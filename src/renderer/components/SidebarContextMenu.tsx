@@ -378,7 +378,8 @@ export function SidebarTreeRow({ target, label, className, version, actions, chi
   useLayoutEffect(() => { present.current = true; return () => { present.current = false; context?.retireFor(row.current); }; }, []);
   /** 行生命周期与目录代次共同约束选择和动作，中央列表同步刷新也能撤销旧目标。 */
   function proof(node: HTMLDivElement, captured: typeof latest.current): RowLease {
-    return { node, current: () => present.current && row.current === node && latest.current.token === captured.token && captured.isCurrent?.() !== false };
+    return { node, current: () => present.current && row.current === node && !node.closest('[hidden]') &&
+      latest.current.token === captured.token && captured.isCurrent?.() !== false };
   }
   /** 目录行实际挂载后才选中并聚焦，复用原节点租约，绝不触发行点击。 */
   useLayoutEffect(() => {

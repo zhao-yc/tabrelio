@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
+import { appDialogSelector } from '../../src/renderer/modalSelectors';
 
 const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8');
 const file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -20,7 +21,7 @@ function nodes() {
 }
 it.each([false, true])('已有模态=%s时入口只在无模态下撤销旧导航并打开', modal => {
   const value = nodes(), invalidate = vi.fn(), show = vi.fn();
-  runInNewContext(ts.transpileModule(value.entry.getText(file) + '\nopenConnectionOrganization();', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, { document: { querySelector: () => modal ? {} : null }, workbenchNavigation: { invalidate }, setConnectionOrganization: show });
+  runInNewContext(ts.transpileModule(value.entry.getText(file) + '\nopenConnectionOrganization();', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, { appDialogSelector, document: { querySelector: () => modal ? {} : null }, workbenchNavigation: { invalidate }, setConnectionOrganization: show });
   expect(show.mock.calls).toEqual(modal ? [] : [[true]]); expect(invalidate).toHaveBeenCalledTimes(modal ? 0 : 1);
 });
 it('整理成功回调只发布准确连接数组，不触碰版本、标签、任务或会话', () => {

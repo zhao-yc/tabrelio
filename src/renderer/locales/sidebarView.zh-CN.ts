@@ -1,0 +1,14 @@
+export const sidebarViewZh = {
+  controls: '对象树视图',
+  vendor: '数据库类型',
+  all: '全部类型',
+  starredOnly: '仅显示星标连接',
+  flat: '隐藏连接分组',
+  collapse: '折叠全部',
+  noMatch: '没有符合筛选条件的连接',
+  reset: '清除连接筛选',
+  star: '标记星标连接',
+  unstar: '取消连接星标',
+  limit: '星标连接已达上限，请先取消一项星标。',
+  vendors: { mysql: 'MySQL', mariadb: 'MariaDB', postgresql: 'PostgreSQL', sqlite: 'SQLite' },
+} as const;

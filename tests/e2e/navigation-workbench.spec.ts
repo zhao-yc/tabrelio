@@ -5,6 +5,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationZh as text } from '../../src/renderer/locales/navigation.zh-CN';
 import { actionMenuZh } from '../../src/renderer/locales/actionMenu.zh-CN';
 import { sidebarLocateZh } from '../../src/renderer/locales/sidebarLocate.zh-CN';
+import { sidebarViewZh } from '../../src/renderer/locales/sidebarView.zh-CN';
 import type { UiCommandId } from '../../src/shared/uiCommands';
 import { productName } from '../../src/shared/productName';
 
@@ -245,6 +246,71 @@ function register(): void {
     await expect(target.locator('.tree-label')).toBeFocused();
     expect((await audit()).calls).toEqual(before);
     await originalPreserved();
+  });
+
+  test('对象树筛选、星标、扁平显示和折叠全部使用原连接及目录状态', async () => {
+    const sidebar = runtime.page.locator('.sidebar');
+    const trigger = sidebar.getByRole('button', { name: sidebarViewZh.controls, exact: true });
+    const panel = sidebar.getByRole('group', { name: sidebarViewZh.controls, exact: true });
+    const locate = sidebar.getByRole('button', { name: sidebarLocateZh.action, exact: true });
+    const connection = row('connection'), database = row('database');
+    const vendor = panel.getByRole('combobox', { name: sidebarViewZh.vendor, exact: true });
+    const starredOnly = panel.getByRole('checkbox', { name: sidebarViewZh.starredOnly, exact: true });
+    const flat = panel.getByRole('checkbox', { name: sidebarViewZh.flat, exact: true });
+    const headings = sidebar.locator('.connection-group-heading');
+    await openTree();
+    const before = (await audit()).calls;
+
+    await trigger.press('Enter');
+    await runtime.page.keyboard.press('Tab');
+    await expect(vendor).toBeFocused();
+    await flat.check();
+    await expect(headings).toHaveCount(0);
+    await expect(database).toBeVisible();
+    await starredOnly.check();
+    await expect(connection).toBeHidden();
+    await expect(sidebar.getByText(sidebarViewZh.noMatch, { exact: true })).toBeVisible();
+    await starredOnly.uncheck();
+    await vendor.selectOption('sqlite');
+    await expect(connection).toBeHidden();
+    await vendor.selectOption('mysql');
+    await expect(database).toBeVisible();
+    await vendor.press('Escape');
+    await expect(panel).toBeHidden();
+    await expect(trigger).toBeFocused();
+    expect((await audit()).calls).toEqual(before);
+
+    await connection.click({ button: 'right' });
+    await runtime.page.getByRole('menuitem', { name: sidebarViewZh.star, exact: true }).click();
+    await expect(connection.locator('.sidebar-connection-star')).toBeVisible();
+    await trigger.click();
+    await starredOnly.check();
+    await vendor.selectOption('sqlite');
+    await expect(connection).toBeHidden();
+    await locate.click();
+    await expect(database.locator('.tree-label')).toBeFocused();
+    expect((await audit()).calls).toEqual(before);
+    await expect.poll(async () => (await settings()).sidebarView).toEqual({ flat: true, starred: [connectionId] });
+
+    await main(() => (globalThis as AuditRoot).__navigationWorkbenchAudit!.holdObjects());
+    await database.locator('.tree-label').click();
+    await expect.poll(async () => (await audit()).pending).toBe(1);
+    await trigger.click();
+    await panel.getByRole('button', { name: sidebarViewZh.collapse, exact: true }).click();
+    await expect(connection.locator('.tree-label')).toHaveAttribute('aria-expanded', 'false');
+    await expect(connection.locator('.connection-dot')).toBeVisible();
+    await expect(database).toHaveCount(0);
+    await runtime.desktop.evaluate((_, objects) => (globalThis as AuditRoot).__navigationWorkbenchAudit!.releaseObjects(objects), smallObjects);
+    await originalPreserved();
+    expect((await audit()).calls.map(call => call.command)).toEqual([...before.map(call => call.command), 'metadata.objects']);
+    await main(() => (globalThis as AuditRoot).__navigationWorkbenchAudit!.prepareReload());
+    await runtime.page.reload();
+    await expect(connection.locator('.sidebar-connection-star')).toBeVisible();
+    await expect(headings).toHaveCount(0);
+    await connection.click({ button: 'right' });
+    await runtime.page.getByRole('menuitem', { name: sidebarViewZh.unstar, exact: true }).click();
+    await expect(connection.locator('.sidebar-connection-star')).toHaveCount(0);
+    await expect.poll(async () => (await settings()).sidebarView).toEqual({ flat: true, starred: [] });
   });
 
   test('五千合成对象只渲染有界行，搜索和类别切换复用同库对象页并保留原稿', async () => {

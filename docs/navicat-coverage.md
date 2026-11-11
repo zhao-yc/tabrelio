@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。对象树可按数据库类型和星标连接筛选、隐藏分组并折叠全部连接。星标及分组显示保存在本机，折叠可撤销待处理的目录展开。W02 增加连接筛选和树视图控制。[Navicat 导航面板](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#filter-navigation-pane)
+
 2026-11-12 源码增量。资源管理器可按当前表、视图、对象浏览或查询标签展开必要目录并定位，表和视图按原连接、库及关系名匹配。W02 增加活动标签到对象树的定位。[Navicat 导航面板](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#navigation-pane)
 
 2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的字段节点支持右键或 F2 进入改名输入，从新目录重新确认原字段，沿用对应引擎的草稿、SQL 预览和确认提交。W02 增加从树重命名字段。[Navicat 导航面板](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#navigation-pane)

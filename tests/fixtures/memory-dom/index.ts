@@ -44,7 +44,23 @@ export class MemoryNode {
   blur() { this.ownerDocument.activeElement = this.ownerDocument.body; }
   getRootNode(): MemoryNode { return this.parentNode?.getRootNode() ?? this; }
   setSelectionRange(start: number, end: number) { this.selectionStart = start; this.selectionEnd = end; }
-  querySelectorAll(selector: string): MemoryNode[] { const result: MemoryNode[] = []; const matches = (node: MemoryNode) => selector.split(',').some(part => { const s = part.trim(); if (s.includes(':not(:disabled)') && node.disabled) return false; const tag = s.match(/^[a-z]+/)?.[0]; if (tag && node.tagName !== tag.toUpperCase()) return false; const attr = s.match(/\[([^=\]]+)(?:="([^"]*)")?\]/); if (attr && (attr[2] === undefined ? !node.attributes.has(attr[1]) : node.getAttribute(attr[1]) !== attr[2])) return false; return !!tag || !!attr; }); const walk = (node: MemoryNode) => { for (const child of node.childNodes) { if (child.nodeType === 1 && matches(child)) result.push(child); walk(child); } }; walk(this); return result; }
+  matches(selector: string): boolean {
+    if (this.nodeType !== 1) return false;
+    return selector.split(',').some(part => {
+      const s = part.trim();
+      if (s.includes(':not(:disabled)') && this.disabled) return false;
+      const tag = s.match(/^[a-z]+/)?.[0];
+      if (tag && this.tagName !== tag.toUpperCase()) return false;
+      const attr = s.match(/\[([^=\]]+)(?:="([^"]*)")?\]/);
+      if (attr && (attr[2] === undefined ? !this.attributes.has(attr[1]) : this.getAttribute(attr[1]) !== attr[2])) return false;
+      return !!tag || !!attr;
+    });
+  }
+  closest(selector: string): MemoryNode | null {
+    for (let node: MemoryNode | null = this; node; node = node.parentNode) if (node.matches(selector)) return node;
+    return null;
+  }
+  querySelectorAll(selector: string): MemoryNode[] { const result: MemoryNode[] = []; const walk = (node: MemoryNode) => { for (const child of node.childNodes) { if (child.matches(selector)) result.push(child); walk(child); } }; walk(this); return result; }
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
 }
 /** 只补HTML textarea的默认子文本、dirty值及LF读回合同；不扩展input或模拟浏览器布局。 */
