@@ -18,6 +18,7 @@ import { recordNavigatorZh as recordNav } from '../../src/renderer/locales/recor
 import { tableReadHistoryZh as readHistory } from '../../src/renderer/locales/tableReadHistory.zh-CN';
 import { tableColumnChooserZh as chooserText } from '../../src/renderer/locales/tableColumnChooser.zh-CN';
 import { tableFilterEnabledZh } from '../../src/renderer/locales/tableFilterEnabled.zh-CN';
+import { tablePresetsZh } from '../../src/renderer/locales/tablePresets.zh-CN';
 import { sqliteTableEditZh as sqliteEdit } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { sqliteEditWorkspaceZh as sqliteWorkspace } from '../../src/renderer/locales/sqliteEditWorkspace.zh-CN';
 
@@ -705,6 +706,40 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     const previous = beforeClear.at(-1)!;
     expect((await reads()).at(-1)).toEqual(dialect === 'postgresql' ?
       { ...previous, filter: undefined, offset: 0 } : { ...previous, filters: [], filterGroup: undefined, page: 1 });
+    if (dialect === 'postgresql') {
+      // 共用方案树仍支持 PostgreSQL 的展开、保存后刷新和独立首屏。
+      const tree = page.locator('.sidebar');
+      await tree.getByRole('button', { name: 'postgresql', exact: true }).click();
+      await tree.getByRole('button', { name: database, exact: true }).click();
+      const object = tree.locator('.object-row').filter({ hasText: 'update_subject' });
+      const title = await object.locator('.tree-label .truncate').innerText();
+      const expand = tablePresetsZh.treeExpand(title);
+      await object.getByRole('button', { name: expand, exact: true }).click();
+      const branch = tree.getByRole('group', { name: expand, exact: true });
+      await expect(branch.getByText(tablePresetsZh.treeEmpty, { exact: true })).toBeVisible();
+      await tab.getByLabel(postgres.filterColumn, { exact: true }).selectOption('label');
+      const quick = tab.getByLabel(postgres.filterText, { exact: true });
+      await quick.fill('row B');
+      await applyFilterWithEnter(quick, reads);
+      await expect(rowLabels(tab)).toHaveText([/row B$/]);
+      await toggle(postgres.presets);
+      const name = '仅 B 行的方案';
+      const panel = page.getByRole('dialog', { name: postgres.presets, exact: true });
+      await panel.getByLabel(tablePresetsZh.name, { exact: true }).fill(name);
+      await panel.getByRole('button', { name: tablePresetsZh.save, exact: true }).click();
+      await expect(panel.getByRole('status')).toHaveText(tablePresetsZh.saved);
+      await page.keyboard.press('Escape');
+      const entry = branch.getByRole('button', { name: tablePresetsZh.treeOpen(name), exact: true });
+      await expect(entry).toBeVisible();
+      await entry.click();
+      const presetTab = page.locator('.tab-select').getByText(tablePresetsZh.tabTitle(title, name), { exact: true });
+      await expect(presetTab).toBeVisible();
+      await expect(rowLabels(tab)).toHaveText([/row B$/]);
+      await expect(headerFor('scope')).toHaveCount(0);
+      await entry.click();
+      await expect(presetTab).toHaveCount(1);
+      await page.screenshot({ path: info.outputPath('PostgreSQL对象树方案回归.png') });
+    }
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

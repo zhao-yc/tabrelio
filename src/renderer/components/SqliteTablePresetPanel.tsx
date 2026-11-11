@@ -3,6 +3,7 @@ import { sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, sqliteTable
 import type { TablePreferences } from '../../shared/tablePreferences';
 import { sqliteTablePresetsZh as text } from '../locales/sqliteTablePresets.zh-CN';
 import { invoke, errorMessage } from '../lib';
+import { tablePresetsChanged } from '../tablePresetTree';
 import { ErrorBox } from './ui';
 
 export interface SqliteTablePresetServices {
@@ -67,6 +68,7 @@ export function SqliteTablePresetPanel(props: Props) {
       if (replace && !window.confirm(text.confirmReplace(input.name)) || !current(value)) return;
       setError(''); setNotice('');
       const result = await api.save(input);
+      if (api === services) tablePresetsChanged('sqlite', input);
       if (current(value)) { const next = checkSnapshot(result, value); setSnapshot(next); setSelected(next.entries.find(entry => entry.name === input.name)?.id ?? ''); setNotice(text.saved); }
     } catch (reason) { if (current(value)) setError(errorMessage(reason)); }
     finally { value.busy = false; if (current(value)) setBusy(false); }
@@ -93,6 +95,7 @@ export function SqliteTablePresetPanel(props: Props) {
       const entry = snapshot?.entries.find(entry => entry.id === selected); if (!entry) throw Error(text.missing);
       const input = sqliteTablePresetSelectSchema.parse({ ...packet(value), id: entry.id }); if (!window.confirm(text.confirmRemove(entry.name)) || !current(value)) return;
       setError(''); setNotice(''); const result = await api.remove(input);
+      if (api === services) tablePresetsChanged('sqlite', input);
       if (current(value)) { setSnapshot(checkSnapshot(result, value)); setSelected(''); setNotice(text.removed); }
     } catch (reason) { if (current(value)) setError(errorMessage(reason)); }
     finally { value.busy = false; if (current(value)) setBusy(false); }

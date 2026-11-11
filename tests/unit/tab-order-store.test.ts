@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettings, ConnectionProfile } from '../../src/shared/contracts';
-import { postgresPresetTabId } from '../../src/shared/postgresPresetTab';
+import { tablePresetTabId } from '../../src/shared/tablePresetTab';
 
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock('../../src/renderer/lib', () => ({ invoke: request, uid: () => 'new-tab', errorMessage: (error: unknown) => error instanceof Error ? error.message : String(error) }));
@@ -40,10 +40,10 @@ describe('工作台重排沿真实store及原配置持久化通道', () => {
     expect(workspace.useWorkspace.getState().settings.activeTabId).toBe(other.id);
   });
 
-  it('同关系的普通表页和两个命名方案各用独立标签，重复打开只聚焦原方案', () => {
-    const ordinary = table('original'), first = postgresPresetTabId(fileId, '11111111-2222-4333-8444-555555555555');
-    const same = postgresPresetTabId(fileId, '11111111-2222-4333-8444-666666666666');
-    const other = postgresPresetTabId('11111111-2222-4333-8444-777777777777', '11111111-2222-4333-8444-888888888888');
+  it.each(['postgres', 'sqlite'] as const)('%s 同关系的普通表页和两个命名方案各用独立标签，重复打开只聚焦原方案', kind => {
+    const ordinary = table('original'), first = tablePresetTabId(kind, fileId, '11111111-2222-4333-8444-555555555555');
+    const same = tablePresetTabId(kind, fileId, '11111111-2222-4333-8444-666666666666');
+    const other = tablePresetTabId(kind, '11111111-2222-4333-8444-777777777777', '11111111-2222-4333-8444-888888888888');
     install([ordinary]);
     const state = workspace.useWorkspace.getState(); state.setDirty(ordinary.id, true);
     state.openTab({ ...ordinary, id: first }); state.openTab({ ...ordinary, id: other }); state.openTab({ ...ordinary, id: same });

@@ -11,6 +11,8 @@ export const sqliteTablePresetsZh = {
   confirmLayout: '应用方案将替换本标签尚未保存的列布局，确认继续？',
   changed: '原表页、连接或条件表单已变化，未覆盖当前内容；请刷新或重新载入。', stale: '来源已失效，请刷新方案。', busy: '正在处理本机方案…',
   missing: '请先选择一个已保存方案。', staleEntry: '（连接来源已变化）', empty: '当前表还没有本机方案。',
+  opening: '正在打开 SQLite 方案…', retryOpen: '重新打开 SQLite 方案',
+  tabMissing: '此标签的 SQLite 方案已删除或无法识别。可重试，或从对象树打开普通表页。',
   confirmReplace: (name: string) => '覆盖本机方案“' + name + '”的条件、排序和可选列布局？名称保持不变，不修改数据库。',
   confirmRemove: (name: string) => '删除本机方案“' + name + '”？不会删除表或改变数据。',
 };

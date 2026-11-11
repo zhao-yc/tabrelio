@@ -1,6 +1,6 @@
 import { isSqliteRelatedTabId } from '../shared/sqliteRelatedTab';
 import { isPostgresRelatedTabId } from '../shared/postgresRelatedTab';
-import { isPostgresPresetTabId, postgresPresetIdFromTab } from '../shared/postgresPresetTab';
+import { isTablePresetTabId, tablePresetIdFromTab } from '../shared/tablePresetTab';
 import { assertSqliteTableRebuildFactTransition, sqliteTableRebuildFactSchema } from '../shared/sqliteTableRebuild';
 import { sqliteTableRebuildFactMessage, sqliteTableRebuildTaskMessage } from '../shared/sqliteTableRebuildFact';
 import { assertSqliteObjectsFactTransition, sqliteObjectsFactSchema } from '../shared/sqliteObjects';
@@ -280,11 +280,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   /** 表页与每库对象目录各自复用；SQL查询始终保持独立标签和会话。 */
   openTab: candidate => {
     const current = get().settings;
-    const presetId = postgresPresetIdFromTab(candidate.id);
+    const presetKinds = ['postgres', 'sqlite'] as const;
+    const presetKind = presetKinds.find(kind => isTablePresetTabId(kind, candidate.id));
+    const presetId = presetKind && tablePresetIdFromTab(presetKind, candidate.id);
     const existing = candidate.kind === 'table' ? current.tabs.find(tab => !isSqliteRelatedTabId(candidate.id) && !isSqliteRelatedTabId(tab.id) &&
       !isPostgresRelatedTabId(candidate.id) && !isPostgresRelatedTabId(tab.id) &&
       tab.kind === 'table' && tab.connectionId === candidate.connectionId && tab.database === candidate.database && tab.table === candidate.table &&
-      (presetId ? postgresPresetIdFromTab(tab.id) === presetId : !isPostgresPresetTabId(candidate.id) && !isPostgresPresetTabId(tab.id)))
+      (presetKind ? !!presetId && tablePresetIdFromTab(presetKind, tab.id) === presetId :
+        !presetKinds.some(kind => isTablePresetTabId(kind, tab.id))))
       : candidate.kind === 'objects' ? current.tabs.find(tab => tab.kind === 'objects' && tab.connectionId === candidate.connectionId && tab.database === candidate.database) : undefined;
     if (existing && candidate.kind === 'objects') { get().updateTab(existing.id, { objectCategory: candidate.objectCategory }); get().updateSettings({ activeTabId: existing.id }); return; }
     if (existing) { get().updateSettings({ activeTabId: existing.id }); return; }
