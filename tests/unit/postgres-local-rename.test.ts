@@ -188,3 +188,10 @@ it('重命名跨 ROWS FROM 的各个实参，但保留函数名和列定义', ()
   expect(edited('MERGE INTO orders d USING get_records() AS ¦r(id int, n numeric(12,3)) ON d.id=r.id WHEN MATCHED THEN UPDATE SET n=r.n RETURNING r.id', 'records'))
     .toBe('MERGE INTO orders d USING get_records() AS "records"(id int, n numeric(12,3)) ON d.id="records".id WHEN MATCHED THEN UPDATE SET n="records".n RETURNING "records".id');
 });
+
+it('JSON_TABLE 的输入别名和输出别名独立重命名，路径与变量名保持原文', () => {
+  const source = "SELECT j.label FROM documents ¦d, JSON_TABLE(d.payload, '$' AS root PASSING d.n AS v COLUMNS (NESTED PATH '$.items[*]' AS items COLUMNS (label text PATH '$.d.label'))) j";
+  expect(edited(source, '文档')).toBe(source.replace('¦d,', '"文档",').replace('d.payload', '"文档".payload').replace('d.n', '"文档".n'));
+  const merge = "MERGE INTO orders d USING JSON_TABLE('{}', '$' COLUMNS (id int)) AS ¦j ON d.id=j.id WHEN MATCHED THEN DELETE RETURNING j.id";
+  expect(edited(merge, '解析')).toBe(merge.replace('¦j', '"解析"').replaceAll('j.id', '"解析".id'));
+});

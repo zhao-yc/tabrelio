@@ -200,3 +200,16 @@ it('ROWS FROM 的实参共用外层范围，并遵守 JOIN 和写入目标的关
   expect(at('MERGE INTO orders d USING ROWS FROM (generate_series(1,¦d.n)) r(id) ON d.id=r.id WHEN MATCHED THEN DELETE'))
     .toMatchObject({ status: 'blocked' });
 });
+
+it('JSON_TABLE 区分文档、PASSING、列定义和外层别名', () => {
+  const source = "JSON_TABLE(d.payload, '$' AS root PASSING d.n AS minimum COLUMNS (id int, NESTED '$.items[*]' COLUMNS (label text))) j";
+  expect(at('SELECT ¦j.label FROM documents d, ' + source)).toMatchObject({ status: 'ready' });
+  expect(at('SELECT j.label FROM documents d, ' + source.replace('d.payload', '¦d.payload'))).toMatchObject({ status: 'ready' });
+  expect(at('SELECT j.label FROM documents d, ' + source.replace('d.n', '¦d.n'))).toMatchObject({ status: 'ready' });
+  expect(at("SELECT j.id FROM documents d, JSON_TABLE('{}', '$' COLUMNS (id int DEFAULT ¦d.n ON EMPTY)) j"))
+    .toMatchObject({ status: 'blocked' });
+  expect(at("MERGE INTO orders d USING JSON_TABLE(¦d.payload, '$' COLUMNS (id int)) j ON d.id=j.id WHEN MATCHED THEN DELETE"))
+    .toMatchObject({ status: 'blocked' });
+  expect(at("MERGE INTO orders d USING JSON_TABLE('{}', '$' COLUMNS (id int)) j ON d.id=¦j.id WHEN MATCHED THEN DELETE"))
+    .toMatchObject({ status: 'ready' });
+});

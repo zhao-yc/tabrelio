@@ -93,6 +93,26 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
     expect(at('SELECT r.| FROM ROWS FROM (get_records() AS (id int)) WITH ORDINALITY AS r(key,seq)')?.query)
       .toMatchObject({ relations: [{ projection: { names: ['key', 'seq'], exact: true } }] });
   });
+  it('JSON_TABLE 投影包含嵌套列、存在列和序号，并应用位置别名', () => {
+    const source = `JSON_TABLE(d.payload, '$' AS root PASSING d.n AS minimum COLUMNS (
+      seq FOR ORDINALITY, id int, NESTED PATH '$.items[*]' AS child COLUMNS (
+        sub_seq FOR ORDINALITY, "名称" text PATH '$.name', ok boolean EXISTS PATH '$.ok'
+      )) EMPTY ARRAY ON ERROR) AS j("顺序")`;
+    expect(at('SELECT j.| FROM documents d, ' + source)?.query).toMatchObject({ relations: [{ alias: 'j',
+      projection: { names: ['顺序', 'id', 'sub_seq', '名称', 'ok'], stars: [], exact: true } }] });
+    expect(at('MERGE INTO orders d USING ' + source.replace('d.payload', "'{}'").replace('d.n', '1') + ' ON j.|')?.query).toMatchObject({ relations: [{ alias: 'j',
+      projection: { names: ['顺序', 'id', 'sub_seq', '名称', 'ok'], stars: [] } }] });
+    expect(at("WITH q AS (SELECT json_table.* FROM JSON_TABLE('{}', E'$' COLUMNS (id int))) SELECT q.| FROM q")?.query)
+      .toMatchObject({ relations: [{ projection: { names: ['id'], stars: [] } }] });
+  });
+  it('JSON_TABLE 的文档和 PASSING 使用前序来源，路径与列元数据没有字段补全', () => {
+    expect(at('SELECT * FROM documents d, JSON_TABLE(d.|)')?.query).toMatchObject({ relations: [{ name: 'documents', alias: 'd' }] });
+    expect(at("SELECT * FROM documents d, JSON_TABLE('{}', '$' PASSING d.| AS v COLUMNS (id int)) j")?.query)
+      .toMatchObject({ relations: [{ name: 'documents', alias: 'd' }] });
+    expect(at("SELECT * FROM documents d, JSON_TABLE('{}', '$' PASSING j.| AS v COLUMNS (id int)) j")?.query).toBeUndefined();
+    expect(at("SELECT * FROM documents d, JSON_TABLE('{}', '$' COLUMNS (id int DEFAULT d.| ON EMPTY)) j")?.query).toBeUndefined();
+    expect(at("SELECT j.| FROM JSON_TABLE('{}', '$' COLUMNS (id int, NESTED '$' COLUMNS (id int))) j")?.query).toBeUndefined();
+  });
   it('遇到未知返回列时只保留确定的名称，UPDATE FROM 和 DELETE USING 共享补全', () => {
     const rows = 'ROWS FROM (unknown_rows(), get_records() AS (id int, val text)) WITH ORDINALITY AS r(key)';
     const projected = { relations: [{ projection: { names: ['key', 'val', 'ordinality'], exact: false, stars: [{
@@ -315,6 +335,16 @@ it('表函数声明列补全使用安全引用和原文替换范围，零目录�
     expect((await duplicate.suggest())?.suggestions).toEqual([]);
     expect(inputs).toEqual([]);
   } finally { local.provider.dispose(); duplicate.provider.dispose(); }
+});
+
+it('JSON_TABLE 声明列直接补全，保持已输入的标识符范围且零目录请求', async () => {
+  const inputs: PostgresCompletionInput[] = [];
+  const local = editor(`SELECT j.名|旧 FROM JSON_TABLE('{}', '$' COLUMNS (NESTED '$' COLUMNS ("名称" text))) j`,
+    async input => { inputs.push(input); return { items: [], incomplete: false }; });
+  try {
+    expect((await local.suggest())?.suggestions).toMatchObject([{ insertText: '"名称"', range: { startColumn: 10, endColumn: 12 } }]);
+    expect(inputs).toEqual([]);
+  } finally { local.provider.dispose(); }
 });
 
 it('MERGE 只向目录发送当前目标身份，本地来源字段直接补全', async () => {
