@@ -80,6 +80,23 @@ describe('查询结果命名方案共享合同', () => {
     expect(queryResultPresetValueSchema.safeParse({ ...value, visible: [] }).success).toBe(false);
   });
 
+  it('列布局允许隐藏列尺寸，逐项验证完整顺序、唯一宽度键和行高', () => {
+    const original = fixture(), columns = [...original.columns, { key: 'hidden', name: '隐藏列', type: 'TEXT' }];
+    const value = { ...original, columns, visible: [...original.visible].reverse(), frozenThrough: '__proto__',
+      layout: { order: ['__proto__', 'hidden', 'id'], widths: [{ key: 'hidden', width: 230 }], rowHeight: 60 } };
+    expect(queryResultPresetValueSchema.parse(value)).toEqual(value);
+    for (const patch of [{ order: ['id', 'hidden', '__proto__'] }, { order: ['__proto__', 'id', 'id'] },
+      { order: ['__proto__', 'id'] }, { order: ['__proto__', 'other', 'id'] }, { rowHeight: 121 },
+      { widths: [{ key: 'id', width: 63 }] }, { widths: [{ key: 'other', width: 210 }] },
+      { widths: [{ key: 'id', width: 170 }, { key: 'id', width: 180 }] }]) {
+      expect(queryResultPresetValueSchema.safeParse({ ...value, layout: { ...value.layout, ...patch } }).success).toBe(false);
+    }
+    const unsafe = Object.defineProperty({ ...value.layout }, 'order', { get() { throw Error('不应执行'); }, enumerable: true });
+    const rejected = queryResultPresetValueSchema.safeParse({ ...value, layout: unsafe });
+    expect(rejected.success).toBe(false);
+    if (!rejected.success) expect(rejected.error.message).not.toContain('不应执行');
+  });
+
   it('条件和排序均只能引用可见字段，重复排序或方向/NULL选项无效整份拒绝', () => {
     const value = fixture();
     expect(queryResultPresetValueSchema.safeParse({ ...value, visible: [value.columns[0]] }).success).toBe(false);

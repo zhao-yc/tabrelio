@@ -3,9 +3,10 @@ import { resultExportLimits, validateResultExportData } from '../shared/resultEx
 import { isGridRowHeight, type GridRowHeight } from '../shared/gridRowHeight';
 import { tableGridZh } from './locales/tableGrid.zh-CN';
 import { projectSqliteResultStorage } from '../shared/sqliteResultStorage';
+import { queryResultColumnWidthLimits } from '../shared/queryResultPresets';
 import { appendGridFrozenColumn } from './gridFrozenColumn';
 
-export const queryResultColumnWidth = { min: 64, max: 2000, default: 170 } as const;
+export const queryResultColumnWidth = { ...queryResultColumnWidthLimits, default: 170 } as const;
 export interface QueryResultColumnLayout { order: string[]; visible: string[]; frozenThrough?: string; widths?: ReadonlyMap<string, number>; rowHeight?: GridRowHeight; }
 
 /** 独立调高复用当前布局。首次调整以原结果列顺序建立布局。 */

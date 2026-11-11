@@ -4,6 +4,8 @@ import { invoke, errorMessage } from '../lib';
 import { queryResultPresetsZh as text } from '../locales/queryResultPresets.zh-CN';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { zh } from '../locales/zh-CN';
+import { readGridRowHeight } from '../../shared/gridRowHeight';
+import { queryResultColumnWidth } from '../queryResultColumns';
 import { UsageHelp, Modal, ErrorBox, Spinner  } from './ui';
 import '../queryResultPresets.css';
 
@@ -13,6 +15,17 @@ function frozenSummary(value:QueryResultPresetValue):string {
   const position=value.columns.findIndex(column=>column.key===value.frozenThrough);
   if(position<0||!value.visible.some(column=>column.key===value.frozenThrough))return text.frozenUnavailable;
   return text.frozenThrough(position+1,value.columns[position].name||zh.resultExport.emptyName);
+}
+
+/** 预览按保存顺序列出可见列，原序号可区分重复别名。 */
+function LayoutPreview({ value }: { value: QueryResultPresetValue }) {
+  const layout = value.layout;
+  if (!layout) return <p>{text.legacyLayout}</p>;
+  const positions = new Map(value.columns.map(({ key }, index) => [key, index + 1]));
+  const widths = new Map(layout.widths?.map(({ key, width }) => [key, width]));
+  return <details><summary>{text.layout}</summary><p>{text.layoutRowHeight(readGridRowHeight(layout.rowHeight))}</p>
+    <ol>{value.visible.map(({ key, name }) => <li key={key}>{text.layoutColumn(positions.get(key)!, name || zh.resultExport.emptyName, widths.get(key) ?? queryResultColumnWidth.default)}</li>)}</ol>
+  </details>;
 }
 
 /** 预览完整层级及原文，名称只用于显示；实际应用仍核字段唯一键及完整类型。 */
@@ -98,7 +111,7 @@ export function QueryResultPresetsDialog({ connectionId, value, owner, isCurrent
     <label>{text.name}<input aria-label={text.name} maxLength={queryResultPresetLimits.name} disabled={!valid || busy} value={draft.name} onChange={event => change({ ...draft, name: event.target.value })}/></label>
     {!snapshot?.entries.length && !busy && !error && <p>{text.empty}</p>}
     <div className="query-result-preset-actions"><button disabled={!valid || busy} onClick={() => void load()}>{text.refresh}</button><button disabled={!writable || !validName || snapshot?.entries.some(entry => entry.name === name)} onClick={() => void mutate('create')}>{text.create}</button><button disabled={!writable || !selected || !validName || duplicate} onClick={() => void mutate('overwrite')}>{text.overwrite}</button><button disabled={!writable || !selected || !validName || duplicate || name === selected.name} onClick={() => void mutate('rename')}>{text.rename}</button><button disabled={!writable || !selected} onClick={() => void mutate('delete')}>{text.remove}</button></div>
-    {selected && <section className="query-result-preset-preview" aria-label={text.preview}><strong>{selected.name} · {text.summary(selected.value.columns.length, selected.value.visible.length)}</strong><p aria-label={text.savedFrozen}>{frozenSummary(selected.value)}</p><h3>{text.filters}</h3><ExpressionPreview group={selected.value.configuration.expression} value={selected.value}/><h3>{text.sort}</h3>{selected.value.configuration.sort.length ? <ol>{selected.value.configuration.sort.map((rule, index) => <li key={index}>{selected.value.columns.find(column => column.key === rule.column)?.name || rule.column} · {rule.direction === 'ASC' ? text.asc : text.desc} · {rule.nulls === 'FIRST' ? text.nullFirst : rule.nulls === 'LAST' ? text.nullLast : text.nullDefault}{rule.ignoreCase && ` · ${text.ignoreCase}`}</li>)}</ol> : <p>{text.noSort}</p>}</section>}
+    {selected && <section className="query-result-preset-preview" aria-label={text.preview}><strong>{selected.name} · {text.summary(selected.value.columns.length, selected.value.visible.length)}</strong><p aria-label={text.savedFrozen}>{frozenSummary(selected.value)}</p><LayoutPreview value={selected.value}/><h3>{text.filters}</h3><ExpressionPreview group={selected.value.configuration.expression} value={selected.value}/><h3>{text.sort}</h3>{selected.value.configuration.sort.length ? <ol>{selected.value.configuration.sort.map((rule, index) => <li key={index}>{selected.value.columns.find(column => column.key === rule.column)?.name || rule.column} · {rule.direction === 'ASC' ? text.asc : text.desc} · {rule.nulls === 'FIRST' ? text.nullFirst : rule.nulls === 'LAST' ? text.nullLast : text.nullDefault}{rule.ignoreCase && ` · ${text.ignoreCase}`}</li>)}</ol> : <p>{text.noSort}</p>}</section>}
     {selected && !connectionMatches && <ErrorBox message={text.connectionChanged}/>} {selected && !valueMatches && <ErrorBox message={text.mismatch}/>} {!valid && <ErrorBox message={text.stale}/>}<ErrorBox message={error}/>{needsRefresh && <p>{text.refreshNeeded}</p>}{busy && <Spinner text={text.working}/>}
   </div><footer className="modal-footer"><span className="grow"/><button disabled={busy} onClick={close}>{zh.common.close}</button><button className="primary" disabled={!writable || !selected || !connectionMatches || !valueMatches} onClick={() => void apply()}>{text.apply}</button></footer></Modal></div>;
 }

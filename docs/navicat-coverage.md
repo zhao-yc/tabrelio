@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。四种数据库的查询结果整理方案可保存完整列顺序、显隐、冻结、列宽和行高，重新执行后可连同筛选排序一起恢复。新方案核对原始字段键、名称和类型，旧方案保留原有可见列匹配行为。Q05、D06 增加结果布局复用。[Navicat 表方案手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#save-table-profile)
+
 2026-11-12 源码增量。四种数据库的对象 ER 图及表关系图支持手形拖动平移、指针位置滚轮缩放、键盘恢复比例和 F5 刷新图中表。E01 增加宽图导航与原范围刷新。[Navicat ER 图快捷键](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/hot_keys.html#er-diagram-view)
 
 2026-11-12 源码增量。四种数据库的表数据和查询结果，以及离线快照，可从列标题单独冻结所选字段。字段移到左侧冻结区末尾，其余列保持相对顺序，恢复显示的隐藏列仍可滚动。D06 增加单列冻结操作。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#format-data-view)

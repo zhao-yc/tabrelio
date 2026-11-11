@@ -1295,11 +1295,14 @@ it('命名方案：嵌套表达式、停用原文及NULL/大小写完整保存�
   expect(document.querySelector('[aria-label="' + filterText.enabled(1) + '"]')!.checked).toBe(false);
 });
 
-it.each(['type', 'name', 'order', 'visible', 'connection'] as const)('命名方案：%s不匹配拒绝应用且不改变当前结果', async mode => {
+it.each(['type', 'name', 'order', 'legacy-visible', 'connection'] as const)('命名方案：%s不匹配拒绝应用且不改变当前结果', async mode => {
   await mount(); const port = installPresetPort(); await sort(); await savePreset(); await click(zh.common.close); await click(zh.query.text010);
   const snapshot = structuredClone(port.state());
   if (mode === 'connection') snapshot.entries[0].connectionDigest = 'b'.repeat(64);
-  else if (mode === 'visible') snapshot.entries[0].value = { ...snapshot.entries[0].value, visible: snapshot.entries[0].value.visible.slice(1), configuration: { ...snapshot.entries[0].value.configuration, sort: [] } };
+  else if (mode === 'legacy-visible') {
+    const { layout: _layout, ...legacy } = snapshot.entries[0].value;
+    snapshot.entries[0].value = { ...legacy, visible: legacy.visible.slice(1), configuration: { ...legacy.configuration, sort: [] } };
+  }
   else if (mode === 'order') snapshot.entries[0].value = { ...snapshot.entries[0].value, columns: [...snapshot.entries[0].value.columns].reverse() };
   else { snapshot.entries[0].value.columns[0][mode] = '变化'; snapshot.entries[0].value.visible[0][mode] = '变化'; }
   port.replace(snapshot); const rows = grid().rows; await click(presetsText.open); await choosePreset(snapshot.entries[0].id);

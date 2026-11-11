@@ -75,15 +75,18 @@ describe('查询结果命名方案真实SQLite与CAS', () => {
       const fresh = store.saveQueryResultPreset({ ...packet(store.queryResultPresets(target)), replaceId: id, name: '方案', value }); expect(store.selectedQueryResultPreset({ ...packet(fresh), id })).toEqual(value);
     } finally { store.close(); }
   });
-  it('完整元数据、显隐顺序、停用嵌套筛选和全部排序选项重启后准确读回', async () => {
-    const { file, store } = await fixture(), saved = store.saveQueryResultPreset({ ...packet(store.queryResultPresets(target)), name: '  精确整理  ', value });
+  it('完整列布局、停用嵌套筛选和全部排序选项重启后准确读回', async () => {
+    const layoutValue: QueryResultPresetValue = { ...value, frozenThrough: 'payload', layout: {
+      order: ['payload', 'hidden', '__proto__'], widths: [{ key: 'payload', width: 216 }, { key: 'hidden', width: 301 }], rowHeight: 58,
+    } };
+    const { file, store } = await fixture(), saved = store.saveQueryResultPreset({ ...packet(store.queryResultPresets(target)), name: '  精确整理  ', value: layoutValue });
     const id = saved.entries[0].id;
     expect(saved.entries[0].name).toBe('精确整理');
-    expect(store.selectedQueryResultPreset({ ...packet(saved), id })).toEqual(value);
+    expect(store.selectedQueryResultPreset({ ...packet(saved), id })).toEqual(layoutValue);
     store.close();
     const reopened = await LocalStore.open(file, wasm, protector), read = reopened.queryResultPresets(target);
     expect(read.entries).toEqual(saved.entries); expect(read.revision).toBe(1);
-    expect(reopened.selectedQueryResultPreset({ ...packet(read), id })).toEqual(value);
+    expect(reopened.selectedQueryResultPreset({ ...packet(read), id })).toEqual(layoutValue);
     reopened.close();
   });
 

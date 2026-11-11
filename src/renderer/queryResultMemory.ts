@@ -33,10 +33,14 @@ export function captureQueryResultMemory(source: QueryResult, visible: ResultCol
   freeze(copy); return copy;
 }
 
-/** 按完整、有序的键/名称/类型核对，重名字段不能只凭显示名套用。 */
+/** 按完整、有序的键、名称和类型核对结果。 */
+export function queryResultColumnsMatch(left: readonly ResultColumn[], right: readonly ResultColumn[]): boolean {
+  return left.length === right.length && left.every((column, index) => column.key === right[index].key && column.name === right[index].name && column.type === right[index].type);
+}
+
+/** 内存暂存仅适用于同一可见投影，重名字段按内部键区分。 */
 export function queryResultMemoryMatches(memory: QueryResultMemory, source: QueryResult | undefined, visible: readonly ResultColumn[]): boolean {
-  const same = (left: readonly ResultColumn[], right: readonly ResultColumn[]) => left.length === right.length && left.every((column, index) => column.key === right[index].key && column.name === right[index].name && column.type === right[index].type);
-  if (!source || !same(memory.columns, source.columns) || !same(memory.visible, visible)) return false;
+  if (!source || !queryResultColumnsMatch(memory.columns, source.columns) || !queryResultColumnsMatch(memory.visible, visible)) return false;
   try { setQueryResultFrozenThrough({ order: source.columns.map(column => column.key), visible: visible.map(column => column.key) }, memory.frozenThrough); }
   catch { return false; }
   return true;

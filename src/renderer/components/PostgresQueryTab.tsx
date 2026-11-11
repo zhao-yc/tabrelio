@@ -59,7 +59,7 @@ import { capturePostgresQueryTransfer, usePostgresRecordTransfer } from '../post
 import { queryResultComparisonZh as comparisonText } from '../locales/queryResultComparison.zh-CN';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
 import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, freezeQueryResultColumn, setQueryResultHeaderColumnVisibility, reorderQueryResultColumn, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
-import { captureQueryResultMemory, queryResultMemoryMatches } from '../queryResultMemory';
+import { captureQueryResultPreset, prepareQueryResultPresetLayout, queryResultPresetMatches } from '../queryResultPresetLayout';
 import { queryResultPresetsZh as presetsText } from '../locales/queryResultPresets.zh-CN';
 import { queryResultColumnsZh as columnText } from '../locales/queryResultColumns.zh-CN';
 import { QueryRowDetails, type QueryRowDetailsBinding, type QueryRowDetailsView } from '../queryRowDetails';
@@ -1673,8 +1673,8 @@ export function PostgresQueryTab({
     if (!binding || !resultSource || !visibleColumns || !filterView || !sortView || !historyBinding ||
         !resultCurrent() || document.querySelector(appModalSelector)) return;
     try {
-      const value = queryResultPresetValueSchema.parse(captureQueryResultMemory(resultSource, visibleColumns,
-        { expression: filterView.expression, sort: sortView.rules }, layout?.frozenThrough, 'postgresql'));
+      const value = captureQueryResultPreset(resultSource, visibleColumns,
+        { expression: filterView.expression, sort: sortView.rules }, layout, 'postgresql');
       const draft = { binding, value, owner: uid() };
       presetDraftRef.current = draft;
       setPresetDraft(draft);
@@ -1696,17 +1696,18 @@ export function PostgresQueryTab({
   }
 
   /** 保存的配置须匹配完整列及可见顺序；完整试算成功才发布，并记录一整步撤销。 */
-  function applyResultPreset(draft: PresetDraft, value: QueryResultPresetValue) {
+  function applyResultPreset(draft: PresetDraft, raw: QueryResultPresetValue) {
     if (!resultSource || !visibleColumns || !historyBinding || !presetCurrent(draft)) throw Error(presetsText.stale);
-    if (!queryResultMemoryMatches(value, resultSource, visibleColumns)) throw Error(presetsText.mismatch);
-    const keys = resultSource.columns.map(column => column.key);
-    const nextLayout = setQueryResultFrozenThrough(layout ?? { order: keys, visible: keys }, value.frozenThrough);
-    const next = prepareQueryResultOrganization(resultSource, resultContext, visibleColumns, value.configuration, 'postgresql');
-    resultHistory.record(historyBinding, {
+    const value = queryResultPresetValueSchema.parse(raw);
+    const nextLayout = prepareQueryResultPresetLayout(value, resultSource, visibleColumns, layout);
+    const next = prepareQueryResultOrganization(resultSource, resultContext, nextLayout.columns, value.configuration, 'postgresql');
+    if (!presetCurrent(draft)) throw Error(presetsText.stale);
+    if (nextLayout.columns === visibleColumns) resultHistory.record(historyBinding, {
       expression: next.filter.view(next.filterBinding)!.expression,
       sort: next.sorter.view(next.sortBinding)!.rules,
     }, next.filterBinding);
-    setColumnLayout({ source: resultSource, layout: nextLayout, columns: visibleColumns });
+    else resultHistory.invalidate();
+    setColumnLayout({ source: resultSource, ...nextLayout });
     closeResultPresets(draft);
     publishResultOrganization(next);
   }
@@ -2512,7 +2513,7 @@ export function PostgresQueryTab({
         onFilter={filterBinding && sortView ? node => filterFromStatistics(statisticsDraft, node) : undefined} />}
       {presetDraft && <QueryResultPresetsDialog key={presetDraft.owner} connectionId={tab.connectionId}
         value={presetDraft.value} owner={presetDraft.owner} isCurrent={() => presetCurrent(presetDraft)}
-        matches={value => !!visibleColumns && queryResultMemoryMatches(value, resultSource, visibleColumns)}
+        matches={value => !!visibleColumns && queryResultPresetMatches(value, resultSource, visibleColumns)}
         onApply={value => applyResultPreset(presetDraft, value)} onClose={() => closeResultPresets(presetDraft)} />}
       {comparisonDraft && <QueryResultComparisonDialog key={comparisonDraft.owner} owner={comparisonDraft.owner}
         pins={comparisonDraft.pins} dialect="postgresql" isCurrent={() => comparisonCurrent(comparisonDraft)}

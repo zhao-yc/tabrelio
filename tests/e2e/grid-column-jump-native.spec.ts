@@ -7,6 +7,9 @@ import { gridColumnJumpZh as text } from '../../src/renderer/locales/gridColumnJ
 import { queryResultColumnsZh as layoutText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { gridHeaderMenuZh as headerText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
+import { gridRowHeightZh as rowHeightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
+import { queryResultPresetsZh as presetsText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -235,9 +238,48 @@ test('宽表可跳到可见边缘并扩选，按列定位或独立冻结字段',
     await page.screenshot({ path: info.outputPath('独立冻结同名结果列.png') });
     expect(await history()).toEqual(before);
 
-    await open('jump-empty');
+    // 完整方案从实际列布局保存，随后在同一 SQL 新执行的默认布局上恢复。
+    await (await navigationMenuItem(query, { name: layoutText.open, exact: true })).click();
+    await layout.getByRole('checkbox', { name: layoutText.visible(3), exact: true }).uncheck();
+    await layout.getByRole('textbox', { name: layoutText.width(24), exact: true }).fill('238');
+    await layout.getByRole('combobox', { name: rowHeightText.label, exact: true }).selectOption('56');
+    await layout.getByRole('button', { name: layoutText.apply, exact: true }).click();
+    await query.getByRole('grid').evaluate(element => { element.scrollLeft = 0; });
+    await header(query, 4).click({ button: 'right' });
+    await menuAction(headerText.desc).click();
+    const firstRow = query.locator('[role="row"][aria-rowindex="2"]');
+    await expect(firstRow.getByRole('gridcell', { name: 'tail-two-B', exact: true })).toBeVisible();
+    const presets = page.getByRole('dialog', { name: presetsText.title, exact: true });
+    await (await navigationMenuItem(query, { name: presetsText.open, exact: true })).click();
+    await presets.getByRole('textbox', { name: presetsText.name, exact: true }).fill('宽查询固定布局');
+    await presets.getByRole('button', { name: presetsText.create, exact: true }).click();
+    const preview = presets.getByRole('region', { name: presetsText.preview, exact: true });
+    await preview.getByText(presetsText.layout, { exact: true }).click();
+    await expect(preview.getByText(presetsText.layoutColumn(24, 'repeated', 238), { exact: true })).toBeVisible();
+    await expect(preview.getByText(presetsText.layoutRowHeight(56), { exact: true })).toBeVisible();
+    await presets.getByRole('button', { name: zh.common.close, exact: true }).click();
     await execute();
     await expect.poll(async () => (await history()).map(entry => entry.success)).toEqual([true, true]);
+    await expect(header(query, 2)).toContainText('id');
+    await expect(firstRow.getByRole('gridcell', { name: 'row A', exact: true })).toBeVisible();
+    const afterExecute = await history();
+    await (await navigationMenuItem(query, { name: presetsText.open, exact: true })).click();
+    await presets.getByRole('combobox', { name: presetsText.choose, exact: true }).selectOption({ label: '宽查询固定布局' });
+    await presets.getByRole('button', { name: presetsText.apply, exact: true }).click();
+    await expect(presets).toBeHidden();
+    await expect(firstRow.getByRole('gridcell', { name: 'tail-two-B', exact: true })).toHaveAttribute('aria-colindex', '2');
+    await expect(firstRow.getByRole('gridcell', { name: 'tail-one-B', exact: true })).toHaveAttribute('aria-colindex', '3');
+    await expect(header(query, 4)).toHaveAttribute('aria-sort', 'descending');
+    await expect(header(query, 6)).toContainText('col_2');
+    await expect.poll(async () => (await header(query, 2).boundingBox())?.width).toBe(238);
+    await expect.poll(async () => (await firstRow.boundingBox())?.height).toBe(56);
+    await assertFrozen(query, 2, 2);
+    expect(await history()).toEqual(afterExecute);
+    await page.screenshot({ path: info.outputPath('整理方案恢复宽表布局.png') });
+
+    await open('jump-empty');
+    await execute();
+    await expect.poll(async () => (await history()).map(entry => entry.success)).toEqual([true, true, true]);
     await (await choose(query, '#24')).press('Enter');
     await expect(query.getByRole('columnheader').filter({ hasText: /^repeated/i }).last()).toBeFocused();
     await expect(query.getByRole('gridcell')).toHaveCount(0);

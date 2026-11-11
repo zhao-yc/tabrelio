@@ -136,6 +136,27 @@ it('旧方案无边界明确取消当前冻结，界面预览不会误称沿用'
   expect(document.querySelector(`[aria-label="${presetsText.savedFrozen}"]`)!.textContent).toBe(presetsText.notFrozen); await click(presetsText.apply); expect(frozen()).toEqual([]);
 });
 
+it('新方案可在默认列布局上同时恢复重名列顺序、隐藏、宽度、行高及整理规则', async () => {
+  await mount({
+    visible: [{ key: 'c1', name: '同名', type: 'VARCHAR' }, { key: 'c0', name: '同名', type: 'BIGINT' }],
+    frozenThrough: 'c1',
+    layout: { order: ['c1', 'c2', 'c0'], widths: [{ key: 'c1', width: 231 }, { key: 'c2', width: 190 }], rowHeight: 56 },
+    configuration: { expression: { mode: 'AND', children: [{ column: 'c1', operator: 'eq', value: '保留' }] }, sort: [{ column: 'c0', direction: 'ASC' }] },
+  });
+  expect(visible()).toEqual(['c0', 'c1', 'c2']);
+  await applyPreset();
+  expect(visible()).toEqual(['c1', 'c0']);
+  expect(frozen()).toEqual(['c1']);
+  expect(grid().columns.find((column: { key: string }) => column.key === 'c1').width).toBe(231);
+  expect(grid().rowHeight).toBe(56);
+  expect(grid().rows.map((row: { c0: string }) => row.c0)).toEqual(['1', '9007199254740993']);
+  expect(button(historyText.undo).disabled).toBe(true);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+  await click(text.open);
+  expect(document.querySelector(`input[aria-label="${text.width(3)}"]`)!.value).toBe('190');
+  await click(zh.common.cancel);
+});
+
 it('内存暂存完整携带边界，旧无边界暂存仍保持旧形状且应用会清除冻结', async () => {
   await mount(); const plain = captureQueryResultMemory(original, original.columns, { expression: { mode: 'AND', children: [] }, sort: [] });
   expect(Object.keys(plain).sort()).toEqual(['columns', 'configuration', 'visible']);
