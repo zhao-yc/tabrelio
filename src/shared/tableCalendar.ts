@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { calendarUnits } from './civilDate';
-import { assertCalendarCounts, calendarCountSchema, calendarCountsShape } from './calendarDistribution';
+import { assertCalendarCounts, calendarCountSchema, calendarCountsShape, calendarTimeZoneSchema } from './calendarDistribution';
 import type { ColumnInfo } from './contracts';
 
 export const tableCalendarRequestSchema = z.object({
@@ -8,8 +8,7 @@ export const tableCalendarRequestSchema = z.object({
   unit: z.enum(calendarUnits),
 }).strict();
 export type TableCalendarRequest = z.infer<typeof tableCalendarRequestSchema>;
-export const tableCalendarTimeZoneSchema = z.string().min(1).max(128).refine(value => !/[\x00-\x1f\x7f]/.test(value));
-const resultSchema = tableCalendarRequestSchema.extend({ ...calendarCountsShape, timeZone: tableCalendarTimeZoneSchema.optional() }).strict();
+const resultSchema = tableCalendarRequestSchema.extend({ ...calendarCountsShape, timeZone: calendarTimeZoneSchema.optional() }).strict();
 export type TableCalendar = z.infer<typeof resultSchema>;
 
 /** 仅实际目录中的日历类型能参加分布。TIME 和 YEAR 有不同的列语义。 */

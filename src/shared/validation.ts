@@ -59,7 +59,7 @@ import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postg
 import { postgresTableCopyApplySchema, postgresTableCopyPreviewSchema } from './postgresTableCopy';
 import { postgresStructureInputSchema } from './postgresStructure';
 import { postgresBackupCatalogueSchema, postgresBackupSetSchema, postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportCheckSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema, postgresTableReferenceSchema, postgresRelatedTableSchema, postgresTableValuesSchema, postgresTableColumnReadSchema } from './postgresTable';
-import { postgresTableHistogramSchema } from './postgresTable';
+import { postgresTableCalendarSchema, postgresTableHistogramSchema } from './postgresTable';
 import { postgresFilteredUpdateSchema } from './postgresTable';
 import { sqliteDraftSaveSchema, sqliteDraftOpenSchema, sqliteDraftRestoreSchema } from './sqliteTableDraft';
 import { sqliteIncomingInputSchema } from './sqliteIncoming';
@@ -429,6 +429,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.table.values': postgresTableValuesSchema,
   'postgres.table.statistics': postgresTableColumnReadSchema,
   'postgres.table.histogram': postgresTableHistogramSchema,
+  'postgres.table.calendar': postgresTableCalendarSchema,
   'postgres.table.references': postgresTableReferenceSchema,
   'postgres.table.related': postgresRelatedTableSchema,
   'postgres.table.layout.get': postgresLayoutSchemas.target,

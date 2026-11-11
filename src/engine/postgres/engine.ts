@@ -1672,6 +1672,7 @@ export class PostgresEngine {
       case 'postgres.table.values':
       case 'postgres.table.statistics':
       case 'postgres.table.histogram':
+      case 'postgres.table.calendar':
       case 'postgres.table.references':
       case 'postgres.table.apply':
       case 'postgres.table.filteredUpdate':
@@ -1699,6 +1700,7 @@ export class PostgresEngine {
         if (command === 'postgres.table.values') return this.tables.values(input as Parameters<PostgresTableWorkspace['values']>[0], connect);
         if (command === 'postgres.table.statistics') return this.tables.statistics(input as Parameters<PostgresTableWorkspace['statistics']>[0], connect);
         if (command === 'postgres.table.histogram') return this.tables.histogram(input as Parameters<PostgresTableWorkspace['histogram']>[0], connect);
+        if (command === 'postgres.table.calendar') return this.tables.calendar(input as Parameters<PostgresTableWorkspace['calendar']>[0], connect);
         if (command === 'postgres.table.filteredUpdate') return this.tables.previewFilteredUpdate(input as Parameters<PostgresTableWorkspace['previewFilteredUpdate']>[0], connect);
         if (command === 'postgres.table.filteredDelete') return this.tables.previewFilteredDelete(input as Parameters<PostgresTableWorkspace['previewFilteredDelete']>[0], connect);
         if (command === 'postgres.table.page') {

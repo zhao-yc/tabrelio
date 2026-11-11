@@ -1,12 +1,16 @@
 import { useState } from 'react';
 import type { PostgresColumnStatistics } from '../../shared/postgresColumnStatistics';
 import { postgresHistogramBins, postgresHistogramKind, type PostgresHistogramBins, type PostgresTableHistogram } from '../../shared/postgresTableHistogram';
+import { calendarUnits, type CalendarUnit } from '../../shared/civilDate';
+import { assertPostgresTableCalendar, postgresCalendarKind, postgresCalendarUnitSchema, type PostgresTableCalendar } from '../../shared/postgresTableCalendar';
 import { invoke } from '../lib';
 import { postgresColumnStatisticsZh as text } from '../locales/postgresColumnStatistics.zh-CN';
 import { tableHistogramZh as histogramText } from '../locales/tableHistogram.zh-CN';
+import { queryResultStatisticsZh as calendarText } from '../locales/queryResultStatistics.zh-CN';
 import { usePostgresColumnRead, type PostgresColumnReadSource } from '../postgresColumnRead';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import { TableHistogramChart } from './TableHistogramChart';
+import { QueryResultCalendarChart } from './QueryResultCalendarChart';
 import '../tableStatistics.css';
 
 type Value = NonNullable<PostgresColumnStatistics['groups']>['min'];
@@ -18,11 +22,13 @@ function display(value: Value, quoted = false): string {
 
 /** 选择字段只改变本地输入，显式开始才读取原筛选范围内的数据库快照。 */
 export function PostgresColumnStatisticsDialog({ source, onClose }: { source: PostgresColumnReadSource; onClose(): void }) {
-  const { origin, result, busy, error, read, reset } = usePostgresColumnRead<PostgresColumnStatistics | PostgresTableHistogram>(source, text.expired);
+  const { origin, result, busy, error, read, reset } = usePostgresColumnRead<PostgresColumnStatistics | PostgresTableHistogram | PostgresTableCalendar>(source, text.expired);
   const [column, setColumn] = useState(origin.initialColumn ?? origin.columns[0]?.key ?? '');
   const [bins, setBins] = useState<PostgresHistogramBins>(10);
+  const [unit, setUnit] = useState<CalendarUnit>('month');
   const field = origin.columns.find(item => item.key === column);
-  const summary = result && !('ranges' in result) ? result : undefined;
+  const summary = result && 'nonNull' in result ? result : undefined;
+  const calendar = result && 'buckets' in result ? result : undefined;
   const metrics: [string, string][] = [];
   if (summary && field) {
     const { groups, numeric } = summary;
@@ -52,6 +58,16 @@ export function PostgresColumnStatisticsDialog({ source, onClose }: { source: Po
           <button type="button" disabled={busy} onClick={() => void read(() =>
             invoke('postgres.table.histogram', { ...origin.input, column, bins }))}>{text.readHistogram}</button>
         </>}
+        {field && postgresCalendarKind(field) && <>
+          <Field label={calendarText.calendarUnit}><select aria-label={calendarText.calendarUnit} value={unit} disabled={busy} onChange={event => {
+            setUnit(postgresCalendarUnitSchema.parse(event.target.value));
+            if (calendar) reset();
+          }}>
+            {calendarUnits.map(value => <option key={value} value={value}>{calendarText.calendarUnits[value]}</option>)}
+          </select></Field>
+          <button type="button" disabled={busy} onClick={() => void read(async () => assertPostgresTableCalendar(
+            await invoke('postgres.table.calendar', { ...origin.input, column, unit }), field, unit))}>{text.readCalendar}</button>
+        </>}
         {busy && <Spinner text={text.loading}/>}
       </div>
       <ErrorBox message={error}/>
@@ -62,6 +78,11 @@ export function PostgresColumnStatisticsDialog({ source, onClose }: { source: Po
         {!summary.groups && <p className="muted small">{text.countsOnly}</p>}
       </div>}
       {result && 'ranges' in result && <TableHistogramChart histogram={result}/>}
+      {calendar && <div className="table-statistics-results">
+        <dl><dt>{text.rows}</dt><dd aria-label={text.rows}>{calendar.rows}</dd></dl>
+        {calendar.timeZone && <p>{text.calendarZone(calendar.timeZone)}</p>}
+        <QueryResultCalendarChart distribution={calendar}/>
+      </div>}
     </div>
     <footer className="modal-footer"><button type="button" onClick={onClose}>{text.close}</button></footer>
   </Modal>;

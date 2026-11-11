@@ -14,6 +14,7 @@ import { FILTER_LIMITS, filterGroupSchema, filterRuleSchema, sortRulesSchema, va
 import { strictTableLayoutPreferences } from './tablePreferences';
 import { postgresRelatedTabPrefix } from './postgresRelatedTab';
 import { postgresHistogramBins } from './postgresTableHistogram';
+import { postgresCalendarUnitSchema } from './postgresTableCalendar';
 import { postgresIdentifier, postgresRelationName } from './postgresSql';
 import { dataFileFormats, dataMarkupText, dataExportExtension } from './dataMarkupExport';
 import { postgresTableLimits } from './postgresTableLimits';
@@ -162,6 +163,8 @@ export const postgresTableColumnReadSchema = postgresTableReleaseSchema.extend({
 export type PostgresTableColumnReadInput = z.infer<typeof postgresTableColumnReadSchema>;
 export const postgresTableHistogramSchema = postgresTableColumnReadSchema.extend({ bins: postgresHistogramBins }).strict();
 export type PostgresTableHistogramInput = z.infer<typeof postgresTableHistogramSchema>;
+export const postgresTableCalendarSchema = postgresTableColumnReadSchema.extend({ unit: postgresCalendarUnitSchema }).strict();
+export type PostgresTableCalendarInput = z.infer<typeof postgresTableCalendarSchema>;
 export const postgresTableValueLimits = { groups: 500, page: 50, search: 256 } as const;
 export const postgresTableValuesSchema = postgresTableColumnReadSchema.extend({
   search: z.string().max(postgresTableValueLimits.search).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)),

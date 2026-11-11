@@ -19,7 +19,7 @@ import {
   type PostgresTableReleaseInput, type PostgresTableTarget,
   type PostgresTableReferenceInput, type PostgresTableReferenceResult, type PostgresTableColumnReadInput, type PostgresTableValuesInput, type PostgresTableValues, type PostgresTableHistogramInput,
   type PostgresRelatedTableInput, type PostgresRelatedTablePage,
-  type PostgresFilteredUpdateInput,
+  type PostgresFilteredUpdateInput, type PostgresTableCalendarInput,
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
 import type { PostgresSyncEvidence, PostgresSyncRow } from './dataCompare';
@@ -34,6 +34,7 @@ import { postgresTableCondition, postgresTableReadOrder } from '../../shared/pos
 import { readPostgresTableReferences, type PostgresReferenceSourceRow, type PostgresReferenceRowVersion } from './tableReferences';
 import { readPostgresColumnStatistics } from './tableStatistics';
 import { hasPostgresRoundtripFloatText, readPostgresTableHistogram } from './tableHistogram';
+import { readPostgresTableCalendar } from './tableCalendar';
 import { readTableValueOptionsOrder } from '../../shared/tableValueOptions';
 import {
   postgresDraftSchema, type PostgresDraftDocument, type PostgresDraftRestored,
@@ -903,6 +904,15 @@ export class PostgresTableWorkspace {
       const args: unknown[] = [];
       const condition = postgresTableCondition(filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
       return readPostgresTableHistogram(connection, column, only(relation) + (condition ? ' WHERE ' + condition : ''), args, input.bins);
+    });
+  }
+
+  /** 日期区间与原分页共用已应用筛选，但在独立只读快照中聚合全部匹配行。 */
+  calendar(input: Scoped<PostgresTableCalendarInput>, connect: Connect) {
+    return this.readColumn(input, connect, (connection, relation, column, filter) => {
+      const args: unknown[] = [];
+      const condition = postgresTableCondition(filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
+      return readPostgresTableCalendar(connection, column, only(relation) + (condition ? ' WHERE ' + condition : ''), args, input.unit);
     });
   }
 

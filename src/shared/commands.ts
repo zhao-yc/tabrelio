@@ -91,7 +91,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.sqlFile.choose': true, 'postgres.sqlFile.execute': true, 'postgres.sqlFile.target': true,
   'postgres.sqlFile.inspect': true, 'postgres.sqlFile.cancelInspection': true,
   'postgres.table.importChoose': true, 'postgres.table.importCheck': true, 'postgres.table.import': true,
-  'postgres.table.page': true, 'postgres.table.values': true, 'postgres.table.statistics': true, 'postgres.table.histogram': true, 'postgres.table.references': true, 'postgres.table.related': true, 'postgres.table.preview': true, 'postgres.table.apply': true, 'postgres.table.release': true,
+  'postgres.table.page': true, 'postgres.table.values': true, 'postgres.table.statistics': true, 'postgres.table.histogram': true, 'postgres.table.calendar': true, 'postgres.table.references': true, 'postgres.table.related': true, 'postgres.table.preview': true, 'postgres.table.apply': true, 'postgres.table.release': true,
   'postgres.table.filteredUpdate': true,
   'postgres.table.filteredDelete': true,
   'postgres.table.draft.save': true, 'postgres.table.draft.restore': true,

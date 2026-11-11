@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { postgresColumnStatistics } from '../../src/shared/postgresColumnStatistics';
-import { postgresTableColumnReadSchema } from '../../src/shared/postgresTable';
+import { postgresTableCalendarSchema, postgresTableColumnReadSchema, type PostgresTableColumn } from '../../src/shared/postgresTable';
+import { assertPostgresTableCalendar, postgresCalendarKind } from '../../src/shared/postgresTableCalendar';
 
 describe('PostgreSQL 字段概况', () => {
   it('以原精度计算 NULL 与重复组数，并标出已截断的极值', () => {
@@ -22,5 +23,35 @@ describe('PostgreSQL 字段概况', () => {
       pageToken: 'd312a72b-fdfd-4a6e-8770-f5f1637af235', column: 'c1' };
     expect(postgresTableColumnReadSchema.safeParse(request).success).toBe(true);
     expect(postgresTableColumnReadSchema.safeParse({ ...request, search: '额外条件' }).success).toBe(false);
+  });
+});
+
+describe('PostgreSQL 表级日期分布', () => {
+  const field: PostgresTableColumn = { key: 'c1', name: '时间', type: 'timestamp(6) with time zone', valueOptions: true,
+    nullable: true, defaultValue: false, generated: false, primary: false, binary: false };
+  const result = { column: field.name, unit: 'day', timeZone: 'Europe/Paris', rows: '9007199254740998', grouped: '9007199254740995',
+    nulls: '1', ungrouped: '2', peak: '9007199254740993', buckets: [
+      { label: '0002-12-31 BC', count: '1' }, { label: '0001-02-29 BC', count: '1' },
+      { label: '10000-02-29', count: '9007199254740993' },
+    ] };
+
+  it('保留公元前闰日、扩展年份和超过 JS 安全整数的原计数', () => {
+    expect(assertPostgresTableCalendar(result, field, 'day')).toEqual(result);
+    expect(() => assertPostgresTableCalendar({ ...result, buckets: [...result.buckets].reverse() }, field, 'day')).toThrow();
+    expect(() => assertPostgresTableCalendar({ ...result, buckets: [{ ...result.buckets[0], label: '0002-02-29 BC' },
+      ...result.buckets.slice(1)] }, field, 'day')).toThrow();
+    expect(() => assertPostgresTableCalendar({ ...result, rows: '9007199254740997' }, field, 'day')).toThrow();
+    expect(() => assertPostgresTableCalendar({ ...result, timeZone: undefined }, field, 'day')).toThrow();
+  });
+
+  it('只接收原表页字段及固定粒度，时间及同名用户类型不启用日期入口', () => {
+    const request = { connectionId: '连接', database: '库', table: '表', tabId: '页',
+      pageToken: 'd312a72b-fdfd-4a6e-8770-f5f1637af235', column: 'c1', unit: 'month' };
+    expect(postgresTableCalendarSchema.parse(request)).toEqual(request);
+    expect(postgresTableCalendarSchema.safeParse({ ...request, unit: 'week' }).success).toBe(false);
+    expect(postgresTableCalendarSchema.safeParse({ ...request, filter: {} }).success).toBe(false);
+    expect(postgresCalendarKind(field)).toBe('zoned');
+    expect(postgresCalendarKind({ ...field, type: 'time with time zone' })).toBeUndefined();
+    expect(postgresCalendarKind({ ...field, type: 'date', valueOptions: undefined })).toBeUndefined();
   });
 });

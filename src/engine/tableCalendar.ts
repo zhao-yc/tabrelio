@@ -1,8 +1,8 @@
 import type { CellValue, TableInfo } from '../shared/contracts';
 import { tableStatisticsLimits, tableStatisticsMessages, type TableStatisticsInput } from '../shared/tableStatistics';
 import { calendarLabelLength } from '../shared/civilDate';
-import { calendarDistributionLimit, summarizeCalendarGroups } from '../shared/calendarDistribution';
-import { assertTableCalendar, tableCalendarKind, tableCalendarRequestSchema, tableCalendarTimeZoneSchema, type TableCalendar } from '../shared/tableCalendar';
+import { calendarDistributionLimit, calendarTimeZoneSchema, summarizeCalendarGroups } from '../shared/calendarDistribution';
+import { assertTableCalendar, tableCalendarKind, tableCalendarRequestSchema, type TableCalendar } from '../shared/tableCalendar';
 import { buildTableFilterSql, identifier, inlineParameters, qualified } from './sql';
 
 export const tableCalendarMaxRows = calendarDistributionLimit + 3;
@@ -35,6 +35,6 @@ export function decodeTableCalendar(plan: ReturnType<typeof planTableCalendar>, 
     return [label, count] as const;
   });
   const { rows: rowCount, ...counts } = summarizeCalendarGroups(groups);
-  const calendar = { ...plan.request, ...counts, ...(timeZone !== undefined ? { timeZone: tableCalendarTimeZoneSchema.parse(timeZone) } : {}) };
+  const calendar = { ...plan.request, ...counts, ...(timeZone !== undefined ? { timeZone: calendarTimeZoneSchema.parse(timeZone) } : {}) };
   return { rowCount, calendar: assertTableCalendar(calendar, plan.request, plan.column, rowCount) };
 }

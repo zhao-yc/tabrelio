@@ -1,4 +1,5 @@
 import { queryResultSortZh as text } from './locales/queryResultSort.zh-CN';
+import { isCivilDay } from '../shared/civilDate';
 
 export type PostgresTemporalKind = 'pgDate' | 'pgTime' | 'pgTimeTz' | 'pgTimestamp' | 'pgTimestampTz';
 
@@ -11,9 +12,7 @@ const timePattern = /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|([+-])(\d{2})(?:
 
 /** 公元前 1 年按天文历法编号为 0。以三月为年首计算整数日，闰日落在年末。 */
 function calendarDay(year: number, month: number, day: number): bigint {
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (month < 1 || month > 12 || day < 1 || day > monthDays[month - 1]) throw invalid();
+  if (!isCivilDay(year, month, day)) throw invalid();
   const marchYear = year - (month <= 2 ? 1 : 0);
   const era = Math.floor(marchYear / 400), yearInEra = marchYear - era * 400;
   const marchMonth = month + (month > 2 ? -3 : 9);

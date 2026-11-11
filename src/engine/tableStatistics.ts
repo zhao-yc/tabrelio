@@ -8,7 +8,7 @@ import { incomingReferenceSourceDigest, readIncomingReferenceTable } from './inc
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { decodeTableCalendar, planTableCalendar, tableCalendarMaxRows } from './tableCalendar';
-import { tableCalendarTimeZoneSchema } from '../shared/tableCalendar';
+import { calendarTimeZoneSchema } from '../shared/calendarDistribution';
 
 interface Capability { kind: 'numeric' | 'ordered' | 'count-only'; representation: 'text' | 'binary' | 'scalar'; approximate: boolean; }
 export interface TableStatisticsPlan { sql: string; aliases: string[]; columns: { column: ColumnInfo; capability: Capability; distinct?: true }[]; }
@@ -130,7 +130,7 @@ export async function readTableStatistics(context: StructureTaskContext, input: 
     if (calendarPlan.kind === 'timestamp') {
       const { rows } = await structureTaskQuery<{ timeZone: unknown }[]>(context, 'SELECT @@SESSION.time_zone AS timeZone');
       if (!Array.isArray(rows) || rows.length !== 1) throw Error(text.invalid);
-      timeZone = tableCalendarTimeZoneSchema.parse(rows[0].timeZone);
+      timeZone = calendarTimeZoneSchema.parse(rows[0].timeZone);
     }
     computed = { columns: [], ...decodeTableCalendar(calendarPlan, await readStatisticsRows(context, calendarPlan, stop, tableCalendarMaxRows), timeZone) };
   } else {

@@ -3,6 +3,8 @@ export const postgresColumnStatisticsZh = {
   hint: '统计当前筛选匹配的全部已提交记录。当前页行数和未提交的草稿不影响统计。',
   field: '概况字段', read: '开始统计', loading: '正在统计字段…', close: '关闭',
   readHistogram: '读取数值分布',
+  readCalendar: '读取日期分布',
+  calendarZone: (zone: string) => `带时区的时间戳按统计会话时区 ${zone} 归入日期。`,
   expired: '原表页或连接已变化，请重新打开字段概况。',
   metric: '统计项', value: '统计值', type: '字段类型',
   rows: '总记录数', nonNull: '非 NULL 数量', nulls: 'NULL 数量', empty: '空字符串数量',
