@@ -17,7 +17,7 @@ import { Field, Modal } from './ui';
 
 export interface GridHeaderFreeze {
   current(): boolean;
-  apply(key?: string): void;
+  apply(key?: string, mode?: 'append'): void;
 }
 
 export interface GridHeaderColumnVisibility {
@@ -57,7 +57,7 @@ interface HeaderMenuSource {
   reorderColumns?(source: string, target: string): void;
   ownDialog?(): Element | undefined;
   freeze?: GridHeaderFreeze;
-  frozenThrough?: string;
+  frozenCount?: number;
 }
 
 interface SizeRequest {
@@ -209,12 +209,22 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
     const clearSort = source.sort.length ? captureSort(undefined, current) : undefined;
     if (clearSort) actions.push({ label: text.clearAllSort, run: () => clearSort.apply() });
     if (source.freeze?.current()) {
-      const apply = (key?: string) => {
+      const first = (source.rowHeaderColumns ?? 1) + (source.frozenCount ?? 0);
+      const boundary = source.frozenCount ? source.column(first - 1)?.key : undefined;
+      const firstUnfrozen = source.column(first)?.key;
+      const apply = (key?: string, mode?: 'append') => {
         const now = latest.current;
-        if (current() && now.frozenThrough === source.frozenThrough && now.freeze?.current()) now.freeze.apply(key);
+        if (!current() || now.frozenCount !== source.frozenCount || (source.frozenCount && now.column(first - 1)?.key !== boundary) ||
+            !now.freeze?.current()) return;
+        if (mode === 'append') {
+          if (index < first || now.column(first)?.key !== firstUnfrozen) return;
+          if (index !== first) columnFocus.current = { grid, index: first, key: column.key, moved: true };
+        }
+        now.freeze.apply(key, mode);
       };
-      actions.push({ label: text.freeze, disabled: source.frozenThrough === column.key, run: () => apply(column.key) },
-        { label: text.unfreeze, disabled: source.frozenThrough === undefined, run: () => apply() });
+      actions.push({ label: text.freezeColumn, disabled: index < first, run: () => apply(column.key, 'append') },
+        { label: text.freeze, disabled: boundary === column.key, run: () => apply(column.key) },
+        { label: text.unfreeze, disabled: boundary === undefined, run: () => apply() });
     }
     const visibilityControl = source.columnVisibility;
     if (visibilityControl?.current()) {

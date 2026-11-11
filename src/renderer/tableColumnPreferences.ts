@@ -1,6 +1,7 @@
 import { tablePreferencesLimits, type TablePreferences } from '../shared/tablePreferences';
 import { tableGridZh as text } from './locales/tableGrid.zh-CN';
 import { defaultGridRowHeight, isGridRowHeight } from '../shared/gridRowHeight';
+import { appendGridFrozenColumn } from './gridFrozenColumn';
 
 /** 标准行高沿用省略字段的旧记录格式，其余布局属性保持。 */
 export function setTableRowHeight(preferences: TablePreferences, height: number): TablePreferences {
@@ -63,6 +64,14 @@ export function setTableFrozenThrough(preferences: TablePreferences, name?: stri
   if (name === undefined) return output;
   if (typeof name !== 'string' || !name.length || name.length > maximumNameLength || tableFrozenBoundary({ ...output, frozenThrough: name }) !== name) throw Error('冻结边界必须是当前可见的精确唯一列名');
   return { ...output, frozenThrough: name };
+}
+
+/** 列顺序和新边界一起写入原偏好草稿，可继续使用已有保存和恢复流程。 */
+export function freezeTableColumn(preferences: TablePreferences, name: string, maximumNameLength = 256): TablePreferences {
+  const next = setTableFrozenThrough(preferences, name, maximumNameLength);
+  const byName = new Map(next.columns.map(column => [column.name, column]));
+  const order = appendGridFrozenColumn([...byName.keys()], new Set(visibleTableKeys(next)), tableFrozenBoundary(preferences), name);
+  return order ? { ...next, columns: order.map(key => byName.get(key)!) } : preferences;
 }
 
 /** 布局重建后只保留仍可见的合法边界，隐藏边界列会立即解除冻结。 */

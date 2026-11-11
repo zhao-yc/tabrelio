@@ -5,6 +5,7 @@ export const gridHeaderMenuZh = {
   clear: '取消此列排序',
   clearAllSort: '清除全部排序',
   freeze: '冻结到此列',
+  freezeColumn: '冻结此列',
   unfreeze: '取消冻结所有列',
   setWidth: '设置列宽',
   zoomIn: (percent: number) => `放大网格至 ${percent}%`,

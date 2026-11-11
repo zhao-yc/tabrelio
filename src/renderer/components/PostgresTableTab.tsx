@@ -71,7 +71,7 @@ import { tablePresetsZh } from '../locales/tablePresets.zh-CN';
 import { tableGridZh } from '../locales/tableGrid.zh-CN';
 import { postgresTableLayoutZh as layoutText } from '../locales/postgresTableLayout.zh-CN';
 import { TableLayoutController, type SqliteLayoutView, type TableLayoutScope } from '../sqliteTableLayout';
-import { moveTableColumn, setTableColumnWidths, setTableHeaderColumnVisibility, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
+import { moveTableColumn, setTableColumnWidths, setTableHeaderColumnVisibility, freezeTableColumn, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
 import { postgresTablePresetConfiguration, postgresTablePresetOptions, type TablePresetConfiguration } from '../../shared/tablePresets';
 import { validateTableSort } from '../tableSort';
 import { postgresTableImportZh } from '../locales/postgresTableImport.zh-CN';
@@ -1398,11 +1398,13 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   const headerFreeze = {
     current: () => layoutScope.current.current() && !blocked && layoutView.ready && !layoutView.pending,
-    apply(key?: string) {
+    apply(key?: string, mode?: 'append') {
       const column = gridLayout.columns.find(column => column.key === key);
       if (key !== undefined && !column) return;
-      try { changeLayout(setTableFrozenThrough(layout.view.preferences, column?.name)); }
-      catch (reason) { setLayoutError(errorMessage(reason)); }
+      const base = layout.view.preferences;
+      try {
+        changeLayout(mode === 'append' && column ? freezeTableColumn(base, column.name) : setTableFrozenThrough(base, column?.name));
+      } catch (reason) { setLayoutError(errorMessage(reason)); }
     },
   };
 

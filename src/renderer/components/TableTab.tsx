@@ -132,7 +132,7 @@ import { patchReferenceRow, referenceWritable, referencesForColumn, type Referen
 import { referenceZh } from '../locales/references.zh-CN';
 import type { CellValue, ForeignKeyInfo } from '../../shared/contracts';
 import type { TablePreferences } from '../../shared/tablePreferences';
-import { changeTablePreference, moveTableColumn, reconcileTablePreferences, visibleTableKeys, frozenTableKeys, setTableHeaderColumnVisibility, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
+import { changeTablePreference, moveTableColumn, reconcileTablePreferences, visibleTableKeys, frozenTableKeys, freezeTableColumn, setTableHeaderColumnVisibility, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
 import { applyPageReplacement, type PageOccurrence, type PageReplacement } from '../pageFindReplace';
 import { GridCellImage } from './GridCellImage';
 import { tableFieldFindClass, type TableFieldFindDisplay } from './TableFieldFind';
@@ -2505,11 +2505,13 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
           !visibleKeys.includes(from) || !visibleKeys.includes(to)) return;
       updatePreferences(moveTableColumn(preferencesRef.current, from, to));
     },
-    frozenThrough: frozenKeys.at(-1), freeze: {
+    frozenCount: frozenKeys.length, freeze: {
       current: () => !!page && !externalStale && !preferencesLoading && !preferencesLock.current,
       // 和布局窗口共享同一草稿，保存仍由用户从布局入口触发。
-      apply: key => {
-        try { updatePreferences(setTableFrozenThrough(preferencesRef.current, key)); }
+      apply: (key, mode) => {
+        if (record.hasInput()) return;
+        const base = preferencesRef.current;
+        try { updatePreferences(mode === 'append' && key !== undefined ? freezeTableColumn(base, key) : setTableFrozenThrough(base, key)); }
         catch (reason) { setPreferencesError(errorMessage(reason)); }
       },
     },

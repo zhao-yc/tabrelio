@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。四种数据库的表数据和查询结果，以及离线快照，可从列标题单独冻结所选字段。字段移到左侧冻结区末尾，其余列保持相对顺序，恢复显示的隐藏列仍可滚动。D06 增加单列冻结操作。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#format-data-view)
+
 2026-11-12 源码增量。四种关系数据库的对象浏览 ER 图与表关系图可导出整张 PNG。图片沿用当前字段显示、主题和节点选择，覆盖滚动范围，保留箭头与虚线未读目标。E01 增加 PNG 导出。[Navicat 对象页 ER 图](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#er-diagram-view-available-only-in-enterprise-and-standard-edition)
 
 2026-11-12 源码增量。四种关系数据库的新建表设计器及已有表的字段列表支持查找字段名、定位命中和循环查看。支持 Ctrl／⌘＋F、F3 和 Shift＋F3，保留设计草稿和当前字段顺序。O01 增加设计器字段查找。[Navicat 表设计器快捷键](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/hot_keys.html#table--collection-designer)

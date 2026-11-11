@@ -34,7 +34,7 @@ import { QueryRowDetails, type QueryRowDetailsBinding, type QueryRowDetailsView 
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { queryRowDetailsZh as rowDetailsText } from '../locales/queryRowDetails.zh-CN';
 import { QueryResultColumnsDialog } from './QueryResultColumnsDialog';
-import { queryResultColumnKeys, queryResultVisibleColumns, frozenQueryResultKeys, setQueryResultFrozenThrough, setQueryResultHeaderColumnVisibility, reorderQueryResultColumn, setQueryResultRowHeight, queryResultColumnWidth, type QueryResultColumnLayout } from '../queryResultColumns';
+import { queryResultColumnKeys, queryResultVisibleColumns, frozenQueryResultKeys, setQueryResultFrozenThrough, freezeQueryResultColumn, setQueryResultHeaderColumnVisibility, reorderQueryResultColumn, setQueryResultRowHeight, queryResultColumnWidth, type QueryResultColumnLayout } from '../queryResultColumns';
 import type { ColumnWidths } from 'react-data-grid';
 import { queryResultColumnsZh as columnText } from '../locales/queryResultColumns.zh-CN';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
@@ -2281,7 +2281,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
   const headerFreeze = {
     current: () => resultSelectionAllowed(selectionBinding),
-    apply(key?: string) {
+    apply(key?: string, mode?: 'append') {
+      if (mode === 'append' && key !== undefined) {
+        changeHeaderColumnLayout(layout => freezeQueryResultColumn(layout, key));
+        return;
+      }
       if (!sourceResult) return;
       try { setColumnLayout({ result: sourceResult, context: resultContext, layout: layoutWithFrozenThrough(key) }); }
       catch (reason) { setError(errorMessage(reason)); }

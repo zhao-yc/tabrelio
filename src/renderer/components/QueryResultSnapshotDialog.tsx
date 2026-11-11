@@ -8,7 +8,7 @@ import { errorMessage, invoke, uid } from '../lib';
 import { useWorkspace } from '../store';
 import { appModalSelector } from '../modalSelectors';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
-import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultHeaderColumnVisibility, reorderQueryResultColumn, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
+import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, freezeQueryResultColumn, setQueryResultFrozenThrough, setQueryResultHeaderColumnVisibility, reorderQueryResultColumn, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
 import type { GridRangeExportData } from '../gridRangeExport';
 import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView, type SortDialect } from '../queryResultSort';
 import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterRule, type QueryResultFilterView } from '../queryResultFilter';
@@ -492,7 +492,9 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       {matches.active && <QueryResultMatchView active={matches.active} disabled={!!busy} onClear={() => changeMatchView()}/>}
       <div className="query-result-snapshot-viewer-grid">
         <ResultsGrid zoomable rowJump columns={visibleColumns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
-          frozenKeys={frozenKeys} columnVisibility={columnVisibility} onColumnReorder={reorderResultColumns} columnWidths={columnLayout?.layout.widths} rowHeight={columnLayout?.layout.rowHeight}
+          frozenKeys={frozenKeys} freezeColumns={{ current: columnVisibility.current, apply: (key, mode) =>
+            changeHeaderColumnLayout(layout => mode === 'append' && key !== undefined ? freezeQueryResultColumn(layout, key) : setQueryResultFrozenThrough(layout, key)),
+          }} columnVisibility={columnVisibility} onColumnReorder={reorderResultColumns} columnWidths={columnLayout?.layout.widths} rowHeight={columnLayout?.layout.rowHeight}
           onColumnWidthsChange={binding ? resizeColumns : undefined} onRowHeightChange={binding ? resizeRowHeight : undefined}
           onSelectionChange={binding ? selectRows : undefined}
           sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons} onSortChange={sortView ? sortGrid : undefined}

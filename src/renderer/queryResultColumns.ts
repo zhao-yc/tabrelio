@@ -3,6 +3,7 @@ import { resultExportLimits, validateResultExportData } from '../shared/resultEx
 import { isGridRowHeight, type GridRowHeight } from '../shared/gridRowHeight';
 import { tableGridZh } from './locales/tableGrid.zh-CN';
 import { projectSqliteResultStorage } from '../shared/sqliteResultStorage';
+import { appendGridFrozenColumn } from './gridFrozenColumn';
 
 export const queryResultColumnWidth = { min: 64, max: 2000, default: 170 } as const;
 export interface QueryResultColumnLayout { order: string[]; visible: string[]; frozenThrough?: string; widths?: ReadonlyMap<string, number>; rowHeight?: GridRowHeight; }
@@ -44,6 +45,15 @@ export function setQueryResultFrozenThrough(layout: QueryResultColumnLayout, key
   const available = new Set(output.order);
   if (typeof key !== 'string' || !key.length || key.length > 4096 || output.order.length > resultExportLimits.columns || output.order.some(value => typeof value !== 'string' || !value.length) || available.size !== output.order.length || new Set(output.visible).size !== output.visible.length || output.visible.some(value => !available.has(value)) || !available.has(key) || !output.visible.includes(key)) throw Error('结果冻结边界必须是当前可见的精确唯一内部列键');
   return { ...output, frozenThrough: key };
+}
+
+/** 只移动精确原列键，重复的显示别名仍可各自独立冻结。 */
+export function freezeQueryResultColumn(layout: QueryResultColumnLayout, key: string): QueryResultColumnLayout {
+  const next = setQueryResultFrozenThrough(layout, key);
+  const boundary = Object.getOwnPropertyDescriptor(layout, 'frozenThrough');
+  const previous = boundary?.enumerable && 'value' in boundary && typeof boundary.value === 'string' ? boundary.value : undefined;
+  const order = appendGridFrozenColumn(next.order, new Set(next.visible), previous, key);
+  return order ? { ...next, order } : layout;
 }
 
 /** 隐藏当前列沿用结果的原列键。边界列隐藏时解除冻结，恢复显示时不重建布局。 */

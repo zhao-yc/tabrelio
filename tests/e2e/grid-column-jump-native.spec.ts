@@ -6,11 +6,12 @@ import { navigationMenuItem } from './navigation-menu';
 import { gridColumnJumpZh as text } from '../../src/renderer/locales/gridColumnJump.zh-CN';
 import { queryResultColumnsZh as layoutText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
+import { gridHeaderMenuZh as headerText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
-test('宽表可跳到可见边缘并扩选，也能按名称或序号定位数据格与空结果表头', async ({}, info) => {
+test('宽表可跳到可见边缘并扩选，按列定位或独立冻结字段', async ({}, info) => {
   const dialect = process.env.DBARK_COLUMN_JUMP_DIALECT;
   test.skip(!dialect, '需要显式启用列定位专项');
   const local = dialect === 'sqlite';
@@ -73,6 +74,26 @@ test('宽表可跳到可见边缘并扩选，也能按名称或序号定位数�
     const tableTab = page.locator('.table-tab:visible, .postgres-table-tab:visible');
     const query = page.locator('.query-tab:visible');
     const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const header = (scope: typeof query, index: number) => scope.locator('[role="columnheader"][aria-colindex="' + index + '"]');
+    const menuAction = (name: string) => page.getByRole('menuitem', { name, exact: true });
+    const openHeader = async (scope: typeof query, cell: typeof query) => {
+      const index = Number(await cell.getAttribute('aria-colindex'));
+      await header(scope, index).click({ button: 'right' });
+    };
+    const assertFrozen = async (scope: typeof query, start: number, count: number) => {
+      const grid = scope.getByRole('grid');
+      await grid.evaluate(element => { element.scrollLeft = 0; });
+      const left: number[] = [];
+      for (let i = 0; i < count; i++) {
+        await expect(header(scope, start + i)).toHaveClass(/rdg-cell-frozen-start/);
+        left.push((await header(scope, start + i).boundingBox())!.x);
+      }
+      await expect(header(scope, start + count)).not.toHaveClass(/rdg-cell-frozen-start/);
+      await grid.evaluate(element => { element.scrollLeft = 520; });
+      await expect.poll(() => grid.evaluate(element => element.scrollLeft)).toBeGreaterThan(400);
+      for (let i = 0; i < count; i++)
+        await expect.poll(async () => Math.abs((await header(scope, start + i).boundingBox())!.x - left[i])).toBeLessThan(2);
+    };
     const choose = async (scope: typeof query, search: string) => {
       const button = scope.getByRole('button', { name: text.open, exact: true });
       await button.click();
@@ -120,6 +141,7 @@ test('宽表可跳到可见边缘并扩选，也能按名称或序号定位数�
       if (tab === 'jump-view') await open(tab);
       const label = tableTab.getByRole('gridcell').filter({ hasText: /^(TEXT · )?row B$/ });
       await expect(label).toBeVisible();
+      const first = Number(await label.getAttribute('aria-colindex')) - 1;
       const row = label.locator('..');
       const selected = row.getByRole('checkbox');
       await selected.check();
@@ -137,6 +159,17 @@ test('宽表可跳到可见边缘并扩选，也能按名称或序号定位数�
       const tailA = tableTab.getByRole('gridcell').filter({ hasText: /^(TEXT · )?tail-two-A$/ });
       await checkGridEdges(tableTab, label, target, tailA);
       await expect(target.locator('..').getByRole('checkbox')).toBeChecked();
+      // 冻结远端列后，当前勾选和两条原数据应仍属于同一行。
+      await openHeader(tableTab, target);
+      await menuAction(headerText.freezeColumn).click();
+      await expect(header(tableTab, first)).toContainText('tail_two');
+      await expect(target).toHaveAttribute('aria-colindex', String(first));
+      await expect(target.locator('..').getByRole('checkbox')).toBeChecked();
+      await assertFrozen(tableTab, first, 1);
+      await header(tableTab, first).click({ button: 'right' });
+      await expect(menuAction(headerText.freezeColumn)).toBeDisabled();
+      await menuAction(headerText.unfreeze).click();
+      await expect(header(tableTab, first)).not.toHaveClass(/rdg-cell-frozen-start/);
     }
     await open('jump-query');
     const execute = async () => {
@@ -182,6 +215,24 @@ test('宽表可跳到可见边缘并扩选，也能按名称或序号定位数�
     await rowB.click();
     await page.keyboard.press('ControlOrMeta+ArrowRight');
     await expect(query.getByRole('gridcell', { name: 'tail-one-B', exact: true })).toBeFocused();
+    // 恢复隐藏列，再从两个同名标题中冻结第二个，依原列键核对而非比较别名。
+    await openHeader(query, query.getByRole('gridcell', { name: 'tail-one-B', exact: true }));
+    await menuAction(headerText.showAllColumns).click();
+    await (await choose(query, '#24')).press('Enter');
+    await expect(tailB).toHaveAttribute('aria-colindex', '25');
+    await openHeader(query, tailB);
+    await menuAction(headerText.freezeColumn).click();
+    await expect(tailB).toHaveAttribute('aria-colindex', '2');
+    await assertFrozen(query, 2, 1);
+    await (await choose(query, '#24')).press('Enter');
+    const other = query.getByRole('gridcell', { name: 'tail-one-B', exact: true });
+    await expect(other).toHaveAttribute('aria-colindex', '25');
+    await openHeader(query, other);
+    await menuAction(headerText.freezeColumn).click();
+    await expect(other).toHaveAttribute('aria-colindex', '3');
+    await expect(tailB).toHaveAttribute('aria-colindex', '2');
+    await assertFrozen(query, 2, 2);
+    await page.screenshot({ path: info.outputPath('独立冻结同名结果列.png') });
     expect(await history()).toEqual(before);
 
     await open('jump-empty');

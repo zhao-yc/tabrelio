@@ -58,7 +58,7 @@ import { postgresRecordTransferZh as transferText } from '../locales/postgresRec
 import { capturePostgresQueryTransfer, usePostgresRecordTransfer } from '../postgresRecordTransfer';
 import { queryResultComparisonZh as comparisonText } from '../locales/queryResultComparison.zh-CN';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
-import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, setQueryResultHeaderColumnVisibility, reorderQueryResultColumn, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
+import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, freezeQueryResultColumn, setQueryResultHeaderColumnVisibility, reorderQueryResultColumn, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
 import { captureQueryResultMemory, queryResultMemoryMatches } from '../queryResultMemory';
 import { queryResultPresetsZh as presetsText } from '../locales/queryResultPresets.zh-CN';
 import { queryResultColumnsZh as columnText } from '../locales/queryResultColumns.zh-CN';
@@ -1812,7 +1812,11 @@ export function PostgresQueryTab({
 
   const headerFreeze = {
     current: resultCurrent,
-    apply(key?: string) {
+    apply(key?: string, mode?: 'append') {
+      if (mode === 'append' && key !== undefined) {
+        changeHeaderColumnLayout(layout => freezeQueryResultColumn(layout, key));
+        return;
+      }
       if (!resultSource || !visibleColumns) return;
       try {
         const keys = queryResultColumnKeys(resultSource.columns);

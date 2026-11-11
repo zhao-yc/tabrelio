@@ -10,8 +10,8 @@ import type { ConnectionProfile, QueryResult, ResultColumn } from '../../src/sha
 import { tablePreferenceBytes, tablePreferenceSaveSchema, tablePreferencesLimits, tablePreferencesSchema, type TablePreferences } from '../../src/shared/tablePreferences';
 import { queryResultPresetSaveSchema, queryResultPresetValueSchema, type QueryResultPresetValue } from '../../src/shared/queryResultPresets';
 import { commandSchemas } from '../../src/shared/validation';
-import { changeTablePreference, frozenTableKeys, moveTableColumn, reconcileTablePreferences, setTableFrozenThrough, visibleTableKeys } from '../../src/renderer/tableColumnPreferences';
-import { frozenQueryResultKeys, moveQueryResultColumn, projectQueryResultRows, queryResultVisibleColumns, setQueryResultFrozenThrough, type QueryResultColumnLayout } from '../../src/renderer/queryResultColumns';
+import { changeTablePreference, freezeTableColumn, frozenTableKeys, moveTableColumn, reconcileTablePreferences, setTableFrozenThrough, setTableHeaderColumnVisibility, visibleTableKeys } from '../../src/renderer/tableColumnPreferences';
+import { freezeQueryResultColumn, frozenQueryResultKeys, moveQueryResultColumn, projectQueryResultRows, queryResultVisibleColumns, setQueryResultFrozenThrough, setQueryResultHeaderColumnVisibility, type QueryResultColumnLayout } from '../../src/renderer/queryResultColumns';
 
 const target = { connectionId: 'frozen-offline', database: '库', table: '表' };
 /** 隐藏可靠键不影响展示前缀，原型同名列与大小写名称均按精确身份处理。 */
@@ -24,6 +24,18 @@ function layout(): QueryResultColumnLayout { return { order: ['c3', '__proto__',
 function preset(): QueryResultPresetValue { const all = columns(); return { columns: all, visible: [all[0], all[2], all[1]], configuration: { expression: { mode: 'AND', children: [] }, sort: [] } }; }
 
 describe('表页冻结绑定可见顺序前缀，不重排列或原数据', () => {
+  it('追加独立列保留原冻结列、宽度及其余列的相对顺序，恢复隐藏列也不扩大冻结区', () => {
+    const original = setTableFrozenThrough({ ...table(), rowHeight: 56 }, '__proto__');
+    const next = freezeTableColumn(original, 'amount');
+    expect(tablePreferencesSchema.parse(next)).toEqual(next);
+    expect(next.columns.map(column => column.name)).toEqual(['__proto__', 'amount', 'id', 'Name']);
+    expect(frozenTableKeys(setTableHeaderColumnVisibility(next))).toEqual(['__proto__', 'amount']);
+    expect(next.columns[0].width).toBe(200);
+    expect(next.rowHeight).toBe(56);
+    expect(freezeTableColumn(next, '__proto__')).toBe(next);
+    expect(() => freezeTableColumn(next, 'id')).toThrow('冻结');
+    expect(original.columns.map(column => column.name)).toEqual(['id', '__proto__', 'Name', 'amount']);
+  });
   it('冻结到边界、清除和旧文档都保持精确形状及顺序', () => {
     const original = table(), frozen = setTableFrozenThrough(original, 'Name');
     expect(frozenTableKeys(frozen)).toEqual(['__proto__', 'Name']); expect(frozen.columns).toEqual(original.columns);
@@ -76,6 +88,20 @@ describe('表页冻结绑定可见顺序前缀，不重排列或原数据', () =
 });
 
 describe('查询结果冻结只使用原内部key，投影与行顺序不变', () => {
+  it('只冻结所选的重复别名，再独立追加另一列，保留尺寸和隐藏状态', () => {
+    const all = columns(), widths = new Map([['c1', 310]]);
+    const original = { ...layout(), widths, rowHeight: 56 as const };
+    const first = freezeQueryResultColumn(original, 'c1');
+    expect(frozenQueryResultKeys(all, first)).toEqual(['c1']);
+    const next = freezeQueryResultColumn(first, '__proto__');
+    expect(next.order).toEqual(['c1', '__proto__', 'c3', 'constructor']);
+    expect(frozenQueryResultKeys(all, setQueryResultHeaderColumnVisibility(next))).toEqual(['c1', '__proto__']);
+    expect(next.widths).toBe(widths);
+    expect(next.rowHeight).toBe(56);
+    expect(freezeQueryResultColumn(next, '__proto__')).toBe(next);
+    expect(() => freezeQueryResultColumn(next, 'c3')).toThrow('冻结');
+    expect(original.order).toEqual(['c3', '__proto__', 'constructor', 'c1']);
+  });
   it('重复别名按唯一key冻结，移动边界改变范围，清除不引入undefined字段', () => {
     const all = columns(), original = layout(), frozen = setQueryResultFrozenThrough(original, 'constructor');
     expect(frozenQueryResultKeys(all, frozen)).toEqual(['__proto__', 'constructor']);

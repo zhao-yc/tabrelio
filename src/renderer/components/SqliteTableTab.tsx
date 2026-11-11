@@ -53,7 +53,7 @@ import type { SqliteTableFilter } from '../../shared/sqliteTableBrowse';
 import { SqliteTableLayoutController, type SqliteLayoutView, type SqliteLayoutScope } from '../sqliteTableLayout';
 import { sqliteLayoutProjection } from '../../shared/sqliteTableLayout';
 import { sqliteTableLayoutZh as layoutText } from '../locales/sqliteTableLayout.zh-CN';
-import { changeTablePreference, moveTableColumn, setTableHeaderColumnVisibility, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
+import { changeTablePreference, moveTableColumn, setTableHeaderColumnVisibility, freezeTableColumn, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
 import { TablePreferencesDialog } from './TablePreferencesDialog';
 import type { GridColumnFitSource } from '../gridColumnFit';
 import type { TablePreferences } from '../../shared/tablePreferences';
@@ -453,11 +453,13 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   }
   const headerFreeze = {
     current: () => layoutView.ready && layoutUiCurrent(),
-    apply(key?: string) {
+    apply(key?: string, mode?: 'append') {
       const column = page?.result.columns.find(column => column.key === key);
       if (key !== undefined && !column) return;
-      try { changeLayout(setTableFrozenThrough(layout.view.preferences, column?.name, 512)); }
-      catch (reason) { setValidation(errorMessage(reason)); }
+      const base = layout.view.preferences;
+      try {
+        changeLayout(mode === 'append' && column ? freezeTableColumn(base, column.name, 512) : setTableFrozenThrough(base, column?.name, 512));
+      } catch (reason) { setValidation(errorMessage(reason)); }
     },
   };
   const columnChooserBlocked = !page || !active || invalidTarget || !layoutView.ready || layoutView.pending ||

@@ -179,6 +179,18 @@ function register(): void {
         const type = header.querySelector('.column-type')?.textContent ?? '';
         return { name: (header.textContent ?? '').replace(type, '').trim(), type };
       })))).toEqual([{ name: '重复列', type: 'VAR_STRING' }, { name: '重复列', type: 'VAR_STRING' }]);
+      const headerAction = (name: string) => viewer.getByRole('menu', { name: headerText.menu, exact: true }).getByRole('menuitem', { name, exact: true });
+      await step(() => duplicateHeaders.nth(1).click({ button: 'right' }));
+      await step(() => headerAction(headerText.freezeColumn).click());
+      await step(() => expect(grid.getByRole('gridcell', { name: '构造键安全', exact: true })).toHaveAttribute('aria-colindex', '2'));
+      await step(() => expect(duplicateHeaders.first()).toHaveClass(/rdg-cell-frozen-start/));
+      await step(() => expect(duplicateHeaders.nth(1)).not.toHaveClass(/rdg-cell-frozen-start/));
+      await step(() => duplicateHeaders.first().click({ button: 'right' }));
+      await step(() => headerAction(headerText.unfreeze).click());
+      await step(() => expect(duplicateHeaders.first()).not.toHaveClass(/rdg-cell-frozen-start/));
+      await step(() => duplicateHeaders.first().click({ button: 'right' }));
+      await step(() => headerAction(headerText.moveRight).click());
+      await step(() => expect(grid.getByRole('gridcell', { name: '构造键安全', exact: true })).toHaveAttribute('aria-colindex', '3'));
       await step(() => duplicateHeaders.nth(1).click({ button: 'right' }));
       await step(() => viewer.getByRole('menu', { name: headerText.menu, exact: true }).getByRole('menuitem', { name: headerText.columnStatistics, exact: true }).click());
       const columnStatistics = page.getByRole('dialog', { name: statisticsText.title, exact: true });

@@ -350,7 +350,7 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
     visibility: { showType: !!showFieldType, onShowTypeChange: onShowFieldTypeChange },
     zoom,
     resizeRows: onRowHeightChange ? { height, apply: onRowHeightChange } : undefined,
-    columnVisibility, reorderColumns: onColumnReorder, freeze: freezeColumns, frozenThrough: page.result.columns[display.filter(column => column.frozen).at(-1)?.index ?? -1]?.key,
+    columnVisibility, reorderColumns: onColumnReorder, freeze: freezeColumns, frozenCount: display.filter(column => column.frozen).length,
   });
   const quickValue = useRef(onQuickValue); quickValue.current = onQuickValue;
   const chooseReference = useRef(onChooseReference); chooseReference.current = onChooseReference;
