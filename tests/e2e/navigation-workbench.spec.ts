@@ -19,7 +19,7 @@ if (enabled) {
   register();
 } else baseTest.skip('菜单与对象浏览专项默认关闭（未执行）', () => {});
 
-interface ReadCall { command: string; database?: string; name?: string; kind?: string; cursor?: string; released: boolean; }
+interface ReadCall { command: string; database?: string; name?: string; kind?: string; cursor?: string; taskId?: string; released: boolean; }
 interface Summary { calls: ReadCall[]; prohibited: string[]; pending: number; reboundFrames: number; }
 type Handler = (event: Electron.IpcMainInvokeEvent, payload: { command: string; input: Record<string, unknown> }) => Promise<unknown>;
 interface Audit {
@@ -123,6 +123,7 @@ function register(): void {
       let frame = contents.mainFrame, token = frame.frameToken, rendererProcess = frame.processId, reloadArmed = false, reboundFrames = 0;
       const url = contents.getURL(), calls: ReadCall[] = [], prohibited: string[] = [], held: { call: ReadCall; finish(value: unknown): void }[] = [];
       const definitions: (() => void)[] = [];
+      const pendingDependencyDefinitions = new Set<string>();
       let objects = input.objects, hold = false, holdDefinition = false;
       /** 仅显式受控reload可更换原webContents下的frame；窗口、处理器和页面地址始终固定。 */
       const check = (event?: Electron.IpcMainInvokeEvent) => {
@@ -146,8 +147,12 @@ function register(): void {
       };
       const wrapped: Handler = async (event, payload) => {
         check(event); const command = payload.command;
+        if (command === 'query.cancel' && typeof payload.input.taskId === 'string' && pendingDependencyDefinitions.has(payload.input.taskId)) {
+          calls.push({ command, taskId: payload.input.taskId, released: true });
+          return { ok: true, result: undefined };
+        }
         const read = ['connections.open', 'connections.close', 'metadata.databases', 'metadata.objects', 'metadata.table',
-          'metadata.tableElements', 'table.page', 'metadata.ddl', 'mysql.view.dependencies', 'table.incomingReferences'].includes(command);
+          'metadata.tableElements', 'table.page', 'metadata.ddl', 'mysql.view.dependencies', 'table.incomingReferences', 'query.objectDefinition'].includes(command);
         if (read) {
           if ((payload.input.id ?? payload.input.connectionId) !== input.id) throw Error('合成读取拒绝其它连接');
           const profiles = await original(event, { command: 'connections.list', input: {} }) as { ok: boolean; result?: { id: string; host: string; port: number; user: string }[] }; check(event);
@@ -164,6 +169,21 @@ function register(): void {
           if (command === 'metadata.objects') {
             if (hold) { call.released = false; return new Promise(finish => held.push({ call, finish })); }
             return { ok: true, result: objects };
+          }
+          if (command === 'query.objectDefinition') {
+            const taskId = payload.input.taskId;
+            if (!database || !name || !['第一个子表', '第二个子表'].includes(name) || Object.hasOwn(payload.input, 'sessionId') ||
+                typeof taskId !== 'string' || !/^object-definition:[a-f0-9-]{36}$/.test(taskId)) throw Error('定义预览必须使用本例依赖目录项和独立任务');
+            call.taskId = taskId;
+            const response = { ok: true, result: { request: payload.input, database, name, kind: 'table', temporary: false,
+              ddl: `CREATE TABLE \`${name}\` (parent_id BIGINT);` } };
+            if (holdDefinition) {
+              call.released = false; pendingDependencyDefinitions.add(taskId);
+              return new Promise(finish => definitions.push(() => {
+                pendingDependencyDefinitions.delete(taskId); call.released = true; finish(response);
+              }));
+            }
+            return response;
           }
           const object = objects.find(item => item.name === name && (command === 'metadata.ddl' ? item.kind === payload.input.kind :
             command === 'mysql.view.dependencies' ? item.kind === 'view' : item.kind === 'table' || item.kind === 'view'));
@@ -469,6 +489,7 @@ function register(): void {
     await find.getByRole('textbox', { name: 'Find', exact: true }).fill('CREATE VIEW');
     await expect(find.locator('.matchesCount')).toContainText('1 of 1');
     await runtime.page.keyboard.press('Escape');
+    await expect(find).toHaveCount(0);
     const definitions = (await audit()).calls.filter(call => call.command === 'metadata.ddl');
     expect(definitions.map(call => [call.database, call.name, call.kind])).toEqual([[alpha, same, 'table'], [alpha, same, 'view']]);
     expect((await settings()).tabs.map(tab => tab.id)).toEqual(tabs.map(tab => tab.id));
@@ -509,6 +530,40 @@ function register(): void {
     await inbound.getByRole('button', { name: t.nextDependencies, exact: true }).click();
     await expect(inbound).toContainText('第二个子表');
     await expect(inbound.getByRole('button', { name: t.nextDependencies, exact: true })).toBeDisabled();
+    const open = inbound.getByRole('button', { name: t.openDependencyDefinition(alpha + ' / 第二个子表'), exact: true });
+    const preview = pane.getByRole('region', { name: t.dependencyDefinition, exact: true });
+    const back = preview.getByRole('button', { name: t.backToDependencies, exact: true });
+    await open.press('Enter');
+    await expect(preview.locator('.view-lines')).toContainText('CREATE TABLE');
+    await expect(preview.locator('.view-lines')).toContainText('第二个子表');
+    await expect(back).toBeFocused();
+    await preview.getByRole('button', { name: t.find, exact: true }).click();
+    const find = preview.locator('.find-widget.visible');
+    await find.getByRole('textbox', { name: 'Find', exact: true }).fill('parent_id');
+    await expect(find.locator('.matchesCount')).toContainText('1 of 1');
+    await runtime.page.keyboard.press('Escape');
+    await main(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(1024, 680); });
+    await expect.poll(() => runtime.page.evaluate(() => innerWidth)).toBeLessThanOrEqual(1130);
+    await runtime.page.screenshot({ path: info.outputPath('窄窗口依赖对象定义.png') });
+    await back.press('Enter');
+    await expect(open).toBeFocused();
+    await expect(inbound).toContainText(t.dependencyPage(2));
+    await main(() => (globalThis as AuditRoot).__navigationWorkbenchAudit!.holdTableDefinition());
+    await open.press('Enter');
+    await expect(preview).toBeVisible();
+    await expect.poll(async () => (await audit()).pending).toBe(1);
+    await back.click();
+    await expect(open).toBeFocused();
+    await expect.poll(async () => (await audit()).calls.some(call => call.command === 'query.cancel')).toBe(true);
+    const pending = (await audit()).calls.find(call => call.command === 'query.objectDefinition' && !call.released);
+    expect((await audit()).calls.find(call => call.command === 'query.cancel')?.taskId).toBe(pending?.taskId);
+    await main(() => (globalThis as AuditRoot).__navigationWorkbenchAudit!.releaseTableDefinition());
+    await expect(preview).toHaveCount(0);
+    await expect(inbound).toContainText(t.dependencyPage(2));
+    await open.click();
+    await expect(preview.locator('.view-lines')).toContainText('第二个子表');
+    await back.click();
+    await expect(open).toBeFocused();
     await inbound.getByRole('button', { name: t.previousDependencies, exact: true }).click();
     await expect(inbound).toContainText('第一个子表');
     expect((await audit()).calls.filter(call => call.command === 'table.incomingReferences').map(call => call.cursor))

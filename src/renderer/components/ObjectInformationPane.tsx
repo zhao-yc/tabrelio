@@ -12,9 +12,10 @@ import { viewDependenciesZh } from '../locales/viewDependencies.zh-CN';
 import { connectionOrganizationZh } from '../../shared/connectionOrganization.zh-CN';
 import { sidebarConnectionEnd } from '../sidebarNodeRequests';
 import { useWorkspace } from '../store';
-import { readObjectDependencies, supportsObjectDependencies, type ObjectDependencies } from '../objectDependencies';
+import { readObjectDependencies, supportsObjectDependencies, type ObjectDependencies, type ObjectDependencyEntry, type DependencyDefinitionTarget } from '../objectDependencies';
 import { sidebarNodeKey, useSidebarSelection, type SidebarNodeTarget } from './SidebarContextMenu';
 import { SqlEditor } from './SqlEditor';
+import { DependencyDefinition } from './DependencyDefinition';
 import { ErrorBox, Spinner } from './ui';
 import '../objectInformation.css';
 
@@ -60,8 +61,9 @@ function TableStructure({ value }: { value: TableElements }) {
   </div>;
 }
 
-function DependencyList({ value, page, previous, next }: {
+function DependencyList({ value, page, previous, next, open }: {
   value: ObjectDependencies; page: number; previous(): void; next(cursor: string): void;
+  open(row: ObjectDependencyEntry, trigger: HTMLButtonElement): void;
 }) {
   return <div className="object-info-structure object-info-dependencies">
     <div className="object-info-dependency-notes">{value.notices.map(note => <p key={note}>{note}</p>)}</div>
@@ -69,7 +71,11 @@ function DependencyList({ value, page, previous, next }: {
       <h3>{text[direction]} <span>{value[direction].length}</span></h3>
       {direction === 'references' && value.referencesUnknown && <p>{viewDependenciesZh.referencedUnknown}</p>}
       {value[direction].length ? <ul>{value[direction].map((row, index) => <li key={JSON.stringify([row.identity, row.detail, index])}>
-        <strong>{row.identity}</strong>
+        <div className="object-info-dependency-row">
+          <strong>{row.identity}</strong>
+          {row.definition && <button type="button" aria-label={text.openDependencyDefinition(row.identity)}
+            onClick={event => open(row, event.currentTarget)}>{text.definition}</button>}
+        </div>
         {row.detail && <span>{row.detail}</span>}
         {row.mapping?.map((part, partIndex) => <span key={partIndex}>{part}</span>)}
       </li>)}</ul> : (direction !== 'references' || !value.referencesUnknown) && <p>{viewDependenciesZh.empty}</p>}
@@ -117,6 +123,9 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
   const [result, setResult] = useState<Result>(), live = useRef<Source | undefined>(undefined), heading = useRef<HTMLHeadingElement>(null);
   const [definitionEditor, setDefinitionEditor] = useState<{ source: Source; instance: editor.IStandaloneCodeEditor }>();
   const [page, setPage] = useState<DependencyPage>();
+  const [preview, setPreview] = useState<{ source: Source; identity: string; target: DependencyDefinitionTarget; trigger: HTMLButtonElement; scrollTop: number }>();
+  const returnFocus = useRef<{ trigger: HTMLButtonElement; scrollTop: number } | undefined>(undefined);
+  const content = useRef<HTMLDivElement>(null);
   const dependencyPage = page && page.target === target && page.profile === profile && page.refreshKey === refreshKey ? page : undefined;
   const supportsStructure = target?.kind === 'table';
   const supportsDdl = !!target && !!profile && canReadDdl(profile, target);
@@ -130,6 +139,7 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
   useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); return () => { live.current = undefined; }; }, []);
   useEffect(() => {
     setDefinitionEditor(undefined);
+    setPreview(undefined);
     if (!target || !('name' in target) || !profile || shownMode === 'general') return;
     const source: Source = { target, profile, version, refreshKey, mode: shownMode, retry, dependencyPage };
     live.current = source;
@@ -174,11 +184,26 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
   const owned = result?.source.target === target && result?.source.profile === profile &&
     result?.source.version === version && result?.source.mode === shownMode && result?.source.retry === retry &&
     result?.source === live.current && result?.source.refreshKey === refreshKey && result?.source.dependencyPage === dependencyPage ? result : undefined;
+  const shownPreview = preview?.source === owned?.source ? preview : undefined;
+  useLayoutEffect(() => {
+    if (shownPreview || !returnFocus.current) return;
+    const { trigger, scrollTop } = returnFocus.current;
+    returnFocus.current = undefined;
+    if (!trigger.isConnected || trigger.closest('[hidden]')) return;
+    if (content.current) content.current.scrollTop = scrollTop;
+    trigger.focus({ preventScroll: true });
+  }, [shownPreview]);
   const name = target && 'name' in target ? target.name : target?.kind === 'database' ? target.database : profile?.name;
   const kind = target?.kind === 'connection' ? text.connection : target?.kind === 'database' ? text.database : target ? kindLabels[target.kind] : '';
   const findReady = !!owned && definitionEditor?.source === owned.source;
 
   function choose(next: Mode) { if (next !== mode) { live.current = undefined; setResult(undefined); setPage(undefined); setMode(next); } }
+  function dependencySourceCurrent(source: Source) {
+    const workspace = useWorkspace.getState();
+    return live.current === source && latestRefresh.current === source.refreshKey && current() === source.target &&
+      workspace.connections.includes(source.profile) && (workspace.connectionVersions[source.profile.id] ?? 0) === source.version &&
+      !sidebarConnectionEnd(source.profile.id);
+  }
   /** 翻页只沿同一次原目录摘要推进；返回第一页同样核对源对象。 */
   function changeDependencyPage(cursor?: string) {
     if (!owned || live.current !== owned.source || current() !== owned.source.target ||
@@ -215,7 +240,7 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
         {modes.map(item =>
           <button type="button" key={item} aria-pressed={shownMode === item} onClick={() => choose(item)}>{text[item]}</button>)}
       </div>}
-      <div className={`object-info-content${shownMode === 'ddl' ? ' object-info-ddl' : ''}`}>
+      <div ref={content} className={`object-info-content${shownMode === 'ddl' ? ' object-info-ddl' : ''}`}>
         {shownMode === 'general' ? <dl>
           {target.kind !== 'connection' && <><dt>{text.connection}</dt><dd>{profile.name}</dd></>}
           {'name' in target && <><dt>{text.database}</dt><dd>{target.database}</dd></>}
@@ -223,8 +248,20 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
           <dt>{text.group}</dt><dd>{connectionOrganizationZh.groupDisplay(profile.group ?? '')}</dd>
         </dl> : !owned ? <Spinner text={text.loading}/> : 'error' in owned ? <ErrorBox message={owned.error}/> :
           typeof owned.value !== 'string' ? 'references' in owned.value
-            ? <DependencyList value={owned.value} page={(dependencyPage?.cursors.length ?? 0) + 1}
-              previous={() => changeDependencyPage()} next={changeDependencyPage}/>
+            ? <>
+              <div hidden={!!shownPreview}><DependencyList value={owned.value} page={(dependencyPage?.cursors.length ?? 0) + 1}
+                previous={() => changeDependencyPage()} next={changeDependencyPage}
+                open={(row, trigger) => {
+                  if (row.definition && dependencySourceCurrent(owned.source)) setPreview({
+                    source: owned.source, identity: row.identity, target: row.definition, trigger, scrollTop: content.current?.scrollTop ?? 0,
+                  });
+                }}/></div>
+              {shownPreview && <DependencyDefinition target={shownPreview.target} profile={shownPreview.source.profile}
+                identity={shownPreview.identity} current={() => dependencySourceCurrent(shownPreview.source)} onBack={() => {
+                  returnFocus.current = shownPreview;
+                  setPreview(undefined);
+                }}/>}
+            </>
             : <TableStructure value={owned.value}/> :
             owned.value ? <SqlEditor key={JSON.stringify([sidebarNodeKey(target), refreshKey, retry])} value={owned.value} dialect={profile.dialect} readOnly
               onReady={instance => { if (live.current === owned.source) setDefinitionEditor({ source: owned.source, instance }); }}/> :

@@ -20,6 +20,13 @@
 .object-info-structure p{margin:4px 0 12px}
 .object-info-dependency-notes p{margin:0 0 7px;line-height:1.5}
 .object-info-dependency-pages{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;color:var(--muted)}
+.object-info-dependency-row,.object-info-dependency-definition-actions{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.object-info-dependency-row strong{min-width:0;overflow-wrap:anywhere}
+.object-info-dependency-row button{flex-shrink:0;padding:3px 8px;font-size:11px}
+.object-info-dependency-definition{display:flex;height:100%;min-height:190px;flex-direction:column;gap:9px}
+.object-info-dependency-definition-actions button:first-child{display:flex;align-items:center;gap:5px}
+.object-info-dependency-definition-name{overflow-wrap:anywhere}
+.object-info-dependency-editor{flex:1;min-height:0;min-width:0;border:1px solid var(--line);overflow:hidden}
 @media(max-width:1130px){
   .object-information-pane{position:absolute;z-index:28;inset:0 0 0 auto;width:min(340px,100%);box-shadow:-12px 0 30px #0004}
 }

@@ -300,6 +300,14 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     await page.keyboard.press('Escape');
     await expect(outbound).toContainText('parent_catalog');
     await page.screenshot({ path: info.outputPath('对象信息出向依赖.png') });
+    const openDependency = outbound.getByRole('button', { name: /查看 .*parent_catalog.* 的定义/ }).first();
+    const dependencyDefinition = inspector.getByRole('region', { name: information.dependencyDefinition, exact: true });
+    await openDependency.press('Enter');
+    await expect(dependencyDefinition.locator('.view-lines')).toContainText('parent_catalog');
+    await page.screenshot({ path: info.outputPath('依赖对象只读定义.png') });
+    await dependencyDefinition.getByRole('button', { name: information.backToDependencies, exact: true }).press('Enter');
+    await expect(openDependency).toBeFocused();
+    await expect(outbound).toContainText('parent_catalog');
     if (postgresDependencyKinds) {
       for (const [kind, target] of [['function', '"public"."pane_reference"()'], ['sequence', '"public"."pane_sequence"']]) {
         await tree.locator(key([connectionId, database, kind, target])).locator('.tree-label').click({ button: 'right' });

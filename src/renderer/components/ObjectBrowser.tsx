@@ -7,6 +7,7 @@ import type { ConnectionProfile, DatabaseObject } from '../../shared/contracts';
 import { objectCategories, type ObjectCategory } from '../../shared/objectBrowser';
 import { useWorkspace, type WorkspaceTab } from '../store';
 import { errorMessage, invoke, kindLabels } from '../lib';
+import { appModalSelector } from '../modalSelectors';
 import { navigationZh as text } from '../locales/navigation.zh-CN';
 import { SidebarTreeRow } from './SidebarContextMenu';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
@@ -48,7 +49,7 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
     const now = useWorkspace.getState();
     return pageContext.current === pageOwner && pageOwner.valid && active && !!profile && now.settings.activeTabId === tab.id
       && now.settings.tabs.find(item => item.id === tab.id) === tab && now.connections.find(item => item.id === tab.connectionId) === profile
-      && (now.connectionVersions[tab.connectionId] ?? 0) === version && (!requireNoDialog || !document.querySelector('[role="dialog"], [role="alertdialog"]'));
+      && (now.connectionVersions[tab.connectionId] ?? 0) === version && (!requireNoDialog || !document.querySelector(appModalSelector));
   };
   useLayoutEffect(() => {
     const off = useWorkspace.subscribe(() => {
