@@ -26,8 +26,8 @@ export function ObjectBrowserDiagram({ profile, database, tables, current, onDes
     if (operation.taskId) operation.cancel = invoke('query.cancel', { taskId: operation.taskId }).then(() => '', errorMessage);
   }
 
-  async function read() {
-    if (reading.current || !latest.current() || !tables.length || tables.length > limits.tables) return;
+  async function read(names: readonly string[] = tables) {
+    if (reading.current || !latest.current() || !names.length || names.length > limits.tables) return;
     const operation: ReadOperation = { stopped: false };
     reading.current = operation;
     setBusy(true); setProgress(text.browserReading); setError(''); setNotice('');
@@ -38,7 +38,7 @@ export function ObjectBrowserDiagram({ profile, database, tables, current, onDes
     };
     try {
       await Promise.resolve();
-      const value = await readObjectBrowserDiagram(profile, database, tables, {
+      const value = await readObjectBrowserDiagram(profile, database, names, {
         check, task: id => { operation.taskId = id; }, progress: (done, total) => {
           if (owned()) setProgress(text.progress(done, total));
         },
@@ -76,7 +76,8 @@ export function ObjectBrowserDiagram({ profile, database, tables, current, onDes
     {notice && <p role="status">{notice}</p>}
     {busy && <Spinner text={progress}/>}
     <ErrorBox message={error}/>
-    {diagram ? <RelationshipDiagramCanvas diagram={diagram} localDatabase={database} exportDisabled={busy} exportCurrent={current} onDesign={table => {
+    {diagram ? <RelationshipDiagramCanvas diagram={diagram} localDatabase={database} exportDisabled={busy} exportCurrent={current}
+      onRefresh={() => { void read(diagram.tables.map(table => table.name)); }} onDesign={table => {
       if (!reading.current && latest.current()) onDesign(table);
     }} designDisabled={busy}/> : !tables.length && <p>{text.noTables}</p>}
   </section>;

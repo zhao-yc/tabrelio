@@ -4,3 +4,9 @@
 .object-browser-diagram-tools{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .object-browser-diagram-tools>span,.object-browser-diagram>p{color:var(--muted)}
 .object-browser-diagram .relationship-diagram-viewport{height:clamp(220px,38vh,570px)}
+.relationship-diagram-scroll-area{overflow:clip}
+.relationship-diagram-viewport{overflow-anchor:none}
+.relationship-diagram-viewport[data-pan]{cursor:grab;touch-action:none;user-select:none}
+.relationship-diagram-viewport[data-pan] .relationship-diagram-node-title{cursor:inherit}
+.relationship-diagram-viewport[data-dragging]{cursor:grabbing}
+.relationship-diagram-controls button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}

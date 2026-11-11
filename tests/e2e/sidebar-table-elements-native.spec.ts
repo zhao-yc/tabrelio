@@ -468,8 +468,53 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
       await expect(diagram.getByText(/已保存关系图/)).toHaveCount(0);
     }
     const pngPath = info.outputPath('导出的整张 ER 图.png');
-    for (let step = 0; step < 4; step++) await diagram.getByRole('button', { name: diagramText.zoomIn, exact: true }).click();
     const canvasViewport = diagram.locator('.relationship-diagram-viewport');
+    const controls = diagram.locator('.relationship-diagram-controls');
+    const pan = diagram.getByRole('button', { name: diagramText.pan, exact: true });
+    for (let step = 0; step < 3; step++) await canvasViewport.press('ControlOrMeta+Minus');
+    await expect(controls).toContainText('25%');
+    await expect.poll(() => canvasViewport.evaluate(element => [element.scrollWidth - element.clientWidth, element.scrollHeight - element.clientHeight])).toEqual([0, 0]);
+    await canvasViewport.press('ControlOrMeta+0');
+    await expect(controls).toContainText('100%');
+    for (let step = 0; step < 3; step++) await canvasViewport.press('ControlOrMeta+Equal');
+    await expect(controls).toContainText('175%');
+    await canvasViewport.evaluate(element => element.scrollTo({ left: 40, top: 40 }));
+    const point = await canvasViewport.evaluate(element => {
+      const bounds = element.getBoundingClientRect();
+      return { x: bounds.left + element.clientLeft + 80, y: bounds.top + element.clientTop + 80 };
+    });
+    const graphPoint = () => canvasViewport.evaluate(element => {
+      const stage = element.querySelector<HTMLElement>('.relationship-diagram-stage')!;
+      const zoom = new DOMMatrix(getComputedStyle(stage).transform).a;
+      return { zoom, x: (element.scrollLeft + 80) / zoom, y: (element.scrollTop + 80) / zoom };
+    });
+    const beforeWheel = await graphPoint();
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await page.mouse.move(point.x, point.y);
+    await page.keyboard.down(modifier);
+    try { await page.mouse.wheel(0, -40); } finally { await page.keyboard.up(modifier); }
+    await expect.poll(async () => (await graphPoint()).zoom).toBeGreaterThan(beforeWheel.zoom);
+    const afterWheel = await graphPoint();
+    expect(Math.abs(afterWheel.x - beforeWheel.x)).toBeLessThan(1);
+    expect(Math.abs(afterWheel.y - beforeWheel.y)).toBeLessThan(1);
+    await canvasViewport.press('ControlOrMeta+Equal');
+    await expect(controls).toContainText('200%');
+    await canvasViewport.evaluate(element => element.scrollTo(0, 0));
+    await canvasViewport.press('h');
+    await expect(pan).toHaveAttribute('aria-pressed', 'true');
+    const nodeBounds = (await child.boundingBox())!;
+    await page.mouse.move(nodeBounds.x + 90, nodeBounds.y + 50);
+    await page.mouse.down();
+    try {
+      await expect(canvasViewport).toHaveAttribute('data-dragging', 'true');
+      await page.mouse.move(nodeBounds.x + 10, nodeBounds.y + 15, { steps: 5 });
+      await expect.poll(() => canvasViewport.evaluate(element => [element.scrollLeft, element.scrollTop])).toEqual([80, 35]);
+    } finally { await page.mouse.up(); }
+    await expect(canvasViewport).not.toHaveAttribute('data-dragging', 'true');
+    await expect(child).toHaveAttribute('aria-pressed', 'false');
+    await page.screenshot({ path: info.outputPath('ER图手形平移.png') });
+    await canvasViewport.press('Escape');
+    await expect(pan).toHaveAttribute('aria-pressed', 'false');
     await canvasViewport.evaluate(node => { node.scrollLeft = node.scrollWidth; node.scrollTop = node.scrollHeight; });
     await expect.poll(() => canvasViewport.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
     await preparePngPicker(pngPath);
@@ -494,6 +539,18 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     }
     await browser.getByLabel(navigationZh.search, { exact: true }).fill('a_small');
     await expect(diagram).toContainText(diagramText.selectionChanged);
+    await expect(diagram).toContainText(diagramText.counts(2, 0, 1));
+    const refreshing = diagram.evaluate(node => new Promise<boolean>(resolve => {
+      const timeout = window.setTimeout(() => { observer.disconnect(); resolve(false); }, 5000);
+      const observer = new MutationObserver(records => {
+        if (node.getAttribute('aria-busy') !== 'true' && !records.some(record => record.oldValue === 'true')) return;
+        observer.disconnect(); clearTimeout(timeout); resolve(true);
+      });
+      observer.observe(node, { attributes: true, attributeFilter: ['aria-busy'], attributeOldValue: true });
+    }));
+    await canvasViewport.press('F5');
+    expect(await refreshing).toBe(true);
+    await expect(diagram).toHaveAttribute('aria-busy', 'false');
     await expect(diagram).toContainText(diagramText.counts(2, 0, 1));
     await diagram.getByRole('button', { name: diagramText.browserRead, exact: true }).click();
     await expect(diagram).toContainText(diagramText.counts(1, 1, 1));

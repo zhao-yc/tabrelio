@@ -51,9 +51,16 @@ for (const theme of ['dark', 'light']) test('真实表菜单、完整关系图�
     await step(() => expect(modal.locator('.relationship-diagram-controls')).toContainText('75%')); await step(() => modal.getByRole('checkbox', { name: text.fields, exact: true }).uncheck());
     await step(() => expect(modal.locator('.relationship-diagram-column').filter({ hasText: '备注<script>' })).toHaveCount(0));
     await step(() => modal.getByRole('checkbox', { name: text.fields, exact: true }).check()); await step(() => modal.getByRole('button', { name: text.fit, exact: true }).click());
+    const viewport = modal.locator('.relationship-diagram-viewport'), pan = modal.getByRole('button', { name: text.pan, exact: true });
+    await step(() => pan.click());
+    await step(() => expect(viewport).toBeFocused());
+    await step(() => expect(pan).toHaveAttribute('aria-pressed', 'true'));
+    await step(() => viewport.press('Escape'));
+    await step(() => expect(pan).toHaveAttribute('aria-pressed', 'false'));
+    await step(() => expect(modal).toBeVisible());
     expect((await evidence()).calls).toEqual(localBefore.calls); await step(() => expect(modal.locator('script')).toHaveCount(0));
     await info.attach('关系图真实组件-' + theme, { body: await step(() => page.screenshot()), contentType: 'image/png' });
-    await step(() => modal.getByRole('button', { name: text.refresh, exact: true }).click()); await step(() => expect.poll(async () => (await evidence()).calls.filter(call => call.command === 'metadata.table').length).toBe(5));
+    await step(() => viewport.press('F5')); await step(() => expect.poll(async () => (await evidence()).calls.filter(call => call.command === 'metadata.table').length).toBe(5));
     await step(() => modal.getByRole('button', { name: text.close, exact: true }).click()); await step(() => expect(modal).toHaveCount(0));
     const after = await evidence(); expect(after.denied).toEqual([]); expect(after.tabs).toEqual(before.tabs); expect(after.dirty).toEqual(before.dirty); expect(Object.values(after.jobs).every(value => value === false)).toBe(true); expect(errors).toEqual([]);
     if (theme === 'light') {

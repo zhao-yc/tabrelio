@@ -118,7 +118,14 @@ test('SQLite真实表页关系图单快照读取、隐式主键、草稿与本�
       await info.attach('SQLite关系图-' + theme, { body: await step(() => page.screenshot()), contentType: 'image/png' });
     }
     expect(operations((await audit()).commands)).toEqual(operations(beforeLocal.commands));
-    await step(() => dialog.getByRole('button', { name: diagramText.refresh, exact: true }).click()); await step(() => expect.poll(async () => (await audit()).reads.length).toBe(3));
+    const viewport = dialog.locator('.relationship-diagram-viewport');
+    await step(() => viewport.press('h'));
+    await step(() => expect(dialog.getByRole('button', { name: diagramText.pan, exact: true })).toHaveAttribute('aria-pressed', 'true'));
+    await step(() => viewport.press('Escape'));
+    await step(() => expect(dialog).toBeVisible());
+    await step(() => expect(dialog.getByRole('button', { name: diagramText.pan, exact: true })).toHaveAttribute('aria-pressed', 'false'));
+    expect(operations((await audit()).commands)).toEqual(operations(beforeLocal.commands));
+    await step(() => viewport.press('F5')); await step(() => expect.poll(async () => (await audit()).reads.length).toBe(3));
     await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); const after = await audit();
     expect(after.denied).toEqual([]); expect(after.pickerCalls).toBe(1); expect(runtime.pageErrors).toEqual([]);
     const requests = after.reads as { input: { taskId: string; tables: string[] }; reply: { ok: boolean; result: { tables: unknown[]; schemaVersion: string } } }[];

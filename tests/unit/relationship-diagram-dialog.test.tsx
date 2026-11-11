@@ -1,14 +1,14 @@
 import { act, type ComponentProps } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { relationshipDiagramZh as text } from '../../src/renderer/locales/relationshipDiagram.zh-CN';
-import { relationshipFixture } from '../helpers/relationshipDiagramFixture';
+import { installRelationshipViewportPort, relationshipFixture } from '../helpers/relationshipDiagramFixture';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let RelationshipDiagramDialog: typeof import('../../src/renderer/components/RelationshipDiagramDialog')['RelationshipDiagramDialog'], useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'];
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 beforeAll(async () => {
-  document = memoryDocument(); const create = document.createElement.bind(document);
+  document = memoryDocument(); installRelationshipViewportPort(document); const create = document.createElement.bind(document);
   document.createElement = name => { const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key, value); if (key === 'disabled') node.disabled = true; }; node.removeAttribute = key => { remove(key); if (key === 'disabled') node.disabled = false; }; return node; };
   ({ createRoot } = await import('react-dom/client'));
   ({ RelationshipDiagramDialog } = await import('../../src/renderer/components/RelationshipDiagramDialog')); ({ useWorkspace } = await import('../../src/renderer/store'));
