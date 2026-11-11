@@ -498,16 +498,23 @@ function tableFunctionProjection(calls: ParsedFunctionCall[], members: (string[]
     if (knownWidth >= aliases.length) names.push('ordinality');
     knownWidth++;
   }
-  // 位置别名可能覆盖未知返回列，目录无法单独证明此时各成员的输出位置。
-  const stars: PostgresCompletionReference[] = [];
-  if (!aliases.length) for (const [index, call] of calls.entries()) {
-    if (members[index] || !call.catalog) continue;
+  type Layout = NonNullable<PostgresCompletionReference['functionLayout']>;
+  const layout = calls.map((call, index): Layout['members'][number] => {
+    const declared = members[index];
+    if (declared) return { kind: 'declared', names: declared };
     const argumentCount = call.args.parts.length ? 1 + call.args.parts.filter(part => punct(part, ',')).length : 0;
     // 多参数 unnest 可能由 PostgreSQL 拆成多个调用，不能使用单次目录签名推断。
-    if (!call.schema && call.name === 'unnest' && argumentCount > 1) continue;
-    stars.push({ name: call.name, ...(call.schema ? { schema: call.schema } : {}),
-      functionCall: { argumentCount, ...(calls.length === 1 && scalarAlias ? { scalarAlias } : {}) } });
-  }
+    if (!call.catalog || !call.schema && call.name === 'unnest' && argumentCount > 1) return { kind: 'unknown' };
+    return { kind: 'function', name: call.name, ...(call.schema ? { schema: call.schema } : {}),
+      call: { argumentCount, ...(calls.length === 1 && scalarAlias ? { scalarAlias } : {}) } };
+  });
+  const routines = layout.filter(member => member.kind === 'function');
+  // 有位置别名时保留成员顺序，目录用已确认的最小列数证明哪些名称尚未被覆盖。
+  const stars: PostgresCompletionReference[] = aliases.length
+    ? layout.length <= limits.relations && routines.length && !members.some(member => member && member.length > limits.items)
+      ? [{ name: calls[0].name, functionLayout: { aliasCount: aliases.length, ...(ordinal ? { ordinality: true } : {}), members: layout } }]
+      : []
+    : routines.map(member => ({ name: member.name, ...(member.schema ? { schema: member.schema } : {}), functionCall: member.call }));
   return { names: names.slice(0, limits.items), stars: stars.length <= limits.relations ? stars : [],
     exact: exact && aliases.length <= knownWidth && knownWidth <= limits.items };
 }

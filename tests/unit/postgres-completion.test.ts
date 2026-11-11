@@ -95,12 +95,19 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
   });
   it('遇到未知返回列时只保留确定的名称，UPDATE FROM 和 DELETE USING 共享补全', () => {
     const rows = 'ROWS FROM (unknown_rows(), get_records() AS (id int, val text)) WITH ORDINALITY AS r(key)';
-    const projected = { relations: [{ projection: { names: ['key', 'val', 'ordinality'], stars: [], exact: false } }] };
+    const projected = { relations: [{ projection: { names: ['key', 'val', 'ordinality'], exact: false, stars: [{
+      functionLayout: { aliasCount: 1, ordinality: true, members: [
+        { kind: 'function', name: 'unknown_rows', call: { argumentCount: 0 } }, { kind: 'declared', names: ['id', 'val'] },
+      ] },
+    }] } }] };
     expect(at('SELECT r.| FROM ' + rows)?.query).toMatchObject(projected);
     expect(at('UPDATE orders d SET value=r.| FROM ' + rows)?.query).toMatchObject(projected);
     expect(at('DELETE FROM orders d USING ' + rows + ' WHERE d.id=r.|')?.query).toMatchObject(projected);
     expect(at('SELECT r.| FROM unknown_rows() WITH ORDINALITY AS r(first,second)')?.query)
-      .toMatchObject({ relations: [{ projection: { names: ['first', 'second'], stars: [], exact: false } }] });
+      .toMatchObject({ relations: [{ projection: { names: ['first', 'second'], exact: false,
+        stars: [{ functionLayout: { aliasCount: 2, ordinality: true,
+          members: [{ kind: 'function', name: 'unknown_rows', call: { argumentCount: 0, scalarAlias: 'r' } }] } }],
+      } }] });
   });
   it('表函数实参只看到可关联的前序来源，列定义内不触发字段补全', () => {
     expect(at('SELECT * FROM incoming i, ROWS FROM (get_records(i.|) AS (id int)) r, later l')?.query)
@@ -358,6 +365,24 @@ it('表函数返回列沿原会话查询，候选类型未知时保留名称', a
     expect(suggestions?.[0].detail).toBeUndefined();
     expect(inputs).toEqual([{ connectionId: '原连接', database: '原库', sessionId: '原会话', prefix: 'co', kind: 'columns',
       relations: [{ schema: 'api', name: 'feed', functionCall: { argumentCount: 1, scalarAlias: 'f' } }] }]);
+  } finally { source.provider.dispose(); }
+});
+
+it('位置别名与目录证明的剩余列一起补全，只向原会话发送有序成员', async () => {
+  const inputs: PostgresCompletionInput[] = [];
+  const source = editor('SELECT r.| FROM ROWS FROM (api.feed(1), api.tags() AS (tag text)) WITH ORDINALITY AS r(key,amount)',
+    async input => {
+      inputs.push(input);
+      return { items: [{ kind: 'column', reference: 0, name: 'tag', type: '' },
+        { kind: 'column', reference: 0, name: 'ordinality', type: 'bigint' }], incomplete: false };
+    }, '原会话');
+  try {
+    expect((await source.suggest())?.suggestions?.map(item => item.insertText)).toEqual(['"key"', '"amount"', '"tag"', '"ordinality"']);
+    expect(inputs).toEqual([{ connectionId: '原连接', database: '原库', sessionId: '原会话', prefix: '', kind: 'columns', relations: [
+      { name: 'feed', functionLayout: { aliasCount: 2, ordinality: true, members: [
+        { kind: 'function', schema: 'api', name: 'feed', call: { argumentCount: 1 } }, { kind: 'declared', names: ['tag'] },
+      ] } },
+    ] }]);
   } finally { source.provider.dispose(); }
 });
 

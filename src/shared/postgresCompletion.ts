@@ -4,9 +4,21 @@ export const postgresCompletionLimits = { source: 64 * 1024, tokens: 4096, items
 const text = z.string().max(postgresCompletionLimits.name).refine(value => !value.includes('\0'));
 const name = text.refine(value => value.length > 0);
 const target = z.object({ connectionId: name, database: name, prefix: text, sessionId: name.optional() });
-export const postgresCompletionReferenceSchema = z.object({ schema: name.optional(), name, functionCall: z.object({
+const functionCall = z.object({
   argumentCount: z.number().int().min(0).max(postgresCompletionLimits.tokens), scalarAlias: name.optional(),
-}).strict().optional() }).strict();
+}).strict();
+const functionMember = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('function'), schema: name.optional(), name, call: functionCall }).strict(),
+  z.object({ kind: z.literal('declared'), names: z.array(name).min(1).max(postgresCompletionLimits.items) }).strict(),
+  z.object({ kind: z.literal('unknown') }).strict(),
+]);
+const functionLayout = z.object({
+  aliasCount: z.number().int().min(1).max(postgresCompletionLimits.tokens), ordinality: z.literal(true).optional(),
+  members: z.array(functionMember).min(1).max(postgresCompletionLimits.relations),
+}).strict();
+export const postgresCompletionReferenceSchema = z.object({ schema: name.optional(), name,
+  functionCall: functionCall.optional(), functionLayout: functionLayout.optional(),
+}).strict().refine(ref => !(ref.functionCall && ref.functionLayout));
 export type PostgresCompletionReference = z.infer<typeof postgresCompletionReferenceSchema>;
 const routine = z.object({ context: z.enum(['expression', 'from', 'call']), schema: name.optional() }).strict();
 export type PostgresRoutineCompletionTarget = z.infer<typeof routine>;

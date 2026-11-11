@@ -59,12 +59,18 @@ async function relations(connection: PostgresConnection, input: Extract<Postgres
   return { items, incomplete: result.truncated || result.rows.length === rowLimit };
 }
 
-/** 只查例程目录。一个字段必须在每个可能重载中恰好出现一次，动态记录和未知类型不猜测。 */
+/** 用各成员所有可能重载的最小列数证明列位置，动态记录按零列下界处理。 */
 function functionColumnCtes(session: boolean): string {
   const ownTemp = session ? `n.oid ${eq} pg_catalog.pg_my_temp_schema()` : 'false';
-  return `, candidates AS MATERIALIZED (
-    SELECT r.index, r.name, r.scalar_alias, p.*, t.typtype, t.typrelid
-    FROM refs r CROSS JOIN LATERAL (
+  return `, members AS (
+    SELECT *, COALESCE(pg_catalog.cardinality(declared_names), 0) AS declared_width
+    FROM pg_catalog.jsonb_to_recordset($4::pg_catalog.jsonb)
+      AS m(index pg_catalog.int4, member pg_catalog.int4, schema pg_catalog.text, name pg_catalog.text,
+        argument_count pg_catalog.int4, scalar_alias pg_catalog.text, declared_names pg_catalog.text[],
+        alias_count pg_catalog.int4, ordinality pg_catalog.bool)
+  ), candidates AS MATERIALIZED (
+    SELECT r.index, r.member, r.name, r.scalar_alias, p.*, t.typtype, t.typrelid
+    FROM members r CROSS JOIN LATERAL (
       SELECT p.oid, p.prorettype, p.proallargtypes, p.proargnames, p.proargmodes,
         pg_catalog.has_function_privilege(p.oid, 'EXECUTE') AS allowed
       FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid ${eq} p.pronamespace
@@ -79,17 +85,18 @@ function functionColumnCtes(session: boolean): string {
       ORDER BY p.oid LIMIT 65
     ) p JOIN pg_catalog.pg_type t ON t.oid ${eq} p.prorettype
   ), candidate_counts AS (
-    SELECT index, pg_catalog.count(*) AS total FROM candidates GROUP BY index
+    SELECT index, member, pg_catalog.count(*) AS total FROM candidates GROUP BY index, member
     HAVING pg_catalog.count(*) <= 64 AND pg_catalog.bool_and(allowed)
   ), outputs AS (
-    SELECT c.index, c.oid, a.attname::pg_catalog.text AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type
-    FROM candidates c JOIN candidate_counts k ON k.index ${eq} c.index
+    SELECT c.index, c.member, c.oid, a.attname::pg_catalog.text AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type,
+      pg_catalog.row_number() OVER (PARTITION BY c.index, c.member, c.oid ORDER BY a.attnum) AS position
+    FROM candidates c JOIN candidate_counts k USING (index, member)
     JOIN pg_catalog.pg_attribute a ON a.attrelid ${eq} c.typrelid
     WHERE c.typtype::pg_catalog.text ${eq} 'c' AND a.attnum > 0 AND NOT a.attisdropped
     UNION ALL
-    SELECT c.index, c.oid, COALESCE(NULLIF(c.proargnames[o.position], ''), 'column' || o.column_number::pg_catalog.text),
-      CASE WHEN t.typtype::pg_catalog.text ${eq} 'p' THEN '' ELSE pg_catalog.format_type(o.type_oid, NULL) END
-    FROM candidates c JOIN candidate_counts k ON k.index ${eq} c.index
+    SELECT c.index, c.member, c.oid, COALESCE(NULLIF(c.proargnames[o.position], ''), 'column' || o.column_number::pg_catalog.text),
+      CASE WHEN t.typtype::pg_catalog.text ${eq} 'p' THEN '' ELSE pg_catalog.format_type(o.type_oid, NULL) END, o.column_number
+    FROM candidates c JOIN candidate_counts k USING (index, member)
     CROSS JOIN LATERAL (
       SELECT type_oid, position::pg_catalog.int4 AS position, pg_catalog.row_number() OVER (ORDER BY position) AS column_number,
         pg_catalog.count(*) OVER () AS fields
@@ -98,38 +105,65 @@ function functionColumnCtes(session: boolean): string {
     ) o JOIN pg_catalog.pg_type t ON t.oid ${eq} o.type_oid
     WHERE c.prorettype ${eq} 'pg_catalog.record'::pg_catalog.regtype AND o.fields > 1
     UNION ALL
-    SELECT c.index, c.oid, COALESCE((SELECT NULLIF(c.proargnames[a.position::pg_catalog.int4], '')
+    SELECT c.index, c.member, c.oid, COALESCE((SELECT NULLIF(c.proargnames[a.position::pg_catalog.int4], '')
       FROM pg_catalog.unnest(c.proargmodes) WITH ORDINALITY AS a(mode, position)
       WHERE a.mode::pg_catalog.text ${eq} ANY (ARRAY['o','b','t']) LIMIT 1), c.scalar_alias, c.name),
-      pg_catalog.format_type(c.prorettype, NULL)
-    FROM candidates c JOIN candidate_counts k ON k.index ${eq} c.index
+      pg_catalog.format_type(c.prorettype, NULL), 1::pg_catalog.int8
+    FROM candidates c JOIN candidate_counts k USING (index, member)
     WHERE c.typtype::pg_catalog.text NOT IN ('p','c','d')
+  ), output_widths AS (
+    SELECT index, member, oid, pg_catalog.count(*) AS width FROM outputs GROUP BY index, member, oid
+  ), width_bounds AS (
+    SELECT c.index, c.member, pg_catalog.min(COALESCE(w.width, 0)) AS width
+    FROM candidates c JOIN candidate_counts k USING (index, member)
+    LEFT JOIN output_widths w USING (index, member, oid)
+    GROUP BY c.index, c.member
+  ), positions AS (
+    SELECT m.*, COALESCE(b.width, m.declared_width) AS proved_width,
+      COALESCE(pg_catalog.sum(m.declared_width) OVER preceding_members, 0) AS declared_before,
+      COALESCE(pg_catalog.sum(COALESCE(b.width, m.declared_width)) OVER preceding_members, 0) AS proved_before
+    FROM members m LEFT JOIN width_bounds b USING (index, member)
+    WINDOW preceding_members AS (PARTITION BY m.index ORDER BY m.member ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
   ), function_columns AS (
     SELECT o.index, o.name,
       CASE WHEN pg_catalog.count(DISTINCT o.type) ${eq} 1 THEN pg_catalog.min(o.type) ELSE '' END AS type
-    FROM outputs o JOIN candidate_counts k ON k.index ${eq} o.index
-    WHERE pg_catalog.strpos(pg_catalog.lower(o.name), pg_catalog.lower($2::pg_catalog.text)) ${eq} 1
-    GROUP BY o.index, o.name, k.total
+    FROM outputs o JOIN candidate_counts k USING (index, member) JOIN positions p USING (index, member)
+    GROUP BY o.index, o.member, o.name, k.total
     HAVING pg_catalog.count(*) ${eq} k.total AND pg_catalog.count(DISTINCT o.oid) ${eq} k.total
+      AND pg_catalog.bool_and(p.proved_before + o.position > p.alias_count)
+    UNION ALL
+    SELECT p.index, d.name, '' FROM positions p
+    CROSS JOIN LATERAL pg_catalog.unnest(p.declared_names) WITH ORDINALITY AS d(name, position)
+    WHERE p.declared_before + d.position <= p.alias_count AND p.proved_before + d.position > p.alias_count
+    UNION ALL
+    SELECT p.index, 'ordinality', 'bigint' FROM positions p WHERE p.ordinality
+    GROUP BY p.index, p.alias_count
+    HAVING pg_catalog.sum(p.declared_width) < p.alias_count AND pg_catalog.sum(p.proved_width) >= p.alias_count
   )`;
 }
 
 /** 原会话使用服务器实际可见性；独立连接继续对未限定的重名关系保持保守。 */
 async function columns(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'columns' }>, session: boolean): Promise<PostgresCompletionResult> {
-  const refs = JSON.stringify(input.relations.map(({ functionCall, ...ref }, index) => ({ ...ref, index,
-    ...(functionCall ? { argument_count: functionCall.argumentCount, scalar_alias: functionCall.scalarAlias } : {}),
-  })));
-  const functions = input.relations.some(ref => ref.functionCall);
+  const refs = JSON.stringify(input.relations.map(({ name, schema, functionCall, functionLayout }, index) =>
+    ({ name, schema, index, ...(functionCall || functionLayout ? { function_source: true } : {}) })));
+  const members = input.relations.flatMap((ref, index) => {
+    const layout = ref.functionLayout;
+    const sources = layout?.members ?? (ref.functionCall ? [{ kind: 'function' as const, name: ref.name, schema: ref.schema, call: ref.functionCall }] : []);
+    return sources.map((source, member) => ({ index, member, alias_count: layout?.aliasCount ?? 0, ordinality: layout?.ordinality ?? false,
+      ...(source.kind === 'function' ? { name: source.name, schema: source.schema, argument_count: source.call.argumentCount,
+        scalar_alias: source.call.scalarAlias } : source.kind === 'declared' ? { declared_names: source.names } : {}),
+    }));
+  });
+  const functions = members.length > 0;
   const result = await connection.query(`
     WITH ${namespaces(session)}, refs AS (
       SELECT * FROM pg_catalog.jsonb_to_recordset($1::pg_catalog.jsonb)
-        AS r(index pg_catalog.int4, schema pg_catalog.text, name pg_catalog.text,
-          argument_count pg_catalog.int4, scalar_alias pg_catalog.text)
+        AS r(index pg_catalog.int4, schema pg_catalog.text, name pg_catalog.text, function_source pg_catalog.bool)
     ), matched AS (
       SELECT r.index, c.oid
       FROM refs r JOIN pg_catalog.pg_class c ON c.relname::pg_catalog.text ${eq} r.name
       JOIN namespaces n ON n.oid ${eq} c.relnamespace
-      WHERE r.argument_count IS NULL AND c.relkind::pg_catalog.text ${eq} ANY ${relationKinds} AND ${relationPermission}
+      WHERE r.function_source IS NOT TRUE AND c.relkind::pg_catalog.text ${eq} ANY ${relationKinds} AND ${relationPermission}
         AND (n.schema ${eq} r.schema OR (r.schema IS NULL AND pg_catalog.pg_table_is_visible(c.oid)
           ${session ? '' : `AND NOT EXISTS (
             SELECT 1 FROM pg_catalog.pg_class other
@@ -144,9 +178,10 @@ async function columns(connection: PostgresConnection, input: Extract<PostgresCo
     WHERE a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped
       AND pg_catalog.has_column_privilege(r.oid, a.attnum, 'SELECT,INSERT,UPDATE,REFERENCES')
       AND pg_catalog.strpos(pg_catalog.lower(a.attname::pg_catalog.text), pg_catalog.lower($2::pg_catalog.text)) ${eq} 1
-    ${functions ? 'UNION ALL SELECT index, name, type FROM function_columns' : ''}
+    ${functions ? `UNION ALL SELECT index, name, type FROM function_columns
+      WHERE pg_catalog.strpos(pg_catalog.lower(name), pg_catalog.lower($2::pg_catalog.text)) ${eq} 1` : ''}
     ) directory ORDER BY name, index LIMIT $3
-  `, [refs, input.prefix, rowLimit], { rows: rowLimit, bytes: 256 * 1024 });
+  `, [refs, input.prefix, rowLimit, ...(functions ? [JSON.stringify(members)] : [])], { rows: rowLimit, bytes: 256 * 1024 });
   const items: PostgresCompletionItem[] = [];
   for (const row of result.rows.slice(0, postgresCompletionLimits.items)) {
     const reference = Number(row.c0);

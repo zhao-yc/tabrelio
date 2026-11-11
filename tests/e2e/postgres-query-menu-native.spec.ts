@@ -1906,6 +1906,13 @@ test.describe('MERGE 目录与例程补全', () => {
           LANGUAGE SQL AS $$SELECT 1, 2$$;
         CREATE FUNCTION merge_test.overloaded(text) RETURNS TABLE(common text, second_only text)
           LANGUAGE SQL AS $$SELECT 'a'::text, 'b'::text$$;
+        CREATE FUNCTION merge_test.width_probe(integer) RETURNS TABLE(first_value integer, tail integer)
+          LANGUAGE SQL AS $$SELECT 1, 2$$;
+        CREATE FUNCTION merge_test.width_probe(text) RETURNS integer LANGUAGE SQL AS $$SELECT 1$$;
+        CREATE TABLE merge_test.return_shape(first_value integer, removed text, tail_value text);
+        ALTER TABLE merge_test.return_shape DROP COLUMN removed;
+        CREATE FUNCTION merge_test.shaped() RETURNS SETOF merge_test.return_shape
+          LANGUAGE SQL AS $$SELECT * FROM merge_test.return_shape$$;
         CREATE FUNCTION merge_test.match_label(input_label text)
           RETURNS boolean LANGUAGE SQL AS 'SELECT input_label IS NOT NULL'`);
       const into = 'MERGE INTO merge_test.dst_';
@@ -1976,6 +1983,24 @@ test.describe('MERGE 目录与例程补全', () => {
       await replaceDraft('SELECT * FROM pg_catalog.generate_series(1,2) AS series WHERE series.ser');
       await suggest();
       await expect(focused).toContainText('series');
+      await page.keyboard.press('Escape');
+
+      const expectColumns = async (sql: string, names: string[]) => {
+        await replaceDraft(sql);
+        await suggest();
+        await expect(rows).toHaveCount(names.length);
+        for (const name of names) await expect(rows.filter({ hasText: name })).toHaveCount(1);
+      };
+      await expectColumns('SELECT * FROM merge_test.feed_rows(1,\'a\') WITH ORDINALITY AS r(ref) WHERE r.', ['label', 'ordinality', 'ref']);
+      await page.keyboard.press('Escape');
+      const grouped = "SELECT * FROM ROWS FROM (merge_test.feed_rows(1,'a'), jsonb_to_recordset('[]') AS (extra int)) WITH ORDINALITY AS r(ref,tag) WHERE r.";
+      await expectColumns(grouped, ['extra', 'ordinality', 'ref', 'tag']);
+      await tab().screenshot({ path: info.outputPath('postgresql-function-position-aliases.png') });
+      await page.keyboard.press('Escape');
+      await expectColumns("SELECT * FROM ROWS FROM (merge_test.width_probe(1), jsonb_to_recordset('[]') AS (near int,far text)) AS q(a_key,b_key) WHERE q.",
+        ['a_key', 'b_key', 'far']);
+      await page.keyboard.press('Escape');
+      await expectColumns('SELECT * FROM merge_test.shaped() AS r(renamed) WHERE r.', ['renamed', 'tail_value']);
       await page.keyboard.press('Escape');
       expect((await observer.query('SELECT is_called FROM merge_test.call_guard')).rows).toEqual([{ is_called: false }]);
       await expect.poll(async () => (await observer.query('SELECT count(*)::int AS total FROM merge_test.dst_table')).rows[0].total).toBe(0);
