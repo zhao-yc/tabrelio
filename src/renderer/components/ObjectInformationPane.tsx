@@ -350,7 +350,8 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
           <dt>{text.group}</dt><dd>{connectionOrganizationZh.groupDisplay(profile.group ?? '')}</dd>
         </dl> : !owned ? <Spinner text={text.loading}/> : 'error' in owned ? <ErrorBox message={owned.error}/> :
           typeof owned.value !== 'string' && 'identifiers' in owned.value ? <ObjectIdentifierList entries={owned.value.identifiers}
-            fields={owned.source.target.kind !== 'database'} current={() => actionSourceCurrent(owned.source)} onOpen={onOpenObject}/> :
+            fields={owned.source.target.kind !== 'database'} profile={profile} database={owned.source.target.database} expanded={expanded}
+            current={() => actionSourceCurrent(owned.source)} onOpen={onOpenObject}/> :
           typeof owned.value !== 'string' ? 'references' in owned.value
             ? <>
               <div hidden={!!shownPreview}><DependencyList value={owned.value} page={(dependencyPage?.cursors.length ?? 0) + 1}

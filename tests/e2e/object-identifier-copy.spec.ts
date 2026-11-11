@@ -3,13 +3,14 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test, expect, page, desktop, dataDir, pageErrors } from './desktop-fixture';
 import { sidebarContextMenuZh as text } from '../../src/renderer/locales/sidebarContextMenu.zh-CN';
+import { objectInformationZh } from '../../src/renderer/locales/objectInformation.zh-CN';
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { objectIdentifierDragType } from '../../src/renderer/objectIdentifierInsertion';
 
 test('对象名称复制、菜单插入和鼠标拖放均命中原目标', async ({}, info) => {
   const path = join(realpathSync(dataDir), '复制对象名称样本.sqlite');
   const sample = new DatabaseSync(path);
-  try { sample.exec('CREATE TABLE "表.含""引号"(id INTEGER); CREATE TABLE "另一张表"(id INTEGER);'); }
+  try { sample.exec('CREATE TABLE "表.含""引号"(id INTEGER, "列.含""引号" TEXT); CREATE TABLE "另一张表"(id INTEGER);'); }
   finally { sample.close(); }
   const original = readFileSync(path);
 
@@ -158,7 +159,7 @@ test('对象名称复制、菜单插入和鼠标拖放均命中原目标', async
   for (const _ of 'placeholder') await page.keyboard.press('Shift+ArrowLeft');
   await expect.poll(observe).toEqual({ sql: dragBaseSql, start: 'SELECT * FROM '.length, end: originalSql.length });
   const editor = query.locator('.monaco-editor');
-  const dropPoint = await editor.evaluate(node => {
+  const endPoint = () => editor.evaluate(node => {
     const editor = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco?.editor.getEditors()
       .find(instance => instance.getDomNode() === node);
     const end = editor?.getModel()?.getFullModelRange().getEndPosition();
@@ -169,6 +170,7 @@ test('对象名称复制、菜单插入和鼠标拖放均命中原目标', async
     if (hit?.lineNumber !== end.lineNumber || hit.column !== end.column) throw Error('落点未命中查询行尾');
     return { x, y, clientX: rect.left + x, clientY: rect.top + y };
   });
+  const dropPoint = await endPoint();
   await tree.dragTo(editor, { targetPosition: { x: dropPoint.x, y: dropPoint.y } });
   const droppedSql = dragBaseSql + qualified;
   await expect.poll(observe).toEqual({ sql: droppedSql, start: droppedSql.length, end: droppedSql.length });
@@ -199,6 +201,65 @@ test('对象名称复制、菜单插入和鼠标拖放均命中原目标', async
   for (const _ of joinSuffix) await page.keyboard.press('Shift+ArrowLeft');
   await page.keyboard.press('Backspace');
   await expect.poll(async () => (await observe()).sql).toBe(originalSql);
+
+  const t = objectInformationZh;
+  const pane = page.getByRole('complementary', { name: t.title, exact: true });
+  const identifiers = pane.getByRole('region', { name: t.identifiers, exact: true });
+  await sidebar.locator('.database-row .tree-label').filter({ hasText: /^main$/ }).click({ button: 'right' });
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: t.title, exact: true }).click();
+  await pane.getByRole('button', { name: t.identifiers, exact: true }).click();
+  const selectPlaceholder = async () => {
+    await box.focus();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End');
+    for (const _ of 'placeholder') await page.keyboard.press('Shift+ArrowLeft');
+    await expect.poll(observe).toEqual({ sql: originalSql, start: 'SELECT * FROM '.length, end: originalSql.length });
+  };
+  await selectPlaceholder();
+  await identifiers.getByText(name, { exact: true }).dblclick();
+  await expect(box).toBeFocused();
+  await expect.poll(observe).toEqual({ sql: insertedSql, start: insertedSql.length, end: insertedSql.length });
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await observe()).sql).toBe(originalSql);
+
+  await tree.click({ button: 'right' });
+  await page.keyboard.press('Escape');
+  const field = '列.含"引号', fieldSql = '"列.含""引号"';
+  const fieldName = identifiers.getByText(field, { exact: true });
+  const fieldButton = identifiers.getByRole('button', { name: t.insertIdentifier(field), exact: true });
+  await expect(fieldButton).toBeVisible();
+  await pane.getByRole('button', { name: t.expand, exact: true }).click();
+  await expect(fieldButton).toHaveCount(0);
+  await pane.getByRole('button', { name: t.restoreSize, exact: true }).click();
+  await selectPlaceholder();
+  await fieldButton.press('Enter');
+  const fieldInserted = 'SELECT * FROM ' + fieldSql;
+  await expect.poll(observe).toEqual({ sql: fieldInserted, start: fieldInserted.length, end: fieldInserted.length });
+  await expect(box).toBeFocused();
+  await page.screenshot({ path: info.outputPath('信息窗格字段插入.png') });
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await observe()).sql).toBe(originalSql);
+
+  await selectPlaceholder();
+  const fieldDrop = await endPoint();
+  await fieldName.dragTo(editor, { targetPosition: { x: fieldDrop.x, y: fieldDrop.y } });
+  const fieldDropped = originalSql + fieldSql;
+  await expect.poll(observe).toEqual({ sql: fieldDropped, start: fieldDropped.length, end: fieldDropped.length });
+  await expect(box).toBeFocused();
+  await page.screenshot({ path: info.outputPath('信息窗格字段拖放.png') });
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await observe()).sql).toBe(originalSql);
+  const pendingField = await page.evaluateHandle(() => new DataTransfer());
+  try {
+    await fieldName.dispatchEvent('dragstart', { dataTransfer: pendingField });
+    expect(await pendingField.evaluate((transfer, type) => ({ types: [...transfer.types], token: transfer.getData(type) }), objectIdentifierDragType))
+      .toEqual({ types: [objectIdentifierDragType], token: expect.stringMatching(/^[a-f\d-]{36}$/) });
+    await identifiers.getByRole('searchbox', { name: t.searchFieldIdentifiers, exact: true }).fill('找不到的字段');
+    await expect(fieldName).toHaveCount(0);
+    await editor.dispatchEvent('drop', { dataTransfer: pendingField, clientX: fieldDrop.clientX, clientY: fieldDrop.clientY });
+    expect((await observe()).sql).toBe(originalSql);
+  } finally { await pendingField.dispose(); }
+  await pane.getByRole('button', { name: t.close, exact: true }).click();
 
   await query.getByRole('button', { name: queryLayoutZh.placement, exact: true }).click();
   await page.getByRole('menu', { name: queryLayoutZh.placement, exact: true })

@@ -7,7 +7,8 @@ import { useWorkspace } from '../store';
 import { sidebarContextMenuZh as text } from '../locales/sidebarContextMenu.zh-CN';
 import { objectQueryKeyShortcuts, objectQueryShortcut, openObjectQuery } from '../objectQueryNavigation';
 import { objectIdentifierCopy } from '../objectIdentifierCopy';
-import { canInsertObjectIdentifier, objectIdentifierDragType } from '../objectIdentifierInsertion';
+import { canInsertObjectIdentifier, objectIdentifierDragType, type QueryIdentifier } from '../objectIdentifierInsertion';
+import { appModalSelector, isAppModalNode } from '../modalSelectors';
 import type { HistoryInsertionRegistry, HistoryInsertionTarget, ObjectIdentifierDrop } from '../historyInsertion';
 import { writeTableClipboardEvent } from '../gridClipboard';
 import { errorMessage, uid } from '../lib';
@@ -30,7 +31,8 @@ interface TreeContext {
   selected(target: SidebarNodeTarget): boolean;
   select(target: SidebarNodeTarget, lease?: RowLease): void;
   open(target: SidebarNodeTarget, name: string, node: HTMLElement, lease: RowLease, actions: ReactNode, point?: { x: number; y: number }, elementMenu?: boolean): void;
-  beginIdentifierDrag(target: WorkbenchTarget, node: HTMLElement, lease: RowLease, data: DataTransfer): boolean;
+  beginIdentifierDrag(source: QueryIdentifier, node: HTMLElement, lease: RowLease, data: DataTransfer): boolean;
+  insertIdentifier(source: QueryIdentifier, node: HTMLElement, lease: RowLease): boolean;
   canDropIdentifier(tabId: string): boolean;
   dropIdentifier(tabId: string, data: DataTransfer, destination: ObjectIdentifierDrop): void;
   retireFor(node: HTMLElement | null): void;
@@ -59,7 +61,7 @@ function sameScope(target: SidebarNodeTarget): boolean {
 
 /** 模态出现后即使马上移除，也不能让旧菜单恢复执行资格。 */
 function modalChanged(records: MutationRecord[]): boolean {
-  const modal = (node: Node) => node.nodeType === 1 && (['dialog', 'alertdialog'].includes((node as Element).getAttribute('role') ?? '') || !!(node as Element).querySelector('[role="dialog"], [role="alertdialog"]'));
+  const modal = (node: Node) => node.nodeType === 1 && (isAppModalNode(node) || !!(node as Element).querySelector(appModalSelector));
   return records.some(record => record.type === 'attributes'
     ? ['dialog', 'alertdialog'].includes(record.oldValue ?? '') || modal(record.target)
     : [...record.addedNodes, ...record.removedNodes].some(modal));
@@ -95,7 +97,7 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
   function targetCurrent(owner: MenuOwner): boolean {
     const state = useWorkspace.getState();
     return owner.node.isConnected && owner.lease.current() && sameScope(owner.target)
-      && !document.querySelector('[role="dialog"], [role="alertdialog"]')
+      && !document.querySelector(appModalSelector)
       && state.connections.find(profile => profile.id === owner.target.connectionId) === owner.profile
       && (state.connectionVersions[owner.target.connectionId] ?? 0) === owner.revision;
   }
@@ -106,10 +108,10 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
     retire(owner, true); return true;
   }
 
-  function insertionTab(target: WorkbenchTarget, profile: ConnectionProfile) {
+  function insertionTab(database: string, profile: ConnectionProfile) {
     const { settings } = useWorkspace.getState();
     const tab = settings.tabs.find(item => item.id === settings.activeTabId);
-    return canInsertObjectIdentifier(tab, profile, target.database) ? tab : undefined;
+    return canInsertObjectIdentifier(tab, profile, database) ? tab : undefined;
   }
 
   function cancelDrag(owner = dragRef.current) {
@@ -124,20 +126,42 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
     else if (owner?.tabId === tabId) return owner;
   }
 
-  /** 拖动数据只携带一次性标记，真实对象、SQL 与查询选区留在原窗口内存。 */
-  function beginIdentifierDrag(target: WorkbenchTarget, node: HTMLElement, lease: RowLease, data: DataTransfer): boolean {
-    cancelDrag();
-    if (!queryInsertion || !mounted.current || !lease.current() || !node.isConnected || !('name' in target) ||
-        document.querySelector('[role="dialog"], [role="alertdialog"]')) return false;
+  /** 树和信息窗格共用原编辑器选区，动作开始时核对目录及连接，捕获后再核对一次。 */
+  function captureIdentifier(source: QueryIdentifier, node: HTMLElement, lease: RowLease) {
+    if (!queryInsertion || !mounted.current || !lease.current() || !node.isConnected ||
+        document.querySelector(appModalSelector)) return;
     const state = useWorkspace.getState();
-    const profile = state.connections.find(item => item.id === target.connectionId);
-    if (!profile) return false;
-    const tab = insertionTab(target, profile), sql = objectIdentifierCopy(profile.dialect, target.database, target)?.qualified;
-    if (!tab || !sql) return false;
+    const profile = state.connections.find(item => item.id === source.connectionId);
+    const tab = profile && insertionTab(source.database, profile);
+    if (!tab) return;
     retire();
     const insertion = queryInsertion.capture(tab.id, 'object-identifier');
-    if (!insertion) return false;
-    const revision = state.connectionVersions[target.connectionId] ?? 0, token = uid();
+    if (!insertion) return;
+    const revision = state.connectionVersions[source.connectionId] ?? 0;
+    const isCurrent = () => {
+      const now = useWorkspace.getState();
+      return node.isConnected && lease.current() && now.connections.find(item => item.id === source.connectionId) === profile &&
+        (now.connectionVersions[source.connectionId] ?? 0) === revision && !document.querySelector(appModalSelector) && insertion.current();
+    };
+    if (isCurrent()) return { tabId: tab.id, insertion, isCurrent };
+    insertion.dispose();
+  }
+
+  function insertIdentifier(source: QueryIdentifier, node: HTMLElement, lease: RowLease): boolean {
+    cancelDrag();
+    const captured = captureIdentifier(source, node, lease);
+    if (!captured) return false;
+    try { captured.insertion.insert(source.sql); return true; }
+    finally { captured.insertion.dispose(); }
+  }
+
+  /** 拖动数据只携带一次性标记，真实对象、SQL 与查询选区留在原窗口内存。 */
+  function beginIdentifierDrag(source: QueryIdentifier, node: HTMLElement, lease: RowLease, data: DataTransfer): boolean {
+    cancelDrag();
+    const captured = captureIdentifier(source, node, lease);
+    if (!captured) return false;
+    const { tabId, insertion, isCurrent } = captured;
+    const token = uid();
     const observer = new MutationObserver(records => { if (modalChanged(records)) cancelDrag(owner); });
     const lost = () => cancelDrag(owner);
     const escape = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape') lost(); };
@@ -145,12 +169,8 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
     // document 捕获早于编辑器处理；兜底清理留到整次原生 drop 派发结束。
     const dropped = () => { cleanupTask ??= setTimeout(lost, 0); };
     const unsubscribe = insertion.subscribe(lost);
-    const owner: ObjectDragOwner = { tabId: tab.id, node, token, sql, insertion, current() {
-      const now = useWorkspace.getState();
-      return node.isConnected && lease.current() && now.connections.find(item => item.id === target.connectionId) === profile
-        && (now.connectionVersions[target.connectionId] ?? 0) === revision && !modalChanged(observer.takeRecords())
-        && !document.querySelector('[role="dialog"], [role="alertdialog"]') && insertion.current();
-    }, release() {
+    const owner: ObjectDragOwner = { tabId, node, token, sql: source.sql, insertion,
+      current: () => !modalChanged(observer.takeRecords()) && isCurrent(), release() {
       clearTimeout(cleanupTask); observer.disconnect(); unsubscribe(); insertion.dispose();
       document.removeEventListener('dragend', lost, true); document.removeEventListener('dragstart', lost, true);
       document.removeEventListener('keydown', escape, true); document.removeEventListener('drop', dropped, true);
@@ -207,7 +227,7 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
   /** 指针和键盘共用目标捕获；打开菜单不会调用节点的左键展开处理器。 */
   function open(target: SidebarNodeTarget, name: string, node: HTMLElement, lease: RowLease, actions: ReactNode, point?: { x: number; y: number }, elementMenu = false) {
     retire();
-    if (!mounted.current || !node.isConnected || !lease.current() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (!mounted.current || !node.isConnected || !lease.current() || document.querySelector(appModalSelector)) return;
     const state = useWorkspace.getState(), profile = state.connections.find(profile => profile.id === target.connectionId);
     if (!profile) return;
     if (!elementMenu) select(target, lease);
@@ -226,7 +246,7 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
           useWorkspace.getState().notify(text.copied);
         } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
       };
-      const active = qualified && 'database' in target ? insertionTab(target, profile) : undefined;
+      const active = qualified && 'database' in target ? insertionTab(target.database, profile) : undefined;
       const insertion = active ? queryInsertion?.capture(active.id, 'object-identifier') : null;
       if (insertion) {
         releases.push(insertion.subscribe(() => retire(owner)));
@@ -290,7 +310,7 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
       const local = selectedTarget();
       if (local && sameScope(local)) return sidebarNodeKey(local) === sidebarNodeKey(target);
       return selection?.connectionId === target.connectionId && (target.kind === 'connection' ? !selection.database : target.kind === 'database' && selection.database === target.database);
-    }, select, open, beginIdentifierDrag, dropIdentifier, canDropIdentifier: tabId => !!currentDrag(tabId),
+    }, select, open, beginIdentifierDrag, insertIdentifier, dropIdentifier, canDropIdentifier: tabId => !!currentDrag(tabId),
     retireFor(node) {
       if (node && ownerRef.current?.node === node) retire();
       if (node && dragRef.current?.node === node) cancelDrag();
@@ -406,8 +426,11 @@ export function SidebarTreeRow({ target, label, className, version, actions, chi
     {cloneElement(button, { title: button.props.title ?? label, 'aria-haspopup': 'menu', draggable: objectDraggable || undefined,
       onDragStart: objectDraggable ? (event: DragEvent<HTMLButtonElement>) => {
         const node = row.current, captured = latest.current;
-        if (!node || captured.token !== token || captured.target.kind === 'connection' ||
-            !context?.beginIdentifierDrag(captured.target, node, proof(node, captured), event.dataTransfer)) event.preventDefault();
+        const target = captured.target;
+        const profile = useWorkspace.getState().connections.find(item => item.id === target.connectionId);
+        const sql = profile && 'name' in target ? objectIdentifierCopy(profile.dialect, target.database, target)?.qualified : undefined;
+        if (!node || captured.token !== token || !('database' in target) || !sql ||
+            !context?.beginIdentifierDrag({ connectionId: target.connectionId, database: target.database, sql }, node, proof(node, captured), event.dataTransfer)) event.preventDefault();
       } : undefined,
       'aria-keyshortcuts': queryable ? objectQueryKeyShortcuts() : button.props['aria-keyshortcuts'], onClick: (event: MouseEvent<HTMLButtonElement>) => {
       const node = row.current, captured = latest.current;

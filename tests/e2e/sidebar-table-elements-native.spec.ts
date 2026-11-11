@@ -39,6 +39,8 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
   };
   const file = join(await realpath(dataDir), '侧栏表结构.sqlite');
   try {
+    const mainPid = await desktop.evaluate(() => process.pid);
+    await info.attach('本例原 Main 进程', { body: JSON.stringify({ pid: mainPid }), contentType: 'application/json' });
     if (sqlite) {
       const db = new DatabaseSync(file);
       try {
@@ -76,6 +78,8 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
       ] });
       return saved.id;
     }, { profile, database, dialect, rename });
+    // 仅观察原编辑器的真实选区；正文改动仍通过按键与生产插入入口完成。
+    await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
     await page.reload();
     const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
     const originalTabs = (await settings()).tabs;
@@ -344,6 +348,32 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     await expect(identifiers.getByRole('listitem')).toHaveCount(1);
     await expect(identifiers.getByRole('listitem')).toContainText('derived');
     await page.screenshot({ path: info.outputPath('对象信息字段标识符.png') });
+    await page.locator('[data-workspace-tab-id="original"] .tab-select').click();
+    const queryEditor = page.locator('.tab-pane:not([hidden]) .monaco-editor');
+    const queryInput = queryEditor.getByRole('textbox');
+    await expect(queryEditor.locator('.view-lines')).toContainText('SELECT 123;');
+    await queryInput.focus();
+    await expect(queryInput).toBeFocused();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End');
+    await page.keyboard.press('ArrowLeft');
+    for (const _ of '123') await page.keyboard.press('Shift+ArrowLeft');
+    await expect.poll(() => queryEditor.evaluate(node => {
+      const editor = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco?.editor.getEditors()
+        .find(instance => instance.getDomNode() === node);
+      const range = editor?.getSelection();
+      return range && editor?.getModel()?.getValueInRange(range);
+    })).toBe('123');
+    await identifiers.getByRole('button', { name: information.insertIdentifier('derived'), exact: true }).press('Enter');
+    await expect(queryInput).toBeFocused();
+    const expectedSql = sqlite || postgres ? 'SELECT "derived";' : 'SELECT `derived`;';
+    const draftSql = async () => (await settings()).tabs.find(tab => tab.id === 'original')?.sql;
+    await expect.poll(draftSql).toBe(expectedSql);
+    await page.screenshot({ path: info.outputPath('对象信息标识符插入查询.png') });
+    await page.keyboard.press('ControlOrMeta+Z');
+    await expect.poll(draftSql).toBe('SELECT 123;');
+    const tableId = tableTabs.find(tab => tab.kind === 'table' && tab.table === name)?.id;
+    if (!tableId) throw Error('缺少原表标签');
+    await page.locator('[data-workspace-tab-id=' + JSON.stringify(tableId) + '] .tab-select').click();
     await inspector.getByRole('button', { name: information.close, exact: true }).click();
     await expect(inspector).toHaveCount(0);
     await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();

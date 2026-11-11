@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。对象信息窗格的表、视图和字段标识符可双击、用键盘按钮插入当前查询选区，或拖放到编辑器的实际落点。沿用原方言引用和编辑器撤销，拖放中的目录或查询变化会撤销原操作。W02 增加窗格到查询编辑器的标识符插入。[Navicat 查询编辑器手册](https://www.navicat.com/manual/pdf_manual/en/navicat_17/win_manual/navicat_en.pdf)
+
 2026-11-12 源码增量。对象信息窗格新增「标识符」。在选中数据库中搜索表和视图并打开原数据页，在选中表或视图中查找字段。支持按方言复制 SQL 名称，长目录在窗格内分页。W02 增加标识符目录。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#information-pane)
 
 2026-11-12 源码增量。对象信息窗格可拖动或用键盘调整宽度，正常宽度随本机设置恢复。可一键展开整个窗格，恢复时保留原宽度、信息页和只读定义。W02 增加信息窗格尺寸控制。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#expand-and-collapse-pane)

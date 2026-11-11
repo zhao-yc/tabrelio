@@ -40,6 +40,7 @@
 .object-info-identifiers>ul{flex:1;overflow:auto;min-height:0;list-style:none;padding:0 14px;margin:0}
 .object-info-identifiers li{display:flex;align-items:center;gap:5px;padding:6px 0;border-bottom:1px solid var(--line-soft)}
 .object-info-identifier-name{flex:1;display:grid;min-width:0;gap:4px;overflow-wrap:anywhere}
+.object-info-identifier-name strong[draggable=true]{cursor:grab;user-select:none}
 .object-info-identifier-name span,.object-info-identifiers>p,.object-info-identifiers>footer{color:var(--muted)}
 .object-info-identifiers>p{margin:8px 14px}
 .object-info-identifiers>footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:8px 14px;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}

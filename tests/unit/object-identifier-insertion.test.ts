@@ -18,6 +18,12 @@ describe('对象限定名的查询上下文', () => {
     expect(canInsertObjectIdentifier({ ...draft, connectionId: 'other' }, postgres, 'source')).toBe(false);
   });
 
+  it('显式数据库上下文优先，未知和空库不会沿用旧的 PostgreSQL 库名', () => {
+    expect(canInsertObjectIdentifier({ ...draft, databaseContext: { state: 'unknown' } }, postgres, 'source')).toBe(false);
+    expect(canInsertObjectIdentifier({ ...draft, databaseContext: { state: 'known', database: null } }, postgres, 'fallback')).toBe(false);
+    expect(canInsertObjectIdentifier({ ...draft, databaseContext: { state: 'known', database: 'actual' } }, postgres, 'actual')).toBe(true);
+  });
+
   it.each(['mysql', 'mariadb'] as const)('%s 的同连接查询可以引用其它数据库', dialect => {
     expect(canInsertObjectIdentifier(draft, { ...postgres, dialect }, 'another')).toBe(true);
     expect(canInsertObjectIdentifier({ ...draft, kind: 'objects' }, { ...postgres, dialect }, 'another')).toBe(false);
