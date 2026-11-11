@@ -355,14 +355,17 @@ test('PostgreSQL 成功结果查看实际 SQL 并定位原模型范围', async (
     const model = await inspectModel(); return [model.position?.lineNumber, model.selected];
   }).toEqual([2, duplicate]);
 
-  const template = 'SELECT length($1::text) AS size', secret = '参数绑定原值🧭';
+  const template = 'SELECT length([$needle]::text) AS size', secret = '参数绑定原值🧭';
   await replaceDraft(template + ';');
   await tab().getByRole('button', {name: postgresZh.parameters, exact: true}).click();
   const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
-  await form.getByLabel(parameterZh.value + ' p1', {exact: true}).fill(secret);
+  await form.getByLabel(parameterZh.value + ' needle', {exact: true}).fill(secret);
   await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
   await expect(locate()).toBeEnabled();
-  await view().click(); await expect.poll(originalSql).toEqual({sql: template, readOnly: true}); await close();
+  await view().click(); await expect.poll(originalSql).toEqual({sql: template, readOnly: true});
+  await expect(dialog().getByText(postgresZh.resultSqlHint, {exact: true})).toBeVisible();
+  await dialog().screenshot({path: info.outputPath('PostgreSQL命名参数原模板.png')});
+  await close();
   await locate().click(); await expect.poll(async () => (await inspectModel()).selected).toBe(template);
   expect(JSON.stringify(await history())).not.toContain(secret); expect(pageErrors).toEqual([]);
   await quitDesktop();
@@ -634,10 +637,10 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     await unchangedLocate(selectedScript.slice(failedStart, end).trimStart()); expect(await sessions()).toEqual(failedSession);
     await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click(); await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
 
-    const parameterSql = 'SELECT $1::int AS parameter_failure;', secret = '参数失败不应留存😀';
+    const parameterSql = 'SELECT [$bad]::int AS parameter_failure;', secret = '参数失败不应留存😀';
     await replaceDraft(parameterSql); await tab().getByRole('button', {name: postgresZh.parameters, exact: true}).click();
     const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
-    await form.getByLabel(parameterZh.value + ' p1', {exact: true}).fill(secret);
+    await form.getByLabel(parameterZh.value + ' bad', {exact: true}).fill(secret);
     await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
     await expect(notice()).toContainText(partialText.position(1, 0)); await expect(tab()).toContainText('SQLSTATE 22P02');
     await unchangedLocate(parameterSql.slice(0, -1));
@@ -710,7 +713,7 @@ test('PostgreSQL 参数显式暂存与填入保持原事务，忘记及正文撤
   await quitDesktop();
 });
 
-test('PostgreSQL 完整导出按协议绑定类型参数并保留原会话及参数隐私', async ({}, info) => {
+for (const parameterStyle of ['位置', '命名'] as const) test('PostgreSQL 完整导出按协议绑定' + parameterStyle + '参数并保留原会话及参数隐私', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
   if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
@@ -729,7 +732,13 @@ test('PostgreSQL 完整导出按协议绑定类型参数并保留原会话及参
     const originalSessions = await sessions();
     expect(originalSessions).toHaveLength(1);
     expect(originalSessions[0].state).toBe('idle in transaction');
-    const sql = "SELECT $1::bigint AS id, $2::numeric(60,38) AS amount, $3::text AS note, $4::bytea AS bytes, $5::text AS nullable, '$6' AS literal, $$ $7 $$ AS body FROM generate_series(1,130) AS g WHERE g <= $6::int;";
+    const names = parameterStyle === '位置' ? ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'] : ['id', 'amount', 'note', 'bytes', 'nil', 'max_rows'];
+    const [id, amount, note, bytes, nil, limit] = names.map((name, index) => parameterStyle === '位置' ? '$' + (index + 1) : '[$' + name + ']');
+    const literal = parameterStyle === '位置' ? '$6' : '[$max_rows]';
+    const body = parameterStyle === '位置' ? ' $7 ' : ' [$body] ';
+    const sql = 'SELECT ' + id + '::bigint AS id, ' + amount + '::numeric(60,38) AS amount, ' + note + '::text AS note, ' +
+      bytes + '::bytea AS bytes, ' + nil + "::text AS nullable, '" + literal + "' AS literal, $$" + body +
+      '$$ AS body FROM generate_series(1,130) AS g WHERE g <= ' + limit + '::int AND ' + id + '::bigint > 0;';
     const value = "导出参数原文😀'; SELECT '文本内容\n第二行", decimal = '0.12345678901234567890123456789012345678';
     await replaceDraft(sql);
     await tab().getByRole('button', {name: fullExportText.open, exact: true}).click();
@@ -739,7 +748,7 @@ test('PostgreSQL 完整导出按协议绑定类型参数并保留原会话及参
     const values = [['integer', '9007199254740993'], ['decimal', decimal], ['text', value], ['binary', '00ff'], ['null', ''], ['integer', '129']] as const;
     const fillParameters = async () => {
       for (const [index, [type, value]] of values.entries()) {
-        const name = 'p' + (index + 1);
+        const name = names[index];
         await form.getByLabel(parameterZh.type + ' ' + name, {exact: true}).selectOption(type);
         if (type !== 'null') await form.getByLabel(parameterZh.value + ' ' + name, {exact: true}).fill(value);
       }
@@ -765,7 +774,7 @@ test('PostgreSQL 完整导出按协议绑定类型参数并保留原会话及参
     await expect(dialog.getByText(fullExportText.done(129), {exact: true})).toBeVisible();
     const parsed = JSON.parse(await readFile(path, 'utf8'));
     expect(parsed.results[0].rows).toEqual(Array.from({length: 129}, () => ({id: '9007199254740993', amount: decimal,
-      note: value, bytes: {type: 'binary', base64: 'AP8='}, nullable: null, literal: '$6', body: ' $7 '})));
+      note: value, bytes: {type: 'binary', base64: 'AP8='}, nullable: null, literal, body})));
     await page.screenshot({path: info.outputPath('PostgreSQL参数完整导出.png')});
     await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
     await expect.poll(sessions).toEqual(originalSessions);
@@ -788,7 +797,7 @@ test('PostgreSQL 完整导出按协议绑定类型参数并保留原会话及参
   await quitDesktop();
 });
 
-test('PostgreSQL 完整查询工作簿共用快照、位置参数并保护目标文件', async ({}, info) => {
+test('PostgreSQL 完整查询工作簿共用快照、命名参数并保护目标文件', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   test.setTimeout(90_000);
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
@@ -802,9 +811,9 @@ test('PostgreSQL 完整查询工作簿共用快照、位置参数并保护目标
       INSERT INTO public.query_workbook VALUES (9223372036854775807, '原快照');`);
     await prepare({id: '', name: '隔离 PostgreSQL 查询工作簿', dialect: 'postgresql', group: '', color: '#123456',
       host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, [
-      'SELECT $1::bigint AS value, pg_advisory_xact_lock(62308915)::text AS barrier;',
-      "SELECT id AS value, note AS value, decode('00ff','hex') AS bytes FROM public.query_workbook CROSS JOIN generate_series(1,205) AS g WHERE id=$1::bigint ORDER BY g;",
-      'SELECT $1::bigint AS id, $2::text AS note WHERE false;',
+      'SELECT [$id]::bigint AS value, pg_advisory_xact_lock(62308915)::text AS barrier;',
+      "SELECT id AS value, note AS value, decode('00ff','hex') AS bytes FROM public.query_workbook CROSS JOIN generate_series(1,205) AS g WHERE id=[$id]::bigint ORDER BY g;",
+      'SELECT [$last_note]::text AS note, [$id]::bigint AS id;',
     ].join('\n'));
     await mkdir(info.outputDir, {recursive: true});
     const output = info.outputPath('PostgreSQL 完整查询工作簿.xlsx');
@@ -836,23 +845,24 @@ test('PostgreSQL 完整查询工作簿共用快照、位置参数并保护目标
     await open();
     await modal.getByRole('button', {name: fullExportText.parameters, exact: true}).click();
     const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
-    await form.getByLabel(parameterZh.type + ' p1', {exact: true}).selectOption('integer');
-    await form.getByLabel(parameterZh.value + ' p1', {exact: true}).fill('9223372036854775807');
-    await form.getByLabel(parameterZh.value + ' p2', {exact: true}).fill('只用于第三条查询');
+    await form.getByLabel(parameterZh.type + ' id', {exact: true}).selectOption('integer');
+    await form.getByLabel(parameterZh.value + ' id', {exact: true}).fill('9223372036854775807');
+    await form.getByLabel(parameterZh.value + ' last_note', {exact: true}).fill('只用于第三条查询');
     await form.getByRole('button', {name: fullExportText.applyParameters, exact: true}).click();
     await observer.query('SELECT pg_advisory_lock(62308915)');
     try {
       await start(); await waitForCursor();
       await observer.query("UPDATE public.query_workbook SET note='并发已提交'");
     } finally { await observer.query('SELECT pg_advisory_unlock(62308915)'); }
-    await expect(modal.getByRole('status')).toContainText(fullExportText.done(206));
+    await expect(modal.getByRole('status')).toContainText(fullExportText.done(207));
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(output);
-    expect(workbook.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['结果 1', 2], ['结果 2', 206], ['结果 3', 1]]);
+    expect(workbook.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['结果 1', 2], ['结果 2', 206], ['结果 3', 2]]);
     expect(workbook.worksheets[0].getCell('A2').text).toBe('9223372036854775807');
     expect(['A206', 'B1', 'B206', 'C206'].map(cell => workbook.worksheets[1].getCell(cell).text))
       .toEqual(['9223372036854775807', 'value [2]', '原快照', '\\B:AP8=']);
-    expect(workbook.worksheets[2].getCell('B1').text).toBe('note');
+    expect(['A1', 'A2', 'B2'].map(cell => workbook.worksheets[2].getCell(cell).text))
+      .toEqual(['note', '只用于第三条查询', '9223372036854775807']);
     await modal.screenshot({path: info.outputPath('PostgreSQL 完整查询工作簿.png')});
     const original = await readFile(output);
 

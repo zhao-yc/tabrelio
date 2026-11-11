@@ -85,14 +85,19 @@ export class QueryFailureSourceLease {
     return { start: this.base + from, end: this.base + to };
   }
 
-  private active(): boolean {
+  private active(checkModal = true): boolean {
     if (!this.current()) return false;
-    try { const scope = this.capture.scope(); return scope.active && !scope.busy && !scope.modal && !scope.closing; } catch { this.invalidate(); return false; }
+    try { const scope = this.capture.scope(); return scope.active && !scope.busy && (!checkModal || !scope.modal) && !scope.closing; } catch { this.invalidate(); return false; }
   }
 
   /** 光标和选区移动不会失效；非活动标签、模态、忙碌或关闭期间只暂时禁用。 */
   available(): boolean {
     return !!this.range && this.active();
+  }
+
+  /** 渲染使用调用方的模态状态，因为此时 DOM 仍可能保留即将关闭的窗口。 */
+  availableForRender(): boolean {
+    return !!this.range && this.active(false);
   }
 
   /** 成功结果的临时目标不覆盖首错按钮已绑定的范围。 */

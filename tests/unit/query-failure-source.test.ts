@@ -29,6 +29,18 @@ it.each([undefined, null, {}, [], { start: -1, end: 2 }, { start: 0, end: 0 }, {
 it('数值访问器不得执行，原range对象后改也不改变已固定范围', () => { const f = fixture(), getter = vi.fn(() => 0), lease = f.create()!; expect(lease.bindRange({ get start() { return getter(); }, end: 3 })).toBe(false); expect(getter).not.toHaveBeenCalled(); const next = f.create()!, value = { start: 0, end: 3 }; expect(next.bindRange(value)).toBe(true); value.end = 5; expect(next.locate()).toBe(true); expect(f.editor.setSelection.mock.calls[0][0].endColumn).toBe(4); next.dispose(); });
 it.each(['CRLF', '代理对'])('%s中间边界不能被Monaco钳位后冒充原范围', kind => { const f = fixture(), offset = kind === 'CRLF' ? f.source.indexOf('\r\n') + 1 : f.source.indexOf('🧭') + 1; const lease = f.create()!; expect(lease.bindRange({ start: offset, end: f.source.length })).toBe(false); expect(lease.locate()).toBe(false); });
 it.each(['active', 'busy', 'modal', 'closing'] as const)('%s暂时阻止定位但不因光标或选区移动撤销原源', key => { const f = fixture(), lease = f.create()!; lease.bindRange({ start: 0, end: 3 }); f.scope[key] = key !== 'active'; f.emit('scope'); expect(lease.available()).toBe(false); f.scope[key] = key === 'active'; f.emit('scope'); f.select(3, 5); expect(lease.locate()).toBe(true); expect(f.invalidated).not.toHaveBeenCalled(); lease.dispose(); });
+it('渲染可依据即将提交的模态状态，实际定位仍检查当前 DOM', () => {
+  const f = fixture(), lease = f.create()!;
+  expect(lease.bindRange({ start: 0, end: 3 })).toBe(true);
+  f.scope.modal = true;
+  expect(lease.availableForRender()).toBe(true);
+  expect(lease.locate()).toBe(false);
+  expect(f.editor.setSelection).not.toHaveBeenCalled();
+  f.scope.modal = false;
+  expect(lease.locate()).toBe(true);
+  f.emit('content');
+  expect(lease.availableForRender()).toBe(false);
+});
 it.each(['content', 'modelDispose', 'editorDispose'])('%s即使同文字恢复仍永久撤销且通知一次', kind => { const f = fixture(), lease = f.create()!; lease.bindRange({ start: 0, end: 3 }); f.emit(kind); f.emit(kind); expect(lease.locate()).toBe(false); expect(f.invalidated).toHaveBeenCalledOnce(); expect(f.subscriptions()).toBe(0); });
 it('模型换走再换回不能复活；无事件版本漂移也会在点击前拒绝', () => { const f = fixture(), lease = f.create()!; lease.bindRange({ start: 0, end: 3 }); f.swap({}); f.swap(f.model); expect(lease.locate()).toBe(false); const next = f.create()!; next.bindRange({ start: 0, end: 3 }); (f.model as any)._versionId++; expect(next.locate()).toBe(false); expect(f.editor.setSelection).not.toHaveBeenCalled(); });
 it.each(['present', 'connectionId', 'connectionVersion', 'tabId'] as const)('%s的ABA永久失效，不因同ID或修订恢复复活', key => { const f = fixture(), lease = f.create()!; lease.bindRange({ start: 0, end: 3 }); const previous = f.scope[key]; Object.assign(f.scope, { [key]: typeof previous === 'boolean' ? false : typeof previous === 'number' ? previous + 1 : 'other' }); f.emit('scope'); Object.assign(f.scope, { [key]: previous }); f.emit('scope'); expect(lease.locate()).toBe(false); expect(f.subscriptions()).toBe(0); });

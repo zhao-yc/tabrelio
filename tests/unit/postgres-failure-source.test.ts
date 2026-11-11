@@ -72,9 +72,12 @@ describe('PostgreSQL 失败范围沿用实际执行的原文偏移', () => {
     expect(JSON.stringify(output.failure)).not.toContain('不在模板的值'); expect(output.failure?.message).toContain('SQLSTATE 22P02');
   });
   it('参数校验或 COPY 拒绝可定位已扫描的语句，不发送拒绝内容或尾部', async () => {
-    for (const sql of ['SELECT $2;', 'COPY subject TO STDOUT;']) {
+    for (const sql of ['SELECT $2;', 'SELECT [$id], $1;', 'SELECT [$id];', 'COPY subject TO STDOUT;']) {
       const output = await execute(sql, {parameters: []}); expect(output.failure?.sourceRange).toEqual({start: 0, end: sql.length - 1});
     }
+    const script = 'SELECT [$id]; SELECT 2';
+    const output = await execute(script, {parameters: [{name: 'id', type: 'text', value: '原值'}]});
+    expect(output.failure?.sourceRange).toEqual({start: 0, end: script.indexOf(';')});
     expect(sent).toEqual([]);
   });
   it('每句按实际字符串模式重新扫描，范围来自同一轮解析', async () => {

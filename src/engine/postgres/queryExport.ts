@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import type { CellValue, QueryResult, ResultColumn } from '../../shared/contracts';
-import { postgresIdentifier, type PostgresStatement } from '../../shared/postgresSql';
+import { postgresIdentifier } from '../../shared/postgresSql';
 import { resultExportColumns } from '../../shared/resultExport';
 import { EXCEL_LIMITS } from '../../shared/excelTransfer';
 import { AtomicFile, nativeAtomicFileIO } from '../atomicFile';
@@ -9,7 +9,7 @@ import { queryExportSelectsRowResult, queryStreamExportLimits } from '../../shar
 import { postgresQueryExportSchema, postgresQueryExportStatements, postgresQueryInsertColumnsForResult, type PostgresQueryExportInput, type PostgresQueryExportOutput } from '../../shared/postgresQueryExport';
 import { createQueryStreamFile, type QueryStreamFile } from '../queryStreamFile';
 import type { PostgresConnection } from './connection';
-import { postgresParameterValues } from './parameters';
+import { postgresParameterBindings } from './parameters';
 import { readPostgresSqlExportSettings, writePostgresSqlPreamble, writePostgresSqlRows } from './sqlExport';
 
 export type PostgresQueryExportRequest = PostgresQueryExportInput & {filePath: string};
@@ -45,8 +45,8 @@ async function* queryExportRows(first: QueryResult,
 }
 
 /** 复用同名游标时，先确认原游标真实关闭。扩展协议同时约束只允许一条命令。 */
-async function openExportCursor(connection: PostgresConnection, part: PostgresStatement, values: unknown[] | undefined) {
-  const declared = await connection.query('DECLARE dbark_query_export NO SCROLL CURSOR FOR\n' + part.sql,
+async function openExportCursor(connection: PostgresConnection, sql: string, values: unknown[] | undefined) {
+  const declared = await connection.query('DECLARE dbark_query_export NO SCROLL CURSOR FOR\n' + sql,
     values, {rows: 0, bytes: 1024}, undefined, 'extended');
   if (declared.postgresCommand !== 'DECLARE') throw Error('PostgreSQL 未确认导出游标');
 }
@@ -70,7 +70,8 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
       check();
       const workbook = format === 'xlsx';
       const source = postgresQueryExportStatements(sql, connection.standardStrings, workbook);
-      const values = postgresParameterValues(source.parameters, parameters);
+      const bindings = postgresParameterBindings(source.names, parameters);
+      const valuesFor = (names: readonly string[]) => bindings && names.map(name => bindings.get(name));
       const beginSql = workbook ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' : 'BEGIN READ ONLY';
       const begun = await connection.query(beginSql, undefined, {rows: 0, bytes: 1024});
       if (begun.postgresCommand !== 'BEGIN' || !connection.state().transactionKnown || !connection.state().transactionOpen)
@@ -82,7 +83,7 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
         async function* sheets(): AsyncGenerator<ExcelExportSheet> {
           for (const [index, part] of source.statements.entries()) {
             check();
-            await openExportCursor(connection, part, values?.slice(0, part.parameters.length));
+            await openExportCursor(connection, part.sql, valuesFor(part.names));
             const batches = queryExportBatches(connection, check);
             const first = await batches.next();
             if (first.done) throw Error('PostgreSQL Excel 导出缺少列描述');
@@ -103,7 +104,8 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
       } else {
         const insertSettings = format === 'sql' ? await readPostgresSqlExportSettings(connection) : undefined;
         check();
-        await openExportCursor(connection, source.statements[0], values);
+        const part = source.statements[0];
+        await openExportCursor(connection, part.sql, valuesFor(part.names));
         const batches = queryExportBatches(connection, check);
         if (format === 'sql') {
           const first = await batches.next();

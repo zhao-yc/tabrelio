@@ -4,6 +4,7 @@ export interface PostgresStatement {
   end: number;
   parameters: number[];
   keyword: string;
+  namedParameters?: { name: string; start: number; end: number }[];
 }
 
 const maxScriptLength = 4 * 1024 * 1024;
@@ -12,6 +13,7 @@ const whitespace = /[ \t\n\r\f\v]/;
 const identifierStart = /[A-Za-z_\u0080-\uFFFF]/;
 const identifierPart = /[A-Za-z_0-9$\u0080-\uFFFF]/;
 const tagPart = /[A-Za-z_0-9\u0080-\uFFFF]/;
+const namedParameter = /^\[\$([A-Za-z_][A-Za-z0-9_]{0,63})\]/;
 export class IncompletePostgresSql extends Error {}
 export class PostgresStatementLimit extends Error {}
 
@@ -25,6 +27,17 @@ function quotedEnd(source: string, opening: number, backslash: boolean): number 
     return i + 1;
   }
   throw new IncompletePostgresSql('PostgreSQL引用未闭合');
+}
+
+/** 跨行续接沿用首段字符串的转义模式，避免把续行字面量内部当成参数。 */
+function continuedStringEnd(source: string, index: number, backslash: boolean): number {
+  const continuation = /(?:[ \t\r\n\f\v]|--[^\r\n]*)+/y;
+  for (;;) {
+    continuation.lastIndex = index;
+    const gap = continuation.exec(source)?.[0];
+    if (!gap || !/[\r\n]/.test(gap) || source[index + gap.length] !== "'") return index;
+    index = quotedEnd(source, index + gap.length, backslash);
+  }
 }
 
 /** PostgreSQL的块注释可嵌套，内部引号和分号均属于注释。 */
@@ -71,18 +84,27 @@ export function splitPostgresSql(source: string, standardStrings = true, firstOn
   return scanPostgresSql(source, standardStrings, firstOnly);
 }
 
-function scanPostgresSql(source: string, standardStrings: boolean, firstOnly: boolean): PostgresStatement[] {
+/** 只有参数入口识别命名模板，普通运行、原生脚本和其它词法消费者沿用原规则。 */
+export function splitPostgresParameterSql(source: string, standardStrings: boolean, firstOnly = false): PostgresStatement[] {
+  if (source.length > maxScriptLength || source.includes('\0')) throw Error('PostgreSQL脚本超过4MiB或包含NUL');
+  return scanPostgresSql(source, standardStrings, firstOnly, true);
+}
+
+function scanPostgresSql(source: string, standardStrings: boolean, firstOnly: boolean, allowNamed = false): PostgresStatement[] {
   const statements: PostgresStatement[] = [];
   let start = 0, index = 0, meaningful = false, keyword = '';
   let parameters = new Set<number>();
+  let named: NonNullable<PostgresStatement['namedParameters']> = [], namedOccurrences = 0;
   const finish = (end: number) => {
     if (meaningful) {
       if (statements.length >= 1000) throw new PostgresStatementLimit('PostgreSQL脚本最多1000条语句');
-      statements.push({ sql: source.slice(start, end), start, end, parameters: [...parameters].sort((a, b) => a - b), keyword });
+      statements.push({ sql: source.slice(start, end), start, end, parameters: [...parameters].sort((a, b) => a - b), keyword,
+        ...(named.length ? { namedParameters: named } : {}) });
     }
     start = end + 1;
     meaningful = false;
     parameters = new Set();
+    named = [];
     keyword = '';
   };
   while (index < source.length) {
@@ -107,8 +129,22 @@ function scanPostgresSql(source: string, standardStrings: boolean, firstOnly: bo
     meaningful = true;
     if (c === "'" || c === '"') {
       const explicitEscape = /[eE]/.test(source[index - 1] ?? '') && !identifierPart.test(source[index - 2] ?? '');
-      index = quotedEnd(source, index, c === "'" && (!standardStrings || explicitEscape));
+      const nonEscapingPrefix = allowNamed && (/[bBxX]/.test(source[index - 1] ?? '') && !identifierPart.test(source[index - 2] ?? '') ||
+        /[uU]&/.test(source.slice(Math.max(0, index - 2), index)) && !identifierPart.test(source[index - 3] ?? ''));
+      const backslash = c === "'" && (explicitEscape || !standardStrings && !nonEscapingPrefix);
+      index = quotedEnd(source, index, backslash);
+      if (allowNamed && c === "'") index = continuedStringEnd(source, index, backslash);
       continue;
+    }
+    if (allowNamed && c === '[' && next === '$') {
+      const match = namedParameter.exec(source.slice(index, index + 67));
+      if (match) {
+        if (++namedOccurrences > 100000) throw Error('PostgreSQL命名参数不能超过100000处');
+        const end = index + match[0].length;
+        named.push({ name: match[1], start: index - start, end: end - start });
+        index = end;
+        continue;
+      }
     }
     if (c === '$' && !identifierPart.test(source[index - 1] ?? '')) {
       const tag = dollarTag(source, index);
@@ -135,9 +171,9 @@ function scanPostgresSql(source: string, standardStrings: boolean, firstOnly: bo
 }
 
 /** 光标只选择原文内的准确语句，使用编辑器的UTF-16偏移。 */
-export function currentPostgresStatement(source: string, offset: number, standardStrings = true): PostgresStatement {
+export function currentPostgresStatement(source: string, offset: number, standardStrings = true, allowNamed = false): PostgresStatement {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > source.length) throw Error('PostgreSQL光标位置无效');
-  const statements = splitPostgresSql(source, standardStrings);
+  const statements = allowNamed ? splitPostgresParameterSql(source, standardStrings) : splitPostgresSql(source, standardStrings);
   const selected = statements.find(statement => offset >= statement.start && offset <= statement.end) ??
     (offset === source.length ? statements.at(-1) : undefined);
   if (!selected) throw Error('当前位置没有可执行PostgreSQL语句');
@@ -352,15 +388,7 @@ export function scanPostgresFormattingTokens(source: string, budget: number, sta
         const backslash = quote === "'" && (/^e$/i.test(prefix) || !standardStrings && !/^[bx]|^u&/i.test(prefix));
         i = quotedEnd(source, i + prefix.length, backslash);
         // 相邻单引号字符串只有跨行才会续接，E 字符串的转义规则随续行保留。
-        if (quote === "'") {
-          const continuation = /(?:[ \t\r\n\f\v]|--[^\r\n]*)+/y;
-          while (true) {
-            continuation.lastIndex = i;
-            const gap = continuation.exec(source)?.[0];
-            if (!gap || !/[\r\n]/.test(gap) || source[i + gap.length] !== "'") break;
-            i = quotedEnd(source, i + gap.length, backslash);
-          }
-        }
+        if (quote === "'") i = continuedStringEnd(source, i, backslash);
       } else if (tag) {
         kind = 'literal';
         const end = source.indexOf(tag, i + tag.length);

@@ -4,8 +4,10 @@ import { expect, it, vi } from 'vitest';
 import { validateCommand } from '../../src/shared/validation';
 import { exportPostgresQuery } from '../../src/engine/postgres/queryExport';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
-import { postgresParameterValues } from '../../src/engine/postgres/parameters';
-import { postgresCurrentQueryExportSource, postgresExportParameterNames, postgresQueryInsertColumnsForResult } from '../../src/shared/postgresQueryExport';
+import { postgresParameterBindings } from '../../src/engine/postgres/parameters';
+import { postgresParameterStatement } from '../../src/shared/postgresParameters';
+import { splitPostgresSql } from '../../src/shared/postgresSql';
+import { postgresCurrentQueryExportSource, postgresExportParameterNames, postgresQueryExportStatements, postgresQueryInsertColumnsForResult } from '../../src/shared/postgresQueryExport';
 
 const base = {connectionId: 'pg', database: 'postgres', fileToken: 'choice', taskId: 'task', format: 'csv', encoding: 'utf8'} as const;
 
@@ -23,6 +25,34 @@ it('工作簿按语句校验位置编号，同编号复用且总页数有界', (
     expect(() => postgresExportParameterNames(sql, true)).toThrow();
 });
 
+it('命名模板保留原范围，重复名同序绑定，字符串、数组、嵌套注释和 dollar 正文各守原义', () => {
+  const source = "-- [$line]\r\nSELECT [$Id]::bigint, [$id]::text, [$Id], ARRAY[[$Id]], ARRAY[$tag$[$raw]$tag$], " +
+    "E'a'\n'\\'[$continued];', '[$literal]', 0 AS \"[$column]\" /* [$block] /* [$nested] */ */;";
+  const plan = postgresParameterStatement(source, true);
+  expect(plan.names).toEqual(['Id', 'id']);
+  expect(plan.statement.sql).toBe(source.slice(0, -1));
+  expect(plan.statement.start).toBe(0);
+  expect(plan.statement.end).toBe(source.length - 1);
+  expect(plan.sql).toBe(source.slice(0, -1).replaceAll('[$Id]', ' $1 ').replace('[$id]', ' $2 '));
+  expect(splitPostgresSql('SELECT [$Id]')).toEqual([{sql: 'SELECT [$Id]', keyword: 'SELECT', start: 0, end: 12, parameters: []}]);
+  const full = 'SELECT 0;\r\n' + source + '\nSELECT 2;';
+  expect(postgresParameterStatement(full, true, full.indexOf('[$Id]')).statement.start).toBe(9);
+  expect(() => postgresParameterStatement(full, true)).toThrow('一条语句');
+});
+
+it('命名工作簿按首见顺序收集全局参数，各条语句独立排位', () => {
+  const source = 'SELECT [$id]::int; SELECT [$note]::text, [$id]::int, [$note]::text; SELECT 1';
+  expect(postgresExportParameterNames(source, true).names).toEqual(['id', 'note']);
+  const plan = postgresQueryExportStatements(source, true, true);
+  expect(plan.statements.map(part => part.names)).toEqual([['id'], ['note', 'id'], []]);
+  expect(plan.statements[1].sql).toBe(' SELECT  $1 ::text,  $2 ::int,  $1 ::text');
+  for (const mixed of ['SELECT [$id], $1', 'SELECT [$p1]; SELECT $1'])
+    expect(() => postgresExportParameterNames(mixed, true)).toThrow('混用');
+  const over = 'SELECT ' + Array.from({length: 201}, (_, i) => '[$p' + i + ']').join(',');
+  expect(() => postgresParameterStatement(over, true)).toThrow('200');
+  expect(() => postgresExportParameterNames("SELECT 'a\\'; SELECT [$id]; -- '", true)).toThrow();
+});
+
 it('当前 PostgreSQL 导出只截取两种模式一致的原查询', () => {
   const head = "UPDATE t SET n=1 /*前置🚢*/;\r\n";
   const target = "WITH data AS (SELECT $$; $2$$ AS note) SELECT $1, note FROM data;";
@@ -37,14 +67,15 @@ it('当前 PostgreSQL 导出只截取两种模式一致的原查询', () => {
 
 it('PostgreSQL 绑定保留38位小数原文、精确整数、NULL及字节', () => {
   const decimal = '0.12345678901234567890123456789012345678';
-  expect(postgresParameterValues([1, 2, 3, 4], [
+  expect([...postgresParameterBindings(['p1', 'p2', 'p3', 'p4'], [
     {name: 'p1', type: 'integer', value: '9007199254740993'}, {name: 'p2', type: 'decimal', value: decimal},
     {name: 'p3', type: 'null'}, {name: 'p4', type: 'binary', value: '00ff'},
-  ])).toEqual(['9007199254740993', decimal, null, Buffer.from([0, 255])]);
-  expect(postgresParameterValues([])).toBeUndefined();
-  expect(() => postgresParameterValues([1])).toThrow();
-  expect(() => postgresParameterValues([1], [{name: 'p2', type: 'text', value: '值'}])).toThrow();
-  expect(() => postgresParameterValues([1, 3], [{name: 'p1', type: 'null'}, {name: 'p3', type: 'null'}])).toThrow();
+  ])!.values()]).toEqual(['9007199254740993', decimal, null, Buffer.from([0, 255])]);
+  expect(postgresParameterBindings([])).toBeUndefined();
+  expect(() => postgresParameterBindings(['p1'])).toThrow();
+  expect(() => postgresParameterBindings(['p1'], [{name: 'p2', type: 'text', value: '值'}])).toThrow();
+  expect(() => postgresParameterBindings(['id', 'note'], [{name: 'note', type: 'null'}, {name: 'id', type: 'null'}])).toThrow();
+  expect(() => postgresParameterStatement('SELECT $1, $3', true)).toThrow('连续');
 });
 
 it('参数导出IPC接纳严格类型，拒绝附加字段、重复名称及超预算', () => {
@@ -77,7 +108,7 @@ it('完整 PostgreSQL INSERT 只接收准确目标和 UTF-8，按引号名称及
   }
 });
 
-it.each(['SELECT 1; SELECT 2', 'DELETE FROM records', 'SELECT $1', 'SELECT $$未闭合'])('不向导出会话投递不符合边界的 SQL %s', async sql => {
+it.each(['SELECT 1; SELECT 2', 'DELETE FROM records', 'SELECT $1', 'SELECT [$id]', 'SELECT [$id], $1', 'SELECT $$未闭合'])('不向导出会话投递不符合边界的 SQL %s', async sql => {
   const query = vi.fn();
   const connection = {query, standardStrings: true} as unknown as PostgresConnection;
   await expect(exportPostgresQuery({...base, sql, filePath: join(tmpdir(), 'pg-export-preflight.csv')},

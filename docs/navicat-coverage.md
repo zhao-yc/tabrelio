@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。PostgreSQL 查询执行与完整查询导出识别 `[$name]` 值参数，重复名称在查询及多工作表导出中共享一次输入。执行通过原生协议绑定，结果定位保留原模板。Q06、Q05 仍为部分覆盖。[Navicat 查询参数手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html#query-parameters)
+
 2026-11-11 源码增量。SQLite 和 PostgreSQL 表页的字段概况支持在已应用筛选和排序后，从第一页起算取前 N 条。SQLite 字段概况及日期分布、PostgreSQL 字段概况及数值和日期分布均显示实际样本行数。D09 增加 SQLite 和 PostgreSQL 表页抽样。[Navicat 数据剖析手册](https://www.navicat.com/manual/pdf_manual/en/navicat_17/win_manual/navicat_en.pdf)
 
 2026-11-11 源码增量。MySQL 和 MariaDB 的表数据统计支持在已应用筛选和表页排序后取前 N 条，适用于字段概况、不同值计数、日期分布及具备非空唯一键的 InnoDB 表数值分布。D09 增加 MySQL 和 MariaDB 表页抽样。[Navicat 数据剖析手册](https://www.navicat.com/manual/pdf_manual/en/navicat_17/win_manual/navicat_en.pdf)

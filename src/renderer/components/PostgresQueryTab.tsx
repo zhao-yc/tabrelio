@@ -1053,7 +1053,7 @@ export function PostgresQueryTab({
       if (originsCurrent(view)) setOriginsView({ ...view, error: errorMessage(reason) });
     }
   }
-  const resultLocationAvailable = !!receiptSource && resultRanges.current.has(receiptSource) && !!failureSource.current?.available();
+  const resultLocationAvailable = !!receiptSource && resultRanges.current.has(receiptSource) && !!failureSource.current?.availableForRender();
   // 名称属于服务器已返回的语句，编辑草稿时仍显示原结果的名称。
   const resultNames = useMemo(() => outcome?.results.map(result => result.columns.length
     ? queryResultTitle(result.statement, 'postgresql') : undefined) ?? [], [outcome]);

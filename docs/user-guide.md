@@ -850,9 +850,9 @@ SQLite 查询页从「更多查询操作 → 执行与分析 → 执行并导出
 
 SQLite 选择 Excel 时可导出 1 至 64 条 SELECT 或 WITH 查询。每条查询依次写入一张工作表，空结果保留标题。所有查询共用同一个主库只读快照，同名参数复用同一个值。[SQLite 多查询 Excel 工作簿](development/sqlite-query-export-20261107.md#多查询-excel-工作簿)
 
-PostgreSQL 查询页的「执行并导出完整结果」可将一条 SELECT／WITH 查询分批保存为 CSV、JSON 或 Excel。非空单选区优先，空光标使用全文。导出使用独立只读会话，读取目标数据库已提交的数据。选好格式、编码和文件后点击「执行查询并保存」，完成后显示行数。有位置参数时，先点击「设置导出参数」填写类型和值，再采用本次参数。[完整查询导出](development/postgres-query-export-20261107.md) [参数导出](development/postgres-export-parameters-20261107.md)
+PostgreSQL 查询页的「执行并导出完整结果」可将一条 SELECT／WITH 查询分批保存为 CSV、JSON 或 Excel。非空单选区优先，空光标使用全文。导出使用独立只读会话，读取目标数据库已提交的数据。选好格式、编码和文件后点击「执行查询并保存」，完成后显示行数。含命名或位置参数时，先点击「设置导出参数」填写类型和值，再采用本次参数。[完整查询导出](development/postgres-query-export-20261107.md) [参数导出](development/postgres-export-parameters-20261107.md)
 
-选择 Excel 时也可导出 1 至 64 条 SELECT 或 WITH 查询。所有查询共用同一个可重复读快照，每条查询生成一张工作表，空结果保留标题。各条查询从 `$1` 开始编号，同编号使用同一个参数值。[多查询 Excel 工作簿](development/postgres-query-export-20261107.md#多查询-excel-工作簿)
+选择 Excel 时也可导出 1 至 64 条 SELECT 或 WITH 查询。所有查询共用同一个可重复读快照，每条查询生成一张工作表，空结果保留标题。同名参数共用一个值。使用位置参数时，每条查询从 `$1` 连续编号，同编号共用一个值。[多查询 Excel 工作簿](development/postgres-query-export-20261107.md#多查询-excel-工作簿)
 
 完整 Excel 导出保留精确数字文本、NULL 和二进制。重名及空标题按列位置生成可区分的名称。详见 [完整查询 Excel 导出](development/full-query-xlsx-20261107.md)。
 
@@ -898,11 +898,11 @@ PostgreSQL 查询页的「事务默认设置」可[读取并设置本会话后�
 
 在 PostgreSQL 查询页打开「查询超时」，可为当前会话设置语句超时和锁等待超时。以毫秒填写，0 表示禁用相应超时。可恢复服务器为该会话提供的默认值，修改后会读回实际设置。[PostgreSQL 会话查询超时](development/postgres-query-timeouts-20261107.md)
 
-PostgreSQL 查询收到 NOTICE 或 WARNING 等服务端消息时，在当前结果中展开「服务端消息」。可搜索消息、展开详情、提示或上下文，也可定位对应原语句。查询失败前已收到的消息仍可查看；位置参数执行只显示级别和 SQLSTATE。[PostgreSQL 查询服务端消息](development/postgres-query-notices-20261107.md)
+PostgreSQL 查询收到 NOTICE 或 WARNING 等服务端消息时，在当前结果中展开「服务端消息」。可搜索消息、展开详情、提示或上下文，也可定位对应原语句。查询失败前已收到的消息仍可查看。参数执行的消息显示级别和 SQLSTATE。[PostgreSQL 查询服务端消息](development/postgres-query-notices-20261107.md)
 
 PostgreSQL 当前查询结果会显示语句序号、服务器回执、服务端计数及本条耗时。行结果还会显示客户端实际接收的行数。开启「遇错继续」时，结果选择器保留原序号，失败语句的序号可在错误摘要中找到。底栏显示本次执行总耗时。[PostgreSQL 查询回执](development/postgres-query-receipts-20261107.md)
 
-在 PostgreSQL 当前语句回执点击「查看结果 SQL」可只读查看实际执行的语句，位置参数显示为模板。点击「定位原语句」可在原编辑器选中对应语句。MySQL 和 MariaDB 的定位入口位于「更多结果操作」。同一条 CALL 的多个结果会指回同一个调用位置，参数查询定位到原模板。编辑草稿后仍可查看结果 SQL，原定位停用。[PostgreSQL 结果来源](development/postgres-result-source-20261107.md)
+在 PostgreSQL 当前语句回执点击「查看结果 SQL」可只读查看结果来源。参数查询显示原 SQL 模板。点击「定位原语句」可在原编辑器选中对应语句。MySQL 和 MariaDB 的定位入口位于「更多结果操作」。同一条 CALL 的多个结果会指回同一个调用位置。编辑草稿后仍可查看结果 SQL，原定位停用。[PostgreSQL 结果来源](development/postgres-result-source-20261107.md)
 
 源码版可点击查询工具栏“事务设置”，读取该标签原会话的隔离级别、默认只读、连接 ID、实际库及事务状态；修改后点击“应用到本会话”。这只改变 SESSION 默认值，当前事务及手写一次性事务覆盖可能不同。活动事务中须先明确提交或回滚，再重新读取并修改。
 
@@ -1188,7 +1188,9 @@ SELECT :id AS id, :keyword AS keyword, :id AS repeated_id;
 
 当前开发源码新增[本标签参数暂存](development/query-parameter-reuse-20261029.md)，默认关闭。明确勾选后，仅完整成功且原会话、正文及默认库确认一致时在内存保留一组；下次打开仍须明确填入并执行。可单独忘记副本，来源变化或关闭标签会清除；参数不写入工作区、历史或文件。本批已通过相关CLI检查和Windows／MySQL 8.4只读窗口专项；安装包、macOS及其他参数类型的原生矩阵另验，暂不发布。
 
-PostgreSQL 的「参数执行」也支持[本标签参数暂存](development/postgres-parameter-reuse-20261107.md)。填写 `$1`、`$2` 对应的类型和值，显式勾选后执行成功才保留一组；再次打开需点击「填入上次暂存的参数」并明确执行。忘记不会清除当前输入，改正文后即使撤销也不会恢复旧组。值只在本标签内存保留。
+PostgreSQL 的「参数执行」支持 `[$name]` 命名参数及 `$1`、`$2` 位置参数。同一次操作使用一种写法。例如 `SELECT [$id]::bigint, [$id]::bigint + 1;` 只需为 `id` 填一次值。位置参数从 `$1` 连续编号，表单中对应 `p1`、`p2`。值通过协议绑定，结果来源和历史保留原 SQL 模板。完整查询导出也支持命名参数，多查询 Excel 工作簿的各查询共用同名值。
+
+PostgreSQL 的「参数执行」也支持[本标签参数暂存](development/postgres-parameter-reuse-20261107.md)。显式勾选后执行成功才保留一组，再次打开需点击「填入上次暂存的参数」并明确执行。忘记后保留当前输入。更改正文即清除旧组，值仅保存在本标签的内存中。
 
 静态可分析脚本会在发送第一条用户 SQL 前核对完整模板的参数、缺参、多余参数及展开预算。明确的常量 `SET sql_mode` 可以预演词法模式；无法静态确定模式的 `SET`、程序调用或可执行版本注释会提示名称预览可能不完整，可手动添加后续语句需要的参数。动态脚本执行时按每条语句完成后的协议状态继续扫描、绑定。关闭会话变量跟踪或服务器错误可能使模式无法确定；此时只执行各候选模式下语句和参数边界均一致的 SQL，实际歧义会明确停止，不能猜测引号边界。后续缺参、模式或语法错误、累积预算超限和最终多余参数错误会停止脚本，**此前已提交的语句及 DDL 不会撤销，未提交事务也不会自动回滚或重放**。静态参数校验通过同样不保证服务器后续语句成功；执行写入前须核对整个脚本，失败后先检查事务和已提交数据。
 
@@ -1707,7 +1709,7 @@ SQLite 也可切换到「搜索数据」，在 `main` 中勾选普通表、视�
 
 在 PostgreSQL 查询页也可跳转保存查询命中。若要继续使用当前草稿，先选中一段 SQL 或放置光标，再从「搜索保存查询」或「保存的查询」点击「插入当前查询选区」。插入使用保存查询的完整正文，可一次撤销，原连接和数据库保持原值。[操作与验收](development/postgres-saved-query-navigation-20261107.md)
 
-活动的 PostgreSQL 查询页可从应用「编辑」菜单查找替换、定位行列或括号、切换注释和编辑行。「工具 → 查询」提供仅执行选区、执行光标所在语句和执行全部，另可停止原查询、格式化、查看计划或绑定位置参数。用「文件 → 保存查询」将脚本存入本地查询库。[PostgreSQL 查询菜单](development/postgres-query-menu-commands-20261107.md)
+活动的 PostgreSQL 查询页可从应用「编辑」菜单查找替换、定位行列或括号、切换注释和编辑行。「工具 → 查询」提供仅执行选区、执行光标所在语句和执行全部，另可停止原查询、格式化、查看计划或执行参数查询。用「文件 → 保存查询」将脚本存入本地查询库。[PostgreSQL 查询菜单](development/postgres-query-menu-commands-20261107.md)
 
 在 PostgreSQL 查询页点击「复制为新查询」，可将当前完整 SQL 和数据库上下文复制到独立草稿。副本可以单独编辑和保存，原标签仍可查看已有结果及处理活动事务。[PostgreSQL 复制查询](development/postgres-query-duplicate-20261107.md)
 

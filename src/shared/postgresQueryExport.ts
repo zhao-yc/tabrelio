@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { csvExportDelimiters } from './csvExport';
 import { queryParameterTypes, validateQueryParameters, type QueryParameterNames } from './queryParameters';
 import { postgresNewIdentifier } from './postgresCreateTable';
-import { currentPostgresStatement, splitPostgresSql } from './postgresSql';
+import { currentPostgresStatement, splitPostgresParameterSql } from './postgresSql';
+import { postgresParameterPlan } from './postgresParameters';
 import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
 import { EXCEL_LIMITS } from './excelTransfer';
 
@@ -48,11 +49,12 @@ export interface PostgresQueryExportOutput { rows: number; fileCommitted: true; 
 
 /** 导出使用独立会话，只有两种字符串模式都指向同一原语句和参数时才接受。 */
 export function postgresCurrentQueryExportSource(source: string, offset: number): string {
-  const primary = currentPostgresStatement(source, offset, true);
-  const alternate = currentPostgresStatement(source, offset, false);
+  const primary = currentPostgresStatement(source, offset, true, true);
+  const alternate = currentPostgresStatement(source, offset, false, true);
   if (offset > primary.end || primary.start !== alternate.start || primary.end !== alternate.end ||
       primary.parameters.length !== alternate.parameters.length ||
-      primary.parameters.some((position, index) => position !== alternate.parameters[index]))
+      primary.parameters.some((position, index) => position !== alternate.parameters[index]) ||
+      JSON.stringify(primary.namedParameters) !== JSON.stringify(alternate.namedParameters))
     throw Error('当前位置没有边界明确的 PostgreSQL 导出语句');
   if (!['SELECT', 'WITH'].includes(primary.keyword))
     throw Error('请将光标放在要完整导出的 PostgreSQL SELECT 或 WITH 语句中');
@@ -60,28 +62,23 @@ export function postgresCurrentQueryExportSource(source: string, offset: number)
   return source.slice(primary.start, end);
 }
 
-/** 每条语句的参数从 $1 独立编号，工作簿内同编号复用一次输入的值。 */
+/** 保留每条原查询，为独立游标准备有序绑定，工作簿内同名或同编号复用输入。 */
 export function postgresQueryExportStatements(sql: string, standardStrings: boolean, workbook = false) {
-  const statements = splitPostgresSql(sql, standardStrings);
+  const statements = splitPostgresParameterSql(sql, standardStrings);
   if (workbook ? statements.length < 1 || statements.length > EXCEL_LIMITS.maxSheets : statements.length !== 1)
     throw Error(workbook ? '完整 Excel 导出需要 1 至 64 条查询' : '完整导出需要一条 SELECT 或 WITH 查询');
-  let parameters: number[] = [];
-  for (const part of statements) {
-    if (!['SELECT', 'WITH'].includes(part.keyword)) throw Error('完整导出只接受 SELECT 或 WITH 查询');
-    if (part.parameters.some((position, index) => position !== index + 1)) throw Error('每条 PostgreSQL 查询的位置参数必须从 $1 连续编号');
-    if (part.parameters.length > parameters.length) parameters = part.parameters;
-  }
-  return {statements, parameters};
+  if (statements.some(part => !['SELECT', 'WITH'].includes(part.keyword))) throw Error('完整导出只接受 SELECT 或 WITH 查询');
+  return postgresParameterPlan(statements);
 }
 
-/** 表单的两种候选字符串模式须同意每条语句的范围及编号，独立连接再按实际模式复核。 */
+/** 表单的两种候选字符串模式须同意原范围、绑定 SQL 和参数顺序，独立连接再按实际模式复核。 */
 export function postgresExportParameterNames(sql: string, workbook = false): QueryParameterNames {
   const ordinary = postgresQueryExportStatements(sql, true, workbook), escaped = postgresQueryExportStatements(sql, false, workbook);
   if (ordinary.statements.length !== escaped.statements.length || ordinary.statements.some((part, index) => {
     const alternative = escaped.statements[index];
-    return part.start !== alternative.start || part.end !== alternative.end ||
-      part.parameters.length !== alternative.parameters.length || part.parameters.some((position, i) => position !== alternative.parameters[i]);
+    return part.statement.start !== alternative.statement.start || part.statement.end !== alternative.statement.end ||
+      part.sql !== alternative.sql || JSON.stringify(part.names) !== JSON.stringify(alternative.names);
   })) throw Error('导出参数需要边界明确的 PostgreSQL 查询');
-  return {names: ordinary.parameters.map(position => 'p' + position), warnings: [], maxDecimalScale: 38,
+  return {names: ordinary.names, warnings: [], maxDecimalScale: 38,
     allowTimeEndpointFraction: false, ansiQuotes: true, noBackslashEscapes: true};
 }
