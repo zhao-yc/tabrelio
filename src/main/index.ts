@@ -1356,11 +1356,16 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if ((command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.explain') &&
       input.sqliteStatementTimeoutMs !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('SQLite 语句超时只能用于原 SQLite 查询会话');
-  if ((command === 'query.parameterNames' || command === 'query.executeParameterized') &&
-      input.currentStatement !== undefined && !broker.isSqliteSession(input.sessionId)) {
-    const postgres = sessions.get(input.sessionId)?.postgres;
-    if (shuttingDown || !postgres || postgres.closing || !columns || !columnsMain.sharesDocumentOwner(postgres.owner, columns))
-      throw Error('此当前语句操作需要原窗口的 PostgreSQL 或 SQLite 查询会话');
+  if ((command === 'query.parameterNames' || command === 'query.executeParameterized') && input.currentStatement !== undefined) {
+    const session = sessions.get(input.sessionId);
+    const mysqlOwner = session?.mysqlOwner;
+    const postgres = session?.postgres;
+    const mysqlRange = input.currentStatement.confirmedRange;
+    const owner = postgres?.owner ?? mysqlOwner;
+    const sqlite = broker.isSqliteSession(input.sessionId);
+    if (shuttingDown || (!sqlite && (!owner || !columns || postgres?.closing || !columnsMain.sharesDocumentOwner(owner, columns))) ||
+        (command === 'query.executeParameterized' && Boolean(mysqlRange) !== Boolean(mysqlOwner && !sqlite && !postgres)))
+      throw Error('当前语句参数操作需要原窗口、查询会话和有效的参数识别范围');
   }
   if (command === 'query.explain' && input.currentStatement !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('此当前语句计划操作只用于原 SQLite 查询会话');

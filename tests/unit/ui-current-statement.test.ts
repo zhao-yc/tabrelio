@@ -42,17 +42,17 @@ function fixture(dialect: 'mysql' | 'sqlite' = 'mysql') {
   let serial = 0;
   // 对应真实组件的useRef：复制/格式化尚未发起，模型挂载标记初始false，仍执行真实接管函数。
   // 未打开结果写入用途的真实初始引用，不替换原执行函数或断言。
-  const port = createContext({ ...queryDialectVm(connection), fileSource: { busy: false, isBusy: () => fileBusy }, snapshotOperation: { current: null }, continueOnError: false, collectWarnings: false, resultInsertRef: { current: null }, resultInsertActivity: { current: 0 }, duplicateIntent: { current: null }, formatting: { current: null }, fileModelAttached: { current: false }, resultSelection: selection.resultSelection, captureQueryFailureSource, failureSource: { current: undefined }, parameterFailureSource: { current: undefined }, alive: { current: true }, closeRequestRef: { current: undefined }, refreshFailureSource: vi.fn(),
+  const port = createContext({ ...queryDialectVm(connection), fileSource: { busy: false, isBusy: () => fileBusy }, snapshotOperation: { current: null }, continueOnError: false, collectWarnings: false, collectStatus: false, collectStages: false, resultInsertRef: { current: null }, resultInsertActivity: { current: 0 }, duplicateIntent: { current: null }, formatting: { current: null }, fileModelAttached: { current: false }, resultSelection: selection.resultSelection, captureQueryFailureSource, failureSource: { current: undefined }, parameterFailureSource: { current: undefined }, alive: { current: true }, closeRequestRef: { current: undefined }, refreshFailureSource: vi.fn(),
     // 与真实组件初始useRef一致：尚未打开行详情，但真实失效函数仍撤销控制器并清空两个React状态。
     rowDetails: new QueryRowDetails(), setRowDetail: vi.fn(), setActiveDetailRow: vi.fn(),
     // 对应新增确认入口的真实初始useRef；本组未打开实际分析，但模型替换仍执行原回调。
-    analyzeIntent: { current: null },
+    analyzeIntent: { current: null }, toggleBlockCommentRef: { current: null },
     // 尚未打开筛选草稿；真实撤销函数仍使用组件的引用及状态端口。
     comparisonLeaseRef: { current: null }, setComparisonLease: vi.fn(), statisticsLeaseRef: { current: null }, setStatisticsLease: vi.fn(), sortLeaseRef: { current: null }, setSortLease: vi.fn(), filterLeaseRef: { current: null }, setFilterLease: vi.fn(),
     CurrentStatementIntent, currentStatementZh, queryContextZh, queryConnectionDatabase, resolveQueryDatabase, Error, resultsOnly: false, document: { querySelector: () => modal ? {} : null },
     useWorkspace: { getState: () => workspace, subscribe: (action: () => void) => listen('context', action).dispose }, tab: workspace.settings.tabs[0], settings: { resultLimit: 10 }, editor: { current: editor }, activeCurrentIntent: { current: null }, setSearchEditor: vi.fn(), sessionRef: { current: '' }, pendingSession: { current: null }, busyRef: { current: false }, cancelledQuery: { current: '' }, task: { current: '' }, parameterSession: { current: '' }, explainSource: { current: '' },
     invoke, flushSettings, handleQueryError, rememberDatabase: vi.fn(), uid: () => `task-${++serial}`, errorMessage: (reason: any) => reason.message, zh: { query: { text001: '请输入SQL' } },
-    setSessionId: vi.fn(), setRecoveryDatabase: vi.fn(), setRecovery: vi.fn(), setBusy: vi.fn(), setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(),
+    setSessionId: vi.fn(), setRecoveryDatabase: vi.fn(), setRecovery: vi.fn(), setBusy: vi.fn(), setQueryRunning: vi.fn(), setInterruptedStatus: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(),
   });
   runInContext(code, port);
   return { selection, port, workspace, model, editor, invoke, flushSettings, handleQueryError, emit, listeners,
@@ -164,7 +164,7 @@ describe('真实按钮和Monaco动作接线', () => {
       };
     }
     // 本例只核对原快捷键；正文桥接的真实生命周期由专用组件测试覆盖。
-    const port = createContext({ ...queryDialectVm(),  monaco: { KeyMod: { CtrlCmd: 2048, Shift: 1024 }, KeyCode: { Enter: 3, KeyE: 35 } }, zh: { editor: { text001: '执行' } }, currentStatementZh, uiCommandLabels: { 'select-current-statement': '选中当前语句' }, bindEditorIndentation, editorIndentationOptions, optionsRef: { current: { tabSize: 4, insertSpaces: true } }, editorRef: { current: null }, widgetRef: { current: null }, propsRef: { current: {} }, aliveRef: { current: true }, attachContent: () => ({ ready: true }), runRef: { current: original }, currentRunRef: { current: first }, toggleCommentRef: { current: undefined }, selectCurrentRef: { current: select } });
+    const port = createContext({ ...queryDialectVm(),  monaco: { KeyMod: { CtrlCmd: 2048, Shift: 1024 }, KeyCode: { Enter: 3, KeyE: 35 } }, zh: { editor: { text001: '执行' } }, currentStatementZh, uiCommandLabels: { 'select-current-statement': '选中当前语句' }, bindEditorIndentation, editorIndentationOptions, optionsRef: { current: { tabSize: 4, insertSpaces: true } }, editorRef: { current: null }, widgetRef: { current: null }, propsRef: { current: {} }, aliveRef: { current: true }, attachContent: () => ({ ready: true }), runRef: { current: original }, currentRunRef: { current: first }, toggleCommentRef: { current: undefined }, toggleBlockCommentRef: { current: undefined }, selectCurrentRef: { current: select } });
     runInContext(ts.transpileModule('globalThis.mounted=' + mounted, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, port); const firstEditor = actionEditor(); port.mounted(firstEditor.editor); firstEditor.changeModel();
     expect(actions.map(action => [action.id, action.keybindings[0]])).toEqual([['dbark-run', 2051], ['dbark-run-current', 3075], ['dbark-select-current-statement', 2083]]); port.currentRunRef.current = latest; actions[1].run(); actions[0].run(); expect(latest).toHaveBeenCalledOnce(); expect(first).not.toHaveBeenCalled(); expect(original).toHaveBeenCalledOnce();
     expect(actions[2].keybindingContext).toBe('editorTextFocus'); actions[2].run(); expect(select).toHaveBeenCalledOnce();
@@ -180,7 +180,7 @@ describe('SQLite 当前语句复用真实 QueryTab 意图与准入', () => {
   });
   it('SQLite原选区和全文执行仍无currentStatement，MySQL当前语句入口原行为保留', async () => {
     const sqlite = fixture('sqlite'); sqlite.port.continueOnError = true; sqlite.port.collectWarnings = true; await sqlite.original(); await sqlite.original('all'); const inputs = sqlite.invoke.mock.calls.filter(([command]) => command === 'query.execute').map(([, input]) => input);
-    expect(inputs.map(input => input.sql)).toEqual(['SELECT selected', sqlite.model.getValue()]); expect(inputs.every(input => !Object.hasOwn(input, 'currentStatement') && !Object.hasOwn(input, 'continueOnError') && !Object.hasOwn(input, 'collectWarnings'))).toBe(true);
+    expect(inputs.map(input => input.sql)).toEqual(['SELECT selected', sqlite.model.getValue()]); expect(inputs.every(input => !Object.hasOwn(input, 'currentStatement') && input.continueOnError === true && !Object.hasOwn(input, 'collectWarnings'))).toBe(true);
     const mysql = fixture(); await mysql.execute(); expect(mysql.invoke.mock.calls.find(([command]) => command === 'query.execute')?.[1]).toMatchObject({ currentStatement: { offset: mysql.model.getValue().indexOf('当前') }, sql: mysql.model.getValue() });
   });
   it.each(['busy', 'other-job', 'modal', 'hidden', 'closed', 'closing', 'file', 'file-opening', 'formatting', 'unmounted'] as const)('%s在捕获/建连之前拒绝SQLite当前语句', async kind => {
@@ -208,8 +208,8 @@ describe('SQLite 当前语句复用真实 QueryTab 意图与准入', () => {
     else f.port.cancelledQuery.current = f.port.task.current;
     held.release(); await pending; expect(f.invoke.mock.calls.some(([command]) => command === 'query.execute')).toBe(false); expect([...f.listeners.values()].every(group => !group.size)).toBe(true);
   });
-  it.each(['parameter-current', 'explain-parameters', 'analyze', 'continue', 'warnings'] as const)('显式%s仍在SQLite runQuery投递前拒绝，不因参数/current/计划开放旁路', async kind => {
-    const f = fixture('sqlite'), locator = { dispose: vi.fn() }; const result = await f.port.handlers.runQuery('SELECT 1', kind === 'explain-parameters' ? 'explain' : kind === 'analyze' ? 'analyze' : 'execute', kind === 'parameter-current' || kind === 'explain-parameters' ? [] : undefined, kind === 'parameter-current' ? {} : undefined, locator, undefined, kind === 'continue', kind === 'warnings'); expect(result).toBe(false); expect(f.invoke).not.toHaveBeenCalled(); expect(f.port.setError).toHaveBeenCalledWith(f.port.sqliteZh.unsupported); expect(locator.dispose).toHaveBeenCalledOnce();
+  it.each(['parameter-current', 'explain-parameters', 'analyze', 'warnings'] as const)('显式%s仍在SQLite runQuery投递前拒绝，不因参数/current/计划开放旁路', async kind => {
+    const f = fixture('sqlite'), locator = { dispose: vi.fn() }; const result = await f.port.handlers.runQuery('SELECT 1', kind === 'explain-parameters' ? 'explain' : kind === 'analyze' ? 'analyze' : 'execute', kind === 'parameter-current' || kind === 'explain-parameters' ? [] : undefined, kind === 'parameter-current' ? {} : undefined, locator, undefined, false, kind === 'warnings'); expect(result).toBe(false); expect(f.invoke).not.toHaveBeenCalled(); expect(f.port.setError).toHaveBeenCalledWith(f.port.sqliteZh.unsupported); expect(locator.dispose).toHaveBeenCalledOnce();
   });
   it.each(['mysql', 'sqlite'] as const)('%s原生菜单声明命令使用同handler，busy/close/file/hidden/modal与旧revision均拒绝', async dialect => {
     let initializer = ''; function inspect(node: ts.Node) { if (ts.isPropertyAssignment(node) && node.name.getText(tree) === "'execute-current'") initializer = node.initializer.getText(tree); ts.forEachChild(node, inspect); } inspect(tree); expect(initializer).not.toBe('');

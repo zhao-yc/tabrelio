@@ -18,4 +18,13 @@ describe('当前语句可选协议的严格边界', () => {
     expect(validateCommand('query.executeParameterized', { ...input, parameters: [], currentStatement })).toMatchObject({ currentStatement });
     expect(() => validateCommand('query.analyze', { ...input, acknowledged: true, expectedDatabase: null, currentStatement })).toThrow();
   });
+  it('仅参数执行接收已识别的严格范围，允许光标在结束分隔符处', () => {
+    const currentStatement = { offset: 8, confirmedRange: { start: 0, end: 8 } };
+    expect(validateCommand('query.executeParameterized', { ...input, parameters: [], currentStatement })).toMatchObject({ currentStatement });
+    expect(() => validateCommand('query.execute', { ...input, currentStatement })).toThrow();
+    expect(() => validateCommand('query.parameterNames', { sessionId: input.sessionId, sql: input.sql, currentStatement })).toThrow();
+    for (const confirmedRange of [{ start: -1, end: 8 }, { start: 9, end: 17 }, { start: 0, end: 0 },
+      { start: 0, end: 99 }, { start: 0, end: 8, sql: '其它SQL' }])
+      expect(() => validateCommand('query.executeParameterized', { ...input, parameters: [], currentStatement: { offset: 8, confirmedRange } })).toThrow();
+  });
 });

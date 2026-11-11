@@ -47,17 +47,17 @@ function fixture() {
     return (waitForExecution ?? Promise.resolve()).then(() => { if (result instanceof Error) throw result; return result; });
   });
   const context: any = createContext({ ...queryDialectVm(),  QueryParameterReuseOwner, resolveQueryDatabase, queryDatabaseFromSession, confirmedQueryContinueRange, scriptFailureRanges: { current: new Set() }, failureSource: { current: undefined }, Error, Set, JSON, invoke, tab,
-    useWorkspace: { getState: () => workspace }, parameterReuse: { current: null }, parameterReusePort: { current: null },
+    useWorkspace: { getState: () => workspace }, parameterReuse: { current: null }, parameterReusePort: { current: null }, parameterDialog: null,
     alive: { current: true }, closeRequestRef: { current: null }, sessionRef: { current: 's' }, parameterSession: { current: '' }, editor: { current: editor },
     busyRef: { current: false }, task: { current: '' }, cancelledQuery: { current: '' }, explainSource: { current: '' }, settings: workspace.settings,
     parameterFailureSource: { current: undefined }, parameterContinueOnError: { current: false }, parameterCollectWarnings: { current: false },
-    collectWarnings: false, continueOnError: false, document: { querySelector: () => null }, querySource: () => sql, captureFailureSource: () => undefined,
+    collectWarnings: false, collectStatus: false, collectStages: false, continueOnError: false, document: { querySelector: () => null }, querySource: () => sql, captureFailureSource: () => undefined,
     clearFailureSource: vi.fn(), invalidateResultSelection: vi.fn(), ensureSession: async () => context.sessionRef.current,
     rememberDatabase: (value: Parameters<typeof queryDatabasePatch>[0]) => workspace.updateTab('tab', queryDatabasePatch(value)), flushSettings: vi.fn(async () => {}),
     handleQueryError: vi.fn(async () => {}), queryContextZh: { snapshotFailed: '落盘失败', cancelledBeforeSend: '已取消' }, errorMessage: (error: Error) => error.message,
     uid: () => 'task-' + ++sequence, zh: { query: { text001: '空SQL' } },
     setParameterSource: (value: string | null) => { context.parameterSource = value; }, setBusy: (value: boolean) => { context.busy = value; if (!value && earlyConfirmation) context.confirm(); },
-    setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(), setCompletionSession: vi.fn(),
+    setQueryRunning: vi.fn(), setInterruptedStatus: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(), setCompletionSession: vi.fn(),
     databaseSwitchIntent: { current: null }, databaseSwitchDialog: null, useEffect: (effect: () => void) => effect(), sessionId: 's', busy: false, connectionVersion: 1,
   });
   const code = names.map(name => declarations.get(name)).join('\n') + `\nglobalThis.open=openParameters;globalThis.load=loadParameterNames;globalThis.submit=${executeBinding};globalThis.close=closeParameters;globalThis.getPort=()=>(${reuseBinding});globalThis.confirm=()=>{${completionEffect}};`;

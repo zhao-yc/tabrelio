@@ -189,7 +189,7 @@ test('SQLite真实参数表单九类型与模板隐私、整组拒绝及事务�
   /** 只打开原菜单识别；lexer可建立物理session，却不能投递用户driver SQL或新增历史。 */
   const openParameters = async (source?: string, invalidStyle = false, current = false) => {
     if (source !== undefined) await write(source, current ? currentOffset : 0); const before = await step(audit), beforeHistory = await history(), count = operations(before, 'query.parameterNames').length;
-    await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(query(), { name: current ? parameterZh.sqliteCurrentOpen : parameterZh.open, exact: true }, check)).click()); await step(() => expect(dialog()).toBeVisible());
+    await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(query(), { name: current ? parameterZh.currentOpen : parameterZh.open, exact: true }, check)).click()); await step(() => expect(dialog()).toBeVisible());
     await step(() => expect.poll(async () => { const facts = operations(await audit(), 'query.parameterNames'); return facts.length === count + 1 && facts.at(-1)?.reply !== undefined; }).toBe(true));
     const after = await step(audit), fact = operations(after, 'query.parameterNames').at(-1); if (!fact) throw Error('原参数识别请求缺失'); expect(after.driverSql).toEqual(before.driverSql); expect(await history()).toEqual(beforeHistory);
     if (invalidStyle) { expect(fact.reply).toMatchObject({ ok: false, error: expect.any(String) }); await step(() => expect(dialog().locator('.error-box')).toBeVisible()); await step(() => expect(dialog().getByRole('button', { name: parameterZh.execute, exact: true })).toBeDisabled()); return { fact, names: [] as string[] }; }

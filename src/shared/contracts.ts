@@ -22,7 +22,7 @@ import type { CsvExportDelimiter } from './csvExport';
 import type { TableCopyStructureGetInput, TableCopyStructureGetOutput, TableCopyStructurePreviewInput, TableCopyStructurePreviewOutput, TableCopyStructureApplyInput, TableCopyStructureApplyOutput, TableCopyStructureReleaseInput } from './tableCopyStructure';
 /** 所有跨进程数据均为可结构化克隆的普通值，精确数值由驱动保留为字符串。 */
 import type { DatabaseCreateGetInput, DatabaseCreateGetOutput, DatabaseCreatePreviewInput, DatabaseCreatePreviewOutput, DatabaseCreateApplyInput, DatabaseCreateApplyOutput, DatabaseCreateReleaseInput } from './databaseCreate';
-import type { QueryParameter, QueryParameterNames } from './queryParameters';
+import type { QueryParameter, QueryParameterNames, QueryParameterStatementRange } from './queryParameters';
 import type { RoutineInvocationMetadata, RoutineInvocationTarget } from './routineInvocation';
 import type { TableDefaultEncodingGetInput, TableDefaultEncodingGetOutput, TableDefaultEncodingPreviewInput, TableDefaultEncodingPreviewOutput, TableDefaultEncodingApplyInput, TableDefaultEncodingApplyOutput, TableDefaultEncodingReleaseInput } from './tableDefaultEncoding';
 import type { TableRenameGetInput, TableRenameGetOutput, TableRenamePreviewInput, TableRenamePreviewOutput, TableRenameApplyInput, TableRenameApplyOutput, TableRenameReleaseInput } from './tableRename';
@@ -333,7 +333,7 @@ export interface CommandMap {
   'query.temporaryState':{input:{sessionId:string};output:SessionObjectSnapshot};
   'query.temporaryCompletion':{input:{sessionId:string;database:string;prefix:string;kind:'objects'}|{sessionId:string;database:string;table:string;prefix:string;kind:'columns';details?:true};output:SessionObjectCompletion};
   'query.temporaryRead':{input:{sessionId:string;database:string;table:string;taskId:string};output:SessionObjectReadResult};
-  'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; currentStatement?: { offset: number }; sqliteNavicatParameters?: true; continueOnError?: boolean; /** 显式采集时警告消息隐藏参数展开值。 */ collectWarnings?: boolean; collectStatus?: boolean; collectStages?: boolean }; output: QueryOutcome };
+  'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; currentStatement?: { offset: number; confirmedRange?: QueryParameterStatementRange }; sqliteNavicatParameters?: true; continueOnError?: boolean; /** 显式采集时警告消息隐藏参数展开值。 */ collectWarnings?: boolean; collectStatus?: boolean; collectStages?: boolean }; output: QueryOutcome };
   'query.exportStream': { input: QueryStreamExportInput; output: QueryStreamExportOutput };
   'query.confirmInsertExport': { input: import('zod').infer<typeof import('./queryInsertExport').queryInsertConfirmationSchema>; output: void };
   'query.cancel': { input: { taskId: string }; output: void };

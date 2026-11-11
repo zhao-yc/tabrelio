@@ -57,7 +57,7 @@ import iconv from 'iconv-lite';
 import { Types, type FieldPacket, type ResultSetHeader } from 'mysql2';
 import type { CellValue, CommandMap, EngineCommand, ConnectionProfile, NetworkConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, SqlPreview, TableDesign, TableInfo, TaskEvent } from '../shared/contracts';
 import { connectionTransportChanged } from '../shared/connectionProfile';
-import { bindQueryParameters, namedParameterTokens, queryParameterLimits, validateQueryParameters, type QueryParameter, type SqlLexicalMode } from '../shared/queryParameters';
+import { bindQueryParameters, namedParameterTokens, queryParameterLimits, validateQueryParameters, type QueryParameter, type QueryParameterStatementRange, type SqlLexicalMode } from '../shared/queryParameters';
 import { canonicalReference, validateReferenceValues } from '../shared/references';
 import { buildReferencePageSql, buildChildReferencePageSql, hasStableReferencePagination } from './references';
 import { readIncomingReferences, resolveIncomingReference, recheckIncomingReference } from './incomingReferences';
@@ -190,6 +190,8 @@ function appendScriptResults(task: RunningTask, results: QueryResult[], complete
 interface IndependentTask { externalAbort?: () => void; commitProtected?: () => boolean; connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; resources?: IndependentTaskResourceLease; resourceCloseFailed?: boolean; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; fileFinalization?: boolean; fileCommitStarted?: boolean; fileCommitted?: boolean; }
 interface IndependentFileFinalizer<T> { abort?(): void; commit(check: () => void, start: () => void): Promise<T>; dispose(): Promise<void>; committed(): boolean; }
 type Input = Record<string, any>;
+
+type CurrentQueryStatement = { offset: number; confirmedRange?: QueryParameterStatementRange };
 
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
 export class Engine {
@@ -726,8 +728,11 @@ export class Engine {
       case 'query.confirmInsertExport':this.insertConfirmations.confirm({taskId:input.taskId,previewToken:input.previewToken,confirmation:input.confirmation});return;
       case 'query.parameterNames': return this.withSession(input.sessionId, async managed => {
         const mode = await this.sqlMode(managed);
-        const preview = this.parameterPlan(input.sql, mode);
-        return { names: preview.names, ...mode, warnings: preview.warnings, maxDecimalScale: this.maxDecimalScale(managed),
+        const current = input.currentStatement && this.currentParameterStatement(input.sql, input.currentStatement.offset, mode);
+        const preview = current ? { names: current.names, warnings: [] } :
+          this.parameterPlan(input.sql, mode);
+        return { names: preview.names, warnings: preview.warnings, ...mode,
+          ...(current ? { currentStatementRange: { start: current.start, end: current.end } } : {}), maxDecimalScale: this.maxDecimalScale(managed),
           allowTimeEndpointFraction: managed.status.dialect === 'mariadb',
           ...(managed.status.dialect === 'mariadb' ? { dialect: 'mariadb' } : {}) };
       });
@@ -744,7 +749,7 @@ export class Engine {
         return completionSessionState(session.managed,session.busy);
       }
       case 'query.databaseSwitch': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '切换本查询默认库', task => switchQueryDatabase(input as QueryDatabaseSwitchInput, this.databaseSwitchContext(input.sessionId, managed, task))));
-      case 'query.executeParameterized': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行参数查询', task => this.queryScript(task, input.sql, input.maxRows, input.parameters, undefined, 'parameterized', input.continueOnError, input.collectWarnings, input.collectStatus, input.collectStages), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
+      case 'query.executeParameterized': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行参数查询', task => this.queryScript(task, input.sql, input.maxRows, input.parameters, input.currentStatement, 'parameterized', input.continueOnError, input.collectWarnings, input.collectStatus, input.collectStages), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
       case 'query.temporaryState':{
         const session=this.sessions.get(input.sessionId);if(!session?.managed.sessionObjects)throw new Error('会话对象目录不存在，请重新连接');
         return session.managed.sessionObjects.snapshot(session.busy,session.managed.broken);
@@ -1571,6 +1576,15 @@ export class Engine {
     return major > 10 || (major === 10 && (minor > 2 || (minor === 2 && patch >= 1))) ? 38 : 30;
   }
 
+  /** 当前语句由原文分隔符和原会话确定，识别整条模板一次，保留例程内的分号。 */
+  private currentParameterStatement(sql: string, offset: number, mode: SqlLexicalMode) {
+    const current = currentSqlStatement(sql, offset, mode, this.parameterBrackets(mode));
+    if (!current) throw Error('光标所在位置没有可执行的完整语句');
+    const names = [...new Set(namedParameterTokens(current.sql, mode).map(token => token.name))];
+    if (names.length > queryParameterLimits.names) throw Error('查询参数不能超过 200 个');
+    return { ...current, names };
+  }
+
   /** 明确的常量 SET 可预演；服务器表达式与版本条件只能在执行后读取实际模式。 */
   private nextStaticMode(sql: string, mode: SqlLexicalMode): SqlLexicalMode | undefined {
     const clean = sql.replace(/^(?:\s+|\/\*(?![!]|M!)[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$))*/, '');
@@ -1880,18 +1894,24 @@ export class Engine {
   }
 
   /** 工作台与完整导出共用唯一调度器；每次消费一条，实际执行结束后才按会话模式解释尾部。 */
-  private async *queryStatements(task: RunningTask, sql: string, parameters?: QueryParameter[], currentStatement?: { offset: number }, locate?: (range: QueryFailureSourceRange | undefined) => void): AsyncGenerator<{ statement: string; template: string; mode: SqlLexicalMode; ordinal: number }> {
+  private async *queryStatements(task: RunningTask, sql: string, parameters?: QueryParameter[], currentStatement?: CurrentQueryStatement, locate?: (range: QueryFailureSourceRange | undefined) => void): AsyncGenerator<{ statement: string; template: string; mode: SqlLexicalMode; ordinal: number }> {
     locate?.(undefined);
     if (typeof sql !== 'string' || Buffer.byteLength(sql) > queryParameterLimits.sqlBytes) throw new Error('SQL 模板不能超过 20 MiB');
     const values = parameters === undefined ? undefined : validateQueryParameters(parameters, this.maxDecimalScale(task.managed), task.managed.status.dialect === 'mariadb');
     let mode = await this.sqlMode(task.managed, task);
     if (currentStatement !== undefined) {
       // 只用本会话实际模式定位；之前的SET不执行，DELIMITER过程体也不二次按分号拆分。
-      const current = currentSqlStatement(sql, currentStatement.offset, mode);
+      const parameterized = values && this.currentParameterStatement(sql, currentStatement.offset, mode);
+      const current = parameterized ?? currentSqlStatement(sql, currentStatement.offset, mode);
       if (!current) throw new Error('光标所在位置没有可执行的完整语句；未执行相邻语句或全文');
       this.checkCancelled(task);
       locate?.({ start: current.start, end: current.end });
-      yield { statement: current.sql, template: current.sql, mode, ordinal: 1 };
+      if (values && (!currentStatement.confirmedRange ||
+          current.start !== currentStatement.confirmedRange.start || current.end !== currentStatement.confirmedRange.end))
+        throw Error('会话中的当前语句范围已变化，请重新识别参数');
+      if (values && parameterized && (values.size !== parameterized.names.length || parameterized.names.some(name => !values.has(name))))
+        throw Error('当前语句参数名称和值必须完整匹配，请重新识别参数');
+      yield { statement: values ? bindQueryParameters(current.sql, values, mode) : current.sql, template: current.sql, mode, ordinal: 1 };
       locate?.(undefined);
       return;
     }
@@ -2239,7 +2259,7 @@ export class Engine {
   }
 
   /** 所有执行模式按实际交付的结果对象附上来源。警告、计划及内部诊断不冒充用户结果。 */
-  private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized', continueOnError?: boolean, collectWarnings?: boolean, collectStatus?: boolean, collectStages?: boolean): Promise<QueryOutcome> {
+  private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: CurrentQueryStatement, failureMode?: 'query' | 'parameterized', continueOnError?: boolean, collectWarnings?: boolean, collectStatus?: boolean, collectStages?: boolean): Promise<QueryOutcome> {
     if (!failureMode) return this.queryScriptStop(task, sql, maxRows, parameters, currentStatement);
     this.queryRelationSources.delete(task.managed);
     this.queryEdits.delete(task.managed);
@@ -2269,7 +2289,7 @@ export class Engine {
   }
 
   /** 顺序执行脚本并共享结果预算，末尾读取真实事务状态供界面提示。 */
-  private async queryScriptStop(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized'): Promise<QueryOutcome> {
+  private async queryScriptStop(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: CurrentQueryStatement, failureMode?: 'query' | 'parameterized'): Promise<QueryOutcome> {
     const started = performance.now();
     const values = parameters !== undefined || failureMode === 'parameterized';
     const results: QueryResult[] = [];
@@ -2344,7 +2364,7 @@ export class Engine {
   }
 
   /** 显式警告模式仍首错即停；采集与用户SQL分开计事实，默认路径不进入此分支。 */
-  private async queryScriptWithWarnings(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized'): Promise<QueryOutcome> {
+  private async queryScriptWithWarnings(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: CurrentQueryStatement, failureMode?: 'query' | 'parameterized'): Promise<QueryOutcome> {
     task.collectWarningsMode = true;
     const started = performance.now(), results: QueryResult[] = [], parameterized = parameters !== undefined || failureMode === 'parameterized';
     const warnings = new QueryWarningCollector(parameterized), budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
@@ -2413,7 +2433,7 @@ export class Engine {
   }
 
   /** 显式遇错继续共用原调度器与整批预算；成功语句和失败片段不混合，不重放任何语句。 */
-  private async queryScriptContinuing(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized', collectWarnings?: boolean): Promise<QueryOutcome> {
+  private async queryScriptContinuing(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: CurrentQueryStatement, failureMode?: 'query' | 'parameterized', collectWarnings?: boolean): Promise<QueryOutcome> {
     task.continueOnErrorMode = true;
     const started = performance.now(), results: QueryResult[] = [];
     const budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
@@ -2637,8 +2657,8 @@ export class Engine {
       await new Promise<void>((resolve, reject) => {
         const query = task.managed.connection.query({ sql, rowsAsArray: true });
         submitted = true;
-        // 驱动已接收当前片段后才授权落历史；取消/定位失败/同步投递失败都没有全文或空SQL历史。
-        if (reportExecutionSql && !continuing) this.emit({ taskId: task.id, status: 'running', progress: 0, message: '已发送当前语句', executionSql: sql });
+        // 驱动接收当前片段后只交付模板。定位失败或未投递不写历史，展开值不进入任务事件。
+        if (reportExecutionSql && !continuing) this.emit({ taskId: task.id, status: 'running', progress: 0, message: '已发送当前语句', executionSql: displaySql });
         /** 驱动解析器或底层连接的致命错误也必须结束任务，不能让界面永久等待。 */
         let settled = false;
         const fail = (error: Error) => { if (settled) return; settled = true; recordStatus?.('failed', submitted); task.managed.transactionStateKnown = false; cleanup(); reject(error); };
@@ -2714,7 +2734,7 @@ export class Engine {
           if (!deferredError) { deferredError = error; continuing.driverError(error); }
           // 服务器ERR不等于命令end；原终态到达前不能发送状态诊断或下一句。
         }).once('end', () => { continuing?.commandEnded?.(); if (settled) return; finishRowsWarning(); if (deferredError) { fail(deferredError); return; } recordStatus?.('completed', submitted); continuing?.commandSucceeded?.(); settled = true; cleanup(); resolve(); });
-        if (reportExecutionSql && continuing) consume(() => this.emit({ taskId: task.id, status: 'running', progress: 0, message: '已发送当前语句', executionSql: sql }))();
+        if (reportExecutionSql && continuing) consume(() => this.emit({ taskId: task.id, status: 'running', progress: 0, message: '已发送当前语句', executionSql: displaySql }))();
       });
       for (let index = 0; index < results.length; index++) { flush(index); if (results[index]) results[index].elapsedMs = performance.now() - started; }
       if (discarded.size) {

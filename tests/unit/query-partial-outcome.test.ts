@@ -29,6 +29,57 @@ beforeEach(async () => {
 });
 afterEach(async () => { await engine.closeAll(); });
 
+describe('MySQL 系当前语句参数执行', () => {
+  const template = "CREATE PROCEDURE p() BEGIN SELECT :value; SELECT [$value]; END";
+  const sql = "SELECT '🧭', :before;\r\nDELIMITER //\r\n" + template + '//\r\nDELIMITER ;\r\nSELECT :after;';
+  const start = sql.indexOf('CREATE');
+  const offset = sql.indexOf('[$value]');
+  const range = { start, end: start + template.length };
+  const parameters = [{ name: 'value', type: 'integer', value: '9007199254740993' }];
+  const submit = (currentStatement: { offset: number; confirmedRange?: typeof range }, bindings = parameters, flags = {}) =>
+    engine.handle('query.executeParameterized', { sessionId, sql, taskId: 'current-parameters', maxRows: 10, parameters: bindings, currentStatement, ...flags }) as Promise<QueryOutcome>;
+
+  it.each([{}, { collectWarnings: true }, { continueOnError: true }])('按原 DELIMITER 投递一条语句，结果和事件只发布模板 %j', async flags => {
+    const info = await engine.handle('query.parameterNames', { sessionId, sql, currentStatement: { offset } });
+    expect(info).toMatchObject({ names: ['value'], currentStatementRange: range });
+    expect(sent).toEqual([]);
+    scenario = (_managed, _sql, query) => ok(query);
+    const output = await submit({ offset, confirmedRange: info.currentStatementRange }, parameters, flags);
+    expect(output.failure).toBeUndefined();
+    expect(sent).toEqual(['CREATE PROCEDURE p() BEGIN SELECT 9007199254740993; SELECT  9007199254740993 ; END']);
+    expect(output.results[0].statement).toBe(template);
+    expect(output.mysqlResultSourceRanges).toEqual([range]);
+    expect(events.filter(event => event.executionSql).map(event => event.executionSql)).toEqual([template]);
+    expect(JSON.stringify(events)).not.toContain('9007199254740993');
+  });
+
+  it.each([
+    [{ offset }, parameters, '范围已变化'],
+    [{ offset, confirmedRange: { ...range, end: range.end - 1 } }, parameters, '范围已变化'],
+    [{ offset, confirmedRange: range }, [...parameters, { name: 'after', type: 'integer', value: '1' }], '必须完整匹配'],
+    [{ offset, confirmedRange: range }, [], '必须完整匹配'],
+  ] as const)('未确认范围或绑定不完整时零投递 %#', async (scope, bindings, message) => {
+    const output = await submit(scope, [...bindings]);
+    expect(output.failure?.message).toContain(message);
+    expect(sent).toEqual([]);
+    expect(events.every(event => event.executionSql === undefined)).toBe(true);
+  });
+
+  it('已识别后会话切换为 MSSQL，按当前方括号模式复核绑定，不发送旧参数', async () => {
+    const active = connections.at(-1)!;
+    active.status.dialect = 'mariadb';
+    const source = 'SELECT [$value]';
+    const currentStatement = { offset: 7 };
+    const info = await engine.handle('query.parameterNames', { sessionId, sql: source, currentStatement });
+    expect(info.names).toEqual(['value']);
+    active.sqlMode = 'MSSQL';
+    const output = await engine.handle('query.executeParameterized', { sessionId, sql: source, taskId: 'changed-mode', maxRows: 10,
+      parameters, currentStatement: { ...currentStatement, confirmedRange: info.currentStatementRange } });
+    expect(output.failure.message).toContain('必须完整匹配');
+    expect(sent).toEqual([]);
+  });
+});
+
 describe('查询首错停止且只保留完整前序结果', () => {
   it('CALL多结果、重复列、BIGINT/DECIMAL/BLOB完整保留；失败语句已流出的批次不进入可导出结果', async () => {
     scenario = (_managed, sql, query) => {

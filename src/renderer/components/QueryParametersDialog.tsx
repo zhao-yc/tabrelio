@@ -16,13 +16,14 @@ interface ParameterRow { id: number; parameter: QueryParameter; manual: boolean;
 
 /** 仅识别和填写参数；真正执行由拥有固定会话的查询标签统一管理。 */
 export function QueryParametersDialog({ source, previewSql, previewDialect, loadNames, onExecute, onClose, submitLabel, syntaxHint, initialParameters = [], reuse, ownerId,
-  allowSqliteNavicat = false, initialSqliteNavicatParameters }: {
+  allowSqliteNavicat = false, initialSqliteNavicatParameters, allowManualParameters = true }: {
   source: string; loadNames: (sqliteNavicatParameters?: true) => Promise<QueryParameterNames>;
   previewSql?: (info: QueryParameterNames) => string;
   previewDialect?: ConnectionProfile['dialect'];
   onExecute: (parameters: QueryParameter[], sqliteNavicatParameters?: true) => void; onClose: () => void;
   submitLabel?: string; syntaxHint?: string; initialParameters?: QueryParameter[]; reuse?: QueryParameterReusePort; ownerId?: string;
   allowSqliteNavicat?: boolean; initialSqliteNavicatParameters?: true;
+  allowManualParameters?: boolean;
 }) {
   const [rows, setRows] = useState<ParameterRow[]>([]); const [loading, setLoading] = useState(true); const loadingRef = useRef(false);
   const [navicat, setNavicat] = useState(allowSqliteNavicat && initialSqliteNavicatParameters === true);
@@ -91,7 +92,7 @@ export function QueryParametersDialog({ source, previewSql, previewDialect, load
       setRows(previous => {
         const existingRows = previous.length ? previous : initialParameters.map(parameter => ({ id: ++sequence.current, parameter, manual: true }));
         const existing = new Map(existingRows.map(row => [row.parameter.name, row]));
-        return [...next.names.map(name => { const old = existing.get(name); return { id: old?.id ?? ++sequence.current, parameter: old?.parameter ?? { name, type: 'text' as const, value: '' }, manual: false }; }), ...existingRows.filter(row => row.manual && !next.names.includes(row.parameter.name))];
+        return [...next.names.map(name => { const old = existing.get(name); return { id: old?.id ?? ++sequence.current, parameter: old?.parameter ?? { name, type: 'text' as const, value: '' }, manual: false }; }), ...(allowManualParameters ? existingRows.filter(row => row.manual && !next.names.includes(row.parameter.name)) : [])];
       });
       infoRef.current = next; setInfo(next); ready.current = true;
       setPreview(displayed);
@@ -183,7 +184,7 @@ export function QueryParametersDialog({ source, previewSql, previewDialect, load
       {allowSqliteNavicat && <div><label><input type="checkbox" checked={navicat} disabled={loading} onChange={event => changeNavicat(event.target.checked)}/>{text.sqliteNavicatMode}</label><p className="muted small">{text.sqliteNavicatHint}</p></div>}
       {reuse && <section aria-label={reuseText.title}><p>{reuseText.overwrite}</p><label><input type="checkbox" checked={remember} disabled={loading || !info} onChange={event => changeRemember(event.target.checked)}/>{reuseText.remember}</label><div className="parameter-actions"><button type="button" disabled={loading || !info || !reusable} onClick={fillPrevious}>{reuseText.fill}</button><button type="button" disabled={loading || !info || !reusable && !remember} onClick={forgetPrevious}>{reuseText.forget}</button></div>{notice && <p role="status">{notice}</p>}</section>}
       <h3>{text.source}</h3>{previewSource.length > 65536 && <p className="warning-text">{text.sourceTruncated}</p>}<SqlEditor value={previewSource.slice(0, 65536)} dialect={previewDialect ?? info?.dialect} readOnly height={160}/>
-      <div className="parameter-actions">{loading ? <Spinner text={text.namesLoading}/> : !rows.length && <span className="muted small">{info?.dialect === 'sqlite' ? text.sqliteNoParameters : text.noParameters}</span>}<span className="grow"/><button disabled={loading} onClick={() => void reload()}>{text.retry}</button><button disabled={loading || rows.length >= 200} onClick={() => { if (frame() && !loadingRef.current) setRows(previous => previous.length >= 200 ? previous : [...previous, { id: ++sequence.current, parameter: { name: '', type: 'text', value: '' }, manual: true }]); }}><Plus size={13}/>{text.add}</button></div>
+      <div className="parameter-actions">{loading ? <Spinner text={text.namesLoading}/> : !rows.length && (allowManualParameters || info) && <span className="muted small">{info?.dialect === 'sqlite' ? text.sqliteNoParameters : allowManualParameters ? text.noParameters : text.currentNoParameters}</span>}<span className="grow"/><button disabled={loading} onClick={() => void reload()}>{text.retry}</button>{allowManualParameters && <button disabled={loading || rows.length >= 200} onClick={() => { if (frame() && !loadingRef.current) setRows(previous => previous.length >= 200 ? previous : [...previous, { id: ++sequence.current, parameter: { name: '', type: 'text', value: '' }, manual: true }]); }}><Plus size={13}/>{text.add}</button>}</div>
       {!!info?.warnings?.length && <div className="info-strip">{text.namesDynamic}<ul>{info.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div>}
       <div className="parameter-list">{rows.map(row => <div className="parameter-row" key={row.id}>
         <Field label={`${text.name} ${row.id}`}><input aria-label={`${text.name} ${row.id}`} readOnly={!row.manual} disabled={loading} maxLength={64} value={row.parameter.name} onChange={event => update(row.id, { name: event.target.value })}/></Field>

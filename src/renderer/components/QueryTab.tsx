@@ -181,7 +181,7 @@ import { QueryParameterReuseOwner } from '../queryParameterReuseOwner';
 import type { QueryParameterReusePort } from '../queryParameterReusePort';
 import type { QueryParameterReuseScopeInput } from '../queryParameterReuseScope';
 import { parameterZh } from '../locales/queryParameters.zh-CN';
-import { queryParameterLimits, type QueryParameter } from '../../shared/queryParameters';
+import { queryParameterLimits, type QueryParameter, type QueryParameterStatementRange } from '../../shared/queryParameters';
 import { locateSqliteStatement } from '../../shared/sqliteStatementScanner';
 import '../queryPins.css';
 import { QueryStreamExportDialog, type StreamExportOptions } from './QueryStreamExportDialog';
@@ -219,7 +219,7 @@ import { actionMenuZh as menuText } from '../locales/actionMenu.zh-CN';
 import { bracketCommands, sqlPositionActions, sqlTextActions } from '../sqlEditorActions';
 const completionStatusInfo={sessionUnknown:{text:completionZh.sessionUnknown,hint:completionZh.sessionUnknownHint},partial:{text:completionZh.partial,hint:completionZh.partialHint},unavailable:{text:completionZh.unavailable,hint:completionZh.unavailableHint},limited:{text:completionZh.limited,hint:completionZh.limitedHint},databaseUnknown:{text:completionZh.databaseUnknown,hint:completionZh.databaseUnknownHint},startupTimeout:{text:completionZh.startupTimeout,hint:completionZh.startupTimeoutHint},analysisTimeout:{text:completionZh.analysisTimeout,hint:completionZh.analysisTimeoutHint}};
 
-interface SqliteParameterForm { id: string; source: string; intent?: CurrentStatementIntent; connectionId: string; connection: unknown; version: number; fileBinding: unknown; savedBinding: unknown; session: string; recognized: boolean; sqliteNavicatParameters?: true; submitted: boolean; valid: boolean; }
+interface QueryParameterForm { id: string; source: string; intent?: CurrentStatementIntent; connectionId: string; connection: unknown; version: number; fileBinding: unknown; savedBinding: unknown; session: string; recognized: boolean; confirmedRange?: QueryParameterStatementRange; sqliteNavicatParameters?: true; submitted: boolean; valid: boolean; }
 
 /** 一个标签对应一个固定会话，流式结果和任务事件只接收当前执行编号。 */
 export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseRequestFinished,historyInsertionRegistry,onChooseQueryTarget,onCreateView }: { historyInsertionRegistry?: HistoryInsertionRegistry; closeRequest?: QueryCloseRequest; onCloseRequestFinished?(request: QueryCloseRequest, close: boolean, keep?: WorkspaceTab): void; tab: WorkspaceTab; onHistory: () => void;searchNavigation?:SavedQueryNavigationSource; onChooseQueryTarget?(draft: QueryTargetDraft): void; onCreateView?(draft: QueryViewDraft): void }) {
@@ -449,10 +449,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   useEffect(() => () => snippetTarget.current?.dispose(), []);
   const [parameterSource, setParameterSource] = useState<string | null>(null);
   const parameterSession = useRef(''); const [queryRunning, setQueryRunning] = useState(false);
-  const sqliteParameterForm = useRef<SqliteParameterForm | null>(null);
+  const parameterFormRef = useRef<QueryParameterForm | null>(null);
   /** 原表单有独立生命周期；关闭/文件流程的ABA撤权，不因自身参数Modal或busy自失效。 */
-  useLayoutEffect(() => { const form = sqliteParameterForm.current; if (!form) return; if (closeRequest || fileSource.busy || fileOpening) form.valid = false; try { assertSqliteParameterForm(form); } catch { /* 每次实际渲染也观察session/来源ABA，不复活旧租约。 */ } });
-  useEffect(() => { const off = useWorkspace.subscribe(() => { const form = sqliteParameterForm.current; if (form) { try { assertSqliteParameterForm(form); } catch { /* 原表单保留错误提示，不接管后继来源。 */ } } }); return () => { off(); if (sqliteParameterForm.current) { sqliteParameterForm.current.valid = false; sqliteParameterForm.current.intent?.dispose(); } }; }, []);
+  useLayoutEffect(() => { const form = parameterFormRef.current; if (!form) return; if (closeRequest || fileSource.busy || fileOpening) form.valid = false; try { assertParameterForm(form); } catch { /* 每次实际渲染也观察session/来源ABA，不复活旧租约。 */ } });
+  useEffect(() => { const off = useWorkspace.subscribe(() => { const form = parameterFormRef.current; if (form) { try { assertParameterForm(form); } catch { /* 原表单保留错误提示，不接管后继来源。 */ } } }); return () => { off(); if (parameterFormRef.current) { parameterFormRef.current.valid = false; parameterFormRef.current.intent?.dispose(); } }; }, []);
   const parameterReuse = useRef<QueryParameterReuseOwner | null>(null);
   const parameterReusePort = useRef<QueryParameterReusePort | null>(null);
   /** 值只属于当前组件RAM；不进入workspace、设置、历史或文件来源。 */
@@ -959,14 +959,15 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
   /** 参数识别只打开固定会话，不建立任务、不执行用户模板，也不清除已有结果。 */
   function openParameters(mode: 'selection-or-all' | 'current' = 'selection-or-all') {
-    if (sqlite && (!alive.current || useWorkspace.getState().settings.activeTabId !== tab.id || useWorkspace.getState().activeJobs[tab.id] || closeRequestRef.current || fileSource.isBusy() || formatting.current || useWorkspace.getState().queryFileOpenings?.[tab.id] || document.querySelector('[role="alertdialog"]'))) return;
+    const guarded = sqlite || mode === 'current';
+    if (guarded && (!alive.current || useWorkspace.getState().settings.activeTabId !== tab.id || useWorkspace.getState().activeJobs[tab.id] || closeRequestRef.current || fileSource.isBusy() || formatting.current || useWorkspace.getState().queryFileOpenings?.[tab.id] || document.querySelector('[role="alertdialog"]'))) return;
     if (busyRef.current || document.querySelector(appDialogSelector)) return;
     let intent: CurrentStatementIntent | undefined;
     let source: string;
-    const formId = sqlite ? uid() : '';
+    const formId = guarded ? uid() : '';
     try {
       if (mode === 'current') {
-        if (!sqlite || !editor.current) throw Error(currentStatementZh.unavailable);
+        if (!editor.current) throw Error(currentStatementZh.unavailable);
         intent = new CurrentStatementIntent(editor.current, () => ({
           ...currentStatementScope(),
           // 原参数弹窗属于本次意图，其它模态仍会阻止发送。
@@ -974,10 +975,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
             !dialog.querySelector(`[data-query-parameter-owner="${formId}"]`)),
         }), changed => useWorkspace.subscribe(changed));
         const sql = intent.source;
-        if (sql.length > queryParameterLimits.sqlBytes || new TextEncoder().encode(sql).length > queryParameterLimits.sqlBytes) throw Error(parameterZh.sqliteCurrentTooLong);
-        const selected = locateSqliteStatement(sql, intent.offset);
-        if (!selected) throw Error(parameterZh.sqliteCurrentMissing);
-        source = selected.sql;
+        if (sql.length > queryParameterLimits.sqlBytes || new TextEncoder().encode(sql).length > queryParameterLimits.sqlBytes)
+          throw Error(sqlite ? parameterZh.sqliteCurrentTooLong : parameterZh.currentTooLong);
+        if (sqlite) {
+          const selected = locateSqliteStatement(sql, intent.offset);
+          if (!selected) throw Error(parameterZh.sqliteCurrentMissing);
+          source = selected.sql;
+        } else source = sql;
       } else {
         source = querySource();
         if (!source.trim()) throw Error(zh.query.text001);
@@ -989,21 +993,22 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     parameterFailureSource.current = intent ? captureFailureSource(intent.source, true) : captureFailureSource(source);
     parameterContinueOnError.current = !intent && continueOnError;
     parameterCollectWarnings.current = !sqlite && collectWarnings;
-    if (sqlite) {
+    if (guarded) {
       const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), profile = workspace.connections.find(item => item.id === tab.connectionId);
-      if (current?.kind !== 'query' || current.connectionId !== tab.connectionId || workspace.settings.activeTabId !== tab.id || profile?.dialect !== 'sqlite') {
+      const validDialect = sqlite ? profile?.dialect === 'sqlite' : profile?.dialect === 'mysql' || profile?.dialect === 'mariadb';
+      if (current?.kind !== 'query' || current.connectionId !== tab.connectionId || workspace.settings.activeTabId !== tab.id || !validDialect) {
         intent?.dispose(); parameterFailureSource.current?.dispose(); parameterFailureSource.current = undefined; return;
       }
-      sqliteParameterForm.current?.intent?.dispose();
-      if (sqliteParameterForm.current) sqliteParameterForm.current.valid = false;
-      sqliteParameterForm.current = { id: formId, source, intent, connectionId: current.connectionId, connection: profile, version: workspace.connectionVersions[current.connectionId] ?? 0, fileBinding: current.fileSourceBinding, savedBinding: current.sourceBinding, session: sessionRef.current, recognized: false, submitted: false, valid: true };
+      parameterFormRef.current?.intent?.dispose();
+      if (parameterFormRef.current) parameterFormRef.current.valid = false;
+      parameterFormRef.current = { id: formId, source, intent, connectionId: current.connectionId, connection: profile, version: workspace.connectionVersions[current.connectionId] ?? 0, fileBinding: current.fileSourceBinding, savedBinding: current.sourceBinding, session: sessionRef.current, recognized: false, submitted: false, valid: true };
     }
     invalidateResultSelection(); parameterSession.current = ''; parameterReusePort.current = intent ? null : parameterReuseOwner().begin(source); setParameterSource(source);
   }
   /** 普通参数可执行原捕获模板；只有表单/连接/物理会话及文件来源必须始终保持原归属。 */
-  function assertSqliteParameterForm(form: SqliteParameterForm | undefined, recognized = false): void {
+  function assertParameterForm(form: QueryParameterForm | undefined, recognized = false): void {
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id);
-    if (!form || sqliteParameterForm.current !== form || !form.valid || !alive.current || current?.kind !== 'query' || current.connectionId !== form.connectionId || workspace.settings.activeTabId !== tab.id || workspace.connections.find(item => item.id === form.connectionId) !== form.connection || (workspace.connectionVersions[form.connectionId] ?? 0) !== form.version || current.fileSourceBinding !== form.fileBinding || current.sourceBinding !== form.savedBinding || closeRequestRef.current || fileSource.isBusy() || workspace.queryFileOpenings?.[tab.id] || form.session && sessionRef.current !== form.session || recognized && (!form.recognized || !form.session || parameterSession.current !== form.session)) { if (form) form.valid = false; throw Error(parameterZh.sqliteSourceChanged); }
+    if (!form || parameterFormRef.current !== form || !form.valid || !alive.current || current?.kind !== 'query' || current.connectionId !== form.connectionId || workspace.settings.activeTabId !== tab.id || workspace.connections.find(item => item.id === form.connectionId) !== form.connection || (workspace.connectionVersions[form.connectionId] ?? 0) !== form.version || current.fileSourceBinding !== form.fileBinding || current.sourceBinding !== form.savedBinding || closeRequestRef.current || fileSource.isBusy() || workspace.queryFileOpenings?.[tab.id] || form.session && sessionRef.current !== form.session || recognized && (!form.recognized || !form.session || parameterSession.current !== form.session)) { if (form) form.valid = false; throw Error(sqlite ? parameterZh.sqliteSourceChanged : parameterZh.currentSourceChanged); }
     form.intent?.assertCurrent();
   }
   /** 捕获不可变选区或全文；打开和选择文件均不执行 SQL。 */
@@ -1065,22 +1070,30 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 会话尚在建立时取消也必须阻止迟到的执行请求；已登记任务仍由引擎释放资源。 */
   async function cancelStreamExport(taskId: string) { streamCancelled.current = taskId; await invoke('query.cancel', { taskId }); }
   /** 模态关闭仍等待识别请求结束，期间保持标签互斥，不能同时开启另一条查询。 */
-  async function loadParameterNames(form?: SqliteParameterForm, sqliteNavicatParameters?: true) {
+  async function loadParameterNames(form?: QueryParameterForm, sqliteNavicatParameters?: true) {
     if (busyRef.current) throw new Error('当前标签仍有操作正在进行，请稍后重试');
-    if (sqlite) { assertSqliteParameterForm(form); if (form!.submitted) throw Error(parameterZh.sqliteSourceChanged); form!.recognized = false; }
+    if (sqlite && !form) assertParameterForm(form);
+    const changed = (sqlite || form) ? (sqlite ? parameterZh.sqliteSourceChanged : parameterZh.currentSourceChanged) : undefined;
+    if (form) {
+      assertParameterForm(form);
+      if (form.submitted) throw Error(changed);
+      form.recognized = false;
+      form.confirmedRange = undefined;
+    }
     busyRef.current = true; setBusy(true); useWorkspace.getState().setBusy(tab.id, true);
     try {
       const session = await ensureSession();
-      if (sqlite) {
-        assertSqliteParameterForm(form); if (form!.session && form!.session !== session || sessionRef.current !== session) throw Error(parameterZh.sqliteSourceChanged);
-        form!.session = session;
-        form!.intent?.bindSession(session);
+      if (form) {
+        assertParameterForm(form);
+        if (form.session && form.session !== session || sessionRef.current !== session) throw Error(changed);
+        form.session = session;
+        form.intent?.bindSession(session);
       }
       const intent = form?.intent;
-      const names = await invoke('query.parameterNames', { sessionId: session, sql: intent?.source ?? (sqlite ? form!.source : parameterSource!),
+      const info = await invoke('query.parameterNames', { sessionId: session, sql: intent?.source ?? form?.source ?? parameterSource!,
         ...(intent ? {currentStatement: {offset: intent.offset}} : {}),
         ...(sqlite && sqliteNavicatParameters ? {sqliteNavicatParameters} : {}) });
-      if (sqlite) assertSqliteParameterForm(form);
+      if (form) assertParameterForm(form);
       parameterSession.current = session;
       // 只读原协议缓存确认当前库；确认失败仅禁用复用，普通捕获模板仍沿原执行路径。
       try {
@@ -1090,14 +1103,25 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           const port = parameterReusePort.current; if (port) parameterReuse.current?.recognized(port);
         }
       } catch { parameterReuse.current?.observe(); }
-      if (sqlite) {
-        assertSqliteParameterForm(form);
-        if (names.sqliteNavicatParameters !== sqliteNavicatParameters) throw Error(parameterZh.sqliteNavicatChanged);
-        form!.sqliteNavicatParameters = sqliteNavicatParameters;
-        form!.recognized = true;
+      if (form) {
+        assertParameterForm(form);
+        if (sqlite) {
+          if (info.sqliteNavicatParameters !== sqliteNavicatParameters) throw Error(parameterZh.sqliteNavicatChanged);
+          form.sqliteNavicatParameters = sqliteNavicatParameters;
+        } else {
+          const range = info.currentStatementRange;
+          if (!intent || !range || !Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end) ||
+              range.start < 0 || range.start > intent.offset || range.start >= range.end || range.end > intent.source.length)
+            throw Error(changed);
+          form.confirmedRange = range;
+        }
+        form.recognized = true;
       }
+      if (!info.currentStatementRange) return info;
+      // 范围属于当前语句表单，参数元数据仍沿用原格式。
+      const {currentStatementRange: _range, ...names} = info;
       return names;
-    } catch (reason) { if (!sqlite || sqliteParameterForm.current === form) await handleQueryError(reason); throw reason; }
+    } catch (reason) { if (!form || parameterFormRef.current === form) await handleQueryError(reason); throw reason; }
     finally { busyRef.current = false; setBusy(false); useWorkspace.getState().setBusy(tab.id, false); }
   }
   /** 读取协议缓存更新事务提示；错误后不附加 SQL，不重放任何已经执行的写操作。 */
@@ -1118,11 +1142,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     }
   }
   /** 所有查询共用流式结果、取消与会话互斥；确认参数后立即取得互斥，无延迟重复执行窗口。 */
-  async function runQuery(source: string, mode: 'execute' | 'explain' | 'explain-text' | 'explain-current' | 'analyze' = 'execute', parameters?: QueryParameter[], currentIntent?: CurrentStatementIntent, locator?: QueryFailureSourceLease, analysisIntent?: QueryAnalyzeIntent, continueAfterError = false, collectWarningDetails = false, reuseExecution?: { beforeLedger(taskId: string): void }, parameterForm?: SqliteParameterForm): Promise<boolean> {
+  async function runQuery(source: string, mode: 'execute' | 'explain' | 'explain-text' | 'explain-current' | 'analyze' = 'execute', parameters?: QueryParameter[], currentIntent?: CurrentStatementIntent, locator?: QueryFailureSourceLease, analysisIntent?: QueryAnalyzeIntent, continueAfterError = false, collectWarningDetails = false, reuseExecution?: { beforeLedger(taskId: string): void }, parameterForm?: QueryParameterForm): Promise<boolean> {
     if (sqlite && (!['execute', 'explain', 'explain-text', 'explain-current'].includes(mode) || parameters && (mode !== 'execute' || currentIntent !== parameterForm?.intent) || analysisIntent || collectWarningDetails)) { locator?.dispose(); setError(sqliteZh.unsupported); return false; }
     if (busyRef.current) { locator?.dispose(); return false; }
     if (!source.trim()) { locator?.dispose(); setError(zh.query.text001); return false; }
-    if (sqlite && parameters) { try { assertSqliteParameterForm(parameterForm, true); if (source !== (parameterForm!.intent?.source ?? parameterForm!.source)) throw Error(parameterZh.sqliteSourceChanged); } catch (reason) { locator?.dispose(); setError(errorMessage(reason)); return false; } }
+    const changed = parameters && (sqlite || parameterForm) ? (sqlite ? parameterZh.sqliteSourceChanged : parameterZh.currentSourceChanged) : undefined;
+    if (parameters && (sqlite || parameterForm)) { try { assertParameterForm(parameterForm, true); if (source !== (parameterForm!.intent?.source ?? parameterForm!.source)) throw Error(changed); } catch (reason) { locator?.dispose(); setError(errorMessage(reason)); return false; } }
     clearFailureSource(); let retainLocator = false;
     setInterruptedStatus(undefined);
     invalidateResultSelection(); busyRef.current = true; setBusy(true); setQueryRunning(true); setError(''); setSelectedPin(''); setShowPinSql(null); setOutcome(null); setStream([]); setResultIndex(0); task.current = uid();cancelledQuery.current=''; useWorkspace.getState().setBusy(tab.id, true);
@@ -1131,7 +1156,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       if (mode === 'execute' && collectWarningDetails === true) { warningReceipt = { scope: warningsViewScope(), valid: true }; warningsResultSource.current = warningReceipt; }
       if (mode === 'analyze') { if (!analysisIntent) throw Error(queryAnalyzeZh.changed); analysisIntent.assertCurrent(); }
       const session = await ensureSession();
-      if (sqlite && parameters) { assertSqliteParameterForm(parameterForm, true); if (session !== parameterForm!.session) throw Error(parameterZh.sqliteSourceChanged); }
+      if (parameters && parameterForm) { assertParameterForm(parameterForm, true); if (session !== parameterForm!.session) throw Error(changed); }
       if (warningReceipt) { if (warningReceipt.scope.sessionId && warningReceipt.scope.sessionId !== session) warningReceipt.valid = false; warningReceipt.scope.sessionId = session; }
       currentIntent?.bindSession(session);
       if (mode === 'analyze') { analysisIntent!.assertCurrent(); analysisIntent!.allowContextPreparation(); }
@@ -1139,7 +1164,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       // 从发送前到协议终态之间持久化为未知，崩溃恢复不会误把初始库用于下一次写入。
       reuseExecution?.beforeLedger(task.current);
       await prepareExecutionContext();
-      if (sqlite && parameters) assertSqliteParameterForm(parameterForm, true);
+      if (parameters && parameterForm) assertParameterForm(parameterForm, true);
       if (mode === 'analyze') analysisIntent!.assertCurrent();
       if(cancelledQuery.current===task.current)throw new Error(queryContextZh.cancelledBeforeSend);
       currentIntent?.assertCurrent();
@@ -1149,7 +1174,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       // 文本计划复用首次捕获的 SQL，切换展示不会读取后来编辑的草稿。
       if (mode === 'explain' || mode === 'explain-text') explainSource.current = source;
       const result = parameters ? await invoke('query.executeParameterized', { ...input, parameters,
-        ...(parameterForm?.sqliteNavicatParameters ? {sqliteNavicatParameters: true as const} : {}) }) : mode === 'execute' ? await invoke('query.execute', input) : mode === 'analyze' ? await invoke('query.analyze', { ...input, acknowledged: true, expectedDatabase: analysisIntent!.database }) : await invoke('query.explain', { ...input, format: mode === 'explain-text' ? 'text' : 'auto' });
+        ...(parameterForm?.sqliteNavicatParameters ? {sqliteNavicatParameters: true as const} : {}),
+        ...(currentIntent && parameterForm?.confirmedRange ? {currentStatement: {offset: currentIntent.offset, confirmedRange: parameterForm.confirmedRange}} : {}) }) : mode === 'execute' ? await invoke('query.execute', input) : mode === 'analyze' ? await invoke('query.analyze', { ...input, acknowledged: true, expectedDatabase: analysisIntent!.database }) : await invoke('query.explain', { ...input, format: mode === 'explain-text' ? 'text' : 'auto' });
       if (result.scriptReport) {
         // 多个错误只共享一份模型/模板捕获；仅经数值和UTF16边界确认的范围可重绑定位。
         const failures = result.scriptReport.errors.filter(failure => confirmedQueryContinueRange(source, failure));
@@ -1171,11 +1197,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     finally { if (!retainLocator) locator?.dispose(); busyRef.current = false; setBusy(false); setQueryRunning(false); useWorkspace.getState().setBusy(tab.id, false); }
   }
   /** 可选暂存与SQL提交分开：原方法同步签发任务，明确成功后再等待原会话库确认。 */
-  function submitParameterQuery(source: string, parameters: QueryParameter[], form?: SqliteParameterForm, sqliteNavicatParameters?: true): void {
-    if (sqlite) {
-      assertSqliteParameterForm(form, true);
-      if (form!.submitted || source !== form!.source || form!.sqliteNavicatParameters !== sqliteNavicatParameters)
-        throw Error(parameterZh.sqliteSourceChanged);
+  function submitParameterQuery(source: string, parameters: QueryParameter[], form?: QueryParameterForm, sqliteNavicatParameters?: true): void {
+    if (sqlite || form) {
+      assertParameterForm(form, true);
+      if (form!.submitted || source !== form!.source || form!.sqliteNavicatParameters !== sqliteNavicatParameters ||
+          !sqlite && !form!.confirmedRange)
+        throw Error(sqlite ? parameterZh.sqliteSourceChanged : parameterZh.currentSourceChanged);
       form!.submitted = true;
     }
     const port = parameterReusePort.current, owner = parameterReuse.current;
@@ -1189,7 +1216,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     parameterReusePort.current = null; setParameterSource(null);
     void operation.then(success => {
       intent?.dispose();
-      if (sqlite && sqliteParameterForm.current === form) { form!.valid = false; sqliteParameterForm.current = null; }
+      if (form && parameterFormRef.current === form) { form!.valid = false; parameterFormRef.current = null; }
       if (!owner?.settled(taskId, success === true)) return;
       if (origin) void confirmParameterReuse(owner, taskId, session, origin);
       else owner.settled(taskId, false);
@@ -1211,8 +1238,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     } catch { owner.settled(taskId, false); }
   }
   /** 取消只撤原表单；不清除其它新表单，也不写入或执行参数值。 */
-  function closeParameters(form?: SqliteParameterForm): void {
-    if (sqlite) { if (!form || sqliteParameterForm.current !== form) return; form.valid = false; form.intent?.dispose(); sqliteParameterForm.current = null; }
+  function closeParameters(form?: QueryParameterForm): void {
+    if (sqlite || form) { if (!form || parameterFormRef.current !== form) return; form.valid = false; form.intent?.dispose(); parameterFormRef.current = null; }
     const port = parameterReusePort.current; if (port) parameterReuse.current?.close(port);
     parameterReusePort.current = null; parameterFailureSource.current?.dispose(); parameterFailureSource.current = undefined; invalidateResultSelection(); setParameterSource(null);
   }
@@ -2783,7 +2810,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }, { active: settings.activeTabId === tab.id && !closeRequest, contextKey: queryMenuKey });
   const draftContext: QueryDatabaseContext = resolveQueryDatabase(tab.database,tab.databaseContext,connectionDatabase(connection));
   const databaseCaption=sessionId?(completionSession?.databaseKnown?completionSession.database||queryContextZh.none:queryContextZh.unknown):draftContext.state==='known'?draftContext.database||queryContextZh.none:queryContextZh.unknown;
-  const sqliteParameterDialog = sqliteParameterForm.current;
+  const parameterDialog = parameterFormRef.current;
   const recoveryDialog=recovery&&<Modal title={queryContextZh.title} onClose={()=>setRecovery(false)}><form onSubmit={event=>{event.preventDefault();if(sessionRef.current||busyRef.current)return;rememberDatabase({state:'known',database:sqlite?'main':recoveryDatabase||null});setRecovery(false);setError('');}}><div className="modal-content"><p className="muted small">{sqlite ? sqliteZh.recoveryHint : queryContextZh.hint}</p><Field label={queryContextZh.database}><input autoFocus readOnly={sqlite} value={sqlite ? 'main' : recoveryDatabase} maxLength={256} onChange={event=>setRecoveryDatabase(event.target.value)}/></Field></div><footer className="modal-footer"><span className="grow"/><button type="button" onClick={()=>setRecovery(false)}>{zh.common.cancel}</button><button className="primary" type="submit" disabled={busy}>{queryContextZh.confirm}</button></footer></form></Modal>;
   /** 鼠标和快捷键都清理原结果的选区与快照视图，再显示本次执行的目标结果。 */
   function selectCurrentResult(index: number): void {
@@ -2844,8 +2871,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       </label>}</div></ActionMenu></div><QueryFileActions tab={tab} files={fileSource} renderActions={fileActions => <AdaptiveToolbar
       className="toolbar query-primary-toolbar" ariaLabel={menuText.queryToolbar} contextKey={queryMenuKey} isCurrent={queryMenuCurrent}
       items={[
-        { key: 'execute', content: (<div className="query-execute-split"><button className="primary" disabled={busy || !connection} onClick={() => void execute()}><Play size={14}/>{zh.query.text010}<kbd>⌘ / Ctrl ↵</kbd></button><ActionMenu label={menuText.executeOptions} disabled={busy || !connection} contextKey={queryMenuKey} isCurrent={queryMenuCurrent}><button disabled={busy || !connection} title={menuText.selectedOrScriptHint} onClick={() => void execute()}>{menuText.selectedOrScript}</button><button disabled={!canExecuteSelection} title={currentStatementZh.selectionHint} onClick={() => void execute('selection-only')}>{currentStatementZh.selectionOnly}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} title={currentStatementZh.hint} aria-label={currentStatementZh.action} onClick={() => void executeCurrentStatement()}><Play size={14}/>{currentStatementZh.action}</button>{sqlite && <button disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={() => openParameters('current')}>{parameterZh.sqliteCurrentOpen}</button>}<button disabled={busy} onClick={() => void execute('all')}>{zh.query.text011}</button></ActionMenu></div>), overflow: (<ActionMenuSection label={menuText.executeOptions}><button className="primary" disabled={busy || !connection} onClick={() => void execute()}><Play size={14}/>{zh.query.text010}<kbd>⌘ / Ctrl ↵</kbd></button>
-<button disabled={!canExecuteSelection} title={currentStatementZh.selectionHint} onClick={() => void execute('selection-only')}>{currentStatementZh.selectionOnly}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} title={currentStatementZh.hint} aria-label={currentStatementZh.action} onClick={() => void executeCurrentStatement()}><Play size={14}/>{currentStatementZh.action}</button>{sqlite && <button disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={() => openParameters('current')}>{parameterZh.sqliteCurrentOpen}</button>}
+        { key: 'execute', content: (<div className="query-execute-split"><button className="primary" disabled={busy || !connection} onClick={() => void execute()}><Play size={14}/>{zh.query.text010}<kbd>⌘ / Ctrl ↵</kbd></button><ActionMenu label={menuText.executeOptions} disabled={busy || !connection} contextKey={queryMenuKey} isCurrent={queryMenuCurrent}><button disabled={busy || !connection} title={menuText.selectedOrScriptHint} onClick={() => void execute()}>{menuText.selectedOrScript}</button><button disabled={!canExecuteSelection} title={currentStatementZh.selectionHint} onClick={() => void execute('selection-only')}>{currentStatementZh.selectionOnly}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} title={currentStatementZh.hint} aria-label={currentStatementZh.action} onClick={() => void executeCurrentStatement()}><Play size={14}/>{currentStatementZh.action}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={() => openParameters('current')}>{parameterZh.currentOpen}</button><button disabled={busy} onClick={() => void execute('all')}>{zh.query.text011}</button></ActionMenu></div>), overflow: (<ActionMenuSection label={menuText.executeOptions}><button className="primary" disabled={busy || !connection} onClick={() => void execute()}><Play size={14}/>{zh.query.text010}<kbd>⌘ / Ctrl ↵</kbd></button>
+<button disabled={!canExecuteSelection} title={currentStatementZh.selectionHint} onClick={() => void execute('selection-only')}>{currentStatementZh.selectionOnly}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} title={currentStatementZh.hint} aria-label={currentStatementZh.action} onClick={() => void executeCurrentStatement()}><Play size={14}/>{currentStatementZh.action}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={() => openParameters('current')}>{parameterZh.currentOpen}</button>
 <button disabled={busy} onClick={() => void execute('all')}>{zh.query.text011}</button></ActionMenuSection>) },
         { key: 'stop', content: (<button disabled={!queryRunning} onClick={() => void cancelCurrentQuery().catch(reason => setError(errorMessage(reason)))}><Square size={13}/>{zh.common.stop}</button>) },
         { key: 'format', content: (<button disabled={busy} title={sqlFormattingZh.hint} aria-label={sqlFormattingZh.action} onClick={() => formatQuery()}><AlignLeft size={15}/>{sqlFormattingZh.button}</button>) },
@@ -3046,7 +3073,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         onPreview={previewResultReplace} onStage={stageResultReplace}
         renderGrid={(findTarget?: GridFindTarget, findMarks?: ReadonlySet<string>) => <ResultsGrid zoomable columnNameDialect={connection?.dialect} findTarget={findTarget} findMarks={findMarks} rowJump rowHeight={layoutMatches ? columnLayout?.layout.rowHeight : undefined} sqliteSource={result} key={pin?.id ?? `current-${resultIndex}`} columns={visibleColumns} rows={result.rows} frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnVisibility={columnVisibility} onColumnReorder={reorderResultColumns} columnWidths={resultColumnWidths} onColumnWidthsChange={resizeResultColumns} onRowHeightChange={resizeResultRowHeight} binarySourceIdentity={[...resultContext,result,filterView,sortView]} binaryIsCurrent={() => alive.current && !busyRef.current && task.current === resultContext[3]} sort={sortView?.rules ? [...sortView.rules] : []} onSortChange={sortBinding && selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? sortResult : undefined} sortReasons={sortBinding?.reasons} onHistoryTravel={travelResultHistory} onFilterCell={filterBinding && selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? openCellFilter : undefined} onStageFindFilter={filterBinding && selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? openFilterRule : undefined} findFilterSource={filterBinding?.source} onFilterSelected={filterBinding && selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? openSelectedFilter : undefined} onStatistics={selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? openResultStatistics : undefined} selectionScope={selectionBinding} onSelectionChange={selectResultRows} onShowRows={changeMatchView} onExportRange={exportGridRange} isCurrent={() => resultSelectionAllowed(selectionBinding)} onActiveRowIndexChange={selectActiveDetailRow} onCellEdit={recordEditTable || mysqlRelationAvailable ? editQueryCell : undefined} onFillRange={(recordEditTable || mysqlRelationAvailable) && selectionBinding ? fillQueryRange : undefined} onCellPaste={(recordEditTable || mysqlRelationAvailable) && selectionBinding ? pasteQueryRange : undefined} restoreCell={restoreEditedCell}/>}/>{currentRowDetail && <QueryRowDetailsPanel controller={rowDetails} view={currentRowDetail} isCurrent={() => rowDetailAllowed(currentRowDetail.binding)} onMove={moveRowDetail} onClose={closeRowDetail}/>}</div> : result ? <Empty title={zh.query.text023} text={sqliteReceipt ? undefined : formatText(zh.query.text024, result.affectedRows ?? 0, result.insertId ? formatText(zh.query.text025, result.insertId) : '', result.warningCount ? formatText(zh.query.text026, result.warningCount) : '')}/> : <Empty title={zh.query.text027} text={zh.query.text028}><div className="key-tip"><kbd>Ctrl / ⌘</kbd><span>+</span><kbd>Enter</kbd></div></Empty>}</div></div></div><div className="tab-status">{result?.columns.length && result.warningCount !== undefined ? <span aria-label={queryWarningsZh.count(result.warningCount)}>{queryWarningsZh.count(result.warningCount)}</span> : null}<span>{result ? formatText(zh.query.text029, result.rows.length, result.truncated ? zh.query.text030 : '') : zh.query.text031}</span>{busy ? <Spinner text={zh.query.text018}/> : outcome && (!sqlite || !pin) && <span className="muted small">{sqlite ? sqliteZh.executionElapsed(outcome.elapsedMs) : outcome.elapsedMs + zh.query.text019}</span>}<span className="grow"/>{!busy&&completionStatus!=='idle'&&<span className="muted small" aria-label="SQL 补全状态" title={completionStatusInfo[completionStatus].hint}>{completionStatusInfo[completionStatus].text}</span>}{(transaction || !transactionKnown) && <span className="warning-text" title={!transactionKnown ? parameterZh.transactionUnknownHint : undefined}><LockKeyhole size={12}/>{transactionKnown ? zh.query.text032 : parameterZh.transactionUnknown}</span>}<button disabled={busy || transaction || !transactionKnown} onClick={() => void transactionAction('begin')}>{zh.common.transactionBegin}</button><button disabled={busy || (!transaction && transactionKnown)} onClick={() => void transactionAction('commit')}><Check size={12}/>{zh.common.transactionCommit}</button><button disabled={busy || (!transaction && transactionKnown)} onClick={() => void transactionAction('rollback')}><RotateCcw size={12}/>{zh.common.transactionRollback}</button></div>{sessionObjects&&<SessionObjectsDialog sessionId={sessionId} database={completionSession?.databaseKnown?completionSession.database??undefined:undefined} busy={busy} onRead={readTemporaryObject} onClose={()=>setSessionObjects(false)}/ >}{recoveryDialog}{databaseSwitchDialog&&<QueryDatabaseSwitchDialog intent={databaseSwitchDialog} onLoad={()=>loadDatabaseSwitchChoices(databaseSwitchDialog)} onApply={database=>applyDatabaseSwitch(databaseSwitchDialog,database)} onClose={()=>closeDatabaseSwitch(databaseSwitchDialog)}/ >}{closeRequest && !archiveOutcome && closePhase === 'choose' && <QueryCloseDialog title={tab.title} onCancel={() => finishClose(false)} onDiscard={() => finishClose(true)} onKeep={closeKeepingDraft} onSave={beginCloseSave}/ >}{closeRequest && !archiveOutcome && closePhase === 'save' && createPortal(<QueryBindingDialog initialName={queryName} bound={!!tab.sourceBinding} onSave={saveAndClose} onClose={() => finishClose(false)}/>, document.body)}{save && <QueryBindingDialog initialName={queryName} bound={!!tab.sourceBinding} onSave={async (action, name, group) => { await saveQuery(action, name, group); }} onClose={() => {invalidateResultSelection();setSave(false);}}/>}{resultSqlPreview && <ResultSqlDialog title={resultSqlPreview.pinId ? zh.query.pinSource : zh.query.resultSqlTitle}
           hint={zh.query.resultSqlHint} statement={resultSqlPreview.statement} sourceSql={resultSqlPreview.sourceSql}
-          dialect={connection?.dialect} onClose={closeResultSql}/>}{snippets && <SnippetsDialog dialect={connection?.dialect} initialSql={snippets.initialSql} startWithDraft={snippets.create} onInsert={insertSnippet} onClose={closeSnippets}/ >}{warningsDialog && <QueryWarningsDialog report={warningsDialog.report} onClose={() => closeWarningsReport(warningsDialog)}/ >}{transactionSettingsDialog && <QueryTransactionSettingsDialog intent={transactionSettingsDialog.intent} connectionName={transactionSettingsDialog.connectionName} onRead={taskId => requestTransactionSettings(transactionSettingsDialog.intent, taskId)} onApply={input => requestTransactionSettings(transactionSettingsDialog.intent, input.taskId, input)} onAutocommit={input => requestAutocommit(transactionSettingsDialog.intent, input)} onClose={() => closeTransactionSettings(transactionSettingsDialog.intent)}/>}{analyzeDialog && <QueryAnalyzeConfirmDialog source={analyzeDialog.intent.source} connectionName={analyzeDialog.connectionName} databaseLabel={analyzeDialog.databaseLabel} invalidReason={analyzeInvalid || undefined} onConfirm={() => void confirmAnalyze(analyzeDialog.intent)} onClose={() => closeAnalyze(analyzeDialog.intent)}/ >}{parameterSource !== null && <QueryParametersDialog key={sqlite ? sqliteParameterDialog?.id : undefined} source={parameterSource} allowSqliteNavicat={sqlite} loadNames={sqlite ? navicat => loadParameterNames(sqliteParameterDialog ?? undefined, navicat) : () => loadParameterNames()} reuse={parameterReusePort.current ?? undefined} ownerId={sqliteParameterDialog?.intent ? sqliteParameterDialog.id : undefined} syntaxHint={sqliteParameterDialog?.intent ? parameterZh.sqliteCurrentHint : undefined} onExecute={(parameters, navicat) => submitParameterQuery(parameterSource, parameters, sqlite ? sqliteParameterDialog ?? undefined : undefined, navicat)} onClose={() => closeParameters(sqlite ? sqliteParameterDialog ?? undefined : undefined)}/ >}{sqliteFullExport && <FullQueryExportDialog source={sqliteFullExport} onClose={() => setSqliteFullExport(null)}/>}{streamExportSource !== null && (connection?.dialect === 'mysql' || connection?.dialect === 'mariadb') && <QueryStreamExportDialog dialect={connection.dialect} sessionBusy={busy} source={streamExportSource} loadNames={loadStreamParameterNames} onExecute={runStreamExport} onCancel={cancelStreamExport} onClose={() => { if (!busyRef.current) setStreamExportSource(null); }}/ >}{activeColumnLease&&<QueryResultColumnsDialog binding={activeColumnLease.binding} initial={activeColumnLease.initial} owner={activeColumnLease.owner} isCurrent={()=>columnManagerCurrent(activeColumnLease)} onApply={layout=>applyColumnLayout(activeColumnLease,layout)} onClose={()=>closeColumnManager(activeColumnLease)}/ >}{activePresetLease&&<QueryResultPresetsDialog key={activePresetLease.owner} connectionId={tab.connectionId} value={activePresetLease.value} owner={activePresetLease.owner} isCurrent={()=>presetManagerCurrent(activePresetLease)} matches={value=>queryResultMemoryMatches(value,viewSource,visibleColumns)} onApply={value=>applyResultPreset(activePresetLease,value)} onClose={()=>closeResultPresets(activePresetLease)}/ >}{activeStatisticsLease&&<QueryResultStatisticsDialog key={activeStatisticsLease.owner} sqliteSource={activeStatisticsLease.source} columns={activeStatisticsLease.columns} rows={activeStatisticsLease.rows} initialColumn={activeStatisticsLease.column} selectedIndices={activeStatisticsLease.indices} truncated={activeStatisticsLease.truncated} owner={activeStatisticsLease.owner} isCurrent={()=>statisticsCurrent(activeStatisticsLease)} onClose={()=>closeResultStatistics(activeStatisticsLease)} onFilter={node=>filterFromStatistics(activeStatisticsLease,node)}/ >}{activeComparisonLease&&<QueryResultComparisonDialog key={activeComparisonLease.owner} pins={activeComparisonLease.pins} owner={activeComparisonLease.owner} isCurrent={()=>comparisonCurrent(activeComparisonLease)} onClose={()=>closeResultComparison(activeComparisonLease)}/ >}{resultInsertSource && <ResultInsertDialog intent={resultInsertSource} initialConnectionId={tab.connectionId} onActivity={resultInsertActivityChange} onClose={() => closeResultInsert(resultInsertSource)} onCommitted={output => useWorkspace.getState().notify(resultInsertZh.committed(output.rows))} onCleanupError={message => useWorkspace.getState().notify(resultInsertZh.cleanupFailed + message, true)}/>}{recordEdit && <SqliteSearchRecordEditDialog connectionId={tab.connectionId} table={recordEdit.table} queryRecord={recordEdit.source} cell={recordEdit.cell} rangeFill={recordEdit.rangeFill} rangePaste={recordEdit.rangePaste} deletePositions={recordEdit.deletePositions} duplicatePositions={recordEdit.duplicatePositions} rangeReplace={recordEdit.rangeReplace} visible={settings.activeTabId === tab.id}
+          dialect={connection?.dialect} onClose={closeResultSql}/>}{snippets && <SnippetsDialog dialect={connection?.dialect} initialSql={snippets.initialSql} startWithDraft={snippets.create} onInsert={insertSnippet} onClose={closeSnippets}/ >}{warningsDialog && <QueryWarningsDialog report={warningsDialog.report} onClose={() => closeWarningsReport(warningsDialog)}/ >}{transactionSettingsDialog && <QueryTransactionSettingsDialog intent={transactionSettingsDialog.intent} connectionName={transactionSettingsDialog.connectionName} onRead={taskId => requestTransactionSettings(transactionSettingsDialog.intent, taskId)} onApply={input => requestTransactionSettings(transactionSettingsDialog.intent, input.taskId, input)} onAutocommit={input => requestAutocommit(transactionSettingsDialog.intent, input)} onClose={() => closeTransactionSettings(transactionSettingsDialog.intent)}/>}{analyzeDialog && <QueryAnalyzeConfirmDialog source={analyzeDialog.intent.source} connectionName={analyzeDialog.connectionName} databaseLabel={analyzeDialog.databaseLabel} invalidReason={analyzeInvalid || undefined} onConfirm={() => void confirmAnalyze(analyzeDialog.intent)} onClose={() => closeAnalyze(analyzeDialog.intent)}/ >}{parameterSource !== null && <QueryParametersDialog key={parameterDialog?.id} source={parameterSource} allowSqliteNavicat={sqlite} allowManualParameters={sqlite || !parameterDialog?.intent} loadNames={navicat => loadParameterNames(parameterDialog ?? undefined, navicat)} reuse={parameterReusePort.current ?? undefined} ownerId={parameterDialog?.intent ? parameterDialog.id : undefined} syntaxHint={parameterDialog?.intent ? (sqlite ? parameterZh.sqliteCurrentHint : parameterZh.currentHint) : undefined}
+          previewSql={parameterDialog?.intent && !sqlite ? () => {
+            const range = parameterDialog.confirmedRange;
+            if (!range) throw Error(parameterZh.currentSourceChanged);
+            return parameterSource.slice(range.start, range.end);
+          } : undefined} onExecute={(parameters, navicat) => submitParameterQuery(parameterSource, parameters, parameterDialog ?? undefined, navicat)} onClose={() => closeParameters(parameterDialog ?? undefined)}/ >}{sqliteFullExport && <FullQueryExportDialog source={sqliteFullExport} onClose={() => setSqliteFullExport(null)}/>}{streamExportSource !== null && (connection?.dialect === 'mysql' || connection?.dialect === 'mariadb') && <QueryStreamExportDialog dialect={connection.dialect} sessionBusy={busy} source={streamExportSource} loadNames={loadStreamParameterNames} onExecute={runStreamExport} onCancel={cancelStreamExport} onClose={() => { if (!busyRef.current) setStreamExportSource(null); }}/ >}{activeColumnLease&&<QueryResultColumnsDialog binding={activeColumnLease.binding} initial={activeColumnLease.initial} owner={activeColumnLease.owner} isCurrent={()=>columnManagerCurrent(activeColumnLease)} onApply={layout=>applyColumnLayout(activeColumnLease,layout)} onClose={()=>closeColumnManager(activeColumnLease)}/ >}{activePresetLease&&<QueryResultPresetsDialog key={activePresetLease.owner} connectionId={tab.connectionId} value={activePresetLease.value} owner={activePresetLease.owner} isCurrent={()=>presetManagerCurrent(activePresetLease)} matches={value=>queryResultMemoryMatches(value,viewSource,visibleColumns)} onApply={value=>applyResultPreset(activePresetLease,value)} onClose={()=>closeResultPresets(activePresetLease)}/ >}{activeStatisticsLease&&<QueryResultStatisticsDialog key={activeStatisticsLease.owner} sqliteSource={activeStatisticsLease.source} columns={activeStatisticsLease.columns} rows={activeStatisticsLease.rows} initialColumn={activeStatisticsLease.column} selectedIndices={activeStatisticsLease.indices} truncated={activeStatisticsLease.truncated} owner={activeStatisticsLease.owner} isCurrent={()=>statisticsCurrent(activeStatisticsLease)} onClose={()=>closeResultStatistics(activeStatisticsLease)} onFilter={node=>filterFromStatistics(activeStatisticsLease,node)}/ >}{activeComparisonLease&&<QueryResultComparisonDialog key={activeComparisonLease.owner} pins={activeComparisonLease.pins} owner={activeComparisonLease.owner} isCurrent={()=>comparisonCurrent(activeComparisonLease)} onClose={()=>closeResultComparison(activeComparisonLease)}/ >}{resultInsertSource && <ResultInsertDialog intent={resultInsertSource} initialConnectionId={tab.connectionId} onActivity={resultInsertActivityChange} onClose={() => closeResultInsert(resultInsertSource)} onCommitted={output => useWorkspace.getState().notify(resultInsertZh.committed(output.rows))} onCleanupError={message => useWorkspace.getState().notify(resultInsertZh.cleanupFailed + message, true)}/>}{recordEdit && <SqliteSearchRecordEditDialog connectionId={tab.connectionId} table={recordEdit.table} queryRecord={recordEdit.source} cell={recordEdit.cell} rangeFill={recordEdit.rangeFill} rangePaste={recordEdit.rangePaste} deletePositions={recordEdit.deletePositions} duplicatePositions={recordEdit.duplicatePositions} rangeReplace={recordEdit.rangeReplace} visible={settings.activeTabId === tab.id}
         isCurrent={() => recordEdit.job.owns() && queryOwnerCurrent() && recordEdit.source.sessionId === sessionRef.current && recordEdit.source.taskId === task.current}
         onDirty={() => { /* 整个编辑对话框占用原标签，关闭时由记录编辑器核对本地修改。 */ }}
         onDone={committed => {

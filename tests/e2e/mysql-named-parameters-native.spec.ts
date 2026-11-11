@@ -82,10 +82,44 @@ test('Navicat 命名参数的查询与完整导出，以及 MariaDB 方括号标
     await modal.screenshot({ path: info.outputPath('命名参数完整导出.png') });
     await exportButton(zh.common.close).click();
 
+    // 相邻命令包含不同的参数名，只有中间的自定义分隔符语句可被识别、发送和记录。
+    const currentTemplate = "SELECT [$payload] AS bound, :payload AS repeated, 'a//b' AS quoted";
+    const source = [
+      'SET @parameter_before = :before;',
+      'DELIMITER //',
+      currentTemplate + '//',
+      'DELIMITER ;',
+      'SET @parameter_after = :after;',
+    ].join('\n');
+    const placeOnThirdLine = async (sql: string) => {
+      await writeSql(sql);
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowLeft' : 'Home');
+    };
+    const openCurrent = async () => (await navigationMenuItem(tab, { name: parameter.currentOpen, exact: true })).click();
+    await placeOnThirdLine(source);
+    const beforeCurrent = await tasks();
+    await openCurrent();
+    await expect(form.locator('.parameter-row')).toHaveCount(1);
+    await expect(form.getByRole('button', { name: parameter.add, exact: true })).toHaveCount(0);
+    await expect(form.locator('.view-lines')).toContainText('a//b');
+    await expect(form.locator('.view-lines')).not.toContainText('parameter_before');
+    await expect(form.locator('.view-lines')).not.toContainText('parameter_after');
+    await input('payload').fill(raw);
+    expect(await tasks()).toEqual(beforeCurrent);
+    await form.screenshot({ path: info.outputPath('参数执行当前语句.png') });
+    await execute();
+    await expect(result.getByRole('gridcell', { name: raw, exact: true })).toHaveCount(2);
+    await expect(result.getByRole('gridcell', { name: 'a//b', exact: true })).toBeVisible();
+    await executeSql("SELECT IF(@parameter_before IS NULL AND @parameter_after IS NULL, '相邻命令未执行', 'unexpected') AS guard;");
+    await expect(result.getByRole('gridcell', { name: '相邻命令未执行', exact: true })).toBeVisible();
+
     if (dialect === 'mariadb') {
       await executeSql("SET SESSION sql_mode='MSSQL';");
-      await writeSql("SELECT [$payload] AS stored, :payload AS supplied FROM (SELECT '服务器列值' AS `$payload`) AS fixture;");
-      await open();
+      await placeOnThirdLine("SELECT 0;\n\nSELECT [$payload;column] AS stored, :payload AS supplied FROM (SELECT '服务器列值' AS `$payload;column`) AS fixture;\nSELECT :other;");
+      await openCurrent();
       await expect(form.locator('.parameter-row')).toHaveCount(1);
       await input('payload').fill(raw);
       await execute();
@@ -104,6 +138,8 @@ test('Navicat 命名参数的查询与完整导出，以及 MariaDB 方括号标
       settings: await window.dbark.invoke('settings.get', {}),
     }));
     expect(persisted.history.some(entry => entry.sql === sql && entry.success)).toBe(true);
+    expect(persisted.history.filter(entry => entry.sql === currentTemplate && entry.success)).toHaveLength(1);
+    expect(persisted.history.some(entry => entry.sql.includes('SET @parameter_before') || entry.sql.includes('SET @parameter_after'))).toBe(false);
     expect(JSON.stringify(persisted)).not.toContain(raw);
     expect(JSON.stringify(persisted).toLowerCase()).not.toContain(Buffer.from(raw).toString('hex'));
     expect(pageErrors).toEqual([]);
