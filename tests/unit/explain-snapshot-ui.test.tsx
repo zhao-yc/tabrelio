@@ -3,6 +3,7 @@ import { workspaceToolCommandSource } from '../helpers/workspaceToolCommandSourc
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { readEditorWordWrap } from '../../src/shared/editorWordWrap';
+import { appDialogSelector } from '../../src/renderer/modalSelectors';
 let errorMessage: typeof import('../../src/renderer/lib')['errorMessage'];
 let restoreNavigationMenuPort: () => void = () => {};
 let ActionMenu: typeof import('../../src/renderer/components/ActionMenu')['ActionMenu'], ActionMenuSection: typeof import('../../src/renderer/components/ActionMenu')['ActionMenuSection'];
@@ -42,7 +43,7 @@ function appEntry(invalidate: () => void) {
   }
   visit(app); expect([declaration, modal].every(Boolean)).toBe(true); expect(methods).toHaveLength(2);
   const menu = workspaceToolCommandSource(source, readFileSync(new URL('../../src/renderer/components/NavigationToolbar.tsx', import.meta.url), 'utf8'), 'explain-snapshot');
-  const context: any = createContext({ exports: {}, useState, document, useWorkspace: store, flushSettings: () => Promise.resolve(), errorMessage, readEditorWordWrap, ActionMenu, ActionMenuSection, uiCommandLabels, navigationZh, ExplainSnapshotDialog: Dialog, workbenchNavigation: { invalidate: invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
+  const context: any = createContext({ exports: {}, useState, document, appDialogSelector, useWorkspace: store, flushSettings: () => Promise.resolve(), errorMessage, readEditorWordWrap, ActionMenu, ActionMenuSection, uiCommandLabels, navigationZh, ExplainSnapshotDialog: Dialog, workbenchNavigation: { invalidate: invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
   runInContext(ts.transpileModule(`function Entry({children}:any){${declaration}
 ${methods.join('\n')}
 ${menu}return <><ActionMenu label={navigationZh.tools}>{toolActions}</ActionMenu>${modal ? '{' + modal + '}' : ''}{children}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);

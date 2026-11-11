@@ -7,6 +7,9 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
+import type { editor as monacoEditor } from 'monaco-editor';
+import { editorContentBridge } from '../../src/renderer/editorContentBridge';
+import { ContentEditorPort, ContentModelPort } from './editor-content-test-ports';
 import type { QueryResult } from '../../src/shared/contracts';
 import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 import { queryResultMemoryZh as memoryText } from '../../src/renderer/locales/queryResultMemory.zh-CN';
@@ -21,16 +24,17 @@ import { queryResultComparisonZh as comparisonText } from '../../src/renderer/lo
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { queryResultPresetSnapshotSchema, queryResultPresetValueSchema, type QueryResultPresetSnapshot } from '../../src/shared/queryResultPresets';
-const ports=vi.hoisted(()=>({grids:[] as any[],scroll:vi.fn()}));
+const ports=vi.hoisted(()=>({grids:[] as any[],scroll:vi.fn(),editorReady:undefined as ((editor:monacoEditor.IStandaloneCodeEditor)=>void)|undefined}));
 // 仅虚拟布局/Monaco由RAM替代；真实QueryTab、选择/复制/查找/详情/导出及store均运行。
 vi.mock('react-data-grid',async()=>{const {useImperativeHandle,useRef}=await import('react');return{SelectColumn:{key:'select-row'},DataGrid(props:any){const host=useRef<HTMLDivElement>(null);ports.grids.push(props);useImperativeHandle(props.ref,()=>({element:host.current,scrollToCell:ports.scroll}));return <div ref={host} role="grid"/>;}};});
-vi.mock('../../src/renderer/components/SqlEditor',()=>({SqlEditor:()=>null}));
+vi.mock('../../src/renderer/components/SqlEditor',()=>({SqlEditor:({onReady}: { onReady?: typeof ports.editorReady })=>{ if(onReady) ports.editorReady=onReady; return null; }}));
 // QueryTab也直接导入语法标记端口；本组仅验证结果整理，不加载浏览器Monaco。
 vi.mock('monaco-editor', () => ({ editor: { setModelMarkers: vi.fn() }, MarkerSeverity: { Warning: 4 } }));
 let Grid:typeof import('../../src/renderer/components/ResultsGrid')['ResultsGrid'];
 let QueryTab:typeof import('../../src/renderer/components/QueryTab')['QueryTab'],store:typeof import('../../src/renderer/store')['useWorkspace'],flush:typeof import('../../src/renderer/store')['flushSettings'];
 let document:ReturnType<typeof memoryDocument>,createRoot:typeof import('react-dom/client')['createRoot'],root:ReturnType<typeof createRoot>|undefined;
 let original:QueryResult,commands:string[],exports:any[],observers:Set<Function>,events:((event:any)=>void)|undefined;
+let releaseSnippetEditor: (() => void) | undefined;
 const globals=['window','document','navigator','IS_REACT_ACT_ENVIRONMENT','MutationObserver','Element'].map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)] as const);
 /** 单选option选中时取消同级旧项；React依赖此DOM语义，普通布尔字段会留下多个选中项。 */
 function installMemoryOption(node:MemoryNode):void{
@@ -48,7 +52,7 @@ beforeAll(async()=>{
   observers=new Set();(globalThis as any).Element=create('div').constructor;(globalThis as any).MutationObserver=navigationMenuObservedMutationPort(observers);
   ({createRoot}=await import('react-dom/client'));({QueryTab}=await import('../../src/renderer/components/QueryTab'));({ResultsGrid:Grid}=await import('../../src/renderer/components/ResultsGrid'));({useWorkspace:store,flushSettings:flush}=await import('../../src/renderer/store'));
 });
-afterEach(async()=>{vi.useRealTimers();if(root){await act(async()=>root!.unmount());root=undefined;}await flush();delete(window as any).dbark;vi.restoreAllMocks();ports.grids=[];ports.scroll.mockClear();document.body.textContent='';});
+afterEach(async()=>{vi.useRealTimers();if(root){await act(async()=>root!.unmount());root=undefined;}releaseSnippetEditor?.();releaseSnippetEditor=undefined;ports.editorReady=undefined;await flush();delete(window as any).dbark;vi.restoreAllMocks();ports.grids=[];ports.scroll.mockClear();document.body.textContent='';});
 afterAll(()=>{ restoreNavigationMenuPort();for(const[name,descriptor]of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);});
 /** 只返回本地常量；query.execute是RAM服务端口，禁止网络、DB、实际文件或剪贴板。 */
 async function mount(prepare?: (result: QueryResult) => void,dialect:'mysql'|'sqlite'='mysql'){
@@ -1096,6 +1100,22 @@ it('筛选：空结果仍显示原返回/过滤数量，可清除恢复，所有
 
 it('片段库打开和关闭保留筛选及多列排序，旧选择撤销且不会额外执行SQL',async()=>{
   await mountMulti();await filterGroup();await headerAction('group');await headerAction('id',{ctrlKey:true});
+  // 从真实正文桥和单一光标进入片段库，仅替换 Monaco 的模型和可见性端口。
+  const value = store.getState().settings.tabs[0].sql!;
+  const model = Object.assign(new ContentModelPort(value), { getValueLengthInRange: () => 0, getValueInRange: () => '' });
+  const cursor = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1, isEmpty: () => true };
+  const widget = Object.assign(new ContentEditorPort(model), {
+    getSelection: () => cursor, getSelections: () => [cursor],
+    getDomNode: () => ({ getClientRects: () => [{ width: 1, height: 1 }] }),
+    onDidChangeCursorSelection: () => ({ dispose() {} }), focus() {},
+  });
+  const instance = widget as unknown as monacoEditor.IStandaloneCodeEditor;
+  const bridge = editorContentBridge(instance, () => ({ value, readOnly: false }), () => {});
+  releaseSnippetEditor = () => { bridge.dispose(); widget.dispose(); model.dispose(); };
+  expect(bridge.ready).toBe(true);
+  const ready = ports.editorReady;
+  expect(typeof ready).toBe('function');
+  await act(async () => ready!(instance));
   const displayed=grid().rows,rules=grid().sortColumns,saved=structuredClone(original);
   await act(async()=>grid().onSelectedRowsChange(new Set([0])));const old=grid();
   // 片段列表仅使用明确RAM端口；真实QueryTab、父弹窗和结果视图仍共同运行。

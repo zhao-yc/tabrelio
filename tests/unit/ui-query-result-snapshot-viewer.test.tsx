@@ -4,6 +4,7 @@ import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { appDialogSelector } from '../../src/renderer/modalSelectors';
 import { readEditorWordWrap } from '../../src/shared/editorWordWrap';
+import { GridZoomProvider } from '../../src/renderer/gridZoom';
 let errorMessage: typeof import('../../src/renderer/lib')['errorMessage'];
 let restoreNavigationMenuPort: () => void = () => {};
 let ActionMenu: typeof import('../../src/renderer/components/ActionMenu')['ActionMenu'], ActionMenuSection: typeof import('../../src/renderer/components/ActionMenu')['ActionMenuSection'];
@@ -238,12 +239,13 @@ function appEntry(invalidate: () => void) {
   function visit(node: ts.Node) {
     if (ts.isVariableStatement(node) && node.declarationList.declarations.some(item => item.name.getText(file) === '[resultSnapshot, setResultSnapshot]')) declaration = node.getText(file);
     if (ts.isFunctionDeclaration(node) && ['openResultSnapshot','closeResultSnapshot'].includes(node.name?.text ?? '')) methods.push(node.getText(file));
-    if (ts.isBinaryExpression(node) && node.left.getText(file) === 'resultSnapshot' && ts.isJsxSelfClosingElement(node.right)) modal = node.getText(file);
+    if (ts.isBinaryExpression(node) && node.left.getText(file) === 'resultSnapshot' &&
+        (ts.isJsxSelfClosingElement(node.right) || ts.isJsxElement(node.right))) modal = node.getText(file);
     ts.forEachChild(node, visit);
   }
   visit(app); expect([declaration, modal].every(Boolean)).toBe(true); expect(methods).toHaveLength(2);
   const menu = workspaceToolCommandSource(source, readFileSync(new URL('../../src/renderer/components/NavigationToolbar.tsx', import.meta.url), 'utf8'), 'result-snapshot');
-  const context: any = createContext({ exports: {}, useState, document, appDialogSelector, useWorkspace: store, flushSettings: () => Promise.resolve(), errorMessage, readEditorWordWrap, ActionMenu, ActionMenuSection, uiCommandLabels, navigationZh, QueryResultSnapshotDialog: Dialog, workbenchNavigation: { invalidate: invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
+  const context: any = createContext({ exports: {}, useState, document, appDialogSelector, useWorkspace: store, flushSettings: () => Promise.resolve(), errorMessage, readEditorWordWrap, ActionMenu, ActionMenuSection, uiCommandLabels, navigationZh, GridZoomProvider, QueryResultSnapshotDialog: Dialog, workbenchNavigation: { invalidate: invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
   runInContext(ts.transpileModule(`function Entry({children}:any){${declaration}
 ${methods.join('\n')}
 ${menu}return <><ActionMenu label={navigationZh.tools}>{toolActions}</ActionMenu>${modal ? '{' + modal + '}' : ''}{children}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);

@@ -6,7 +6,7 @@ export function installNavigationMenuRamPort(document: MemoryDocument): () => vo
   const names = ['Node', 'Element', 'HTMLElement', 'HTMLButtonElement', 'HTMLInputElement', 'MutationObserver', 'ResizeObserver', 'getComputedStyle'];
   const saved = new Map(names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   const prototype = MemoryNode.prototype as any;
-  const properties = ['isConnected', 'parentElement', 'dataset', 'clientWidth', 'scrollIntoView', 'matches', 'insertBefore', 'removeChild', 'setAttribute', 'removeAttribute', 'textContent'];
+  const properties = ['isConnected', 'parentElement', 'dataset', 'clientWidth', 'scrollIntoView', 'insertBefore', 'removeChild', 'setAttribute', 'removeAttribute', 'textContent'];
   const original = new Map(properties.map(name => [name, Object.getOwnPropertyDescriptor(prototype, name)]));
   const createElement = document.createElement.bind(document);
   document.createElement = name => {
@@ -21,7 +21,6 @@ export function installNavigationMenuRamPort(document: MemoryDocument): () => vo
     dataset: { configurable: true, get(this: MemoryNode) { return Object.fromEntries([...this.attributes].filter(([key]) => key.startsWith('data-')).map(([key, value]) => [key.slice(5).replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase()), value])); } },
     clientWidth: { configurable: true, get() { return 1440; } },
     scrollIntoView: { configurable: true, writable: true, value() {} },
-    matches: { configurable: true, value(this: MemoryNode, selector: string) { return selector.split(',').some(part => { const match = part.trim().match(/^\[([^=\]]+)="([^"]*)"\]$/); return !!match && this.getAttribute(match[1]) === match[2]; }); } },
   });
   const observers = new Set<DisplayMutationObserver>();
   class DisplayMutationObserver {

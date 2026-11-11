@@ -97,11 +97,15 @@ it('会话菜单按需展示原执行checkbox，保留受控值、风险说明�
   await act(async () => change(continuation!, true)); expect(continuation!.checked).toBe(true);
   const status = navigationMenuRamCheckbox(section(), mysqlQueryStatusZh.collect);
   expect(status).toBeDefined(); expect(status!.checked).toBe(false);
+  const stages = navigationMenuRamCheckbox(section(), mysqlQueryStatusZh.collectStages);
+  expect(stages).toBeDefined(); expect(stages!.checked).toBe(false);
   warnings!.focus();
   await act(async () => warnings!.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'ArrowDown' })));
-  expect(document.activeElement).toBe(status);
+  expect(document.activeElement.getAttribute('aria-label')).toBe(mysqlQueryStatusZh.collect);
   await act(async () => status!.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'ArrowDown' })));
-  expect(document.activeElement).toBe(continuation);
+  expect(document.activeElement.getAttribute('aria-label')).toBe(mysqlQueryStatusZh.collectStages);
+  await act(async () => stages!.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'ArrowDown' })));
+  expect(document.activeElement.getAttribute('aria-label')).toBe(queryContinueOnErrorZh.option);
   await act(async () => change(status!, true)); expect(status!.checked).toBe(true);
   expect(store.getState().settings.tabs).toEqual(before); expect(renders.grids).toHaveLength(0);
 });
