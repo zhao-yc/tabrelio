@@ -4,7 +4,9 @@ export const postgresCompletionLimits = { source: 64 * 1024, tokens: 4096, items
 const text = z.string().max(postgresCompletionLimits.name).refine(value => !value.includes('\0'));
 const name = text.refine(value => value.length > 0);
 const target = z.object({ connectionId: name, database: name, prefix: text, sessionId: name.optional() });
-export const postgresCompletionReferenceSchema = z.object({ schema: name.optional(), name }).strict();
+export const postgresCompletionReferenceSchema = z.object({ schema: name.optional(), name, functionCall: z.object({
+  argumentCount: z.number().int().min(0).max(postgresCompletionLimits.tokens), scalarAlias: name.optional(),
+}).strict().optional() }).strict();
 export type PostgresCompletionReference = z.infer<typeof postgresCompletionReferenceSchema>;
 const routine = z.object({ context: z.enum(['expression', 'from', 'call']), schema: name.optional() }).strict();
 export type PostgresRoutineCompletionTarget = z.infer<typeof routine>;

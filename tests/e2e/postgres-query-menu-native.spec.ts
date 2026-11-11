@@ -1896,8 +1896,16 @@ test.describe('MERGE 目录与例程补全', () => {
         CREATE MATERIALIZED VIEW merge_test.dst_mat AS SELECT * FROM merge_test.dst_table;
         CREATE TABLE merge_test.dst_ruled(id integer);
         CREATE RULE no_insert AS ON INSERT TO merge_test.dst_ruled DO INSTEAD NOTHING;
+        CREATE SEQUENCE merge_test.call_guard;
         CREATE FUNCTION merge_test.feed_rows(input_number integer, input_label text)
-          RETURNS TABLE(id integer, label text) LANGUAGE SQL AS 'SELECT input_number, input_label';
+          RETURNS TABLE(id integer, label text) LANGUAGE SQL AS
+          $$SELECT nextval('merge_test.call_guard')::integer, input_label$$;
+        CREATE TYPE merge_test.pair_result AS ("编号" bigint, note text);
+        CREATE FUNCTION merge_test.pairs() RETURNS SETOF merge_test.pair_result LANGUAGE SQL AS $$SELECT 1::bigint, ''::text$$;
+        CREATE FUNCTION merge_test.overloaded(integer) RETURNS TABLE(common integer, first_only integer)
+          LANGUAGE SQL AS $$SELECT 1, 2$$;
+        CREATE FUNCTION merge_test.overloaded(text) RETURNS TABLE(common text, second_only text)
+          LANGUAGE SQL AS $$SELECT 'a'::text, 'b'::text$$;
         CREATE FUNCTION merge_test.match_label(input_label text)
           RETURNS boolean LANGUAGE SQL AS 'SELECT input_label IS NOT NULL'`);
       const into = 'MERGE INTO merge_test.dst_';
@@ -1944,6 +1952,32 @@ test.describe('MERGE 目录与例程补全', () => {
       await replaceDraft('MERGE INTO merge_test.dst_table d USING (SELECT 1 id) s ON merge_test.match_la');
       await suggest();
       await expect(focused).toContainText('match_label');
+      await page.keyboard.press('Escape');
+
+      const functionColumn = 'MERGE INTO merge_test.dst_table d USING merge_test.feed_rows(1,\'a\') s ON s.lab';
+      await replaceDraft(functionColumn);
+      await suggest();
+      await expect(focused).toContainText('label');
+      await tab().screenshot({ path: info.outputPath('postgresql-function-return-columns.png') });
+      await page.keyboard.press('Enter');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(functionColumn.replace(/lab$/, '"label"'));
+
+      await replaceDraft('SELECT * FROM merge_test.pairs() p WHERE p.编');
+      await suggest();
+      await expect(focused).toContainText('编号');
+      await page.keyboard.press('Escape');
+
+      await replaceDraft('SELECT * FROM merge_test.overloaded(1) a WHERE a.');
+      await suggest();
+      await expect(focused).toContainText('common');
+      await expect(rows).toHaveCount(1);
+      await page.keyboard.press('Escape');
+
+      await replaceDraft('SELECT * FROM pg_catalog.generate_series(1,2) AS series WHERE series.ser');
+      await suggest();
+      await expect(focused).toContainText('series');
+      await page.keyboard.press('Escape');
+      expect((await observer.query('SELECT is_called FROM merge_test.call_guard')).rows).toEqual([{ is_called: false }]);
       await expect.poll(async () => (await observer.query('SELECT count(*)::int AS total FROM merge_test.dst_table')).rows[0].total).toBe(0);
       expect(await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) })))
         .toEqual({ tasks: [], history: [] });

@@ -444,17 +444,26 @@ function readRelationAlias(parts: Part[], index: number, columns: boolean): Rela
   return { declaration, alias, names, next: index };
 }
 
-function readFunctionCall(parts: Part[], start: number): { name: string; args: Group; next: number } | undefined {
+const specialFunctionSyntax = new Set(['CAST', 'COALESCE', 'EXTRACT', 'GREATEST', 'LEAST', 'NULLIF', 'NORMALIZE',
+  'OVERLAY', 'POSITION', 'SUBSTRING', 'TRIM', 'XMLCONCAT', 'XMLELEMENT', 'XMLFOREST', 'XMLPARSE', 'XMLPI', 'XMLROOT',
+  'XMLSERIALIZE', 'JSON_ARRAY', 'JSON_OBJECT', 'JSON_QUERY', 'JSON_EXISTS', 'JSON_VALUE']);
+
+interface ParsedFunctionCall { name: string; schema?: string; args: Group; next: number; catalog: boolean; }
+
+function readFunctionCall(parts: Part[], start: number): ParsedFunctionCall | undefined {
   let index = start;
   let name = identifier(parts[index]);
+  let schema: string | undefined;
   if (!name || stop.has(keyword(parts[index++]))) return;
   if (punct(parts[index], '.')) {
+    schema = name;
     name = identifier(parts[index + 1]);
     index += 2;
   }
   const args = parts[index];
   if (!name || name.length > limits.name || args?.kind !== 'group' || args.closing !== ')') return;
-  return { name, args, next: index + 1 };
+  const catalog = args.closed && (schema ? schema.length <= limits.name : !specialFunctionSyntax.has(keyword(parts[start])));
+  return { name, schema, args, next: index + 1, catalog };
 }
 
 /** 只提取显式列名，类型和排序规则不进入表达式作用域。 */
@@ -477,7 +486,8 @@ function typedColumnNames(group?: Part): string[] | undefined {
 interface TableFunctionSource { relation: ScopedRelation; args: Group[]; next: number; }
 
 /** 未知函数列数时，只有确定越过位置别名的后续声明列才保留原名。 */
-function tableFunctionProjection(members: (string[] | undefined)[], aliases: string[], ordinal: boolean): Projection {
+function tableFunctionProjection(calls: ParsedFunctionCall[], members: (string[] | undefined)[], aliases: string[],
+  ordinal: boolean, scalarAlias?: string): Projection {
   const names = [...aliases];
   let knownWidth = 0, exact = true;
   for (const member of members) {
@@ -488,7 +498,18 @@ function tableFunctionProjection(members: (string[] | undefined)[], aliases: str
     if (knownWidth >= aliases.length) names.push('ordinality');
     knownWidth++;
   }
-  return { names: names.slice(0, limits.items), stars: [], exact: exact && aliases.length <= knownWidth && knownWidth <= limits.items };
+  // 位置别名可能覆盖未知返回列，目录无法单独证明此时各成员的输出位置。
+  const stars: PostgresCompletionReference[] = [];
+  if (!aliases.length) for (const [index, call] of calls.entries()) {
+    if (members[index] || !call.catalog) continue;
+    const argumentCount = call.args.parts.length ? 1 + call.args.parts.filter(part => punct(part, ',')).length : 0;
+    // 多参数 unnest 可能由 PostgreSQL 拆成多个调用，不能使用单次目录签名推断。
+    if (!call.schema && call.name === 'unnest' && argumentCount > 1) continue;
+    stars.push({ name: call.name, ...(call.schema ? { schema: call.schema } : {}),
+      functionCall: { argumentCount, ...(calls.length === 1 && scalarAlias ? { scalarAlias } : {}) } });
+  }
+  return { names: names.slice(0, limits.items), stars: stars.length <= limits.relations ? stars : [],
+    exact: exact && aliases.length <= knownWidth && knownWidth <= limits.items };
 }
 
 /** ROWS FROM 的各个实参共享外部可见关系，函数名和成员列定义不会引入新的关系别名。 */
@@ -499,7 +520,7 @@ function readTableFunction(parts: Part[], start: number): TableFunctionSource | 
   const body = rows && group.kind === 'group' ? group.parts : parts;
   const first = readFunctionCall(body, rows ? 0 : start);
   if (!first) return rows ? false : undefined;
-  const args = [first.args];
+  const calls = [first];
   const members: (string[] | undefined)[] = [];
   if (rows) {
     let member = first;
@@ -517,7 +538,7 @@ function readTableFunction(parts: Part[], start: number): TableFunctionSource | 
       const following = readFunctionCall(body, index + 1);
       if (!following) return false;
       member = following;
-      args.push(member.args);
+      calls.push(member);
     }
   } else members.push(undefined);
   let next = rows ? start + 3 : first.next;
@@ -534,13 +555,13 @@ function readTableFunction(parts: Part[], start: number): TableFunctionSource | 
     if (!anonymousColumns) aliases = nameList(columns);
     if (!aliases.length) {
       const names = typedColumnNames(columns);
-      if (args.length !== 1 || members[0] || ordinal || !names) return false;
+      if (calls.length !== 1 || members[0] || ordinal || !names) return false;
       members[0] = names;
     }
     next++;
   }
   return { relation: { name: first.name, alias: renamed.alias, declaration: renamed.declaration,
-    projection: tableFunctionProjection(members, aliases, ordinal) }, args, next };
+    projection: tableFunctionProjection(calls, members, aliases, ordinal, renamed.alias) }, args: calls.map(call => call.args), next };
 }
 
 function traceTableFunction(source: TableFunctionSource, scope: Scope,

@@ -155,7 +155,7 @@ export function createPostgresCompletionProvider(options: {
             suggestions.push({ ...common, label: { label: item.name, description: item.schema },
               insertText: (query.schema ? '' : postgresIdentifier(item.schema) + '.') + postgresIdentifier(item.name) });
           } else if (item.kind === 'column' && origins[item.reference] !== undefined) {
-            localColumns.push({ reference: origins[item.reference], name: item.name, type: item.type });
+            localColumns.push({ reference: origins[item.reference], name: item.name, type: item.type || undefined });
           } else if (item.kind === 'routine' && routine) {
             const name = postgresIdentifier(item.name);
             const insert = analysis.existingCall ? { insertText: name } : {

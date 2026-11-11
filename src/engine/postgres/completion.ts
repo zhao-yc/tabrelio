@@ -59,18 +59,77 @@ async function relations(connection: PostgresConnection, input: Extract<Postgres
   return { items, incomplete: result.truncated || result.rows.length === rowLimit };
 }
 
+/** 只查例程目录。一个字段必须在每个可能重载中恰好出现一次，动态记录和未知类型不猜测。 */
+function functionColumnCtes(session: boolean): string {
+  const ownTemp = session ? `n.oid ${eq} pg_catalog.pg_my_temp_schema()` : 'false';
+  return `, candidates AS MATERIALIZED (
+    SELECT r.index, r.name, r.scalar_alias, p.*, t.typtype, t.typrelid
+    FROM refs r CROSS JOIN LATERAL (
+      SELECT p.oid, p.prorettype, p.proallargtypes, p.proargnames, p.proargmodes,
+        pg_catalog.has_function_privilege(p.oid, 'EXECUTE') AS allowed
+      FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid ${eq} p.pronamespace
+      WHERE r.argument_count IS NOT NULL AND p.proname::pg_catalog.text ${eq} r.name
+        AND p.prokind::pg_catalog.text ${eq} 'f'
+        AND p.pronargs - p.pronargdefaults - CASE WHEN p.provariadic ${ne} 0::pg_catalog.oid THEN 1 ELSE 0 END <= r.argument_count
+        AND (p.provariadic ${ne} 0::pg_catalog.oid OR p.pronargs >= r.argument_count)
+        AND (${ownTemp} OR n.nspname ${eq} 'pg_catalog' OR n.nspname OPERATOR(pg_catalog.!~) '^pg_')
+        AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
+        AND (CASE WHEN r.schema IS NULL THEN pg_catalog.pg_function_is_visible(p.oid) AND NOT (${ownTemp})
+          ELSE (CASE WHEN ${ownTemp} THEN 'pg_temp' ELSE n.nspname::pg_catalog.text END) ${eq} r.schema END)
+      ORDER BY p.oid LIMIT 65
+    ) p JOIN pg_catalog.pg_type t ON t.oid ${eq} p.prorettype
+  ), candidate_counts AS (
+    SELECT index, pg_catalog.count(*) AS total FROM candidates GROUP BY index
+    HAVING pg_catalog.count(*) <= 64 AND pg_catalog.bool_and(allowed)
+  ), outputs AS (
+    SELECT c.index, c.oid, a.attname::pg_catalog.text AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type
+    FROM candidates c JOIN candidate_counts k ON k.index ${eq} c.index
+    JOIN pg_catalog.pg_attribute a ON a.attrelid ${eq} c.typrelid
+    WHERE c.typtype::pg_catalog.text ${eq} 'c' AND a.attnum > 0 AND NOT a.attisdropped
+    UNION ALL
+    SELECT c.index, c.oid, COALESCE(NULLIF(c.proargnames[o.position], ''), 'column' || o.column_number::pg_catalog.text),
+      CASE WHEN t.typtype::pg_catalog.text ${eq} 'p' THEN '' ELSE pg_catalog.format_type(o.type_oid, NULL) END
+    FROM candidates c JOIN candidate_counts k ON k.index ${eq} c.index
+    CROSS JOIN LATERAL (
+      SELECT type_oid, position::pg_catalog.int4 AS position, pg_catalog.row_number() OVER (ORDER BY position) AS column_number,
+        pg_catalog.count(*) OVER () AS fields
+      FROM pg_catalog.unnest(c.proallargtypes) WITH ORDINALITY AS a(type_oid, position)
+      WHERE c.proargmodes[position::pg_catalog.int4]::pg_catalog.text ${eq} ANY (ARRAY['o','b','t'])
+    ) o JOIN pg_catalog.pg_type t ON t.oid ${eq} o.type_oid
+    WHERE c.prorettype ${eq} 'pg_catalog.record'::pg_catalog.regtype AND o.fields > 1
+    UNION ALL
+    SELECT c.index, c.oid, COALESCE((SELECT NULLIF(c.proargnames[a.position::pg_catalog.int4], '')
+      FROM pg_catalog.unnest(c.proargmodes) WITH ORDINALITY AS a(mode, position)
+      WHERE a.mode::pg_catalog.text ${eq} ANY (ARRAY['o','b','t']) LIMIT 1), c.scalar_alias, c.name),
+      pg_catalog.format_type(c.prorettype, NULL)
+    FROM candidates c JOIN candidate_counts k ON k.index ${eq} c.index
+    WHERE c.typtype::pg_catalog.text NOT IN ('p','c','d')
+  ), function_columns AS (
+    SELECT o.index, o.name,
+      CASE WHEN pg_catalog.count(DISTINCT o.type) ${eq} 1 THEN pg_catalog.min(o.type) ELSE '' END AS type
+    FROM outputs o JOIN candidate_counts k ON k.index ${eq} o.index
+    WHERE pg_catalog.strpos(pg_catalog.lower(o.name), pg_catalog.lower($2::pg_catalog.text)) ${eq} 1
+    GROUP BY o.index, o.name, k.total
+    HAVING pg_catalog.count(*) ${eq} k.total AND pg_catalog.count(DISTINCT o.oid) ${eq} k.total
+  )`;
+}
+
 /** 原会话使用服务器实际可见性；独立连接继续对未限定的重名关系保持保守。 */
 async function columns(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'columns' }>, session: boolean): Promise<PostgresCompletionResult> {
-  const refs = JSON.stringify(input.relations.map((ref, index) => ({ ...ref, index })));
+  const refs = JSON.stringify(input.relations.map(({ functionCall, ...ref }, index) => ({ ...ref, index,
+    ...(functionCall ? { argument_count: functionCall.argumentCount, scalar_alias: functionCall.scalarAlias } : {}),
+  })));
+  const functions = input.relations.some(ref => ref.functionCall);
   const result = await connection.query(`
     WITH ${namespaces(session)}, refs AS (
       SELECT * FROM pg_catalog.jsonb_to_recordset($1::pg_catalog.jsonb)
-        AS r(index pg_catalog.int4, schema pg_catalog.text, name pg_catalog.text)
+        AS r(index pg_catalog.int4, schema pg_catalog.text, name pg_catalog.text,
+          argument_count pg_catalog.int4, scalar_alias pg_catalog.text)
     ), matched AS (
       SELECT r.index, c.oid
       FROM refs r JOIN pg_catalog.pg_class c ON c.relname::pg_catalog.text ${eq} r.name
       JOIN namespaces n ON n.oid ${eq} c.relnamespace
-      WHERE c.relkind::pg_catalog.text ${eq} ANY ${relationKinds} AND ${relationPermission}
+      WHERE r.argument_count IS NULL AND c.relkind::pg_catalog.text ${eq} ANY ${relationKinds} AND ${relationPermission}
         AND (n.schema ${eq} r.schema OR (r.schema IS NULL AND pg_catalog.pg_table_is_visible(c.oid)
           ${session ? '' : `AND NOT EXISTS (
             SELECT 1 FROM pg_catalog.pg_class other
@@ -78,13 +137,15 @@ async function columns(connection: PostgresConnection, input: Extract<PostgresCo
             WHERE other.oid ${ne} c.oid AND other.relname ${eq} c.relname
               AND other.relkind::pg_catalog.text ${eq} ANY ${relationKinds}
           )`}))
-    )
-    SELECT r.index, a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod)
+    )${functions ? functionColumnCtes(session) : ''}
+    SELECT index, name, type FROM (
+    SELECT r.index, a.attname::pg_catalog.text AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type
     FROM matched r JOIN pg_catalog.pg_attribute a ON a.attrelid ${eq} r.oid
     WHERE a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped
       AND pg_catalog.has_column_privilege(r.oid, a.attnum, 'SELECT,INSERT,UPDATE,REFERENCES')
       AND pg_catalog.strpos(pg_catalog.lower(a.attname::pg_catalog.text), pg_catalog.lower($2::pg_catalog.text)) ${eq} 1
-    ORDER BY a.attname, r.index LIMIT $3
+    ${functions ? 'UNION ALL SELECT index, name, type FROM function_columns' : ''}
+    ) directory ORDER BY name, index LIMIT $3
   `, [refs, input.prefix, rowLimit], { rows: rowLimit, bytes: 256 * 1024 });
   const items: PostgresCompletionItem[] = [];
   for (const row of result.rows.slice(0, postgresCompletionLimits.items)) {

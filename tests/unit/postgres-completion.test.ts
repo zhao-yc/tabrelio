@@ -110,6 +110,19 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
     expect(at('UPDATE orders d SET value=1 FROM get_records(d.|) AS r(id int)')?.query).toBeUndefined();
     expect(at('SELECT * FROM get_records() AS r(id r.|type)')?.query).toBeUndefined();
   });
+  it('表函数投影保留真实例程身份和成员参数数量，显式列仍可离线使用', () => {
+    expect(at('WITH c AS (SELECT r.* FROM api.feed(1, nested(2,3)) r) SELECT c.| FROM c')?.query)
+      .toMatchObject({ relations: [{ projection: { stars: [{ schema: 'api', name: 'feed', functionCall: { argumentCount: 2, scalarAlias: 'r' } }] } }] });
+    expect(at('MERGE INTO orders d USING ROWS FROM (api.a(), api.b(1) AS (k int), api.c(2)) WITH ORDINALITY r ON r.|')?.query)
+      .toMatchObject({ relations: [{ projection: { names: ['k', 'ordinality'], stars: [
+        { schema: 'api', name: 'a', functionCall: { argumentCount: 0 } },
+        { schema: 'api', name: 'c', functionCall: { argumentCount: 1 } },
+      ] } }] });
+    expect(at('SELECT r.| FROM api.feed() AS r(id int)')?.query)
+      .toMatchObject({ relations: [{ projection: { names: ['id'], stars: [] } }] });
+    expect(at('SELECT r.| FROM unnest(ARRAY[1,2],ARRAY[3,4]) AS r')?.query)
+      .toMatchObject({ relations: [{ projection: { stars: [] } }] });
+  });
   it('MERGE 在尚未写完的 ON 和 WHEN 中绑定字段及分支作用域', () => {
     const merge = 'MERGE INTO app.orders d USING (SELECT 1 id, 2 value) s ON ';
     const source = { relations: [{ alias: 's', projection: { names: ['id', 'value'], stars: [] } }] };
@@ -331,6 +344,21 @@ it('MERGE 目录请求区分目标和来源，保留原会话与例程类别', a
       { connectionId: '原连接', database: '原库', sessionId: '原会话', prefix: 'local_', kind: 'relations', routine: { context: 'from' } },
     ]);
   } finally { target.provider.dispose(); source.provider.dispose(); }
+});
+
+it('表函数返回列沿原会话查询，候选类型未知时保留名称', async () => {
+  const inputs: PostgresCompletionInput[] = [];
+  const source = editor('SELECT f.co| FROM api.feed(1) AS f', async input => {
+    inputs.push(input);
+    return { items: [{ kind: 'column', reference: 0, name: 'common', type: '' }], incomplete: false };
+  }, '原会话');
+  try {
+    const suggestions = (await source.suggest())?.suggestions;
+    expect(suggestions).toMatchObject([{ label: { label: 'common', description: 'f' }, insertText: '"common"' }]);
+    expect(suggestions?.[0].detail).toBeUndefined();
+    expect(inputs).toEqual([{ connectionId: '原连接', database: '原库', sessionId: '原会话', prefix: 'co', kind: 'columns',
+      relations: [{ schema: 'api', name: 'feed', functionCall: { argumentCount: 1, scalarAlias: 'f' } }] }]);
+  } finally { source.provider.dispose(); }
 });
 
 it('切走再返回原标签时丢弃迟到目录，并由原承诺串行收尾', async () => {
