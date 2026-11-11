@@ -8,6 +8,7 @@ import { captureQueryResultCellFilter, queryResultCellFilterRule } from './query
 import { queryResultFilterLimits, queryResultFilterOperators, type QueryResultFilterGroup, type QueryResultFilterRule } from './queryResultFilter';
 import { sqliteResultCellMatches } from '../shared/sqliteResultStorage';
 import { QueryResultHistogramCounter, type QueryResultHistogram, type QueryResultHistogramBins } from './queryResultHistogram';
+import { QueryResultCalendarCounter, type QueryResultCalendarDistribution, type QueryResultCalendarUnit } from './queryResultCalendar';
 
 export interface QueryResultStatisticsCapture {
   readonly column: Readonly<ResultColumn>;
@@ -23,6 +24,7 @@ export interface QueryResultStatisticsResult {
   readonly frequency?: QueryResultFrequency;
   readonly quality?: Readonly<{ emptyText: number; singletons: number }>;
   readonly histogram?: QueryResultHistogram;
+  readonly calendar?: QueryResultCalendarDistribution;
 }
 type OrdinaryKey = ReturnType<typeof queryResultFilterKey>;
 type Key = OrdinaryKey | SqliteResultComparisonKey;
@@ -323,6 +325,8 @@ export class QueryResultStatisticsScan {
   private readonly frequency?: QueryResultFrequencyCounter;
   private readonly histogram?: QueryResultHistogramCounter;
   private readonly histogramBins?: QueryResultHistogramBins;
+  private readonly calendarMode: boolean;
+  private readonly calendar?: QueryResultCalendarCounter;
   private readonly qualityOnly: boolean;
   private minimum?: { key: Key; literal: string };
   private maximum?: { key: Key; literal: string };
@@ -336,19 +340,26 @@ export class QueryResultStatisticsScan {
   private readonly numericColumn: boolean;
   private readonly floatingColumn: boolean;
   /** 私有WeakMap拒绝伪造capture；声明为字节的列即使返回字符串也不参加值聚合。 */
-  constructor(capture: QueryResultStatisticsCapture, mode: boolean | 'quality' | { histogram: QueryResultHistogramBins } = false) {
+  constructor(capture: QueryResultStatisticsCapture, mode: boolean | 'quality' | { histogram: QueryResultHistogramBins } | { calendar: QueryResultCalendarUnit } = false) {
     const binding = bindings.get(capture);
     if (!binding || !currentQueryResultStatistics(capture, binding.columns, binding.rows)) throw Error(text.stale);
     this.binding = binding; this.capture = capture; this.total = capture.rowCount; this.kind = queryResultSortKind(capture.column.type, binding.dialect);
     this.floatingColumn = this.kind === 'float' || this.kind === 'postgresFloat';
     this.numericColumn = this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'postgresNumeric' || this.floatingColumn;
-    const histogramBins = typeof mode === 'object' ? mode.histogram : undefined;
+    const histogramBins = typeof mode === 'object' && 'histogram' in mode ? mode.histogram : undefined;
     this.histogramBins = histogramBins;
     this.qualityOnly = mode === 'quality';
     if (mode === true) this.frequency = new QueryResultFrequencyCounter();
     if (histogramBins && (binding.sqlite || this.numericColumn)) this.histogram = new QueryResultHistogramCounter(histogramBins);
     if (binding.sqlite) this.sqliteTypes = { integer: 0, real: 0, text: 0, blob: 0, null: 0 };
     else if (!this.kind || /^(?:TINY_|MEDIUM_|LONG_)?BLOB(?:\b|$)/i.test(capture.column.type.trim())) this.reason = text.unsupported;
+    this.calendarMode = typeof mode === 'object' && 'calendar' in mode;
+    if (typeof mode === 'object' && 'calendar' in mode) {
+      const kind = binding.sqlite ? 'sqlite' : this.kind;
+      if (kind === 'date' || kind === 'datetime' || kind === 'pgDate' || kind === 'pgTimestamp' || kind === 'pgTimestampTz' || binding.sqlite && kind === 'sqlite') {
+        this.calendar = new QueryResultCalendarCounter(mode.calendar, kind);
+      } else this.reason = text.calendarUnsupported;
+    }
   }
   /** 取消释放不同值集合及部分聚合，不能通过后续step/result复活旧结果。 */
   cancel(): void {
@@ -357,6 +368,7 @@ export class QueryResultStatisticsScan {
     this.distinct.clear();
     this.frequency?.clear();
     this.histogram?.clear();
+    this.calendar?.clear();
     this.minimum = undefined;
     this.maximum = undefined;
     this.published = undefined;
@@ -366,7 +378,7 @@ export class QueryResultStatisticsScan {
     this.capture = undefined;
   }
   /** 坏值只撤销所有值指标，完整计数仍继续；不发布部分不同值或极值。 */
-  private rejectValues(reason: string): void { this.reason = reason; this.distinct.clear(); this.frequency?.clear(); this.histogram?.clear(); this.minimum = undefined; this.maximum = undefined; this.sum = { coefficient: 0n, scale: 0 }; this.sumOfSquares = 0n; }
+  private rejectValues(reason: string): void { this.reason = reason; this.distinct.clear(); this.frequency?.clear(); this.histogram?.clear(); this.calendar?.clear(); this.minimum = undefined; this.maximum = undefined; this.sum = { coefficient: 0n, scale: 0 }; this.sumOfSquares = 0n; }
   /** 同一完整身份服务于摘要和分布；仅当前模式需要的集合持有它。 */
   private observeValue(identity: string, literal: string, kind: QueryResultFrequencyKind, index: number): void {
     if (this.frequency) {
@@ -407,6 +419,11 @@ export class QueryResultStatisticsScan {
         }
         if (this.reason) continue;
         try {
+          if (this.calendar) {
+            // SQLite 整数在协议中也可能是字符串，必须核对逐格 TEXT 身份后才按日期解析。
+            if (typeof value === 'string' && (!binding.sqlite || binding.sqlite.literal(index, capture.column.key).sqliteType === 'text')) this.calendar.add(value);
+            continue;
+          }
           let key: Key, literal: string, numeric: boolean;
           if (binding.sqlite) {
             const cell = binding.sqlite.literal(index, capture.column.key), type = cell.sqliteType;
@@ -466,6 +483,12 @@ export class QueryResultStatisticsScan {
   /** 有限AVG先约分精确扩展；仅循环小数按最大原尺度或18位，用BigInt商余数实现half-away。 */
   private finish(): void {
     const count = this.total, nonNull = count - this.nulls, floatInput = this.sqliteTypes ? this.sqliteTypes.real > 0 : this.floatingColumn && nonNull > 0;
+    if (this.calendarMode) {
+      const calendar = !this.reason && this.calendar ? this.calendar.result(this.capture!.column.name || this.capture!.column.key, count, this.nulls) : undefined;
+      this.published = Object.freeze({ count, nonNull, nulls: this.nulls, approximate: false, floatInput: false, averageRounded: false, calendar, reason: this.reason });
+      this.calendar?.clear();
+      return;
+    }
     if (this.histogramBins) {
       const counter = this.histogram;
       const nonNumeric = this.sqliteTypes ? this.sqliteTypes.text + this.sqliteTypes.blob : 0;

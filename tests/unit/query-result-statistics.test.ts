@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { DataRow, ResultColumn } from '../../src/shared/contracts';
+import type { DataRow, QueryResult, ResultColumn } from '../../src/shared/contracts';
 import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilters, QueryResultQualityOverviewScan, QueryResultStatisticsScan, type QueryResultStatisticsCapture } from '../../src/renderer/queryResultStatistics';
 import { queryResultStatisticsZh as text } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import type { SortDialect } from '../../src/renderer/queryResultSort';
@@ -22,6 +22,52 @@ function finish(scan: QueryResultStatisticsScan, initialProcessed = 0) {
     expect(scan.result()).toBeUndefined();
   }
 }
+
+describe('查询结果日期分布', () => {
+  it('保留 PostgreSQL 原偏移所示日期，并按公元前和扩展年份排序', () => {
+    const f = fixture('TIMESTAMPTZ', [
+      '10000-01-01 00:00:00+00', '0001-12-31 23:59:59+00 BC', '0002-01-01 00:00:00+00 BC',
+      '2024-03-01 00:00:00.000001+02', '2024-02-29 22:00:00.000001+00',
+      '2024-03-15 00:00:00-05:30', 'infinity', '2023-02-29 12:00:00+00', null,
+    ], undefined, 'postgresql');
+    const result = finish(new QueryResultStatisticsScan(f.capture, { calendar: 'month' }));
+    expect(result.calendar).toMatchObject({ grouped: 6, ungrouped: 2, nulls: 1, peak: 2, buckets: [
+      { label: '0002-01 BC', count: 1 }, { label: '0001-12 BC', count: 1 }, { label: '2024-02', count: 1 },
+      { label: '2024-03', count: 2 }, { label: '10000-01', count: 1 },
+    ] });
+  });
+
+  it('MySQL 按勾选范围统计真实日历日期，零日期和无效闰日不生成区间', () => {
+    const f = fixture('DATETIME', [
+      '2024-02-29 23:59:59.999999', '2024-03-01 00:00:00', '0000-00-00 00:00:00',
+      '2023-02-29 00:00:00', '2024-03-01 01:23:00', null,
+    ], new Set([0, 2, 3, 4, 5]));
+    const day = finish(new QueryResultStatisticsScan(f.capture, { calendar: 'day' }));
+    expect(day.calendar).toMatchObject({ grouped: 2, ungrouped: 2, nulls: 1, buckets: [
+      { label: '2024-02-29', count: 1 }, { label: '2024-03-01', count: 1 },
+    ] });
+    expect(finish(new QueryResultStatisticsScan(f.capture, { calendar: 'year' })).calendar?.buckets)
+      .toEqual([{ label: '2024', count: 2 }]);
+    f.rows[0].k = '2024-01-01 12:00:00';
+    expect(() => new QueryResultStatisticsScan(f.capture, { calendar: 'day' })).toThrow(text.stale);
+    const clock = fixture('TIME', ['12:00:00', null]);
+    expect(finish(new QueryResultStatisticsScan(clock.capture, { calendar: 'day' })).calendar).toBeUndefined();
+  });
+
+  it('SQLite 只按逐格 TEXT 分类，混合整数、字节和无效日期仍计入未分组行数', () => {
+    const source: QueryResult = { columns: [{ key: 'c0', name: '日期值', type: 'SQLITE' }],
+      rows: ['2024-02-29', '2024-03-01T01:30:00+02:00', '20240301', { type: 'binary', base64: 'AA==' },
+        '2024-04-31', '2024-03-01T12:00:00+29:00', null].map(c0 => ({ c0 })) as DataRow[],
+      sqliteStorage: { version: 1, rows: ['t', 't', 'i', 'b', 't', 't', 'n'] }, elapsedMs: 1, truncated: false, statement: 'SELECT 日期值' };
+    const capture = captureQueryResultStatistics(source.columns, source.rows, source.columns[0], undefined, source);
+    expect(finish(new QueryResultStatisticsScan(capture, { calendar: 'day' })).calendar).toMatchObject({
+      grouped: 2, nulls: 1, ungrouped: 4, buckets: [{ label: '2024-02-29', count: 1 }, { label: '2024-03-01', count: 1 }],
+    });
+    const old = { ...source }; delete old.sqliteStorage;
+    const oldCapture = captureQueryResultStatistics(old.columns, old.rows, old.columns[0], undefined, old);
+    expect(finish(new QueryResultStatisticsScan(oldCapture, { calendar: 'day' })).calendar).toBeUndefined();
+  });
+});
 
 describe('PostgreSQL 当前结果列统计', () => {
   it('仅对勾选的有限 NUMERIC 原值计算精确合计与平均值', () => {

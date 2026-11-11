@@ -5,6 +5,7 @@ import { QueryResultStatisticsDialog } from '../../src/renderer/components/Query
 import { QueryResultStatisticsScan } from '../../src/renderer/queryResultStatistics';
 import { queryResultStatisticsZh as text } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import { tableHistogramZh as histogramText } from '../../src/renderer/locales/tableHistogram.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
@@ -119,6 +120,26 @@ describe('查询结果列统计的真实对话框', () => {
     await change(text.column, 'word');
     await finish();
     expect(document.body.textContent).toContain(text.histogramUnavailable);
+  });
+  it('日期区间分页保留全部记录，切换分组回到首屏', async () => {
+    const columns = [{ key: 'd', name: '日期', type: 'DATE' }];
+    const rows = [1, 2].flatMap(month => Array.from({ length: 26 }, (_, index) => ({ d: `2024-0${month}-${String(index + 1).padStart(2, '0')}` })));
+    await mount({ columns, rows });
+    await finish();
+    await act(async () => button(text.calendar).dispatchEvent(new MemoryEvent('click')));
+    await finish();
+    const periods = () => document.querySelectorAll('[scope="row"]').map(row => row.textContent);
+    expect(periods()).toEqual(['2024-01', '2024-02']);
+    await change(text.calendarUnit, 'day');
+    await finish();
+    expect(periods()).toHaveLength(50);
+    expect(metric(text.calendarGrouped)).toBe('52');
+    await act(async () => button(zh.common.pageNext).dispatchEvent(new MemoryEvent('click')));
+    expect(periods()).toEqual(['2024-02-25', '2024-02-26']);
+    await change(text.calendarUnit, 'year');
+    await finish();
+    expect(periods()).toEqual(['2024']);
+    expect(metric(text.calendarGrouped)).toBe('52');
   });
   it('明确切换值分布才发布，当前勾选与全部范围的占比正确，失效时撤下整图', async () => {
     const f = await mount({ selectedIndices: new Set([2, 0]), truncated: true }); await finish();

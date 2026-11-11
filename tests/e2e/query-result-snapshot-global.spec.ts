@@ -184,6 +184,14 @@ function register(): void {
       const columnStatistics = page.getByRole('dialog', { name: statisticsText.title, exact: true });
       await step(() => expect(columnStatistics.getByLabel(statisticsText.column, { exact: true })).toHaveValue('constructor'));
       await step(() => expect(columnStatistics.getByLabel(statisticsText.distinct, { exact: true })).toHaveText('2'));
+      await step(() => columnStatistics.getByLabel(statisticsText.column, { exact: true }).selectOption('date'));
+      await step(() => columnStatistics.getByRole('button', { name: statisticsText.calendar, exact: true }).click());
+      const calendar = columnStatistics.getByRole('table', { name: statisticsText.calendar, exact: true });
+      await step(() => expect(calendar.getByRole('rowheader')).toHaveText(['2026-10']));
+      await step(() => expect(calendar.getByRole('cell').first()).toHaveText('2'));
+      await step(() => columnStatistics.getByLabel(statisticsText.calendarUnit, { exact: true }).selectOption('day'));
+      await step(() => expect(calendar.getByRole('rowheader')).toHaveText(['2026-10-28', '2026-10-29']));
+      await step(() => columnStatistics.screenshot({ path: info.outputPath('离线快照日期分布.png') }));
       await step(() => columnStatistics.getByRole('button', { name: statisticsText.close, exact: true }).click());
       await step(() => expect(columnStatistics).toHaveCount(0));
       const bounds = await step(() => grid.boundingBox()), viewport = await step(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })));

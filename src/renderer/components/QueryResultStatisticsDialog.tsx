@@ -10,6 +10,8 @@ import { UsageHelp, ErrorBox, Modal  } from './ui';
 import { QueryResultFrequencyChart } from './QueryResultFrequencyChart';
 import { TableHistogramChart } from './TableHistogramChart';
 import { QueryResultQualityOverview } from './QueryResultQualityOverview';
+import { QueryResultCalendarChart } from './QueryResultCalendarChart';
+import { queryResultCalendarUnits, type QueryResultCalendarUnit } from '../queryResultCalendar';
 import { queryResultHistogramBins, type QueryResultHistogramBins } from '../queryResultHistogram';
 import { tableHistogramZh as histogramText } from '../locales/tableHistogram.zh-CN';
 
@@ -21,8 +23,8 @@ interface Props {
   isCurrent(): boolean; onClose(): void;
   onFilter?(node: QueryResultFilterRule | QueryResultFilterGroup): void;
 }
-const modes = ['summary', 'frequency', 'histogram', 'overview'] as const;
-type Request = { column: string; scope: 'all' | 'selected'; mode: typeof modes[number]; bins: QueryResultHistogramBins };
+const modes = ['summary', 'frequency', 'histogram', 'calendar', 'overview'] as const;
+type Request = { column: string; scope: 'all' | 'selected'; mode: typeof modes[number]; bins: QueryResultHistogramBins; calendarUnit: QueryResultCalendarUnit };
 type Operation = { request: Request; capture: QueryResultStatisticsCapture; scan: QueryResultStatisticsScan; timer?: ReturnType<typeof setTimeout> };
 type View = { request: Request; processed: number; total: number; binning?: true; result?: QueryResultStatisticsResult; error?: string };
 
@@ -39,7 +41,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
       return { indices, capture, options, error: '' };
     } catch (reason) { return { indices: new Set<number>() as ReadonlySet<number>, capture: undefined, options: [] as { key: string; name: string }[], error: errorMessage(reason) }; }
   });
-  const [request, setRequest] = useState<Request>(() => ({ column: prepared.capture?.column.key ?? '', scope: prepared.indices.size ? 'selected' : 'all', mode: 'summary', bins: 10 }));
+  const [request, setRequest] = useState<Request>(() => ({ column: prepared.capture?.column.key ?? '', scope: prepared.indices.size ? 'selected' : 'all', mode: 'summary', bins: 10, calendarUnit: 'month' }));
   const requestRef = useRef(request), firstRequest = useRef(request).current;
   const [view, setView] = useState<View>({ request, processed: 0, total: prepared.capture?.rowCount ?? 0, error: prepared.error });
   const operation = useRef<Operation | undefined>(undefined), alive = useRef(true), invalid = useRef(false), closed = useRef(false);
@@ -72,7 +74,8 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
       if (!column) throw Error(text.stale);
       const capture = request === firstRequest ? prepared.capture : captureQueryResultStatistics(origin.columns, origin.rows, column, request.scope === 'selected' ? prepared.indices : undefined, origin.sqliteSource, origin.dialect);
       lastCapture.current = capture;
-      const mode = request.mode === 'histogram' ? { histogram: request.bins } : request.mode === 'frequency';
+      const mode = request.mode === 'histogram' ? { histogram: request.bins } :
+        request.mode === 'calendar' ? { calendar: request.calendarUnit } : request.mode === 'frequency';
       active = { request, capture, scan: new QueryResultStatisticsScan(capture, mode) }; operation.current = active;
       setView({ request, processed: 0, total: capture.rowCount });
     } catch (reason) { setView({ request, processed: 0, total: 0, error: errorMessage(reason) }); return; }
@@ -100,7 +103,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
   /** 选择只使用首次勾选快照；同步换请求引用，旧列或范围回调不能覆盖后继扫描。 */
   function change(next: Request): void {
     if (committed.current !== ticket || requestRef.current !== request || !environment() || next.scope === 'selected' && !prepared.indices.size || !prepared.options.some(column => column.key === next.column)) return;
-    if (next.column === request.column && next.scope === request.scope && next.mode === request.mode && next.bins === request.bins) return;
+    if (next.column === request.column && next.scope === request.scope && next.mode === request.mode && next.bins === request.bins && next.calendarUnit === request.calendarUnit) return;
     // 显式切换时允许一次完整复核，不能用新捕获追认上一轮已经漂移的原值。
     if (lastCapture.current && !currentQueryResultStatistics(lastCapture.current, origin.columns, origin.rows)) {
       invalid.current = true; stop(); setView({ request, processed: 0, total: 0, error: text.stale }); return;
@@ -120,6 +123,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
     summary: text.scanning,
     frequency: text.scanningFrequency,
     histogram: view.binning ? text.binningHistogram : text.scanningHistogram,
+    calendar: text.calendarScanning,
   };
   /** 过期按钮无法开启筛选；追加失败保留当前统计与已有草稿。 */
   function applyStatisticsFilter(build: () => QueryResultFilterRule | QueryResultFilterGroup): void {
@@ -153,12 +157,12 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
     [text.repeatedRows, result.quality && result.nonNull - result.quality.singletons],
   ] as const;
   return <div data-query-result-statistics-owner={owner}><Modal title={text.title} onClose={close} wide><div className="modal-content">
-    <p>{text.notice}</p><UsageHelp>
+    <p>{text.notice}</p>{request.mode !== 'calendar' && <UsageHelp>
       {request.mode === 'histogram' && <p>{text.histogramHint}</p>}
       {request.mode === 'frequency' && <><p>{text.frequencyHint}</p>{onFilter && <p>{text.frequencyFilterHint}</p>}</>}
       {onFilter && request.mode !== 'histogram' && <p>{text.qualityFilterHint}</p>}
       {request.mode === 'summary' && <><p>{sqliteSource ? text.sqliteHint : dialect === 'postgresql' ? text.postgresHint : text.hint}</p><p>{text.qualityHint}</p><p>{text.standardDeviationHint}</p></>}
-    </UsageHelp>{truncated && <p role="note">{text.truncated}</p>}
+    </UsageHelp>}{truncated && <p role="note">{text.truncated}</p>}
     <div className="filter-inputs">{request.mode !== 'overview' && <label>{text.column}<select aria-label={text.column} value={request.column} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...request, column: event.target.value }); }}>{prepared.options.map(column => <option key={column.key} value={column.key}>{column.name || column.key} · {column.key}</option>)}</select></label>}
       <label>{text.scope}<select aria-label={text.scope} value={request.scope} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && (event.target.value === 'all' || event.target.value === 'selected')) change({ ...request, scope: event.target.value }); }}><option value="all">{text.all}</option><option value="selected" disabled={!prepared.indices.size}>{text.selected}</option></select></label></div>
     <div className="query-result-frequency-modes" role="group" aria-label={text.mode}>{modes.map(mode => <button key={mode} type="button" aria-pressed={mode === request.mode} className={mode === request.mode ? 'selected' : ''} disabled={!valid || !prepared.capture} onClick={() => change({ ...request, mode })}>{text[mode]}</button>)}</div>
@@ -167,6 +171,12 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
         const bins = queryResultHistogramBins.find(value => String(value) === event.target.value);
         if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && bins) change({ ...request, bins });
       }}>{queryResultHistogramBins.map(bins => <option key={bins} value={bins}>{bins}</option>)}</select>
+    </label></div>}
+    {request.mode === 'calendar' && <div className="filter-inputs"><label>{text.calendarUnit}
+      <select aria-label={text.calendarUnit} value={request.calendarUnit} disabled={!valid || !prepared.capture} onChange={event => {
+        const calendarUnit = queryResultCalendarUnits.find(unit => unit === event.target.value);
+        if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && calendarUnit) change({ ...request, calendarUnit });
+      }}>{queryResultCalendarUnits.map(unit => <option key={unit} value={unit}>{text.calendarUnits[unit]}</option>)}</select>
     </label></div>}
     {!valid && !closed.current && <ErrorBox message={text.stale}/>}<ErrorBox message={current ? view.error : undefined}/>
     {valid && current && request.mode !== 'overview' && !view.result && !view.error && <p role="status">{scanning[request.mode]} {text.progress(view.processed, view.total)}</p>}
@@ -183,6 +193,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
       </div>}
     </section>}
     {result && request.mode === 'histogram' && (result.histogram ? <TableHistogramChart histogram={result.histogram}/> : <p>{text.histogramUnavailable} {result.reason}</p>)}
+    {result && request.mode === 'calendar' && (result.calendar ? <QueryResultCalendarChart distribution={result.calendar}/> : <p>{text.calendarUnavailable} {result.reason}</p>)}
     {result && request.mode === 'frequency' && <>{result.frequency ? <QueryResultFrequencyChart frequency={result.frequency} count={result.count} nulls={result.nulls} onFilter={onFilter ? filterFrequency : undefined}/> : <p>{text.frequencyUnavailable} {result.reason}</p>}{result.floatInput && <p>{text.floatInput}</p>}</>}
     {result && request.mode === 'summary' && <><dl aria-label={text.title}>{labels.map(label => <div key={label}><dt>{text[label]}</dt><dd aria-label={text[label]} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result[label] ?? text.unavailable}</dd></div>)}</dl>{result.sqliteTypes && <dl aria-label={text.sqliteTypes}>{(['integer', 'real', 'text', 'blob', 'null'] as const).map(kind => <div key={kind}><dt>{kind.toUpperCase()}</dt><dd aria-label={text.sqliteTypeCount(kind)}>{result.sqliteTypes![kind]}</dd></div>)}</dl>}{result.approximate && <p>{text.approximate}</p>}{result.floatInput && <p>{text.floatInput}</p>}{result.averageRounded && <p title={text.averageRounded}>{text.rounded}</p>}{result.standardDeviationRounded && <p title={text.standardDeviationHint}>{text.standardDeviationRounded}</p>}{result.reason && <p>{text.reason}：{result.reason}</p>}</>}
   </div><footer className="modal-footer"><span className="grow"/><button onClick={close}>{result || request.mode === 'overview' ? text.close : text.cancel}</button></footer></Modal></div>;
