@@ -213,3 +213,17 @@ it('JSON_TABLE 区分文档、PASSING、列定义和外层别名', () => {
   expect(at("MERGE INTO orders d USING JSON_TABLE('{}', '$' COLUMNS (id int)) j ON d.id=¦j.id WHEN MATCHED THEN DELETE"))
     .toMatchObject({ status: 'ready' });
 });
+
+it('XMLTABLE 在 SQL 表达式中绑定前序来源，保留列类型及命名空间元数据', () => {
+  const sql = `SELECT x.id FROM documents d, XMLTABLE(XMLNAMESPACES(d.uri AS n), CASE WHEN d.n>0 THEN d.xpath ELSE '/r' END
+    PASSING BY REF d.doc BY VALUE COLUMNS id d.typ PATH d.path DEFAULT d.n NOT NULL) x`;
+  expect(at(sql.replace('d.uri', '¦d.uri'))).toMatchObject({ status: 'ready',
+    declaration: { start: sql.indexOf('documents d') + 'documents '.length }, references: Array(6).fill(expect.any(Object)) });
+  expect(at(sql.replace('d.typ', '¦d.typ'))).toMatchObject({ status: 'blocked' });
+  expect(at(sql.replace('SELECT x', 'SELECT ¦x'))).toMatchObject({ status: 'ready', declaration: { start: sql.length - 1 } });
+  expect(at(sql.replace('d.path', '¦x.path'))).toMatchObject({ status: 'blocked' });
+  expect(at("SELECT x.id FROM documents d RIGHT JOIN XMLTABLE('/r' PASSING ¦d.doc COLUMNS id int) x ON true")).toMatchObject({ status: 'blocked' });
+  expect(at("MERGE INTO documents d USING XMLTABLE('/r' PASSING ¦d.doc COLUMNS id int) x ON d.id=x.id WHEN MATCHED THEN DELETE"))
+    .toMatchObject({ status: 'blocked' });
+  expect(at('SELECT ¦x.id FROM xmltable x')).toMatchObject({ status: 'ready' });
+});

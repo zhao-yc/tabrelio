@@ -195,3 +195,11 @@ it('JSON_TABLE 的输入别名和输出别名独立重命名，路径与变量�
   const merge = "MERGE INTO orders d USING JSON_TABLE('{}', '$' COLUMNS (id int)) AS ¦j ON d.id=j.id WHEN MATCHED THEN DELETE RETURNING j.id";
   expect(edited(merge, '解析')).toBe(merge.replace('¦j', '"解析"').replaceAll('j.id', '"解析".id'));
 });
+
+it('重命名 XMLTABLE 的来源时改写 SQL 表达式并保留 XPath 文本', () => {
+  const sql = `SELECT x.id FROM documents ¦d, XMLTABLE(XMLNAMESPACES(d.uri AS n), d.xpath
+    PASSING d.doc COLUMNS id int DEFAULT d.n PATH (d.path || '/d.id') NOT NULL) x`;
+  expect(edited(sql, '文档')).toBe(sql.replace('¦d', '"文档"').replaceAll(/d\.(uri|xpath|doc|n|path)\b/g, '"文档".$1'));
+  const merge = "MERGE INTO orders d USING XMLTABLE('/r' PASSING xmlparse(document '<r/>') COLUMNS id int) AS ¦x ON d.id=x.id WHEN MATCHED THEN DELETE RETURNING x.id";
+  expect(edited(merge, '解析')).toBe(merge.replace('¦x', '"解析"').replaceAll('x.id', '"解析".id'));
+});

@@ -40,7 +40,8 @@ const expressionEntries = new Set(['SELECT', 'WHERE', 'HAVING', 'ON', 'RETURNING
 const expressionOperators = new Set(['(', '[', ',', '=', '+', '-', '*', '/', '%', '<', '>', '|', '&', '^', '~']);
 const unknown: Projection = { names: [], stars: [], exact: false };
 const referenceCommands = new Set(['SELECT', 'WITH', 'VALUES', 'TABLE']);
-const unsupportedReferenceSyntax = new Set(['TABLESAMPLE', 'SEARCH', 'CYCLE', 'XMLTABLE']);
+const unsupportedReferenceSyntax = new Set(['TABLESAMPLE', 'SEARCH', 'CYCLE']);
+const declaredTableSyntax = new Set(['JSON_TABLE', 'XMLTABLE']);
 
 /** PostgreSQL 未引用标识符折叠 ASCII 大写字母，引用名称保留原大小写。 */
 const identifier = (part?: Part) => part?.kind === 'identifier' && !part.open ? part.text
@@ -267,7 +268,7 @@ function traceExpressions(parts: Part[], scope: Scope, refs: ScopedRelation[], o
       i = span.end - 1;
       continue;
     }
-    if (word === 'JSON_TABLE' && parts[i + 1]?.kind === 'group' && !punct(parts[i - 1], '.')) {
+    if (declaredTableSyntax.has(word) && parts[i + 1]?.kind === 'group' && !punct(parts[i - 1], '.')) {
       trace.unsupported = true;
       return;
     }
@@ -459,7 +460,7 @@ function readFunctionCall(parts: Part[], start: number): ParsedFunctionCall | un
   let name = identifier(parts[index]);
   let schema: string | undefined;
   const word = keyword(parts[index++]);
-  if (!name || word === 'JSON_TABLE' || stop.has(word)) return;
+  if (!name || declaredTableSyntax.has(word) || stop.has(word)) return;
   if (punct(parts[index], '.')) {
     schema = name;
     name = identifier(parts[index + 1]);
@@ -489,6 +490,15 @@ function typedColumnNames(group?: Part): string[] | undefined {
 }
 
 interface TableFunctionSource { relation: ScopedRelation; args: Group[]; next: number; }
+
+/** 特殊表来源的投影只来自语句中的列定义和位置别名。 */
+function declaredTableSource(parts: Part[], next: number, name: string, names: string[],
+  args: Group[]): TableFunctionSource | false {
+  const alias = readRelationAlias(parts, next, true);
+  if (!alias || alias.names && alias.names.length > names.length || new Set(names).size !== names.length) return false;
+  const projection = rename({ names: names.slice(0, limits.items), stars: [], exact: names.length <= limits.items }, alias.names ?? []);
+  return { relation: { name, alias: alias.alias, declaration: alias.declaration, projection }, args, next: alias.next };
+}
 
 /** 路径是字符串常量，可有名称。路径名不属于 SQL 关系作用域。 */
 function jsonTablePathEnd(parts: Part[], start: number): number | undefined {
@@ -566,13 +576,121 @@ function readJsonTable(parts: Part[], start: number, partial: boolean): TableFun
   const relation: ScopedRelation = { name: 'json_table', projection: unknown };
   if (index === undefined || keyword(tokens[index]) !== 'COLUMNS') return partial ? { relation, args, next: start + 2 } : false;
   const names: string[] = [];
-  if (!jsonTableColumns(tokens[index + 1], names) || new Set(names).size !== names.length) return false;
+  if (!jsonTableColumns(tokens[index + 1], names)) return false;
   const suffix = tokens.slice(index + 2);
   if (suffix.length && !['ERROR ON ERROR', 'EMPTY ON ERROR', 'EMPTY ARRAY ON ERROR'].includes(suffix.map(keyword).join(' '))) return false;
-  const alias = readRelationAlias(parts, start + 2, true);
-  if (!alias || alias.names && alias.names.length > names.length) return false;
-  const projection = rename({ names: names.slice(0, limits.items), stars: [], exact: names.length <= limits.items }, alias.names ?? []);
-  return { relation: { ...relation, alias: alias.alias, declaration: alias.declaration, projection }, args, next: alias.next };
+  return declaredTableSource(parts, start + 2, relation.name, names, args);
+}
+
+/** 保留表达式首尾的空白范围，让尚未输入第一个词或未完成限定名时仍可补全。 */
+function xmlTableExpression(body: Group, first: number, last: number): Group {
+  const { parts } = body;
+  return { kind: 'group', closing: ')', closed: false, start: (parts[first - 1]?.end ?? body.start + 1) - 1,
+    end: parts[last]?.start ?? body.end - Number(body.closed), parts: parts.slice(first, last) };
+}
+
+/** 点号后的同名词和类型限定词仍属于原表达式，不是 XMLTABLE 子句。 */
+function xmlClause(parts: Part[], index: number): string {
+  return punct(parts[index - 1], '.') || punct(parts[index - 1], ':') || punct(parts[index + 1], '.')
+    ? '' : keyword(parts[index]);
+}
+
+function findXmlClause(parts: Part[], start: number, clause: string): number {
+  let cases = 0;
+  for (let i = start; i < parts.length; i++) {
+    const word = xmlClause(parts, i);
+    if (word === 'CASE') cases++;
+    if (word === 'END' && cases) cases--;
+    if (!cases && i > start && word === clause) return i;
+  }
+  return -1;
+}
+
+/** PATH 和 DEFAULT 是 SQL 表达式。类型、列名和 NULL 约束保留在声明区域。 */
+function xmlTableColumn(column: Group, args: Group[], partial: boolean): string | undefined {
+  const { parts } = column;
+  const name = identifier(parts[0]);
+  if (!name || name.length > limits.name || !identifier(parts[1])) return;
+  if (keyword(parts[1]) === 'FOR') return parts.length === 3 && keyword(parts[2]) === 'ORDINALITY' ? name : undefined;
+  if (keyword(parts[1]) === 'SETOF') return;
+  const options = new Set<string>();
+  let first: number | undefined, cases = 0;
+  for (let i = 2; i < parts.length; i++) {
+    const word = xmlClause(parts, i);
+    const preceding = parts[i - 1];
+    if (word === 'CASE') cases++;
+    if (word === 'END' && cases) { cases--; continue; }
+    if (cases || i === first || preceding.kind === 'punct' && expressionOperators.has(preceding.text)) continue;
+    const notNull = word === 'NOT' && keyword(parts[i + 1]) === 'NULL';
+    const option = notNull ? 'NULL' : word;
+    if (option !== 'PATH' && option !== 'DEFAULT' && option !== 'NULL') continue;
+    if (options.has(option)) return;
+    options.add(option);
+    if (first !== undefined) args.push(xmlTableExpression(column, first, i));
+    if (notNull) i++;
+    first = option === 'NULL' ? undefined : i + 1;
+  }
+  if (first !== undefined) {
+    if (first === parts.length && !partial) return;
+    args.push(xmlTableExpression(column, first, parts.length));
+  }
+  return name;
+}
+
+/** 命名空间 URI、行路径、文档、列路径和默认值共用前序 FROM 来源。 */
+function readXmlTable(parts: Part[], start: number, partial: boolean): TableFunctionSource | false {
+  const body = parts[start + 1];
+  if (body?.kind !== 'group' || body.closing !== ')' || !partial && !body.closed) return false;
+  const tokens = body.parts;
+  const args: Group[] = [];
+  const next = start + 2;
+  const pending = { relation: { name: 'xmltable', projection: unknown }, args, next };
+  let row = 0;
+  const namespaces = tokens[1];
+  if (keyword(tokens[0]) === 'XMLNAMESPACES' && namespaces?.kind === 'group' && namespaces.closing === ')') {
+    let first = 0;
+    for (let end = 0; end <= namespaces.parts.length; end++) {
+      if (end < namespaces.parts.length && !punct(namespaces.parts[end], ',')) continue;
+      const alias = end - 2;
+      if (keyword(namespaces.parts[first]) === 'DEFAULT' && end > first + 1) {
+        args.push(xmlTableExpression(namespaces, first + 1, end));
+      } else if (alias > first && keyword(namespaces.parts[alias]) === 'AS' && identifier(namespaces.parts[alias + 1])) {
+        args.push(xmlTableExpression(namespaces, first, alias));
+      } else if (partial && end === namespaces.parts.length && !namespaces.closed) {
+        const boundary = namespaces.parts.findIndex((part, index) => index >= first && keyword(part) === 'AS');
+        args.push(xmlTableExpression(namespaces, first, boundary < 0 ? end : boundary));
+      } else return false;
+      first = end + 1;
+    }
+    if (!punct(tokens[2], ',')) return partial ? pending : false;
+    row = 3;
+  }
+  const passing = findXmlClause(tokens, row, 'PASSING');
+  args.push(xmlTableExpression(body, row, passing < 0 ? tokens.length : passing));
+  if (passing < 0) return partial ? pending : false;
+  const by = (index: number) => xmlClause(tokens, index) === 'BY' && ['REF', 'VALUE'].includes(keyword(tokens[index + 1]));
+  const document = passing + (by(passing + 1) ? 3 : 1);
+  const columns = findXmlClause(tokens, document, 'COLUMNS');
+  let end = columns < 0 ? tokens.length : columns;
+  if (end - 2 >= document && by(end - 2)) end -= 2;
+  args.push(xmlTableExpression(body, document, end));
+  if (columns < 0 || end <= document) return partial ? pending : false;
+
+  const names: string[] = [];
+  let first = columns + 1, ordinal = false;
+  for (let last = first; last <= tokens.length; last++) {
+    if (last < tokens.length && !punct(tokens[last], ',')) continue;
+    const column = xmlTableExpression(body, first, last);
+    const name = xmlTableColumn(column, args, partial);
+    if (!name) return partial && last === tokens.length ? pending : false;
+    if (keyword(tokens[first + 1]) === 'FOR') {
+      if (ordinal) return false;
+      ordinal = true;
+    }
+    names.push(name);
+    first = last + 1;
+  }
+  return declaredTableSource(parts, next, 'xmltable', names, args);
 }
 
 /** 未知函数列数时，只有确定越过位置别名的后续声明列才保留原名。 */
@@ -611,7 +729,11 @@ function tableFunctionProjection(calls: ParsedFunctionCall[], members: (string[]
 
 /** ROWS FROM 的各个实参共享外部可见关系，函数名和成员列定义不会引入新的关系别名。 */
 function readTableFunction(parts: Part[], start: number, partial: boolean): TableFunctionSource | false | undefined {
-  if (keyword(parts[start]) === 'JSON_TABLE') return readJsonTable(parts, start, partial);
+  const syntax = keyword(parts[start]);
+  if (parts[start + 1]?.kind === 'group') {
+    if (syntax === 'JSON_TABLE') return readJsonTable(parts, start, partial);
+    if (syntax === 'XMLTABLE') return readXmlTable(parts, start, partial);
+  }
   const rows = keyword(parts[start]) === 'ROWS' && keyword(parts[start + 1]) === 'FROM';
   const group = parts[start + 2];
   if (rows && (group?.kind !== 'group' || group.closing !== ')')) return false;
@@ -729,7 +851,7 @@ function completeMergeRelation(parts: Part[], start: number, entryEnd: number, t
   if ((only || lateral) && parts[start].end <= context.start) entryEnd = parts[start].end;
   if (only && first?.kind === 'group' && contains(first, context.offset)) entryEnd = first.start + 1;
   const prefix = mergeNamePrefix(context, entryEnd);
-  if (prefix && keyword(first) !== 'JSON_TABLE') {
+  if (prefix && !(declaredTableSyntax.has(keyword(first)) && parts[index + 1]?.kind === 'group')) {
     const ctes = !target && !prefix.schema ? [...scope.keys()].slice(0, limits.items) : undefined;
     const query: Query | undefined = lateral ? undefined : { kind: 'relations', ...prefix,
       ...(target ? { mergeTarget: true } : {}), ...(ctes?.length ? { ctes } : {}) };
@@ -1155,6 +1277,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   let from = false, deleteUsing = -1;
   let joinChainStart = 0;
   let argumentRefs: ScopedRelation[] | undefined;
+  let argumentStart: number | undefined;
   let inFunctionMetadata = false;
   for (let i = 0; i < (returning < 0 ? main.length : returning); i++) {
     const word = keyword(main[i]);
@@ -1181,8 +1304,13 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
         spans!.set(i, { end: call.next, relation: refs.length });
       }
       if (context && context.offset <= main[call.next - 1].end) {
-        if (call.args.some(args => contains(args, context.offset))) argumentRefs = preceding.slice();
-        else if (context.start >= call.args[0].end || keyword(main[next]) === 'ROWS' && context.start >= main[next + 1].end) {
+        const argument = call.args.find(args => contains(args, context.offset));
+        if (argument) {
+          argumentRefs = preceding.slice();
+          argumentStart = argument.start + 1;
+        }
+        else if (declaredTableSyntax.has(keyword(main[next])) && context.start >= main[next].end ||
+            context.start >= (call.args[0]?.end ?? Infinity) || keyword(main[next]) === 'ROWS' && context.start >= main[next + 1].end) {
           inFunctionMetadata = true;
         }
       }
@@ -1287,7 +1415,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     }
   }
   return { projection, query: keyword(left.at(-1)) === 'AS' ? undefined : columns(visible, outer, left),
-    routine: expressionRoutine(main, left, cursorGroup, [visible, ...outer]) };
+    routine: expressionRoutine(main, left, cursorGroup, [visible, ...outer], argumentStart) };
 }
 
 const noLocalReference = { status: 'blocked', reason: 'syntax' } as const;
@@ -1372,10 +1500,12 @@ export function analyzePostgresCompletion(source: string, offset: number): Postg
   const parts = groupStatement(all, offset, source.length);
   const left = all.filter(token => token !== target && token.end <= start && !(token.kind === 'blocked' && token.text === 'comment'));
   const parsed = parts && parseQuery(parts, new Map(), [], { offset, start, left });
-  const routine = parsed?.routine && (prefix || parsed.routine.schema) ? parsed.routine : undefined;
-  const next = routine && all.find(token => token !== target && token.start >= end && !(token.kind === 'blocked' && token.text === 'comment'));
-  return { start, end, prefix, quoted, ...(parsed?.query ? { query: parsed.query } : {}),
-    ...(routine ? { routine, existingCall: punct(next || undefined, '(') } : {}) };
+  const next = parsed?.routine && all.find(token => token !== target && token.start >= end && !(token.kind === 'blocked' && token.text === 'comment'));
+  const existingCall = punct(next, '(');
+  const declaredTable = existingCall && declaredTableSyntax.has(keyword(target)) && !punct(left.at(-1), '.');
+  const routine = !declaredTable && parsed?.routine && (prefix || parsed.routine.schema) ? parsed.routine : undefined;
+  return { start, end, prefix, quoted, ...(!declaredTable && parsed?.query ? { query: parsed.query } : {}),
+    ...(routine ? { routine, existingCall } : {}) };
 }
 
 /** 在最近的调用层定位当前实参，字面量、数组、子查询和嵌套调用内的逗号不计入外层。 */
@@ -1410,7 +1540,7 @@ export function analyzePostgresSignature(source: string, offset: number) {
     if (frame.close !== ')') continue;
     const token = tokens[frame.index - 1], name = identifier(token);
     if (!name || name.length > limits.name || stop.has(keyword(token))) continue;
-    if (keyword(token) === 'JSON_TABLE' && !punct(tokens[frame.index - 2], '.')) continue;
+    if (declaredTableSyntax.has(keyword(token)) && !punct(tokens[frame.index - 2], '.')) continue;
     const analysis = analyzePostgresCompletion(source, token.end);
     if (!analysis?.routine || !analysis.existingCall) continue;
     return { name, routine: analysis.routine, argument: frame.argument, named: namedAt(frame.start), previousNames: frame.previousNames };

@@ -3,7 +3,7 @@ import { readPostgresCompletion } from '../../src/engine/postgres/completion';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../src/shared/postgresCompletion';
 import { createPostgresCompletionProvider } from '../../src/renderer/postgresCompletionProvider';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { analyzePostgresCompletion, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
 
 /** 测试使用竖线表示编辑器光标，其余 SQL 原样进入生产词法。 */
@@ -112,6 +112,46 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
     expect(at("SELECT * FROM documents d, JSON_TABLE('{}', '$' PASSING j.| AS v COLUMNS (id int)) j")?.query).toBeUndefined();
     expect(at("SELECT * FROM documents d, JSON_TABLE('{}', '$' COLUMNS (id int DEFAULT d.| ON EMPTY)) j")?.query).toBeUndefined();
     expect(at("SELECT j.| FROM JSON_TABLE('{}', '$' COLUMNS (id int, NESTED '$' COLUMNS (id int))) j")?.query).toBeUndefined();
+  });
+  it('XMLTABLE 声明列按原顺序传播到 CTE，并应用位置别名', () => {
+    const table = `XMLTABLE(XMLNAMESPACES(d.uri AS n), d.xpath PASSING BY REF d.doc BY VALUE
+      COLUMNS seq FOR ORDINALITY, amount numeric(12,3) PATH d.amount_path, "名称" text DEFAULT d.fallback NOT NULL)`;
+    expect(at('WITH q AS (SELECT xmltable.* FROM documents d, ' + table + ') SELECT q.| FROM q')?.query)
+      .toMatchObject({ relations: [{ projection: { names: ['seq', 'amount', '名称'], stars: [], exact: true } }] });
+    expect(at('SELECT x.| FROM documents d, ' + table + ' AS x("顺序")')?.query)
+      .toMatchObject({ relations: [{ alias: 'x', projection: { names: ['顺序', 'amount', '名称'], stars: [], exact: true } }] });
+    expect(at("MERGE INTO orders d USING XMLTABLE('/r' PASSING xmlparse(document '<r/>') COLUMNS id int) x ON x.|")?.query)
+      .toMatchObject({ relations: [{ alias: 'x', projection: { names: ['id'], stars: [] } }] });
+    expect(at('SELECT x.| FROM documents d, ' + table + ' x(a,b,c,extra)')?.query).toBeUndefined();
+    expect(at('SELECT x.| FROM documents d, ' + table.replace('"名称" text DEFAULT d.fallback NOT NULL', 'seq int') + ' x')?.query).toBeUndefined();
+  });
+  it('XMLTABLE 的五类表达式可以补全前序来源，元数据、后续来源和写入目标不可见', () => {
+    const table = "XMLTABLE(XMLNAMESPACES(d.uri AS n), d.xpath PASSING BY REF d.doc BY VALUE COLUMNS id int PATH d.path DEFAULT d.n NOT NULL) x";
+    const query = 'SELECT * FROM documents d, ' + table + ', later l';
+    for (const field of ['uri', 'xpath', 'doc', 'path', 'n']) {
+      expect(at(query.replace('d.' + field, 'd.|' + field))?.query)
+        .toMatchObject({ qualified: true, relations: [{ name: 'documents', alias: 'd' }] });
+    }
+    expect(at('SELECT * FROM documents d, XMLTABLE(XMLNAMESPACES(d.|')?.query)
+      .toMatchObject({ relations: [{ alias: 'd' }] });
+    expect(at("SELECT * FROM documents d, XMLTABLE('/r' PASSING BY REF d.|")?.query)
+      .toMatchObject({ relations: [{ alias: 'd' }] });
+    expect(at(query.replace('DEFAULT d.n', 'DEFAULT tools.get_|n'))?.routine)
+      .toEqual({ context: 'expression', schema: 'tools' });
+    expect(at(query.replace('AS n', 'AS |n'))?.query).toBeUndefined();
+    expect(at(query.replace('id int', 'id d.|typ'))?.query).toBeUndefined();
+    expect(at(query.replace('d.path', 'l.|path'))?.query).toBeUndefined();
+    expect(at('UPDATE documents d SET n=1 FROM ' + table.replace('d.path', 'd.|path'))?.query).toBeUndefined();
+    expect(at("DELETE FROM documents d USING XMLTABLE('/r' PASSING d.|doc COLUMNS id int) x")?.query).toBeUndefined();
+  });
+  it('裸 XMLTABLE 调用不查例程目录，同名表和模式限定函数仍可补全', () => {
+    expect(at("SELECT * FROM XMLTABLE|('/r' PASSING doc COLUMNS id int)")).not.toHaveProperty('routine');
+    expect(at('SELECT x.| FROM xmltable x')?.query).toMatchObject({ relations: [{ name: 'xmltable', alias: 'x' }] });
+    const marked = 'SELECT * FROM tools.xmltable(|1)';
+    expect(analyzePostgresSignature(marked.replace('|', ''), marked.indexOf('|')))
+      .toMatchObject({ name: 'xmltable', routine: { context: 'from', schema: 'tools' } });
+    const table = "SELECT * FROM XMLTABLE('/r' PASSING |doc COLUMNS id int)";
+    expect(analyzePostgresSignature(table.replace('|', ''), table.indexOf('|'))).toBeUndefined();
   });
   it('遇到未知返回列时只保留确定的名称，UPDATE FROM 和 DELETE USING 共享补全', () => {
     const rows = 'ROWS FROM (unknown_rows(), get_records() AS (id int, val text)) WITH ORDINALITY AS r(key)';
@@ -344,6 +384,15 @@ it('JSON_TABLE 声明列直接补全，保持已输入的标识符范围且零�
   try {
     expect((await local.suggest())?.suggestions).toMatchObject([{ insertText: '"名称"', range: { startColumn: 10, endColumn: 12 } }]);
     expect(inputs).toEqual([]);
+  } finally { local.provider.dispose(); }
+});
+
+it('XMLTABLE 声明列补全保留引号和光标后的原标识符范围', async () => {
+  const request = vi.fn(async () => ({ items: [], incomplete: false }));
+  const local = editor(`SELECT x.名|旧 FROM XMLTABLE('/r' PASSING xmlparse(document '<r/>') COLUMNS "名称" text) x`, request);
+  try {
+    expect((await local.suggest())?.suggestions).toMatchObject([{ insertText: '"名称"', range: { startColumn: 10, endColumn: 12 } }]);
+    expect(request).not.toHaveBeenCalled();
   } finally { local.provider.dispose(); }
 });
 

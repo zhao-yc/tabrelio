@@ -18,6 +18,9 @@ const mergeCompletionSql = ['MERGE INTO orders d', 'USING (SELECT 1 AS "编号")
 const jsonTableFrom = ['FROM JSON_TABLE(\'{"id":1,"items":[{"name":"x"}]}\', \'$\'',
   '  COLUMNS (id int, NESTED PATH \'$.items[*]\' COLUMNS ("名称" text PATH \'$.name\'))', ') AS '].join('\n');
 const jsonCompletionSql = 'SELECT j.名\n' + jsonTableFrom + 'j;';
+const xmlTableFrom = "FROM XMLTABLE('/r' PASSING xmlparse(document '<r id=\"1\"><name>x</name></r>')\n" +
+  "  COLUMNS seq FOR ORDINALITY, id int PATH '@id', \"名称\" text PATH 'name') AS ";
+const xmlCompletionSql = 'SELECT x.名\n' + xmlTableFrom + 'x;';
 const postgresDrafts = [
   {
     id: 'update-draft', title: 'UPDATE 导航草稿',
@@ -70,6 +73,12 @@ const postgresDrafts = [
     referenceAfter: 'SELECT ', declarationAfter: ') AS ', original: 'j', name: '解析', highlights: 4,
     renamed: 'SELECT "解析".id,"解析"."名称"\n' + jsonTableFrom + '"解析" WHERE "解析".id>0;',
   },
+  {
+    id: 'xml-table-draft', title: 'XMLTABLE 导航草稿',
+    sql: 'SELECT x.id,x."名称"\n' + xmlTableFrom + 'x WHERE x.id>0;',
+    referenceAfter: 'SELECT ', declarationAfter: ') AS ', original: 'x', name: '文档', highlights: 4,
+    renamed: 'SELECT "文档".id,"文档"."名称"\n' + xmlTableFrom + '"文档" WHERE "文档".id>0;',
+  },
 ];
 const command = 'editor-local-references';
 
@@ -93,7 +102,7 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
       }
       await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
       // 真实持久化接口准备草稿，网络方言使用不可连接的回环配置，无需实库或凭据。
-      await page.evaluate(async ({ dialect, sql, cteSql, postgresDrafts, rowsCompletionSql, mergeCompletionSql, jsonCompletionSql }) => {
+      await page.evaluate(async ({ dialect, sql, cteSql, postgresDrafts, rowsCompletionSql, mergeCompletionSql, jsonCompletionSql, xmlCompletionSql }) => {
         const id = 'sql-reference-highlights', base = { id, name: '引用高亮样本', group: '', color: '#51bda5' };
         if (dialect === 'sqlite') {
           const file = await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
@@ -112,9 +121,10 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
             { id: 'rows-completion', kind: 'query' as const, title: '表函数字段补全', connectionId: id, sql: rowsCompletionSql },
             { id: 'merge-completion', kind: 'query' as const, title: 'MERGE 字段补全', connectionId: id, sql: mergeCompletionSql },
             { id: 'json-completion', kind: 'query' as const, title: 'JSON_TABLE 字段补全', connectionId: id, sql: jsonCompletionSql },
+            { id: 'xml-completion', kind: 'query' as const, title: 'XMLTABLE 字段补全', connectionId: id, sql: xmlCompletionSql },
           ] : []),
         ] });
-      }, { dialect, sql, cteSql, postgresDrafts, rowsCompletionSql, mergeCompletionSql, jsonCompletionSql });
+      }, { dialect, sql, cteSql, postgresDrafts, rowsCompletionSql, mergeCompletionSql, jsonCompletionSql, xmlCompletionSql });
       await page.reload();
       const tab = page.locator('.query-tab:visible'), input = tab.locator('.monaco-editor').getByRole('textbox');
       const lines = tab.locator('.view-lines .view-line');
@@ -259,16 +269,21 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
         await page.keyboard.press(undo);
         await expect.poll(async () => (await snapshot()).source).toBe(mergeCompletionSql);
 
-        await page.locator('.tab-strip').getByRole('button', { name: 'JSON_TABLE 字段补全', exact: true }).click();
-        await move(0, 'SELECT j.名'.length);
-        await expect.poll(cursorOffset).toBe('SELECT j.名'.length);
-        await page.keyboard.press('Control+Space');
-        await expect(focused).toContainText('名称');
-        await tab.screenshot({ path: info.outputPath('postgresql-json-table-completion.png') });
-        await page.keyboard.press('Enter');
-        await expect.poll(async () => (await snapshot()).source).toBe(jsonCompletionSql.replace('j.名', 'j."名称"'));
-        await page.keyboard.press(undo);
-        await expect.poll(async () => (await snapshot()).source).toBe(jsonCompletionSql);
+        for (const { name, file, sql, prefix } of [
+          { name: 'JSON_TABLE 字段补全', file: 'postgresql-json-table-completion.png', sql: jsonCompletionSql, prefix: 'j' },
+          { name: 'XMLTABLE 字段补全', file: 'postgresql-xml-table-completion.png', sql: xmlCompletionSql, prefix: 'x' },
+        ]) {
+          await page.locator('.tab-strip').getByRole('button', { name, exact: true }).click();
+          await move(0, ('SELECT ' + prefix + '.名').length);
+          await expect.poll(cursorOffset).toBe(('SELECT ' + prefix + '.名').length);
+          await page.keyboard.press('Control+Space');
+          await expect(focused).toContainText('名称');
+          await tab.screenshot({ path: info.outputPath(file) });
+          await page.keyboard.press('Enter');
+          await expect.poll(async () => (await snapshot()).source).toBe(sql.replace(prefix + '.名', prefix + '."名称"'));
+          await page.keyboard.press(undo);
+          await expect.poll(async () => (await snapshot()).source).toBe(sql);
+        }
       }
       expect(await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }))).toEqual({ tasks: [], history: [] });
       expect(pageErrors).toEqual([]);
