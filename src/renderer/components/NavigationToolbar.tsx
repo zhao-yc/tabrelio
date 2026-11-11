@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Activity, Blocks, Database, FileCode2, FolderOpen, Search, Table2, Wrench, Workflow } from 'lucide-react';
+import { Activity, Blocks, Database, FileCode2, FolderOpen, PanelRight, Search, Table2, Wrench, Workflow } from 'lucide-react';
 import type { UiCommandId } from '../../shared/uiCommands';
 import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
 import type { ObjectCategory } from '../../shared/objectBrowser';
@@ -36,6 +36,9 @@ export function NavigationToolbar({ onBrowse, onQueries, onHistory, objectTarget
     ]} more={<><ActionMenuSection label="收藏夹">{command('favorite-toggle')}{command('favorites-manage')}{command('object-link')}</ActionMenuSection><ActionMenuSection label="帮助">{command('help')}{command('shortcuts')}{command('about')}</ActionMenuSection></>}/>
     <span className="navigation-context" title={`${text.context}：${objectTarget}`}>{objectTarget}</span>
     <div className="navigation-utilities"><button className="icon-button" aria-label={uiCommandLabels['structure-search']} title={uiCommandLabels['structure-search']} disabled={!commands.enabled('structure-search')} onClick={() => commands.run('structure-search')}><Search size={17}/></button>
+      <button type="button" className="icon-button" aria-label={uiCommandLabels['object-information']} title={uiCommandLabels['object-information']}
+        aria-pressed={commands.checked('object-information')} disabled={!commands.enabled('object-information')} data-object-information-toggle
+        onClick={() => commands.run('object-information')}><PanelRight size={17}/></button>
       <button className="icon-button" aria-label={uiCommandLabels['task-center']} title={uiCommandLabels['task-center']} disabled={!commands.enabled('task-center')} onClick={() => commands.run('task-center')}><Activity size={17}/>{runningCount > 0 && <span className="count">{runningCount}</span>}</button></div>
   </div>;
 }

@@ -8,7 +8,7 @@ export const uiCommandIds = [
   'new-connection', 'new-query', 'open-sql-file', 'recent-sql-file', 'save-query', 'save-sql-file',
   'open-bound-sql-external', 'reveal-bound-sql-file', 'edit-bound-sql-external', 'external-sql-editor-preferences',
   'connections-transfer', 'connections-organize', 'find', 'replace', 'sql-goto-line', 'sql-goto-bracket', 'sql-select-bracket', 'sql-toggle-comment', 'sql-toggle-block-comment', 'sql-uppercase', 'sql-lowercase', 'toggle-theme', 'focus-mode',
-  'focus-query-pane',
+  'focus-query-pane', 'object-information',
   ...sqlLineCommandIds, 'sql-selection-to-snippet', 'sql-clipboard-stack', 'sql-copy-quoted',
   ...sqlSelectionFindCommandIds,
   'editor-font', ...sqlEditorZoomCommandIds, 'editor-word-wrap', 'editor-line-numbers', 'editor-match-brackets', 'editor-local-references', 'editor-sql-folding', 'editor-indent', 'favorite-toggle', 'favorites-manage', 'object-link',

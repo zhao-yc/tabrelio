@@ -7,6 +7,7 @@ import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { actionMenuZh } from '../../src/renderer/locales/actionMenu.zh-CN';
 import { sidebarLocateZh } from '../../src/renderer/locales/sidebarLocate.zh-CN';
 import { sidebarViewZh } from '../../src/renderer/locales/sidebarView.zh-CN';
+import { objectInformationZh } from '../../src/renderer/locales/objectInformation.zh-CN';
 import { productName } from '../../src/shared/productName';
 
 const source = readFileSync(new URL('../e2e/navigation-workbench.spec.ts', import.meta.url), 'utf8');
@@ -30,6 +31,7 @@ function collect(args: string[], values: Record<string, string | undefined>) {
       if (name === '../../src/renderer/locales/actionMenu.zh-CN') return { actionMenuZh };
       if (name === '../../src/renderer/locales/sidebarLocate.zh-CN') return { sidebarLocateZh };
       if (name === '../../src/renderer/locales/sidebarView.zh-CN') return { sidebarViewZh };
+      if (name === '../../src/renderer/locales/objectInformation.zh-CN') return { objectInformationZh };
       if (name === '../../src/shared/productName') return { productName };
       // 只有生产register里的准确夹具入口才是桌面边界；遗漏静态依赖必须明确失败。
       if (name === './desktop-fixture') throw Error('RAM已到明确桌面注册边界');

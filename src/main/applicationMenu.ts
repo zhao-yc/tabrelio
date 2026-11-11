@@ -40,7 +40,7 @@ export class ApplicationMenu {
     const mac = this.platform === 'darwin';
     const separator: MenuItemConstructorOptions = { type: 'separator' };
     const item = (id: UiCommandId, accelerator?: string): MenuItemConstructorOptions => {
-      const status = statuses.get(id), checkbox = id === 'focus-mode' || id === 'pin-query-tab' || id === 'editor-word-wrap' || id === 'editor-sql-folding' || id === 'editor-line-numbers' || id === 'editor-match-brackets' || id === 'editor-local-references';
+      const status = statuses.get(id), checkbox = id === 'focus-mode' || id === 'object-information' || id === 'pin-query-tab' || id === 'editor-word-wrap' || id === 'editor-sql-folding' || id === 'editor-line-numbers' || id === 'editor-match-brackets' || id === 'editor-local-references';
       return {
         id, label: id === 'favorite-toggle' ? status?.checked ? text.removeFavorite : text.addFavorite : labels[id], enabled: status?.enabled === true,
         ...(accelerator ? { accelerator } : {}), ...(checkbox ? { type: 'checkbox' as const, checked: status?.checked === true } : {}),
@@ -69,7 +69,7 @@ export class ApplicationMenu {
         item('sql-selection-to-snippet'), item('sql-clipboard-stack'), item('sql-copy-quoted')
       ] },
       { label: text.view, submenu: [
-        item('toggle-theme'), item('focus-mode', 'CmdOrCtrl+Shift+L'), item('focus-query-pane'), separator,
+        item('toggle-theme'), item('focus-mode', 'CmdOrCtrl+Shift+L'), item('focus-query-pane'), item('object-information'), separator,
         { label: text.zoomIn, role: 'zoomIn' }, { label: text.zoomOut, role: 'zoomOut' }, { label: text.resetZoom, role: 'resetZoom' }, { label: text.fullscreen, role: 'togglefullscreen' }, separator,
         { label: text.editor, submenu: [item('editor-font'), ...sqlEditorZoomCommandIds.map(id => item(id)), separator, item('editor-word-wrap'), item('editor-line-numbers'), item('editor-match-brackets'), item('editor-local-references'), item('editor-sql-folding'), item('editor-indent')] }
       ] },

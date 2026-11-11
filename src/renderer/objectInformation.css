@@ -1,0 +1,23 @@
+.app-body:has(>.object-information-pane){position:relative}
+.object-information-pane{display:flex;flex:0 0 340px;min-width:0;min-height:0;flex-direction:column;border-left:1px solid var(--line);background:var(--surface);color:var(--text)}
+.object-info-heading{display:flex;align-items:center;gap:8px;flex-shrink:0;min-height:42px;padding:0 10px 0 14px;border-bottom:1px solid var(--line);color:var(--accent)}
+.object-info-heading h2{font-size:12px;margin:0;color:var(--text)}
+.object-info-subject{display:grid;gap:4px;padding:14px 14px 10px;min-width:0}
+.object-info-subject strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.object-info-subject>span,.object-info-empty,.object-info-content dt,.object-info-structure li>span,.object-info-structure p{color:var(--muted)}
+.object-info-modes{display:flex;flex-shrink:0;gap:6px;padding:2px 12px 9px;border-bottom:1px solid var(--line)}
+.object-info-modes button[aria-pressed=true],.navigation-utilities button[aria-pressed=true]{color:var(--accent);background:var(--surface-3)}
+.object-info-content{flex:1;min-height:0;min-width:0;overflow:auto;padding:12px 14px}
+.object-info-content.object-info-ddl:has(.monaco-editor){overflow:hidden;padding:0}
+.object-info-content dl{display:grid;grid-template-columns:minmax(68px,max-content) 1fr;gap:11px 13px;margin:0}
+.object-info-content dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.object-info-empty{margin:0;padding:16px;line-height:1.55}
+.object-info-structure h3{margin:0;padding:6px 0;font-size:12px;color:var(--accent)}
+.object-info-structure h3 span{font-variant-numeric:tabular-nums;color:var(--muted);font-weight:normal}
+.object-info-structure ul{list-style:none;padding:0;margin:0 0 12px}
+.object-info-structure li{display:grid;gap:4px;padding:7px 0;border-bottom:1px solid var(--line-soft);overflow-wrap:anywhere}
+.object-info-structure li>span:empty{display:none}
+.object-info-structure p{margin:4px 0 12px}
+@media(max-width:1130px){
+  .object-information-pane{position:absolute;z-index:28;inset:0 0 0 auto;width:min(340px,100%);box-shadow:-12px 0 30px #0004}
+}

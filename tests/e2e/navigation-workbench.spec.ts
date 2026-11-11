@@ -6,6 +6,7 @@ import { navigationZh as text } from '../../src/renderer/locales/navigation.zh-C
 import { actionMenuZh } from '../../src/renderer/locales/actionMenu.zh-CN';
 import { sidebarLocateZh } from '../../src/renderer/locales/sidebarLocate.zh-CN';
 import { sidebarViewZh } from '../../src/renderer/locales/sidebarView.zh-CN';
+import { objectInformationZh } from '../../src/renderer/locales/objectInformation.zh-CN';
 import type { UiCommandId } from '../../src/shared/uiCommands';
 import { productName } from '../../src/shared/productName';
 
@@ -24,6 +25,7 @@ type Handler = (event: Electron.IpcMainInvokeEvent, payload: { command: string; 
 interface Audit {
   summary(): Summary; replaceObjects(objects: DatabaseObject[]): void;
   holdObjects(): void; releaseObjects(objects: DatabaseObject[]): void;
+  holdTableDefinition(): void; releaseTableDefinition(): void;
   prepareReload(): void; restore(): void;
 }
 type AuditRoot = typeof globalThis & { __navigationWorkbenchAudit?: Audit };
@@ -120,7 +122,8 @@ function register(): void {
       if (root.__navigationWorkbenchAudit || !original || windows.length !== 1 || !contents?.mainFrame) throw Error('导航专项原Main不唯一');
       let frame = contents.mainFrame, token = frame.frameToken, rendererProcess = frame.processId, reloadArmed = false, reboundFrames = 0;
       const url = contents.getURL(), calls: ReadCall[] = [], prohibited: string[] = [], held: { call: ReadCall; finish(value: unknown): void }[] = [];
-      let objects = input.objects, hold = false;
+      const definitions: (() => void)[] = [];
+      let objects = input.objects, hold = false, holdDefinition = false;
       /** 仅显式受控reload可更换原webContents下的frame；窗口、处理器和页面地址始终固定。 */
       const check = (event?: Electron.IpcMainInvokeEvent) => {
         if (root.__navigationWorkbenchAudit !== state || handlers.get('dbark:request') !== wrapped || contents.isDestroyed() || window.isDestroyed() || contents.getURL() !== url || BrowserWindow.getAllWindows().length !== 1) throw Error('导航专项原Main/端口归属失效');
@@ -132,16 +135,18 @@ function register(): void {
         if (event && (event.sender !== contents || event.senderFrame !== frame)) throw Error('导航专项请求不属于原frame');
       };
       const state: Audit = {
-        summary() { check(); return { calls: calls.map(call => ({ ...call })), prohibited: [...prohibited], pending: held.length, reboundFrames }; },
+        summary() { check(); return { calls: calls.map(call => ({ ...call })), prohibited: [...prohibited], pending: held.length + definitions.length, reboundFrames }; },
         replaceObjects(next) { check(); if (held.length || next.length > 6000) throw Error('合成目录预算或在途归属无效'); objects = next; },
         holdObjects() { check(); hold = true; },
         releaseObjects(next) { check(); if (next.length > 6000) throw Error('合成目录超预算'); objects = next; hold = false; for (const item of held.splice(0)) { item.call.released = true; item.finish({ ok: true, result: objects }); } },
-        prepareReload() { check(); if (held.length || reloadArmed) throw Error('目录仍在途或重载已占用'); reloadArmed = true; },
-        restore() { check(); if (held.length) throw Error('导航目录仍在途，不能恢复端口'); handlers.set('dbark:request', original); delete root.__navigationWorkbenchAudit; }
+        holdTableDefinition() { check(); holdDefinition = true; },
+        releaseTableDefinition() { check(); holdDefinition = false; for (const release of definitions.splice(0)) release(); },
+        prepareReload() { check(); if (held.length || definitions.length || reloadArmed) throw Error('目录仍在途或重载已占用'); reloadArmed = true; },
+        restore() { check(); if (held.length || definitions.length) throw Error('导航目录仍在途，不能恢复端口'); handlers.set('dbark:request', original); delete root.__navigationWorkbenchAudit; }
       };
       const wrapped: Handler = async (event, payload) => {
         check(event); const command = payload.command;
-        const read = ['connections.open', 'connections.close', 'metadata.databases', 'metadata.objects', 'metadata.table', 'table.page', 'metadata.ddl'].includes(command);
+        const read = ['connections.open', 'connections.close', 'metadata.databases', 'metadata.objects', 'metadata.table', 'metadata.tableElements', 'table.page', 'metadata.ddl'].includes(command);
         if (read) {
           if ((payload.input.id ?? payload.input.connectionId) !== input.id) throw Error('合成读取拒绝其它连接');
           const profiles = await original(event, { command: 'connections.list', input: {} }) as { ok: boolean; result?: { id: string; host: string; port: number; user: string }[] }; check(event);
@@ -163,8 +168,17 @@ function register(): void {
           if (command === 'metadata.ddl') {
             const definition = object.kind === 'procedure' ? `CREATE PROCEDURE \`${object.name}\`() SELECT 1;`
               : object.kind === 'function' ? `CREATE FUNCTION \`${object.name}\`() RETURNS INT DETERMINISTIC RETURN 1;`
+              : object.kind === 'table' ? `CREATE TABLE \`${object.name}\` (id BIGINT);`
               : `CREATE VIEW \`${object.name}\` AS SELECT 1 AS id;`;
-            return { ok: true, result: `-- 导航离线定义 ${object.kind}\n${definition}` };
+            const response = { ok: true, result: `-- 导航离线定义 ${object.kind}\n${definition}` };
+            if (holdDefinition && object.kind === 'table') {
+              call.released = false;
+              return new Promise(finish => definitions.push(() => { call.released = true; finish(response); }));
+            }
+            return response;
+          }
+          if (command === 'metadata.tableElements' && object.kind === 'table') {
+            return { ok: true, result: { columns: [{ name: 'id', type: 'bigint', primary: true, generated: false }], indexes: [], foreignKeys: [] } };
           }
           const metadata: TableInfo = { database, name: object.name, objectKind: object.kind as 'table' | 'view', columns: [{ name: 'id', type: 'bigint', nullable: false, defaultValue: null, extra: '', comment: '', generated: false }], indexes: [], foreignKeys: [], primaryKey: object.kind === 'table' ? ['id'] : [], editableKey: object.kind === 'table' ? ['id'] : [], engine: object.kind === 'table' ? 'InnoDB' : '', ddl: `-- 导航离线定义 ${object.name}` };
           if (command === 'metadata.table') return { ok: true, result: metadata };
@@ -406,6 +420,58 @@ function register(): void {
     await expect(runtime.page.getByRole('dialog')).toContainText(routine);
     await expect.poll(async () => (await audit()).calls.filter(call => call.command === 'metadata.ddl').map(call => ({ database: call.database, name: call.name, kind: call.kind })) ).toEqual([{ database: alpha, name: routine, kind: 'procedure' }]);
     await runtime.page.keyboard.press('Escape'); await originalPreserved();
+  });
+
+  test('原生对象信息跟随同名不同类对象，旧 DDL 回包不能覆盖新定义', async () => {
+    const t = objectInformationZh;
+    const pane = runtime.page.getByRole('complementary', { name: t.title, exact: true });
+    const toggle = toolbar().getByRole('button', { name: t.title, exact: true });
+    const ddl = pane.locator('.object-info-content .view-lines');
+    await expect.poll(() => nativeEnabled('object-information')).toBe(true);
+    await native('object-information');
+    await expect(pane.getByText(t.select, { exact: true })).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect((await audit()).calls).toEqual([]);
+    await chooseObjects();
+    const tabs = (await settings()).tabs, before = (await audit()).calls;
+    await row('table', alpha, same, browser()).click({ button: 'right' });
+    await runtime.page.keyboard.press('Escape');
+    await expect(pane.locator('.object-info-subject')).toContainText(same);
+    expect((await audit()).calls).toEqual(before);
+    await pane.getByRole('button', { name: t.structure, exact: true }).click();
+    await expect(pane.getByRole('region', { name: '字段', exact: true })).toContainText('bigint');
+    await main(() => (globalThis as AuditRoot).__navigationWorkbenchAudit!.holdTableDefinition());
+    await pane.getByRole('button', { name: t.ddl, exact: true }).click();
+    await expect.poll(async () => (await audit()).pending).toBe(1);
+    await browser().getByRole('combobox', { name: text.type, exact: true }).selectOption('view');
+    await row('view', alpha, same, browser()).click({ button: 'right' });
+    await runtime.page.keyboard.press('Escape');
+    await expect(pane.getByRole('button', { name: t.structure, exact: true })).toHaveCount(0);
+    await expect(ddl).toContainText('CREATE VIEW');
+    await main(() => (globalThis as AuditRoot).__navigationWorkbenchAudit!.releaseTableDefinition());
+    await expect(ddl).toContainText('CREATE VIEW');
+    await pane.getByRole('button', { name: t.find, exact: true }).click();
+    const find = pane.locator('.find-widget.visible');
+    await expect(find).toBeVisible();
+    await find.getByRole('textbox', { name: 'Find', exact: true }).fill('CREATE VIEW');
+    await expect(find.locator('.matchesCount')).toContainText('1 of 1');
+    await runtime.page.keyboard.press('Escape');
+    const definitions = (await audit()).calls.filter(call => call.command === 'metadata.ddl');
+    expect(definitions.map(call => [call.database, call.name, call.kind])).toEqual([[alpha, same, 'table'], [alpha, same, 'view']]);
+    expect((await settings()).tabs.map(tab => tab.id)).toEqual(tabs.map(tab => tab.id));
+    await originalPreserved();
+
+    await main(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(1024, 680); });
+    const work = runtime.page.locator('.main-workspace');
+    await expect.poll(() => runtime.page.evaluate(() => innerWidth)).toBeLessThanOrEqual(1130);
+    const width = (await work.boundingBox())!.width;
+    await expect(pane).toBeVisible();
+    await runtime.page.screenshot({ path: info.outputPath('窄窗口对象信息.png') });
+    await pane.getByRole('button', { name: t.close, exact: true }).click();
+    await expect(pane).toHaveCount(0);
+    await expect(toggle).toBeFocused();
+    expect((await work.boundingBox())!.width).toBe(width);
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   });
 
   test('对象页布局恢复只重读目录，刷新中的迟到目录不能保留旧菜单目标', async () => {
