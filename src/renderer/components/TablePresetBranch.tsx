@@ -21,8 +21,9 @@ export function TablePresetBranch({ kind, connectionId, database, table, connect
 
   function connectionCurrent(): boolean {
     const state = useWorkspace.getState();
+    const dialect = state.connections.find(profile => profile.id === connectionId)?.dialect;
     return (state.connectionVersions[connectionId] ?? 0) === connectionVersion &&
-      state.connections.find(profile => profile.id === connectionId)?.dialect === (kind === 'postgres' ? 'postgresql' : 'sqlite');
+      (kind === 'mysql' ? dialect === 'mysql' || dialect === 'mariadb' : dialect === (kind === 'postgres' ? 'postgresql' : 'sqlite'));
   }
 
   async function load() {
@@ -31,7 +32,7 @@ export function TablePresetBranch({ kind, connectionId, database, table, connect
     try {
       if (!connectionCurrent() || kind === 'sqlite' && database !== 'main') return;
       const result = kind === 'sqlite' ? await invoke('sqlite.tablePresets.list', { ...target, database: 'main' }) :
-        await invoke('postgres.table.presets.list', target);
+        await invoke(kind === 'postgres' ? 'postgres.table.presets.list' : 'table.presets.list', target);
       if (generation !== request.current || !connectionCurrent()) return;
       loaded.current = result; setSnapshot(result);
     } catch (reason) {

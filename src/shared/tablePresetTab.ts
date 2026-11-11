@@ -1,5 +1,6 @@
-const prefixes = { postgres: 'postgres-preset:', sqlite: 'sqlite-preset:' } as const;
-export type TablePresetTabKind = keyof typeof prefixes;
+export const tablePresetTabKinds = ['mysql', 'postgres', 'sqlite'] as const;
+export type TablePresetTabKind = typeof tablePresetTabKinds[number];
+const prefixes = { mysql: 'mysql-preset:', postgres: 'postgres-preset:', sqlite: 'sqlite-preset:' } as const;
 
 /** 标签仅保存方案和标签编号，条件值仍由本机方案库保存。 */
 export function tablePresetTabId(kind: TablePresetTabKind, presetId: string, nonce: string): string {

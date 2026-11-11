@@ -1,8 +1,13 @@
-import { confirmOwnedDesktopExit, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
+import { answerDialogs, confirmOwnedDesktopExit, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import { tableGridZh as layoutText } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { tablePresetsZh as text } from '../../src/renderer/locales/tablePresets.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import type { CommandMap } from '../../src/shared/contracts';
+import { tableFilterEnabledZh } from '../../src/renderer/locales/tableFilterEnabled.zh-CN';
+import { tableFilteredSelectZh as selectText } from '../../src/renderer/locales/tableFilteredSelect.zh-CN';
+
+type PageInput = CommandMap['table.page']['input'];
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
@@ -103,6 +108,123 @@ test('MySQL 和 MariaDB 表方案恢复筛选排序和列布局', async ({}, inf
     await apply.click();
     await expect(preset.getByText(text.appliedWithLayout)).toBeVisible();
     await expect(data).toHaveText(['match C', 'match A']);
+
+    // 旁观真实 Main 请求，核对展开只读配置、独立标签直接读首屏且没有无条件请求。
+    await desktop.evaluate(({ ipcMain }, table) => {
+      type Request = { command: string; input: PageInput };
+      type Handler = (event: Electron.IpcMainInvokeEvent, request: Request) => Promise<unknown>;
+      const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, Handler> })._invokeHandlers;
+      const original = handlers.get('dbark:request');
+      if (!original) throw Error('缺少正式分页入口');
+      const reads: PageInput[] = [];
+      Object.assign(globalThis, { networkPresetTreeReads: reads });
+      handlers.set('dbark:request', (event, request) => {
+        if (request.command === 'table.page' && [table, 'profile_view'].includes(request.input.table)) reads.push(request.input);
+        return original(event, request);
+      });
+    }, table);
+    const reads = () => desktop.evaluate(() => (globalThis as typeof globalThis & { networkPresetTreeReads: PageInput[] }).networkPresetTreeReads);
+    const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+    const tree = page.locator('.sidebar');
+    const branch = tree.getByRole('group', { name: text.treeExpand(table), exact: true });
+    const entry = branch.getByRole('button', { name: text.treeOpen('组合方案'), exact: true });
+    const openDatabase = async () => {
+      await tree.getByRole('button', { name: '本例表方案', exact: true }).click();
+      await tree.getByRole('button', { name: database, exact: true }).click();
+    };
+    const expandTree = async () => {
+      await openDatabase();
+      await tree.getByRole('button', { name: text.treeExpand(table), exact: true }).click();
+      await expect(entry).toBeVisible();
+    };
+    await expandTree();
+    expect(await reads()).toEqual([]);
+    await (await navigationMenuItem(pane, { name: tableFilterEnabledZh.clear, exact: true })).click();
+    await expect(data).toHaveCount(3);
+    await pane.getByRole('button', { name: zh.table.text006, exact: true }).click();
+    await pane.getByLabel(zh.table.text011, { exact: true }).fill('原标签输入');
+    const beforeOpen = await reads();
+    await entry.click();
+    await expect(data).toHaveText(['match C', 'match A']);
+    await expect(headers.nth(1)).toHaveCSS('width', '310px');
+    await expect(headers.filter({ hasText: /^payload/i })).toHaveCount(0);
+    await expect(pane.getByText(layoutText.unsaved, { exact: true })).toHaveCount(0);
+    const first = (await reads()).slice(beforeOpen.length);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({ page: 1, pageSize: (await settings()).pageSize, filters: [{ column: 'label', operator: 'LIKE', value: 'match%' }], sort: [{ column: 'id', direction: 'DESC' }] });
+    await expect.poll(async () => (await settings()).tabs.length).toBe(2);
+    const presetId = (await settings()).activeTabId!;
+    expect(presetId).toMatch(/^mysql-preset:/);
+    await entry.click();
+    expect((await reads()).slice(beforeOpen.length)).toEqual(first);
+    await page.screenshot({ path: info.outputPath('对象树独立表方案.png') });
+    await (await navigationMenuItem(pane, { name: selectText.entry, exact: true })).click();
+    const draft = page.getByRole('dialog', { name: selectText.title, exact: true });
+    const sql = draft.getByLabel(selectText.preview, { exact: true });
+    await expect(sql).toContainText("`label` LIKE _utf8mb4 X'" + Buffer.from('match%').toString('hex') + "'");
+    await expect(sql).toContainText(/ORDER BY `id` DESC/);
+    await draft.getByRole('button', { name: zh.common.close, exact: true }).click();
+    expect((await reads()).slice(beforeOpen.length)).toEqual(first);
+
+    await page.locator('[data-workspace-tab-id="profile"] .tab-select').click();
+    await expect(data).toHaveCount(3);
+    await expect(pane.getByLabel(zh.table.text011, { exact: true })).toHaveValue('原标签输入');
+    await entry.click();
+    await expect(data).toHaveText(['match C', 'match A']);
+    await expect.poll(async () => (await settings()).activeTabId).toBe(presetId);
+    const beforeReload = await reads();
+    await page.reload();
+    await expect(data).toHaveText(['match C', 'match A']);
+    await expect(headers.nth(1)).toHaveCSS('width', '310px');
+    const restored = (await reads()).slice(beforeReload.length);
+    expect(restored).toHaveLength(2);
+    expect(restored.filter(input => input.filters.length > 0)).toEqual([{ ...first[0], taskId: expect.any(String) }]);
+
+    await page.locator('[data-workspace-tab-id="profile"] .tab-select').click();
+    await expect(data).toHaveText(['match A', 'outside', 'match C']);
+    await expect(headers.filter({ hasText: /^payload/i })).toBeVisible();
+    await pane.getByRole('button', { name: zh.table.text006, exact: true }).click();
+    await preset.getByRole('combobox', { name: text.choose, exact: true }).selectOption({ label: '组合方案' });
+    await expandTree();
+    await answerDialogs([0]);
+    await preset.getByRole('button', { name: text.remove, exact: true }).click();
+    await expect(branch.getByText(text.treeEmpty, { exact: true })).toBeVisible();
+    await page.locator(`[data-workspace-tab-id="${presetId}"] .tab-select`).click();
+    await expect(data).toHaveText(['match C', 'match A']);
+    await expect.poll(async () => (await settings()).activeTabId).toBe(presetId);
+    const beforeMissing = await reads();
+    await page.reload();
+    await expect(pane.getByText(text.tabMissing, { exact: true })).toBeVisible();
+    await expect(data).toHaveCount(0);
+    // 重载会恢复后台普通表的无条件首屏，失效方案及重试都不能增加分页。
+    await expect.poll(async () => (await reads()).length).toBe(beforeMissing.length + 1);
+    const afterMissing = await reads();
+    expect(afterMissing.at(-1)?.filters).toEqual([]);
+    await pane.getByRole('button', { name: text.retryOpen, exact: true }).click();
+    await expect(pane.getByRole('button', { name: text.retryOpen, exact: true })).toBeEnabled();
+    expect(await reads()).toEqual(afterMissing);
+
+    await openDatabase();
+    const view = tree.locator('.object-row').filter({ hasText: 'profile_view' });
+    await view.locator('button.tree-label').click();
+    await expect(data).toHaveCount(3);
+    await view.getByRole('button', { name: text.treeExpand('profile_view'), exact: true }).click();
+    const viewBranch = tree.getByRole('group', { name: text.treeExpand('profile_view'), exact: true });
+    await expect(viewBranch.getByText(text.treeEmpty, { exact: true })).toBeVisible();
+    await pane.getByRole('button', { name: zh.table.text006, exact: true }).click();
+    await pane.getByLabel(zh.table.text009, { exact: true }).selectOption('label');
+    await pane.getByLabel(zh.table.filterOperatorLabel, { exact: true }).selectOption('=');
+    await pane.getByLabel(zh.table.text011, { exact: true }).fill('outside');
+    await pane.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await expect(data).toHaveText(['outside']);
+    await preset.getByRole('textbox', { name: text.name, exact: true }).fill('视图方案');
+    await preset.getByRole('button', { name: text.save, exact: true }).click();
+    const viewEntry = viewBranch.getByRole('button', { name: text.treeOpen('视图方案'), exact: true });
+    await expect(viewEntry).toBeVisible();
+    const beforeView = await reads();
+    await viewEntry.click();
+    await expect(data).toHaveText(['outside']);
+    expect((await reads()).slice(beforeView.length)).toEqual([expect.objectContaining({ table: 'profile_view', page: 1, filters: [expect.objectContaining({ column: 'label', value: 'outside' })] })]);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

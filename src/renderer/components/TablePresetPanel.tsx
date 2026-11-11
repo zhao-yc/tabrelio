@@ -69,7 +69,7 @@ export function TablePresetPanel(props:Props) {
         if (mounted.current && id === request.current && epoch === environment.current.epoch) setNotice(next.layout ? t.appliedWithLayout : t.applied);
       }else{
         const result=kind==='delete'?await invoke(current.postgres?'postgres.table.presets.delete':'table.presets.delete',{...checked,id:entry!.id}):await invoke(current.postgres?'postgres.table.presets.save':'table.presets.save',{...checked,name,configuration:validateTablePresetColumns(current.configuration,current.columns,current.postgres),...(kind==='replace'?{replaceId:same!.id}:{})});
-        if (current.postgres) tablePresetsChanged('postgres', current.target);
+        tablePresetsChanged(current.postgres ? 'postgres' : 'mysql', current.target);
         if(mounted.current&&id===request.current&&epoch===environment.current.epoch){setSnapshot(result);setNotice(kind==='delete'?t.deleted:t.saved);if(kind==='delete')setSelected('');}
       }
     }catch(reason){if(mounted.current&&id===request.current)setError(errorMessage(reason));}

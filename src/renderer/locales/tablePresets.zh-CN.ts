@@ -16,5 +16,6 @@ export const tablePresetsZh={
     return `${label} · ${name}`;
   },
   tabMissing:'此标签的命名方案已删除或无法识别。可重新读取方案，或从对象树打开普通表页。',
+  retryOpen:'重新打开命名方案',
   saved:'方案已保存本机，当前输入保持不变。',deleted:'所选本机方案已删除。',applied:'方案已应用，仅重新读取表数据。',changed:'表页、连接、字段或筛选已变化，本次未应用；请刷新方案后重试。',
 } as const;

@@ -40,7 +40,7 @@ describe('工作台重排沿真实store及原配置持久化通道', () => {
     expect(workspace.useWorkspace.getState().settings.activeTabId).toBe(other.id);
   });
 
-  it.each(['postgres', 'sqlite'] as const)('%s 同关系的普通表页和两个命名方案各用独立标签，重复打开只聚焦原方案', kind => {
+  it.each(['mysql', 'postgres', 'sqlite'] as const)('%s 同关系的普通表页和两个命名方案各用独立标签，重复打开只聚焦原方案', kind => {
     const ordinary = table('original'), first = tablePresetTabId(kind, fileId, '11111111-2222-4333-8444-555555555555');
     const same = tablePresetTabId(kind, fileId, '11111111-2222-4333-8444-666666666666');
     const other = tablePresetTabId(kind, '11111111-2222-4333-8444-777777777777', '11111111-2222-4333-8444-888888888888');
