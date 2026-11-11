@@ -7,6 +7,7 @@ import { gridRangePasteZh as pasteText } from './locales/gridRangePaste.zh-CN';
 import { gridRangeCopyZh as rangeText } from './locales/gridRangeCopy.zh-CN';
 import { startGridCellRangeDrag, type GridRangePoint as Point } from './gridCellRangeDrag';
 import type { GridRangeFillKind } from './gridRangeFill';
+import { isFocusedDataCell, tableCellKeyIsComposing } from './tableCellKeyboard';
 
 export interface GridCellRectangle { top: number; bottom: number; left: number; right: number; }
 export interface GridRangeTarget<Row> { startRow: number; rows: readonly Row[]; keys: readonly string[]; }
@@ -207,6 +208,26 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return true;
   }
 
+  /** 原活动格所在矩形接收首个字符。确认前保持原选区，禁止网格退化为单格输入。 */
+  function fillTextKey(args: Extract<CellKeyDownArgs<Row>, { mode: 'ACTIVE' }>, event: CellKeyboardEvent,
+    open: (selected: GridCellRectangle, value: string, returnFocus: () => void) => void): boolean {
+    const target = event.target;
+    if (event.ctrlKey || event.metaKey || event.altKey || tableCellKeyIsComposing(event.nativeEvent) ||
+        !isFocusedDataCell(target) || !allowed(event) || args.row === undefined) return false;
+    const value = event.key === 'F2' && !event.shiftKey ? '' :
+      Array.from(event.key).length === 1 && !(event.shiftKey && event.key === ' ') ? event.key : undefined;
+    if (value === undefined) return false;
+    const selected = at(args.row, args.rowIdx, args.column?.key ?? '');
+    if (!selected) return false;
+    event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
+    if (!event.repeat) open(selected, value, () => {
+      if (target.isConnected && rectangleCurrent(selected) && gridDialogCurrent(target, ownDialog)) {
+        target.focus({ preventScroll: true });
+      }
+    });
+    return true;
+  }
+
   /** 只允许在本矩形端点复制；活动格已变化时交还原勾选或单格复制。 */
   function copy<Value>(row: Row, column: string, read: (row: Row, key: string) => Value, skip?: (row: Row) => boolean) {
     const { scope: owned, rectangle: selected, focus } = live.current;
@@ -264,7 +285,7 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return grid.current?.element?.querySelector<HTMLElement>('[role="gridcell"][aria-selected="true"]') ?? undefined;
   }
 
-  return { rectangle, mouse, key, fillValueKey, move, copy, copyTarget, capture, captureColumns, pasteTarget, at, copyRectangle, rectangleCurrent,
+  return { rectangle, mouse, key, fillValueKey, fillTextKey, move, copy, copyTarget, capture, captureColumns, pasteTarget, at, copyRectangle, rectangleCurrent,
     focusTarget, selectAllAction, selectColumnAction, selectRowAction };
 }
 

@@ -7,10 +7,14 @@ import { navigationMenuItem } from './navigation-menu';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 import { gridQuickValueZh as text } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridCellEditZh } from '../../src/renderer/locales/gridCellEdit.zh-CN';
+import { gridRangeFillZh as rangeText } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
 import { sqliteTableEditZh as sqliteText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { draftHistoryZh } from '../../src/renderer/locales/draftHistory.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
+import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
+import { postgresResultOriginsZh } from '../../src/renderer/locales/postgresResultOrigins.zh-CN';
+import { mysqlQueryBatchEditZh } from '../../src/renderer/locales/mysqlQueryBatchEdit.zh-CN';
 import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
 import { sqliteTableCellFilterZh } from '../../src/renderer/locales/sqliteTableCellFilter.zh-CN';
 import { sqliteTableBrowseZh } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
@@ -60,6 +64,11 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
       await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'quick-value', tabs: [
         { id: 'quick-value', kind: 'table', title: 'update_subject', connectionId: connection.id, database,
           table: profile?.dialect === 'postgresql' ? '"public"."update_subject"' : 'update_subject' },
+        ...(profile ? [{
+          id: 'quick-fill-query', kind: 'query' as const, title: '选区填充查询', connectionId: connection.id, database,
+          sql: 'SELECT id, scope, label FROM ' + (profile.dialect === 'postgresql' ? 'public.update_subject' : 'update_subject') +
+            " WHERE label <> 'child' ORDER BY id, scope;",
+        }] : []),
       ] });
     }, { profile, database });
     await page.reload();
@@ -133,6 +142,51 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
     await expect(editInput).toBeHidden();
     await expect(cell).toHaveClass(/grid-cell-in-range/);
     await other.click();
+    expect(await jobs()).toEqual(before);
+
+    const rangePanel = tab.getByRole('region', { name: rangeText.open, exact: true });
+    const rangeValue = rangePanel.getByRole('textbox', { name: rangeText.value, exact: true });
+    await cell.click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect(other).toHaveClass(/grid-cell-in-range/);
+    await page.keyboard.press('X');
+    await expect(rangeValue).toBeFocused();
+    await expect(rangeValue).toHaveValue('X');
+    await page.keyboard.type('YZ');
+    await expect(rangeValue).toHaveValue('XYZ');
+    await page.keyboard.press('Escape');
+    await expect(rangePanel).toBeHidden();
+    await expect(other).toBeFocused();
+    await expect(cell).toHaveText(local ? 'TEXT · row A' : 'row A');
+
+    await page.keyboard.press('F2');
+    await expect(rangeValue).toHaveValue('');
+    await rangeValue.fill('统一草稿');
+    await rangeValue.dispatchEvent('compositionstart', { data: '统一草稿' });
+    await page.keyboard.press('Enter');
+    await expect(rangePanel).toBeVisible();
+    await expect(other).toHaveText(local ? 'TEXT · row B' : 'row B');
+    await rangeValue.dispatchEvent('compositionend', { data: '统一草稿' });
+    await rangeValue.fill('统一草稿');
+    await page.screenshot({ path: info.outputPath('键盘打开选区填充.png') });
+    await page.keyboard.press('Enter');
+    await expect(rangePanel).toBeHidden();
+    const filled = local ? 'TEXT · 统一草稿' : '统一草稿';
+    await expect(cell).toHaveText(filled);
+    await expect(grid.getByRole('gridcell', { name: filled, exact: true })).toHaveCount(2);
+    await clickAction(undo);
+    await expect(cell).toHaveText(local ? 'TEXT · row A' : 'row A');
+    await expect(other).toBeVisible();
+    await cell.click();
+    await page.keyboard.press('Shift+ArrowLeft');
+    await page.keyboard.press('F2');
+    await rangeValue.fill('含定位键的选区');
+    await page.keyboard.press('Enter');
+    await expect(rangePanel.getByRole('alert')).toBeVisible();
+    await expect(rangeValue).toHaveValue('含定位键的选区');
+    await expect(cell).toHaveText(local ? 'TEXT · row A' : 'row A');
+    await page.keyboard.press('Escape');
+    await expect(rangePanel).toBeHidden();
     expect(await jobs()).toEqual(before);
 
     await other.locator('..').getByRole('checkbox').check();
@@ -228,7 +282,36 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
           [1, 'row A', second, 'text'], [2, 'row B', null, 'null'],
         ]);
       } finally { check.close(); }
-    } else await writeFile(info.outputPath('已提交UUID.txt'), second);
+    } else {
+      await writeFile(info.outputPath('已提交UUID.txt'), second);
+      await page.locator('[data-workspace-tab-id="quick-fill-query"]').getByRole('button', { name: '选区填充查询', exact: true }).click();
+      const query = page.locator('.query-tab:visible');
+      const execute = pg ? query.getByRole('button', { name: postgresZh.execute, exact: true }) :
+        query.locator('.query-execute-split > button.primary');
+      await execute.click();
+      const firstResult = query.getByRole('gridcell', { name: 'row A', exact: true });
+      const secondResult = query.getByRole('gridcell', { name: 'row B', exact: true });
+      await firstResult.click();
+      await page.keyboard.press('Shift+ArrowDown');
+      await expect(secondResult).toHaveClass(/grid-cell-in-range/);
+      await page.keyboard.press('F2');
+      const input = query.getByRole('region', { name: rangeText.open, exact: true })
+        .getByRole('textbox', { name: rangeText.value, exact: true });
+      await expect(input).toBeFocused();
+      await input.fill('查询草稿');
+      await input.press('Enter');
+      const queryReview = page.getByRole('dialog', {
+        name: pg ? postgresResultOriginsZh.fillTitle : mysqlQueryBatchEditZh.fill, exact: true,
+      });
+      await expect(queryReview.getByText('查询草稿', { exact: true })).toHaveCount(2);
+      await page.screenshot({ path: info.outputPath('查询键盘填充预览.png') });
+      await queryReview.getByRole('button', {
+        name: pg ? postgresResultOriginsZh.editBack : mysqlQueryBatchEditZh.cancel, exact: true,
+      }).click();
+      await expect(queryReview).toBeHidden();
+      await expect(firstResult).toBeVisible();
+      await expect(secondResult).toBeVisible();
+    }
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

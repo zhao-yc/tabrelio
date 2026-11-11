@@ -26,7 +26,7 @@ import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type Grid
 import { copyGridRangeNames, copyGridRangeText, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
-import { GridRangeFill } from './GridRangeFill';
+import { GridRangeFill, type GridRangeFillHandle } from './GridRangeFill';
 import { gridRangeFillActions, gridRangeFillSource, type GridRangeFillInput, type GridRangeFillKind } from '../gridRangeFill';
 import { fitGridRangePaste } from '../gridRangePaste';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
@@ -532,6 +532,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   const rowJumpDisabled = blocked || externalStale || gridEditing || record.hasInput() || record.pending || !visibleKeys.length;
   const rangeCurrent = () => !rowJumpDisabled && tableToolbarCurrent() && rowsRef.current === rows && rowJumpScope === pageFindGeneration();
   const cellRange = useGridCellRange(rows, visibleKeys, rowJumpScope, 1, grid, rangeCurrent);
+  const rangeFill = useRef<GridRangeFillHandle>(null);
   const rowSelectionKey = (row: DraftRow) => row.deleted ? undefined : row.id;
   const rowSelectionCurrent = () => !rowJumpDisabled && tableToolbarCurrent() && rowsRef.current === rows && selectedRowsRef.current === selectedRows
     && !blockedRef.current && !activeGridEditor.current && !record.hasInput() && rowJumpScope === pageFindGeneration();
@@ -2668,6 +2669,10 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       recordPages.cancel();
       applyGridRangeFill(rectangle, kind);
     })) return;
+    if (args.mode === 'ACTIVE' && editable && rangeFill.current && cellRange.fillTextKey(args, event, (rectangle, value, returnFocus) => {
+      recordPages.cancel();
+      rangeFill.current?.beginText(rectangle, value, returnFocus);
+    })) return;
     if (args.mode === 'ACTIVE' && handleGridSelectAllKey(event,
       () => !!args.row && rows[args.rowIdx] === args.row && !!args.column && visibleKeys.includes(args.column.key) && rowSelectionCurrent(),
       () => setSelectedRows(gridRowKeys(rows, rowSelectionKey)))) return;
@@ -2689,7 +2694,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       </form>}<GridRowJump grid={grid} scope={rowJumpScope} count={rows.length} disabled={rowJumpDisabled} onJump={jumpToGridRow}/>
       <GridColumnJump scope={rowJumpScope} columns={visibleColumns} disabled={rowJumpDisabled || !page}
         isCurrent={gridJumpCurrent} onJump={jumpToGridColumn}/>
-      {editable && cellRange.rectangle && !rowJumpDisabled && <GridRangeFill rectangle={cellRange.rectangle} onStage={fillGridRange}/>}
+      {editable && cellRange.rectangle && !rowJumpDisabled && <GridRangeFill ref={rangeFill} rectangle={cellRange.rectangle} onStage={fillGridRange}/>}
       <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={rowJumpDisabled}
         keyFor={rowSelectionKey}
         isCurrent={rowSelectionCurrent}

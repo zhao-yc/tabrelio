@@ -14,7 +14,7 @@ import { copyGridRangeNames, copyGridRangeText, gridHeaderDataCopyActions, gridR
 import { snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { sqliteBinaryOriginalCell } from '../sqliteBinaryInput';
-import { GridRangeFill } from './GridRangeFill';
+import { GridRangeFill, type GridRangeFillHandle } from './GridRangeFill';
 import { gridRangeFillActions, type GridRangeFillInput, type GridRangeFillKind } from '../gridRangeFill';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { tableRangeFilterActions, type TableRangeFilter } from '../tableRangeFilter';
@@ -68,6 +68,7 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
   const order = orderRef.current.indices, naturalOrder = order.length === page.columns.length && order.every((column, index) => column === index);
   const ticket = {}, committed = useRef<object | undefined>(undefined);
   const grid = useRef<DataGridHandle | null>(null), handledFind = useRef<string | undefined>(undefined);
+  const rangeFill = useRef<GridRangeFillHandle>(null);
   const source = useRef({ page, rows, identity: {} }); if (source.current.page !== page || source.current.rows !== rows) source.current = { page, rows, identity: {} };
   const owner = source.current, [, selectionChanged] = useState(0), [error, setError] = useState('');
   const rangeKeys = useMemo(() => order.map(index => 'c' + index), [order]);
@@ -536,7 +537,7 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
       disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => handleTableSql(build, selectedRows.size > 0, sql => onOpenRowSql(kind, sql))}>{labels.open}</button>)}
     {onFillRange && cellRange.rectangle && !disabled &&
-      <GridRangeFill rectangle={cellRange.rectangle} typed onStage={stageGridRangeFill}/>}
+      <GridRangeFill ref={rangeFill} rectangle={cellRange.rectangle} typed onStage={stageGridRangeFill}/>}
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={disabled}
       keyFor={rowSelectionKey}
       isCurrent={rowSelectionCurrent}
@@ -556,6 +557,8 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
       const { row, rowIdx, column, mode } = args;
       if (mode === 'ACTIVE' && cellRange.key(args, event)) return;
       if (mode === 'ACTIVE' && onFillRange && cellRange.fillValueKey(args, event, applyGridRangeFill)) return;
+      const fill = rangeFill.current;
+      if (mode === 'ACTIVE' && fill && onFillRange && cellRange.fillTextKey(args, event, fill.beginText)) return;
       if (mode === 'ACTIVE' && handleGridSelectAllKey(event,
         () => !!row && rows[rowIdx] === row && !!column && order.some(index => column.key === 'c' + index) && rowSelectionCurrent(),
         () => changeCheckedRows(gridRowKeys(rows, rowSelectionKey)))) return;

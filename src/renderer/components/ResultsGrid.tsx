@@ -42,7 +42,7 @@ import { encodeSqliteResultClipboard, sqliteCellClipboardType } from '../sqliteT
 import { copyGridRangeNames, copyGridRangeText, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { gridRangeSqliteStorage, snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
-import { GridRangeFill } from './GridRangeFill';
+import { GridRangeFill, type GridRangeFillHandle } from './GridRangeFill';
 import { gridRangeFillActions, type GridRangeFillInput, type GridRangeFillKind } from '../gridRangeFill';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { tableRangeFilterActions, type TableRangeFilter } from '../tableRangeFilter';
@@ -128,6 +128,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     onSortChange?.(next.map(rule=>{const previous=sort?.find(previous=>previous.column===rule.columnKey);return{column:rule.columnKey,direction:rule.direction,...(previous?.nulls?{nulls:previous.nulls}:{}),...(previous?.ignoreCase!==undefined?{ignoreCase:previous.ignoreCase}:{})};}));
   }
   const gridRef = useRef<DataGridHandle | null>(null);
+  const rangeFill = useRef<GridRangeFillHandle>(null);
   const resultFind = useRef<QueryResultFindControl>(null);
   const rangeKeys = useMemo(() => columns.map(column => column.key), [columns]);
   const rangeScope = useMemo(() => ({}), [scope, presentCell]);
@@ -551,6 +552,8 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     const {row,column}=args,key=event.key.toLowerCase();
     if (args.mode === 'ACTIVE' && cellRange.key(args, event)) return;
     if (args.mode === 'ACTIVE' && onFillRange && cellRange.fillValueKey(args, event, applyGridRangeFill)) return;
+    const fill = rangeFill.current;
+    if (args.mode === 'ACTIVE' && fill && onFillRange && cellRange.fillTextKey(args, event, fill.beginText)) return;
     if (args.mode === 'ACTIVE' && handleGridSelectAllKey(event,
       () => canSelectRows && !!row && rows[args.rowIdx] === row && !!column && columns.some(item => item.key === column.key) && rowSelectionCurrent(),
       () => setSelectedRows(gridRowKeys(rows, rowSelectionKey)))) return;
@@ -812,7 +815,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     quickValueActions.apply(cell, kind);
   }
   const copyTools = <>
-    {onFillRange && cellRange.rectangle && <GridRangeFill rectangle={cellRange.rectangle} typed={!!sqliteSource?.sqliteStorage} onStage={stageGridRangeFill}/>}
+    {onFillRange && cellRange.rectangle && <GridRangeFill ref={rangeFill} rectangle={cellRange.rectangle} typed={!!sqliteSource?.sqliteStorage} onStage={stageGridRangeFill}/>}
     {quickValueActions && gridQuickValueKinds.map(kind =>
       <button key={kind} type="button" title={quickValueText[`${kind}Hint`]}
         disabled={!activeCopyCell || !quickValueActions.allowed(activeCopyCell, kind)} onClick={() => applyQuickValue(kind)}>{quickValueText[kind]}</button>)}

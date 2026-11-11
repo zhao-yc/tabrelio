@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的表页及可写查询结果支持在矩形选区直接键入统一值，或按 F2 打开填充面板。表页确认后暂存，查询结果进入现有更新预览。定位键、生成列及不可写字段继续由整组选区校验。D02、Q05 增加键盘批量填充入口。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#grid-view)
+
 2026-11-12 源码增量。四种数据库的查询结果整理方案可保存完整列顺序、显隐、冻结、列宽和行高，重新执行后可连同筛选排序一起恢复。新方案核对原始字段键、名称和类型，旧方案保留原有可见列匹配行为。Q05、D06 增加结果布局复用。[Navicat 表方案手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#save-table-profile)
 
 2026-11-12 源码增量。四种数据库的对象 ER 图及表关系图支持手形拖动平移、指针位置滚轮缩放、键盘恢复比例和 F5 刷新图中表。E01 增加宽图导航与原范围刷新。[Navicat ER 图快捷键](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/hot_keys.html#er-diagram-view)

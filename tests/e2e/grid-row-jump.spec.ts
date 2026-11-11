@@ -1273,10 +1273,13 @@ test('SQLite 查询矩形填充使用显示顺序并在行冲突时整批回滚'
       await page.keyboard.press('Escape');
       await page.keyboard.press(process.platform === 'darwin' ? 'Meta+d' : 'Control+d');
     } else {
-      await query.getByRole('button', { name: rangeFill.open, exact: true }).click();
+      await page.keyboard.press('X');
       const form = query.getByRole('region', { name: rangeFill.open, exact: true });
-      await form.getByRole('textbox', { name: rangeFill.value, exact: true }).fill('整批不可落盘');
-      await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+      const input = form.getByRole('textbox', { name: rangeFill.value, exact: true });
+      await expect(input).toBeFocused();
+      await expect(input).toHaveValue('X');
+      await input.fill('整批不可落盘');
+      await input.press('Enter');
     }
     await expect(preview.getByLabel('SQLite 修改 SQL 预览', { exact: true })).toBeVisible();
   };
