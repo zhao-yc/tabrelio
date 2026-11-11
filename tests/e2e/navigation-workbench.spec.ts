@@ -19,7 +19,7 @@ if (enabled) {
   register();
 } else baseTest.skip('菜单与对象浏览专项默认关闭（未执行）', () => {});
 
-interface ReadCall { command: string; database?: string; name?: string; kind?: string; released: boolean; }
+interface ReadCall { command: string; database?: string; name?: string; kind?: string; cursor?: string; released: boolean; }
 interface Summary { calls: ReadCall[]; prohibited: string[]; pending: number; reboundFrames: number; }
 type Handler = (event: Electron.IpcMainInvokeEvent, payload: { command: string; input: Record<string, unknown> }) => Promise<unknown>;
 interface Audit {
@@ -146,7 +146,8 @@ function register(): void {
       };
       const wrapped: Handler = async (event, payload) => {
         check(event); const command = payload.command;
-        const read = ['connections.open', 'connections.close', 'metadata.databases', 'metadata.objects', 'metadata.table', 'metadata.tableElements', 'table.page', 'metadata.ddl'].includes(command);
+        const read = ['connections.open', 'connections.close', 'metadata.databases', 'metadata.objects', 'metadata.table',
+          'metadata.tableElements', 'table.page', 'metadata.ddl', 'mysql.view.dependencies', 'table.incomingReferences'].includes(command);
         if (read) {
           if ((payload.input.id ?? payload.input.connectionId) !== input.id) throw Error('合成读取拒绝其它连接');
           const profiles = await original(event, { command: 'connections.list', input: {} }) as { ok: boolean; result?: { id: string; host: string; port: number; user: string }[] }; check(event);
@@ -156,6 +157,7 @@ function register(): void {
           const database = typeof payload.input.database === 'string' ? payload.input.database : undefined, name = typeof (payload.input.name ?? payload.input.table) === 'string' ? String(payload.input.name ?? payload.input.table) : undefined;
           if (database !== undefined && !input.databases.includes(database)) throw Error('合成读取拒绝其它数据库');
           const call: ReadCall = { command, database, name, kind: typeof payload.input.kind === 'string' ? payload.input.kind : undefined, released: true }; calls.push(call);
+          if (typeof payload.input.cursor === 'string') call.cursor = payload.input.cursor;
           if (command === 'connections.open') return { ok: true, result: { dialect: 'mysql', version: '8.4.11', connectionId: 84001 } };
           if (command === 'connections.close') return { ok: true, result: undefined };
           if (command === 'metadata.databases') return { ok: true, result: input.databases };
@@ -163,8 +165,11 @@ function register(): void {
             if (hold) { call.released = false; return new Promise(finish => held.push({ call, finish })); }
             return { ok: true, result: objects };
           }
-          const object = objects.find(item => item.name === name && (command === 'metadata.ddl' ? item.kind === payload.input.kind : item.kind === 'table' || item.kind === 'view'));
+          const object = objects.find(item => item.name === name && (command === 'metadata.ddl' ? item.kind === payload.input.kind :
+            command === 'mysql.view.dependencies' ? item.kind === 'view' : item.kind === 'table' || item.kind === 'view'));
           if (!database || !object) throw Error('合成读取拒绝目录之外对象');
+          if (command === 'mysql.view.dependencies') return { ok: true, result: { source: 'catalogue', referenced: [{ database, name: '视图依赖表' }],
+            referencing: [{ database, name: '上层视图' }], skipped: 0, referencedUnknown: false, truncated: false } };
           if (command === 'metadata.ddl') {
             const definition = object.kind === 'procedure' ? `CREATE PROCEDURE \`${object.name}\`() SELECT 1;`
               : object.kind === 'function' ? `CREATE FUNCTION \`${object.name}\`() RETURNS INT DETERMINISTIC RETURN 1;`
@@ -181,6 +186,14 @@ function register(): void {
             return { ok: true, result: { columns: [{ name: 'id', type: 'bigint', primary: true, generated: false }], indexes: [], foreignKeys: [] } };
           }
           const metadata: TableInfo = { database, name: object.name, objectKind: object.kind as 'table' | 'view', columns: [{ name: 'id', type: 'bigint', nullable: false, defaultValue: null, extra: '', comment: '', generated: false }], indexes: [], foreignKeys: [], primaryKey: object.kind === 'table' ? ['id'] : [], editableKey: object.kind === 'table' ? ['id'] : [], engine: object.kind === 'table' ? 'InnoDB' : '', ddl: `-- 导航离线定义 ${object.name}` };
+          if (command === 'table.incomingReferences' && object.kind === 'table') {
+            if (call.cursor !== undefined && call.cursor !== '原父表第二页') throw Error('未知入向目录页');
+            const key = { name: 'fk_parent', columns: ['parent_id'], referencedDatabase: database, referencedTable: object.name,
+              referencedColumns: ['id'], onUpdate: 'RESTRICT', onDelete: 'RESTRICT' };
+            return { ok: true, result: { source: metadata, sourceDigest: '原父表摘要', scope: 'visible-only',
+              relations: [{ database, table: call.cursor ? '第二个子表' : '第一个子表', foreignKey: key, digest: '原外键摘要' }],
+              ...(call.cursor ? {} : { nextCursor: '原父表第二页' }) } };
+          }
           if (command === 'metadata.table') return { ok: true, result: metadata };
           return { ok: true, result: { rows: [], columns: [{ key: 'id', name: 'id', type: 'bigint' }], hasMore: false, page: payload.input.page, pageSize: payload.input.pageSize } };
         }
@@ -472,6 +485,36 @@ function register(): void {
     await expect(toggle).toBeFocused();
     expect((await work.boundingBox())!.width).toBe(width);
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('对象信息展示双向依赖，并沿原表摘要翻页', async () => {
+    const t = objectInformationZh;
+    const pane = runtime.page.getByRole('complementary', { name: t.title, exact: true });
+    const outbound = pane.getByRole('region', { name: t.references, exact: true });
+    const inbound = pane.getByRole('region', { name: t.referencedBy, exact: true });
+    await chooseObjects();
+    const ids = (await settings()).tabs.map(tab => tab.id);
+    await browser().getByRole('combobox', { name: text.type, exact: true }).selectOption('view');
+    await row('view', alpha, same, browser()).click({ button: 'right' });
+    await runtime.page.keyboard.press('Escape');
+    await native('object-information');
+    await pane.getByRole('button', { name: t.dependencies, exact: true }).click();
+    await expect(outbound).toContainText('视图依赖表');
+    await expect(inbound).toContainText('上层视图');
+    await browser().getByRole('combobox', { name: text.type, exact: true }).selectOption('table');
+    await row('table', alpha, same, browser()).click({ button: 'right' });
+    await runtime.page.keyboard.press('Escape');
+    await expect(inbound).toContainText('第一个子表');
+    await expect(inbound).toContainText('parent_id → id');
+    await inbound.getByRole('button', { name: t.nextDependencies, exact: true }).click();
+    await expect(inbound).toContainText('第二个子表');
+    await expect(inbound.getByRole('button', { name: t.nextDependencies, exact: true })).toBeDisabled();
+    await inbound.getByRole('button', { name: t.previousDependencies, exact: true }).click();
+    await expect(inbound).toContainText('第一个子表');
+    expect((await audit()).calls.filter(call => call.command === 'table.incomingReferences').map(call => call.cursor))
+      .toEqual([undefined, '原父表第二页', undefined]);
+    expect((await settings()).tabs.map(tab => tab.id)).toEqual(ids);
+    await originalPreserved();
   });
 
   test('对象页布局恢复只重读目录，刷新中的迟到目录不能保留旧菜单目标', async () => {

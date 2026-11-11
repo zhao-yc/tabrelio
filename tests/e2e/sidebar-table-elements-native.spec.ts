@@ -26,9 +26,10 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
   test.skip(!dialect, '需显式启用表结构子节点专项');
   const sqlite = dialect === 'sqlite', postgres = dialect === 'postgresql';
   const rename = process.env.DBARK_TREE_RENAME_NATIVE === '1';
+  const postgresDependencyKinds = process.env.DBARK_TREE_DEPENDENCIES_PG_EXTRA === '1';
   const database = sqlite ? 'main' : process.env.DBARK_TREE_ELEMENTS_DATABASE ?? '';
   const password = process.env.DBARK_TREE_ELEMENTS_PASSWORD ?? '', port = Number(process.env.DBARK_TREE_ELEMENTS_PORT);
-  if (process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_DEV_URL || (sqlite ? process.env.DBARK_INTEGRATION_ENABLED !== '0' :
+  if (postgresDependencyKinds && !postgres || process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_DEV_URL || (sqlite ? process.env.DBARK_INTEGRATION_ENABLED !== '0' :
     process.env.DBARK_INTEGRATION_ENABLED !== '1' || !['mysql', 'mariadb', 'postgresql'].includes(dialect!) ||
     !/^tabrelio_te_[a-f0-9]{12}$/.test(database) || !/^[a-f0-9]{64}$/.test(password) ||
     !Number.isInteger(port) || port <= 1024 || port > 65535)) throw Error('只允许本例源码与独占数据库');
@@ -286,6 +287,27 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     await page.keyboard.press('Escape');
     await expect(definition).toContainText('visible_view');
     await page.screenshot({ path: info.outputPath('对象信息视图定义.png') });
+    const outbound = inspector.getByRole('region', { name: information.references, exact: true });
+    const inbound = inspector.getByRole('region', { name: information.referencedBy, exact: true });
+    await inspector.getByRole('button', { name: information.dependencies, exact: true }).click();
+    await expect(outbound).toContainText('a_small');
+    const parentName = postgres ? '"public"."parent_catalog"' : 'parent_catalog';
+    await tree.locator(key([connectionId, database, 'table', parentName])).locator('.tree-label').click({ button: 'right' });
+    await page.keyboard.press('Escape');
+    await expect(inbound).toContainText('a_small');
+    await page.screenshot({ path: info.outputPath('对象信息入向依赖.png') });
+    await rowLabel.click({ button: 'right' });
+    await page.keyboard.press('Escape');
+    await expect(outbound).toContainText('parent_catalog');
+    await page.screenshot({ path: info.outputPath('对象信息出向依赖.png') });
+    if (postgresDependencyKinds) {
+      for (const [kind, target] of [['function', '"public"."pane_reference"()'], ['sequence', '"public"."pane_sequence"']]) {
+        await tree.locator(key([connectionId, database, kind, target])).locator('.tree-label').click({ button: 'right' });
+        await page.keyboard.press('Escape');
+        await expect(inspector.locator('.object-info-subject')).toContainText(target);
+        await expect(outbound).toContainText('a_small');
+      }
+    }
     await inspector.getByRole('button', { name: information.close, exact: true }).click();
     await expect(inspector).toHaveCount(0);
     await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();

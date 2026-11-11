@@ -36,3 +36,10 @@ it('共享合同拒绝路径、SQL、超预算页长、空元组和目录夹带�
   for (const patch of [{ path: '/不读取' }, { sql: 'SELECT 1' }, { values: [{ kind: 'null' }] }, { database: 'temp' }]) expect(sqliteIncomingInputSchema.safeParse({ ...valid, ...patch }).success).toBe(false);
   expect(sqliteIncomingInputSchema.safeParse({ ...valid, incoming: 'page', childTable: 'child', childSchemaKey: entry.schemaKey, foreignKey: 0, values: [], offset: 0, limit: 201 }).success).toBe(false);
 });
+it('对象信息可读取当前外键目录，原记录子页仍须携带父表结构摘要', () => {
+  const request: SqliteIncomingInput = { connectionId: 'c', database: 'main', table: 'parent', taskId: '00000000-0000-4000-8000-000000000001', incoming: 'catalog' };
+  expect(sqliteIncomingInputSchema.parse(request)).toEqual(request);
+  expect(assertSqliteIncomingOutput(reply(request), request).references).toEqual([entry]);
+  expect(sqliteIncomingInputSchema.safeParse({ ...request, incoming: 'page', childTable: 'child', childSchemaKey: entry.schemaKey,
+    foreignKey: 0, values: [{ kind: 'integer', value: '1' }], offset: 0, limit: 1 }).success).toBe(false);
+});

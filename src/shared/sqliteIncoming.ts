@@ -10,7 +10,8 @@ export const sqliteIncomingLimits = { active: 2, tables: 500, columns: 20000, re
 const name = sqliteTablePageSchema.shape.table, hash = z.string().regex(/^[a-f0-9]{64}$/);
 const base = { connectionId: sqliteTablePageSchema.shape.connectionId, database: z.literal('main'), table: name, schemaKey: hash, taskId: z.string().uuid() };
 export const sqliteIncomingInputSchema = z.discriminatedUnion('incoming', [
-  z.object({ ...base, incoming: z.literal('catalog') }).strict(),
+  // 对象信息可读取当前目录。已打开的记录继续携带原 schemaKey，子记录页始终核对原结构。
+  z.object({ ...base, schemaKey: hash.optional(), incoming: z.literal('catalog') }).strict(),
   z.object({ ...base, incoming: z.literal('page'), childTable: name, childSchemaKey: hash, foreignKey: z.number().int().min(0).max(2147483647),
     values: z.array(sqliteEditValueSchema).min(1).max(64), offset: sqliteTablePageSchema.shape.offset, limit: z.number().int().min(1).max(sqliteIncomingLimits.rows) }).strict(),
 ]);

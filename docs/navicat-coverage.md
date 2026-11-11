@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。对象信息窗格增加双向依赖。四种数据库支持表和视图，MySQL、MariaDB 和 SQLite 的表展示已声明的外键，MySQL 和 MariaDB 的入向外键可翻页。PostgreSQL 还支持例程和序列的目录依赖。W02 增加依赖读取及原对象切换保护。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#information-pane)
+
 2026-11-12 源码增量。工作区增加对象信息窗格，跟随对象树或对象列表的选择，提供常规信息、表结构和受支持对象的只读 DDL。W02 增加信息窗格入口及对象切换保护。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#information-pane)
 
 2026-11-12 源码增量。资源管理器按连接名、分组名、库名和已读对象名过滤，并临时展开匹配路径。清除搜索恢复手动展开的连接及数据库。W02 增加树搜索自动展开。[Navicat 导航面板](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#filter-navigation-pane)
