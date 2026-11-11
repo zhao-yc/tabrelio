@@ -1,11 +1,19 @@
 import { isCivilDate } from './civilDate';
 import { validateSqliteQueryParameters } from './sqliteQueryParameters';
+import { navicatParameterNameAt } from './navicatParameter';
 
 /** 参数只代表 SQL 值，不能代替数据库、表、字段等标识符。 */
 export const queryParameterTypes = ['text', 'integer', 'decimal', 'boolean', 'date', 'datetime', 'time', 'binary', 'null'] as const;
 export type QueryParameterType = typeof queryParameterTypes[number];
 export interface QueryParameter { name: string; type: QueryParameterType; value?: string; }
-export interface SqlLexicalMode { noBackslashEscapes: boolean; ansiQuotes: boolean; ansiQuotesKnown?: boolean; noBackslashEscapesKnown?: boolean; }
+export interface SqlLexicalMode {
+  noBackslashEscapes: boolean;
+  ansiQuotes: boolean;
+  ansiQuotesKnown?: boolean;
+  noBackslashEscapesKnown?: boolean;
+  /** MariaDB 的 MSSQL 模式把方括号当标识符引号，模式未知时必须比较两种解释。 */
+  bracketQuotes?: boolean | 'unknown';
+}
 export interface QueryParameterNames extends SqlLexicalMode { names: string[]; warnings: string[]; maxDecimalScale: 30 | 38; allowTimeEndpointFraction: boolean; dialect?: 'mysql' | 'mariadb' | 'sqlite'; }
 export const queryParameterLimits = { names: 200, occurrences: 100000, valueBytes: 64 * 1024, totalBytes: 1024 * 1024, sqlBytes: 20 * 1024 * 1024 } as const;
 const encoder = new TextEncoder();
@@ -68,9 +76,12 @@ export function validateQueryParameters(parameters: QueryParameter[], maxDecimal
 /** 只按可信识别元数据选择验证器；旧无dialect输出保持原MySQL字面量语义。 */
 export function validateQueryParametersForInfo(parameters: readonly QueryParameter[], info: Pick<QueryParameterNames, 'dialect' | 'maxDecimalScale' | 'allowTimeEndpointFraction'> & { names?: readonly string[] }): void {
   if (!info || typeof info !== 'object' || Array.isArray(info) || ![Object.prototype, null].includes(Object.getPrototypeOf(info))) throw Error('查询参数类型元数据无效');
-  for (const key of Reflect.ownKeys(info)) { const descriptor = Object.getOwnPropertyDescriptor(info, key); if (typeof key !== 'string' || !['names', 'warnings', 'dialect', 'noBackslashEscapes', 'ansiQuotes', 'ansiQuotesKnown', 'noBackslashEscapesKnown', 'maxDecimalScale', 'allowTimeEndpointFraction'].includes(key) || !descriptor || !descriptor.enumerable || !('value' in descriptor)) throw Error('查询参数类型元数据无效'); }
+  for (const key of Reflect.ownKeys(info)) { const descriptor = Object.getOwnPropertyDescriptor(info, key); if (typeof key !== 'string' || !['names', 'warnings', 'dialect', 'noBackslashEscapes', 'ansiQuotes', 'ansiQuotesKnown', 'noBackslashEscapesKnown', 'bracketQuotes', 'maxDecimalScale', 'allowTimeEndpointFraction'].includes(key) || !descriptor || !descriptor.enumerable || !('value' in descriptor)) throw Error('查询参数类型元数据无效'); }
   const dialect = Object.getOwnPropertyDescriptor(info, 'dialect');
   if (dialect && (!dialect.enumerable || !('value' in dialect) || !['mysql', 'mariadb', 'sqlite'].includes(dialect.value))) throw Error('查询参数方言元数据无效');
+  const brackets = Object.getOwnPropertyDescriptor(info, 'bracketQuotes');
+  if (brackets && (dialect?.value !== 'mariadb' || ![true, false, 'unknown'].includes(brackets.value)))
+    throw Error('查询参数方括号模式无效');
   if (dialect?.value === 'sqlite') {
     const values = validateSqliteQueryParameters(parameters), names = Object.getOwnPropertyDescriptor(info, 'names');
     if (names) {
@@ -90,21 +101,27 @@ export function validateQueryParametersForInfo(parameters: readonly QueryParamet
 
 export interface NamedParameterToken { name: string; start: number; end: number; }
 /** 参数词法扫描保留偏移：普通注释/引号内不绑定，可执行版本注释内部必须扫描。 */
-export function namedParameterTokens(sql: string, mode: SqlLexicalMode, onWord?: (word: string) => void): NamedParameterToken[] {
-  if (mode.ansiQuotesKnown === false || mode.noBackslashEscapesKnown === false) {
+function scanQueryTokens(sql: string, mode: SqlLexicalMode, onWord?: (word: string) => void): NamedParameterToken[] {
+  if (mode.ansiQuotesKnown === false || mode.noBackslashEscapesKnown === false || mode.bracketQuotes === 'unknown') {
     try {
       let tokens: NamedParameterToken[] | undefined;
       for (const noBackslashEscapes of mode.noBackslashEscapesKnown === false ? [false, true] : [mode.noBackslashEscapes]) {
         for (const ansiQuotes of mode.ansiQuotesKnown === false ? [false, true] : [mode.ansiQuotes]) {
-          const candidate = namedParameterTokens(sql, { noBackslashEscapes, ansiQuotes, ansiQuotesKnown: true, noBackslashEscapesKnown: true }, onWord);
-          if (tokens && JSON.stringify(tokens) !== JSON.stringify(candidate)) throw new Error('参数边界不同');
-          tokens = candidate;
+          for (const bracketQuotes of mode.bracketQuotes === 'unknown' ? [false, true] : [mode.bracketQuotes]) {
+            const candidate = scanQueryTokens(sql, { noBackslashEscapes, ansiQuotes, bracketQuotes }, onWord);
+            if (tokens && JSON.stringify(tokens) !== JSON.stringify(candidate)) throw new Error('参数边界不同');
+            tokens = candidate;
+          }
         }
       }
       return tokens!;
     } catch { throw new Error('无法确定会话 SQL 引号模式，当前 SQL 的引号或参数边界存在歧义；请关闭此标签并新建查询重新连接'); }
   }
   const tokens: NamedParameterToken[] = [];
+  const add = (name: string, start: number, end: number) => {
+    if (tokens.length >= queryParameterLimits.occurrences) throw new Error('单条 SQL 参数占位符不能超过 100000 处');
+    tokens.push({ name, start, end });
+  };
   const scan = (start: number, end: number, executable = false): void => {
     for (let i = start; i < end; i++) {
       const char = sql[i], next = sql[i + 1];
@@ -117,14 +134,22 @@ export function namedParameterTokens(sql: string, mode: SqlLexicalMode, onWord?:
         if (prefix) scan(i + prefix[0].length, close, true);
         i = close + 1; continue;
       }
-      if (char === "'" || char === '"' || char === '`') {
-        const identifier = char === '`' || (char === '"' && mode.ansiQuotes); const quotedStart = i; let closed = false;
+      if (char === "'" || char === '"' || char === '`' || char === '[' && mode.bracketQuotes) {
+        const quote = char === '[' ? ']' : char;
+        const identifier = char === '`' || char === '[' || char === '"' && mode.ansiQuotes; const quotedStart = i; let closed = false;
         for (i++; i < end; i++) {
           if (sql[i] === '\\' && !identifier && !mode.noBackslashEscapes) { i++; continue; }
-          if (sql[i] === char) { if (sql[i + 1] === char && i + 1 < end) i++; else { closed = true; break; } }
+          if (sql[i] === quote) { if (sql[i + 1] === quote && i + 1 < end) i++; else { closed = true; break; } }
         }
         if (!closed) throw new Error('SQL 存在未闭合的引号');
-        if (identifier) onWord?.(sql.slice(quotedStart + 1, i).replaceAll(char + char, char));
+        if (identifier) onWord?.(sql.slice(quotedStart + 1, i).replaceAll(quote + quote, quote));
+        continue;
+      }
+      if (!onWord && char === '[' && next === '$') {
+        const name = navicatParameterNameAt(sql, i);
+        if (!name || i + name.length + 3 > end) throw Error('非法命名参数；请使用 [$name] 值占位符');
+        add(name, i, i + name.length + 3);
+        i += name.length + 2;
         continue;
       }
       if (char === ':' && next !== '=' && sql[i - 1] !== ':') {
@@ -132,8 +157,7 @@ export function namedParameterTokens(sql: string, mode: SqlLexicalMode, onWord?:
         if (/[A-Za-z0-9_`]/.test(sql[i - 1] ?? '') && /^\s*(?:BEGIN|LOOP|REPEAT|WHILE)\b/i.test(sql.slice(i + 1, end))) continue;
         const name = /^[A-Za-z_][A-Za-z0-9_]*/.exec(sql.slice(i + 1, end))?.[0];
         if (!name || /[A-Za-z0-9_$\u0080-\uFFFF:]/.test(sql[i - 1] ?? '') || /[$\u0080-\uFFFF]/.test(sql[i + 1 + name.length] ?? '') || name.length > 64) throw new Error('非法命名参数；请使用独立的 :name 值占位符');
-        if (tokens.length >= queryParameterLimits.occurrences) throw new Error('单条 SQL 参数占位符不能超过 100000 处');
-        tokens.push({ name, start: i, end: i + name.length + 1 }); i += name.length;
+        add(name, i, i + name.length + 1); i += name.length;
       } else if (/[A-Za-z_]/.test(char)) {
         const word = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(sql.slice(i, end))![0];
         onWord?.(word); i += word.length - 1;
@@ -144,10 +168,14 @@ export function namedParameterTokens(sql: string, mode: SqlLexicalMode, onWord?:
   return tokens;
 }
 
+export function namedParameterTokens(sql: string, mode: SqlLexicalMode): NamedParameterToken[] {
+  return scanQueryTokens(sql, mode);
+}
+
 /** 协议缓存只检查可执行单词，不把字符串/普通注释中的 SET、CALL 当作控制命令。 */
 export function sqlExecutableWords(sql: string, mode: SqlLexicalMode): string[] {
   const words: string[] = [];
-  namedParameterTokens(sql, mode, word => words.push(word.toUpperCase()));
+  scanQueryTokens(sql, mode, word => words.push(word.toUpperCase()));
   return words;
 }
 
@@ -157,7 +185,8 @@ export function bindQueryParameters(sql: string, values: ReadonlyMap<string, str
   for (const token of tokens) {
     const literal = values.get(token.name);
     if (literal === undefined) throw new Error('SQL 缺少命名参数值，请重新识别参数');
-    const segment = sql.slice(from, token.start) + literal;
+    // 方括号原本提供词法边界，替换后留空格，防止值与相邻词合并。
+    const segment = sql.slice(from, token.start) + (sql[token.start] === '[' ? ' ' + literal + ' ' : literal);
     bytes += encoder.encode(segment).length;
     if (bytes > queryParameterLimits.sqlBytes) throw new Error('展开后的 SQL 不能超过 20 MiB');
     output += segment; from = token.end;

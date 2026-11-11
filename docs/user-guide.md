@@ -1166,6 +1166,8 @@ MySQL 和 MariaDB 的查询窗口也可选择「Excel（XLSX）：每个行结�
 
 在 SQL 中用独立的 `:name` 表示一个值，点击“参数执行”。当前选区优先，没有选区时使用全部 SQL；表单打开后本次模板固定，不跟随后台草稿变化。名称为 1～64 位 ASCII 字母、数字或下划线，首字符不能是数字；名称区分大小写，同一名称多次出现共用一个值。普通注释、字符串和引号包裹的标识符中的 `:name` 不绑定；可执行版本注释内部按 SQL 分析。
 
+MySQL 和 MariaDB 的「参数执行」及「新执行并完整导出」也识别 `[$name]`。例如 `SELECT [$id], :id;` 只需填一次 `id`。两种写法均使用表单中的参数类型和值，历史保留原模板。MariaDB 的 `MSSQL` 会话模式将方括号用作标识符引号，值参数使用 `:name`。[Navicat 查询参数手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html#query-parameters)
+
 ```sql
 SELECT :id AS id, :keyword AS keyword, :id AS repeated_id;
 ```

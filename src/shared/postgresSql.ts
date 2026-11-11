@@ -1,3 +1,5 @@
+import { navicatParameterNameAt } from './navicatParameter';
+
 export interface PostgresStatement {
   sql: string;
   start: number;
@@ -13,7 +15,6 @@ const whitespace = /[ \t\n\r\f\v]/;
 const identifierStart = /[A-Za-z_\u0080-\uFFFF]/;
 const identifierPart = /[A-Za-z_0-9$\u0080-\uFFFF]/;
 const tagPart = /[A-Za-z_0-9\u0080-\uFFFF]/;
-const namedParameter = /^\[\$([A-Za-z_][A-Za-z0-9_]{0,63})\]/;
 export class IncompletePostgresSql extends Error {}
 export class PostgresStatementLimit extends Error {}
 
@@ -137,11 +138,11 @@ function scanPostgresSql(source: string, standardStrings: boolean, firstOnly: bo
       continue;
     }
     if (allowNamed && c === '[' && next === '$') {
-      const match = namedParameter.exec(source.slice(index, index + 67));
-      if (match) {
+      const name = navicatParameterNameAt(source, index);
+      if (name) {
         if (++namedOccurrences > 100000) throw Error('PostgreSQL命名参数不能超过100000处');
-        const end = index + match[0].length;
-        named.push({ name: match[1], start: index - start, end: end - start });
+        const end = index + name.length + 3;
+        named.push({ name, start: index - start, end: end - start });
         index = end;
         continue;
       }

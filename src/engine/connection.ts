@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import mysql, { type Connection, type ConnectionOptions, type FieldPacket } from 'mysql2';
 import { Client as SshClient, type ClientChannel } from 'ssh2';
 import type { ConnectionProfile, NetworkConnectionProfile, NetworkConnectionStatus } from '../shared/contracts';
-import { sqlExecutableWords } from '../shared/queryParameters';
+import { sqlExecutableWords, type SqlLexicalMode } from '../shared/queryParameters';
 import {initialCompletionDatabase,observeCompletionDatabase,invalidateCompletionDatabase,type CompletionDatabaseState,type SessionStatePacket} from './completionSession';
 import {SessionObjects} from './sessionObjects';
 import { ConnectionResourceOwner, type ConnectionResourceRecovery } from './connectionResourceState';
@@ -98,12 +98,17 @@ export async function closeMysqlConnection(connection: Connection, strict: boole
 
 /** 观察协议包并更新缓存，绝不为诊断或事务状态额外执行 SELECT/DO。 */
 export function observeSessionState(managed: ManagedConnection, packet: SessionStatePacket): void {
-  const previousMode = managed.sqlMode;
+  const previousMode = managed.sqlMode?.split(',');
   const previousStatus = managed.serverStatus;
-  const previousEscapesKnown = managed.noBackslashEscapesKnown;
+  const lexicalMode: SqlLexicalMode = {
+    noBackslashEscapes: previousMode?.includes('NO_BACKSLASH_ESCAPES') ?? Boolean((previousStatus ?? 0) & 512),
+    noBackslashEscapesKnown: previousMode !== undefined || managed.noBackslashEscapesKnown !== false,
+    ansiQuotes: previousMode?.includes('ANSI_QUOTES') ?? false, ansiQuotesKnown: previousMode !== undefined,
+    ...(managed.status?.dialect === 'mariadb' ? { bracketQuotes: previousMode?.includes('MSSQL') ?? 'unknown' } : {}),
+  };
   // 目录是辅助信息，其解析/预算异常绝不能改变已经执行的SQL结果。
-  try{if(packet.sql&&!(Number(packet.serverStatus)&8))managed.sessionObjects?.observe(packet.sql,managed.completionDatabase?.known?managed.completionDatabase.database??undefined:undefined,{noBackslashEscapes:previousMode===undefined?Boolean((previousStatus??0)&512):previousMode.split(',').includes('NO_BACKSLASH_ESCAPES'),noBackslashEscapesKnown:previousMode!==undefined||previousEscapesKnown!==false,ansiQuotes:previousMode?.split(',').includes('ANSI_QUOTES')??false,ansiQuotesKnown:previousMode!==undefined},managed.status.dialect,packet.warningStatus,managed.queryRelationStatement?.sql===packet.sql&&managed.queryRelationStatement.direct);}catch{managed.sessionObjects?.invalidate();}
-  observeCompletionDatabase(managed,packet,{noBackslashEscapes:previousMode===undefined?Boolean((previousStatus??0)&512):previousMode.split(',').includes('NO_BACKSLASH_ESCAPES'),noBackslashEscapesKnown:previousMode!==undefined||previousEscapesKnown!==false,ansiQuotes:previousMode?.split(',').includes('ANSI_QUOTES')??false,ansiQuotesKnown:previousMode!==undefined});
+  try{if(packet.sql&&!(Number(packet.serverStatus)&8))managed.sessionObjects?.observe(packet.sql,managed.completionDatabase?.known?managed.completionDatabase.database??undefined:undefined,lexicalMode,managed.status.dialect,packet.warningStatus,managed.queryRelationStatement?.sql===packet.sql&&managed.queryRelationStatement.direct);}catch{managed.sessionObjects?.invalidate();}
+  observeCompletionDatabase(managed,packet,lexicalMode);
   if (packet.serverStatus !== undefined) { managed.serverStatus = packet.serverStatus; managed.transactionStateKnown = true; }
   const variables = packet.stateChanges?.systemVariables ?? {};
   if (Object.hasOwn(variables, 'sql_mode')) {
@@ -123,7 +128,7 @@ export function observeSessionState(managed: ManagedConnection, packet: SessionS
   // 对不透明控制语句不能凭缺少事件猜测“模式没变”；NBE 位也可能过时，须使用四候选扫描器。
   if (packet.sql && !(Number(packet.serverStatus) & 8)) {
     try {
-      const words = sqlExecutableWords(packet.sql, { noBackslashEscapes: previousMode === undefined ? Boolean((previousStatus ?? 0) & 512) : previousMode.split(',').includes('NO_BACKSLASH_ESCAPES'), noBackslashEscapesKnown: previousMode !== undefined || previousEscapesKnown !== false, ansiQuotes: previousMode?.split(',').includes('ANSI_QUOTES') ?? false, ansiQuotesKnown: previousMode !== undefined });
+      const words = sqlExecutableWords(packet.sql, lexicalMode);
       const control = words[0];
       if (['SET', 'CALL', 'EXECUTE', 'RESET', 'CHANGE'].includes(control)) managed.queryRowContext = undefined;
       if (!Object.hasOwn(variables, 'sql_mode') &&

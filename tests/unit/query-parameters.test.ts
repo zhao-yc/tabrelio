@@ -21,6 +21,26 @@ describe('命名参数词法与精确类型', () => {
     expect(namedParameterTokens('SELECT 1--\u00a0 :v', normal).map(token => token.name)).toEqual(['v']);
     expect(namedParameterTokens('SELECT 1--\x01 :v', normal)).toEqual([]);
   });
+  it('识别 Navicat 参数及原有名称，引用内保留原文并沿用类型值编码', () => {
+    const sql = "SELECT '[$skip]', `[$field]`, [$v], :v /* [$comment] */ /*!80000 + [$other] */";
+    expect(namedParameterTokens(sql, normal).map(({ name, start, end }) => [name, sql.slice(start, end)]))
+      .toEqual([['v', '[$v]'], ['v', ':v'], ['other', '[$other]']]);
+    const value = "原值'; DROP TABLE t; -- ";
+    const values = validateQueryParameters([parameter('text', value)]);
+    expect(bindQueryParameters("SELECT[$v], :v, '[$v]'", values, normal))
+      .toBe("SELECT " + queryParameterLiteral(parameter('text', value)) + " , " + queryParameterLiteral(parameter('text', value)) + ", '[$v]'");
+    for (const invalid of ['[$1]', '[$foo-bar]', '[$' + 'x'.repeat(65) + ']', '[$open'])
+      expect(() => namedParameterTokens('SELECT ' + invalid, normal)).toThrow('非法命名参数');
+  });
+  it('MariaDB 方括号引用沿用实际模式，未知解释不猜值参数', () => {
+    const sql = "SELECT [$v], [a]]b;':ignored], :v";
+    expect(namedParameterTokens(sql, {...normal, bracketQuotes: true}).map(token => sql.slice(token.start, token.end))).toEqual([':v']);
+    expect(() => namedParameterTokens('SELECT [$v], :v', {...normal, bracketQuotes: 'unknown'})).toThrow('歧义');
+    expect(namedParameterTokens("SELECT '[$v]', :v", {...normal, bracketQuotes: 'unknown'}).map(token => token.name)).toEqual(['v']);
+    expect(new SqlScriptScanner(false, true, true, true, 'identifiers').push(sql + ';SELECT 2;', true)).toEqual([sql, 'SELECT 2']);
+    expect(new SqlScriptScanner(false, false, true, true, 'parameters').push('DELIMITER ]\nSELECT [$v]]\nSELECT 2]', true))
+      .toEqual(['SELECT [$v]', 'SELECT 2']);
+  });
   it('按实际反斜线与 ANSI_QUOTES 区分字符串和标识符的结束位置', () => {
     const sql = 'SELECT "path\\", :v';
     expect(() => namedParameterTokens(sql, normal)).toThrow('未闭合');
@@ -166,6 +186,30 @@ describe('参数任务预检、会话模式和失败边界', () => {
     const output = await engine.handle('query.executeParameterized', { sessionId, sql, parameters: [parameter('text', '秘密')], taskId: 'mode', maxRows: 10 });
     expect(sent).toHaveLength(2); expect(sent[1]).toContain("'path\\'");
     expect(output.results[1].statement).toContain(':v'); expect(JSON.stringify(events)).not.toContain('秘密');
+  });
+  it('MariaDB 会话按真实状态在参数和 MSSQL 标识符之间切换，保留原模板', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection;
+    active.status.dialect = 'mariadb';
+    scenario = (sql, result) => {
+      if (sql === "SET sql_mode='MSSQL'") serverMode = 'MSSQL,ANSI_QUOTES';
+      if (sql === "SET sql_mode=''") serverMode = '';
+      done(result);
+    };
+    const sql = "SET sql_mode='MSSQL'; SELECT [$v], [a;:literal], :v; SET sql_mode=''; SELECT [$v];";
+    const preview = await engine.handle('query.parameterNames', { sessionId, sql });
+    expect(preview).toMatchObject({ names: ['v'], dialect: 'mariadb', bracketQuotes: false, warnings: [] });
+    const output = await engine.handle('query.executeParameterized', { sessionId, sql, parameters: [parameter('integer', '42')], taskId: 'brackets', maxRows: 10 });
+    expect(output.failure).toBeUndefined();
+    expect(sent.map(value => value.trim())).toEqual(["SET sql_mode='MSSQL'", 'SELECT [$v], [a;:literal], 42', "SET sql_mode=''", 'SELECT  42']);
+    expect(output.results[1].statement).toBe('SELECT [$v], [a;:literal], :v');
+    expect(output.results[3].statement).toBe('SELECT [$v]');
+    serverMode = undefined; sent.length = 0;
+    await expect(engine.handle('query.parameterNames', { sessionId, sql: 'SELECT [$v]' })).rejects.toThrow('歧义');
+    const refused = await engine.handle('query.executeParameterized', {
+      sessionId, sql: 'INSERT INTO t VALUES (1); SELECT [$v]', parameters: [parameter('integer', '42')], taskId: 'unknown-brackets', maxRows: 10,
+    });
+    expect(refused.failure?.message).toContain('歧义');
+    expect(sent).toEqual([]);
   });
   it('未知模式表达式可执行，预览说明不确定性，运行时重新解析剩余脚本', async () => {
     scenario = (sql, result) => { if (sql.startsWith('SET')) serverMode = 'NO_BACKSLASH_ESCAPES'; done(result); };

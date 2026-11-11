@@ -51,17 +51,21 @@ function snapshotScope(raw: unknown): QueryParameterReuseScope {
 }
 /** 表单和RAM复用共用严格元数据快照，不读取getter，不把未知方言当成MySQL。 */
 export function queryParameterInfo(raw: unknown): QueryParameterNames {
-  const value = data(raw, ['names', 'warnings', 'noBackslashEscapes', 'ansiQuotes', 'ansiQuotesKnown', 'noBackslashEscapesKnown', 'maxDecimalScale', 'allowTimeEndpointFraction', 'dialect']);
+  const value = data(raw, ['names', 'warnings', 'noBackslashEscapes', 'ansiQuotes', 'ansiQuotesKnown', 'noBackslashEscapesKnown', 'bracketQuotes', 'maxDecimalScale', 'allowTimeEndpointFraction', 'dialect']);
   const names = array(value.names, queryParameterLimits.names);
   if (names.some(name => typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name)) || new Set(names).size !== names.length) throw Error('参数暂存元数据无效');
   for (const key of ['noBackslashEscapes', 'ansiQuotes', 'allowTimeEndpointFraction']) if (typeof value[key] !== 'boolean') throw Error('参数暂存元数据无效');
   for (const key of ['ansiQuotesKnown', 'noBackslashEscapesKnown']) if (value[key] !== undefined && typeof value[key] !== 'boolean') throw Error('参数暂存元数据无效');
   if (value.maxDecimalScale !== 30 && value.maxDecimalScale !== 38) throw Error('参数暂存元数据无效');
   if (Object.hasOwn(value, 'dialect') && !['mysql', 'mariadb', 'sqlite'].includes(value.dialect as string)) throw Error('参数暂存方言元数据无效');
+  if (Object.hasOwn(value, 'bracketQuotes') && (value.dialect !== 'mariadb' || ![true, false, 'unknown'].includes(value.bracketQuotes as boolean | 'unknown')))
+    throw Error('参数暂存方括号模式无效');
   if (value.dialect === 'sqlite' && (value.noBackslashEscapes !== true || value.ansiQuotes !== true || value.ansiQuotesKnown !== true || value.noBackslashEscapesKnown !== true || value.maxDecimalScale !== 38 || value.allowTimeEndpointFraction !== true)) throw Error('SQLite参数元数据无效');
   // warnings只显示在原参数表单，不缓存；即使不匹配文案也不接受访问器或稀疏结构。
   const warnings = array(value.warnings, queryParameterLimits.names); if (warnings.some(warning => typeof warning !== 'string')) throw Error('参数暂存元数据无效');
-  return { names: names as string[], warnings: warnings as string[], noBackslashEscapes: value.noBackslashEscapes as boolean, ansiQuotes: value.ansiQuotes as boolean, ...(value.ansiQuotesKnown === undefined ? {} : { ansiQuotesKnown: value.ansiQuotesKnown as boolean }), ...(value.noBackslashEscapesKnown === undefined ? {} : { noBackslashEscapesKnown: value.noBackslashEscapesKnown as boolean }), maxDecimalScale: value.maxDecimalScale, allowTimeEndpointFraction: value.allowTimeEndpointFraction as boolean, ...(Object.hasOwn(value, 'dialect') ? { dialect: value.dialect as QueryParameterNames['dialect'] } : {}) };
+  return { names: names as string[], warnings: warnings as string[], noBackslashEscapes: value.noBackslashEscapes as boolean, ansiQuotes: value.ansiQuotes as boolean, ...(value.ansiQuotesKnown === undefined ? {} : { ansiQuotesKnown: value.ansiQuotesKnown as boolean }), ...(value.noBackslashEscapesKnown === undefined ? {} : { noBackslashEscapesKnown: value.noBackslashEscapesKnown as boolean }),
+    ...(Object.hasOwn(value, 'bracketQuotes') ? { bracketQuotes: value.bracketQuotes as QueryParameterNames['bracketQuotes'] } : {}),
+    maxDecimalScale: value.maxDecimalScale, allowTimeEndpointFraction: value.allowTimeEndpointFraction as boolean, ...(Object.hasOwn(value, 'dialect') ? { dialect: value.dialect as QueryParameterNames['dialect'] } : {}) };
 }
 /** 诊断文案只显示在原表单，不进入缓存或元数据指纹；dialect必须进入指纹。 */
 function metadata(raw: unknown): Metadata { const { warnings: _warnings, ...info } = queryParameterInfo(raw); return info; }

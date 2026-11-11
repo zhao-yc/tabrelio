@@ -1,39 +1,48 @@
+import { navicatParameterNameAt } from './navicatParameter';
+
 /** 范围采用原文 UTF-16 半开区间；客户端分隔符不属于真正发送的 SQL。 */
 export interface SqlStatementRange { sql: string; start: number; end: number; delimiterStart: number; delimiterEnd: number; delimiter: string | null; }
 export interface SqlLocatedStatement { sql: string; sourceRange?: { start: number; end: number }; }
+export type SqlScriptBrackets = 'literal' | 'parameters' | 'identifiers' | 'unknown';
 
 /** 支持跨块、跨行字符串与 DELIMITER 指令，导入脚本时只保留当前语句。 */
 export class SqlScriptScanner {
   private pending = '';
   private statement = '';
   private delimiter = ';';
-  private state: 'normal' | 'single' | 'double' | 'identifier' | 'block' = 'normal';
+  private state: 'normal' | 'single' | 'double' | 'identifier' | 'bracket' | 'block' = 'normal';
+  private brackets: Exclude<SqlScriptBrackets, 'unknown'> = 'literal';
   private hasCode = false;
   private atLineStart = true;
   private alternates: SqlScriptScanner[] = [];
   private pendingOffset = 0;
   private statementOffset = 0;
   /** 使用当前会话的反斜线模式初始化扫描器，避免字符串边界判断错误。 */
-  constructor(private noBackslashEscapes = false, private ansiQuotes = false, ansiQuotesKnown = true, noBackslashEscapesKnown = true) {
-    if (!ansiQuotesKnown || !noBackslashEscapesKnown) this.setMode(noBackslashEscapes, ansiQuotes, ansiQuotesKnown, noBackslashEscapesKnown);
+  constructor(private noBackslashEscapes = false, private ansiQuotes = false, ansiQuotesKnown = true,
+    noBackslashEscapesKnown = true, brackets: SqlScriptBrackets = 'literal') {
+    this.setMode(noBackslashEscapes, ansiQuotes, ansiQuotesKnown, noBackslashEscapesKnown, brackets);
   }
 
   /** 未来定位范围不早于仍保留语句的起点；仅供流式文件释放源块，不改变扫描或返回合同。 */
   get retainedSourceOffset(): number { return Math.min(this.statementOffset, ...this.alternates.map(scanner => scanner.statementOffset)); }
 
   /** 仅在语句边界更新模式；尚未消费的尾部保留到读取下一条语句时再解释。 */
-  setMode(noBackslashEscapes: boolean, ansiQuotes = false, ansiQuotesKnown = true, noBackslashEscapesKnown = true): void {
+  setMode(noBackslashEscapes: boolean, ansiQuotes = false, ansiQuotesKnown = true, noBackslashEscapesKnown = true,
+    brackets: SqlScriptBrackets = 'literal'): void {
     if (this.hasCode || this.state !== 'normal') throw new Error('不能在 SQL 语句中途改变词法模式');
     this.noBackslashEscapes = noBackslashEscapesKnown ? noBackslashEscapes : false; this.ansiQuotes = ansiQuotesKnown ? ansiQuotes : false;
+    this.brackets = brackets === 'unknown' ? 'parameters' : brackets;
     this.alternates = [];
     for (const escapes of noBackslashEscapesKnown ? [noBackslashEscapes] : [false, true]) {
       for (const quotes of ansiQuotesKnown ? [ansiQuotes] : [false, true]) {
-        if (escapes === this.noBackslashEscapes && quotes === this.ansiQuotes) continue;
-        const alternate = new SqlScriptScanner(escapes, quotes);
-        alternate.pending = this.pending; alternate.statement = this.statement; alternate.delimiter = this.delimiter;
-        alternate.state = this.state; alternate.hasCode = this.hasCode; alternate.atLineStart = this.atLineStart;
-        alternate.pendingOffset = this.pendingOffset; alternate.statementOffset = this.statementOffset;
-        this.alternates.push(alternate);
+        for (const candidate of brackets === 'unknown' ? ['parameters', 'identifiers'] as const : [brackets]) {
+          if (escapes === this.noBackslashEscapes && quotes === this.ansiQuotes && candidate === this.brackets) continue;
+          const alternate = new SqlScriptScanner(escapes, quotes, true, true, candidate);
+          alternate.pending = this.pending; alternate.statement = this.statement; alternate.delimiter = this.delimiter;
+          alternate.state = this.state; alternate.hasCode = this.hasCode; alternate.atLineStart = this.atLineStart;
+          alternate.pendingOffset = this.pendingOffset; alternate.statementOffset = this.statementOffset;
+          this.alternates.push(alternate);
+        }
       }
     }
   }
@@ -127,13 +136,22 @@ export class SqlScriptScanner {
       }
       if (this.state !== 'normal') {
         this.statement += char;
-        const quote = this.state === 'single' ? "'" : this.state === 'double' ? '"' : '`';
-        if (char === '\\' && !this.noBackslashEscapes && this.state !== 'identifier' && !(this.state === 'double' && this.ansiQuotes)) { if (next !== undefined) { this.statement += next; i++; } }
+        const quote = this.state === 'single' ? "'" : this.state === 'double' ? '"' : this.state === 'bracket' ? ']' : '`';
+        if (char === '\\' && !this.noBackslashEscapes && (this.state === 'single' || this.state === 'double' && !this.ansiQuotes)) { if (next !== undefined) { this.statement += next; i++; } }
         else if (char === quote) {
           if (next === quote) { this.statement += next; i++; }
           else this.state = 'normal';
         }
         continue;
+      }
+      // 保持完整值占位符，避免自定义分隔符恰好匹配其中的字符。
+      if (this.brackets === 'parameters' && char === '[' && next === '$') {
+        const name = navicatParameterNameAt(line, i);
+        if (name) {
+          const end = i + name.length + 3;
+          this.statement += line.slice(i, end); this.hasCode = true; i = end - 1;
+          continue;
+        }
       }
       if (line.startsWith(this.delimiter, i)) {
         if (this.statement.length > 64 * 1024 * 1024) throw new Error('单条 SQL 不能超过 64 MiB');
@@ -151,6 +169,7 @@ export class SqlScriptScanner {
       if (char === "'") this.state = 'single';
       else if (char === '"') this.state = 'double';
       else if (char === '`') this.state = 'identifier';
+      else if (char === '[' && this.brackets === 'identifiers') this.state = 'bracket';
       if (!/\s/.test(char)) this.hasCode = true;
       this.statement += char;
       if (this.statement.length > 64 * 1024 * 1024) throw new Error('单条 SQL 不能超过 64 MiB');

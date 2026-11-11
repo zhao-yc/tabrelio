@@ -1,6 +1,8 @@
 /** 类型参数查询文案集中管理，值只在当前表单保留，不进入持久化工作区。 */
 export const parameterZh = {
   title: '类型参数查询', open: '参数执行', hint: '以 :name 表示一个值参数。选区优先；没有选区时使用全部 SQL。重复名称共用一个值，表名和列名请直接写在 SQL 中。',
+  mysqlHint: '以 :name 或 [$name] 表示一个值参数。同名参数共用一个值。选区优先，没有选区时使用全部 SQL。',
+  mariadbBracketHint: '当前 MariaDB 会话使用 MSSQL 模式，方括号用于标识符。请用 :name 表示值参数，同名参数共用一个值。',
   sqliteCurrentOpen: '参数执行当前语句',
   sqliteCurrentMissing: '光标位置没有可执行的 SQLite 语句。',
   sqliteCurrentTooLong: 'SQLite SQL 全文不能超过 20 MiB。',

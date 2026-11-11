@@ -64,11 +64,15 @@ export interface QueryStreamExportOutput {
 /** 显式二进制模式仍在发送前选择诊断及控制语句的文本路径，绝不试错准备后重放。 */
 export function queryExportWireProtocol(sql: string, protocol: QueryExportProtocol, mode: SqlLexicalMode): 'text' | 'binary' {
   if (protocol === 'text-strict') return 'text';
-  if (mode.ansiQuotesKnown === false || mode.noBackslashEscapesKnown === false) {
+  if (mode.ansiQuotesKnown === false || mode.noBackslashEscapesKnown === false || mode.bracketQuotes === 'unknown') {
     // 引号边界相同也可能让诊断标识符在候选模式下变成普通字符串；协议选择同样不能猜。
     const candidates = new Set<string>();
     for (const noBackslashEscapes of mode.noBackslashEscapesKnown === false ? [false, true] : [mode.noBackslashEscapes]) {
-      for (const ansiQuotes of mode.ansiQuotesKnown === false ? [false, true] : [mode.ansiQuotes]) candidates.add(queryExportWireProtocol(sql, protocol, { noBackslashEscapes, ansiQuotes }));
+      for (const ansiQuotes of mode.ansiQuotesKnown === false ? [false, true] : [mode.ansiQuotes]) {
+        for (const bracketQuotes of mode.bracketQuotes === 'unknown' ? [false, true] : [mode.bracketQuotes]) {
+          candidates.add(queryExportWireProtocol(sql, protocol, { noBackslashEscapes, ansiQuotes, bracketQuotes }));
+        }
+      }
     }
     if (candidates.size !== 1) throw new Error('无法确定会话 SQL 引号模式，执行协议的诊断识别存在歧义');
     // 同时要求共享参数词法在所有候选下同意边界，不能只比协议选择结果。

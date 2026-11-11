@@ -14,6 +14,15 @@ function fixture() {
 function opted(f = fixture()) { return { ...f, lease: f.cache.setOptIn(f.lease, true)! }; }
 
 describe('同标签显式参数RAM暂存', () => {
+  it('MariaDB 方括号含义变化时，即使名称相同也不复用旧参数', () => {
+    const f = opted();
+    const info: QueryParameterNames = { ...f.info, dialect: 'mariadb', bracketQuotes: false };
+    expect(f.cache.remember(f.lease, info, f.params)).toBe(true);
+    const next = f.cache.begin()!;
+    expect(f.cache.read(next, info)).toEqual(f.params);
+    expect(f.cache.read(next, { ...info, bracketQuotes: true })).toBeNull();
+    expect(f.cache.read(next, { ...info, bracketQuotes: 'unknown' })).toBeNull();
+  });
   it('默认不存、不读；显式同意后才存，重新打开不自动填值或执行', () => {
     const f = fixture(); expect(f.cache.remember(f.lease, f.info, f.params)).toBe(false); expect(f.cache.read(f.lease, f.info)).toBeNull();
     const token = f.cache.setOptIn(f.lease, true)!; expect(f.cache.remember(token, f.info, f.params)).toBe(true);

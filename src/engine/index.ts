@@ -727,7 +727,9 @@ export class Engine {
       case 'query.parameterNames': return this.withSession(input.sessionId, async managed => {
         const mode = await this.sqlMode(managed);
         const preview = this.parameterPlan(input.sql, mode);
-        return { names: preview.names, ...mode, warnings: preview.warnings, maxDecimalScale: this.maxDecimalScale(managed), allowTimeEndpointFraction: managed.status.dialect === 'mariadb' };
+        return { names: preview.names, ...mode, warnings: preview.warnings, maxDecimalScale: this.maxDecimalScale(managed),
+          allowTimeEndpointFraction: managed.status.dialect === 'mariadb',
+          ...(managed.status.dialect === 'mariadb' ? { dialect: 'mariadb' } : {}) };
       });
       case 'query.sessionState': {
         // 即使会话已断开也允许读取缓存；此命令不建连、不查询、不改变事务与诊断状态。
@@ -1545,12 +1547,20 @@ export class Engine {
   /** 使用当前标签会话的协议缓存，不插入 SELECT，以免覆盖 ROW_COUNT、FOUND_ROWS 和警告。 */
   private async sqlMode(managed: ManagedConnection, task?: RunningTask): Promise<SqlLexicalMode> {
     if (task) this.checkCancelled(task);
+    const bracketMode = managed.status?.dialect === 'mariadb'
+      ? { bracketQuotes: managed.sqlMode === undefined ? 'unknown' as const : managed.sqlMode.split(',').includes('MSSQL') }
+      : {};
     if (managed.sqlMode === undefined) {
       if (managed.serverStatus === undefined) throw new Error('无法确定会话 SQL 模式，请关闭此标签并新建查询重新连接；未执行本次 SQL');
-      return { noBackslashEscapes: Boolean(managed.serverStatus & 512), noBackslashEscapesKnown: managed.noBackslashEscapesKnown !== false, ansiQuotes: false, ansiQuotesKnown: false };
+      return { noBackslashEscapes: Boolean(managed.serverStatus & 512), noBackslashEscapesKnown: managed.noBackslashEscapesKnown !== false, ansiQuotes: false, ansiQuotesKnown: false, ...bracketMode };
     }
     const modes = managed.sqlMode.split(',');
-    return { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'), noBackslashEscapesKnown: true, ansiQuotes: modes.includes('ANSI_QUOTES'), ansiQuotesKnown: true };
+    return { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'), noBackslashEscapesKnown: true, ansiQuotes: modes.includes('ANSI_QUOTES'), ansiQuotesKnown: true, ...bracketMode };
+  }
+
+  /** 仅在显式参数操作中选择方括号的解释，未知时同时核对标识符和模板。 */
+  private parameterBrackets(mode: SqlLexicalMode) {
+    return mode.bracketQuotes === 'unknown' ? 'unknown' : mode.bracketQuotes ? 'identifiers' : 'parameters';
   }
 
   /** MariaDB 10.2.1 起允许 38 位小数，MySQL 及更早 MariaDB 保持 30 位。 */
@@ -1567,7 +1577,10 @@ export class Engine {
     const assignment = /^SET\s+(?:(?:SESSION|LOCAL)\s+|@@(?:(?:SESSION|LOCAL)\.)?)?sql_mode\s*=\s*(['"])([A-Za-z0-9_,\s]*)\1\s*$/i.exec(clean);
     if (assignment && !(assignment[1] === '"' && mode.ansiQuotes)) {
       const modes = assignment[2].toUpperCase().split(',').map(value => value.trim());
-      return { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'), ansiQuotes: modes.includes('ANSI_QUOTES') || modes.includes('ANSI') };
+      const bracketQuotes = mode.bracketQuotes !== undefined && modes.includes('MSSQL');
+      return { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'),
+        ansiQuotes: modes.includes('ANSI_QUOTES') || modes.includes('ANSI') || bracketQuotes,
+        ...(mode.bracketQuotes === undefined ? {} : { bracketQuotes }) };
     }
     if (/^(?:SET|CALL|EXECUTE)\b/i.test(clean) || /\/\*(?:!|M!)/.test(clean)) return undefined;
     return mode;
@@ -1576,12 +1589,12 @@ export class Engine {
   /** 静态路径一次校验完整模板；动态模式边界后预览仅为当前模式下的候选名称。 */
   private parameterPlan(sql: string, initial: SqlLexicalMode, values?: ReadonlyMap<string, string>): { names: string[]; warnings: string[]; dynamic: boolean } {
     if (typeof sql !== 'string' || Buffer.byteLength(sql) > queryParameterLimits.sqlBytes) throw new Error('参数查询模板不能超过 20 MiB');
-    const scanner = new SqlScriptScanner(initial.noBackslashEscapes, initial.ansiQuotes, initial.ansiQuotesKnown !== false, initial.noBackslashEscapesKnown !== false);
+    const scanner = new SqlScriptScanner();
     const names = new Set<string>(); let mode = initial, dynamic = false, bytes = 0, first = true;
     for (;;) {
       let statement: string | undefined;
       try {
-        scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
+        scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false, this.parameterBrackets(mode));
         statement = scanner.push(first ? sql : '', true, 1)[0]; first = false;
         if (!statement) break;
         for (const token of namedParameterTokens(statement, mode)) names.add(token.name);
@@ -1883,12 +1896,13 @@ export class Engine {
       return;
     }
     if (values) this.parameterPlan(sql, mode, values);
-    const scanner = new SqlScriptScanner(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
+    const scanner = new SqlScriptScanner();
     let ordinal = 0, expandedBytes = 0, first = true;
     const used = new Set<string>();
     for (;;) {
       this.checkCancelled(task);
-      scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
+      scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false,
+        values ? this.parameterBrackets(mode) : 'literal');
       const chunk = first ? sql : '', located = locate ? scanner.pushLocated(chunk, true, 1)[0] : undefined;
       const template = locate ? located?.sql : scanner.push(chunk, true, 1)[0]; first = false;
       if (!template) break;
