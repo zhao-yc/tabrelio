@@ -3,6 +3,8 @@ import type { CellValue, ColumnInfo, TableInfo } from '../../src/shared/contract
 import type { StructureTaskContext } from '../../src/engine/structureDefinition';
 import { buildPageSql, buildTableFilterSql } from '../../src/engine/sql';
 import { decodeTableStatistics, planTableStatistics, tableStatisticsColumnCapability, tableStatisticsSourceIdentity } from '../../src/engine/tableStatistics';
+import { decodeTableCalendar, planTableCalendar, tableCalendarMaxRows } from '../../src/engine/tableCalendar';
+import { validateCommand } from '../../src/shared/validation';
 
 const column = (name: string, type: string): ColumnInfo => ({ name, type, nullable: true, defaultValue: null, generated: false, extra: '', comment: '' });
 /** 元数据含真实服务器类型字符串，不把类型当作可执行SQL。 */
@@ -12,6 +14,45 @@ function source(): TableInfo {
 const request = (columns: string[]) => ({ columns, filters: [] });
 /** 按固定服务端别名投影原数据，不由实现重新计算预期统计值。 */
 function values(plan: ReturnType<typeof planTableStatistics>, row: Record<string, CellValue>): CellValue[] { return plan.aliases.map(alias => Object.hasOwn(row, alias) ? row[alias] : null); }
+
+describe('全筛选日期分布', () => {
+  const calendar = { column: 'created', unit: 'day' } as const;
+  const input = { connectionId: 'test', database: 'db', table: 'events', taskId: 'test', ...request([]), calendar };
+
+  it('限定原生日期类型，日期统计请求与字段概况互斥', () => {
+    expect(validateCommand('table.statistics', input)).toEqual(input);
+    expect(() => validateCommand('table.statistics', { ...input, distinct: true })).toThrow();
+    expect(() => validateCommand('table.statistics', { ...input, columns: ['created'] })).toThrow();
+    expect(() => planTableCalendar(source(), { ...input, calendar: { ...calendar, column: 'label' } })).toThrow();
+    const plan = planTableCalendar(source(), { ...input, filters: [{ column: 'allnull', operator: '=', value: '17' }] });
+    expect(plan.sql).toContain('FROM `库``名`.`表``名` WHERE');
+    expect(plan.sql).toContain('`allnull`');
+    expect(plan.sql).toContain(`GROUP BY 1 ORDER BY 1 LIMIT ${tableCalendarMaxRows}`);
+  });
+
+  it('精确计数，区分零日期和 NULL，并拒绝不完整或损坏的区间', () => {
+    const plan = planTableCalendar(source(), input);
+    expect(decodeTableCalendar(plan, [[null, '1'], ['', '2'], ['2024-02-29', '9007199254740993']])).toEqual({
+      rowCount: '9007199254740996',
+      calendar: { ...calendar, grouped: '9007199254740993', peak: '9007199254740993', nulls: '1', ungrouped: '2',
+        buckets: [{ label: '2024-02-29', count: '9007199254740993' }] },
+    });
+    expect(decodeTableCalendar(plan, [])).toMatchObject({ rowCount: '0', calendar: { grouped: '0', buckets: [] } });
+    expect(() => decodeTableCalendar(plan, [['2023-02-29', '1']])).toThrow();
+    expect(() => decodeTableCalendar(plan, [['2024-02-29', '1'], ['2024-02-29', '2']])).toThrow();
+    expect(() => decodeTableCalendar(plan, [[null, '1'], ['', '18446744073709551615']])).toThrow();
+    expect(() => decodeTableCalendar(plan, Array.from({ length: 4097 }, () => ['2024-02-29', '1']))).toThrow('超过 4096 个');
+  });
+
+  it('TIMESTAMP 必须带回实际分组时区', () => {
+    const info = source();
+    info.columns.find(column => column.name === calendar.column)!.type = 'TIMESTAMP(6)';
+    const plan = planTableCalendar(info, input);
+    expect(() => decodeTableCalendar(plan, [])).toThrow();
+    expect(decodeTableCalendar(plan, [], '+02:00').calendar.timeZone).toBe('+02:00');
+    expect(() => decodeTableCalendar(planTableCalendar(source(), input), [], '+02:00')).toThrow();
+  });
+});
 
 describe('全部服务器筛选范围的单条统计SQL', () => {
   it('零列只请求COUNT，不读取客户端页、不排序、不LIMIT，不混入原列名为别名', () => {

@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { sqliteRowCountSchema as count, sqliteTablePageSchema } from './sqliteTableBrowse';
 import { sqliteValueOptionSchema } from './sqliteValueOptions';
-import { calendarLabelLength, calendarUnits, isCivilDate } from './civilDate';
+import { calendarUnits } from './civilDate';
+import { assertCalendarCounts, calendarDistributionLimit } from './calendarDistribution';
 
 export const sqliteStatisticsLimits = { groups: 5, bytes: 1024 * 1024, cellBytes: 65536, active: 2 } as const;
 export const sqliteStorageKinds = ['blob', 'integer', 'null', 'real', 'text'] as const;
@@ -17,7 +18,7 @@ const sqliteRowCountInputBase = z.object(aggregateSource).strict();
 export const sqliteRowCountInputSchema = sqliteRowCountInputBase.superRefine(validateConditions);
 export const sqliteStatisticsInputSchema = sqliteRowCountInputBase.extend({ column: page.table }).superRefine(validateConditions);
 export const sqliteCalendarInputSchema = sqliteStatisticsInputSchema.safeExtend({ calendarUnit: z.enum(calendarUnits) });
-export const sqliteCalendarLimits = { buckets: 4096, statementMs: 30000 } as const;
+export const sqliteCalendarLimits = { buckets: calendarDistributionLimit, statementMs: 30000 } as const;
 const sqliteRowCountOutputSchema = z.object({ request: sqliteRowCountInputSchema, rows: count }).strict();
 export type SqliteRowCountInput = z.infer<typeof sqliteRowCountInputSchema>;
 export type SqliteRowCountOutput = z.infer<typeof sqliteRowCountOutputSchema>;
@@ -47,16 +48,7 @@ export function assertSqliteCalendar(raw: unknown, request: SqliteCalendarInput)
   const value = sqliteCalendarOutputSchema.parse(raw);
   const input = sqliteCalendarInputSchema.parse(request);
   if (JSON.stringify(value.request) !== JSON.stringify(input)) throw Error('SQLite日期分布回包与原请求不符');
-  let grouped = 0n, peak = 0n, previous = '';
-  for (const { label, count: countText } of value.buckets) {
-    const date = input.calendarUnit === 'year' ? label + '-01-01' : input.calendarUnit === 'month' ? label + '-01' : label;
-    const size = BigInt(countText);
-    if (label.length !== calendarLabelLength[input.calendarUnit] || !isCivilDate(date) || label <= previous || size === 0n)
-      throw Error('SQLite日期区间或计数无效');
-    grouped += size; if (size > peak) peak = size; previous = label;
-  }
-  if (grouped !== BigInt(value.grouped) || peak !== BigInt(value.peak) || grouped + BigInt(value.nulls) + BigInt(value.ungrouped) !== BigInt(value.rows))
-    throw Error('SQLite日期分布数量不完整');
+  assertCalendarCounts(value, input.calendarUnit, value.rows);
   return value;
 }
 /** 回包整份绑定原任务；类型、数量恒等式、非空极值和预算不符时拒绝，不发布部分统计。 */

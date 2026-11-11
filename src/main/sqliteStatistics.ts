@@ -2,6 +2,7 @@ import { sqliteStatisticsInputSchema, assertSqliteStatistics, sqliteStatisticsLi
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import { sqliteCalendarDateFunction, type SqliteValue } from '../engine/sqlite/protocol';
 import { calendarLabelLength, calendarTextLength } from '../shared/civilDate';
+import { summarizeCalendarGroups } from '../shared/calendarDistribution';
 import { withSqliteReadSnapshot, readSqliteTableCatalogue, verifySqliteTableScope, countSqliteMatchingRows, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 
 /** 原生聚合结果按真实存储类型传输；64位整数、REAL无穷和BLOB不经显示文本猜测。 */
@@ -71,24 +72,12 @@ export async function readSqliteCalendar(driver: SqliteDriverSession, raw: Sqlit
     control.check();
     if (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== rows.length)
       throw Error('SQLite日期分布未完整读取');
-    let nulls: bigint | undefined, ungrouped: bigint | undefined, grouped = 0n, peak = 0n;
-    const buckets: SqliteCalendarOutput['buckets'] = [];
-    for (const row of rows) {
+    const groups = rows.map(row => {
       const [label, count] = row;
       if (row.length !== 2 || label !== null && typeof label !== 'string' || !count || typeof count !== 'object' || count.type !== 'integer')
         throw Error('SQLite日期分布原生计数无效');
-      const size = BigInt(count.value);
-      if (size <= 0n) throw Error('SQLite日期分布原生计数无效');
-      if (label === null && nulls === undefined) nulls = size;
-      else if (label === '' && ungrouped === undefined) ungrouped = size;
-      else if (label) {
-        grouped += size;
-        if (size > peak) peak = size;
-        buckets.push({ label, count: count.value });
-      } else throw Error('SQLite日期分布包含重复计数');
-    }
-    if (buckets.length > sqliteCalendarLimits.buckets) throw Error('日期区间超过 4096 个，请改用更大的分组单位或缩小筛选范围');
-    return assertSqliteCalendar({ request: input, rows: (grouped + (nulls ?? 0n) + (ungrouped ?? 0n)).toString(),
-      grouped: grouped.toString(), peak: peak.toString(), nulls: (nulls ?? 0n).toString(), ungrouped: (ungrouped ?? 0n).toString(), buckets }, input);
+      return [label, count.value] as const;
+    });
+    return assertSqliteCalendar({ request: input, ...summarizeCalendarGroups(groups) }, input);
   });
 }

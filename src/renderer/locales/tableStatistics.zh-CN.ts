@@ -4,6 +4,8 @@ export const tableStatisticsZh = {
   countHint: '统计符合当前筛选的全部服务器记录，包含字段为 NULL 的行，不受当前页条数限制。',
   recentCountHint: '统计完成时的匹配数。刷新、翻页或更改筛选排序后需要重新统计。',
   drafts: '本页未提交修改不计入统计，草稿保持。',
+  analysis: '统计方式', summary: '字段概况', calendarColumn: '日期字段',
+  calendarZone: (zone: string) => `TIMESTAMP 按统计会话时区 ${zone} 归入日期。`,
   selection: '选择统计字段（最多12个）', countOnly: '不选择字段时只统计总记录数。勾选字段不会查询服务器。',
   selected: (count: number) => `已选择 ${count} / 12 个字段`, selectColumn: (name: string) => `统计字段 ${name}`,
   distinctOption: '统计非NULL不同值（可能耗时）', distinctColumn: '非NULL不同值（COUNT DISTINCT）',

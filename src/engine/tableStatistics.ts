@@ -7,6 +7,8 @@ import { buildTableFilterSql, identifier, inlineParameters, qualified } from './
 import { incomingReferenceSourceDigest, readIncomingReferenceTable } from './incomingReferences';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
+import { decodeTableCalendar, planTableCalendar, tableCalendarMaxRows } from './tableCalendar';
+import { tableCalendarTimeZoneSchema } from '../shared/tableCalendar';
 
 interface Capability { kind: 'numeric' | 'ordered' | 'count-only'; representation: 'text' | 'binary' | 'scalar'; approximate: boolean; }
 export interface TableStatisticsPlan { sql: string; aliases: string[]; columns: { column: ColumnInfo; capability: Capability; distinct?: true }[]; }
@@ -88,22 +90,29 @@ export function decodeTableStatistics(plan: TableStatisticsPlan, values: CellVal
 }
 
 /** 只消费一份完整有界聚合；每条语句后立即核原警告，取消仍作用于本代物理命令。 */
-async function readAggregate(context: StructureTaskContext, aggregate: TableHistogramPlan, stop: () => Promise<void>): Promise<CellValue[]> {
-  let values: CellValue[] | undefined, starts = 0, ends = 0, warningCount: number | undefined;
+async function readStatisticsRows(context: StructureTaskContext, aggregate: TableHistogramPlan, stop: () => Promise<void>, maxRows: number): Promise<CellValue[][]> {
+  const rows: CellValue[][] = [];
+  let starts = 0, ends = 0, warningCount: number | undefined;
   await consumeQueryFrames(context.managed, aggregate.sql, 'binary', {
     statementOrdinal: 1, ordinals: { results: 0, rows: 0 }, checkCancelled: context.checkCancelled, commandStarted: context.commandStarted, stop,
     async consume(frame) {
       if (frame.kind === 'rows-start') { if (++starts !== 1 || frame.columns.length !== aggregate.aliases.length || frame.columns.some((column, index) => column.name !== aggregate.aliases[index])) throw Error(text.invalid); }
       else if (frame.kind === 'row') {
-        if (values || starts !== 1 || frame.values.some(value => typeof value === 'string' && Buffer.byteLength(value) > limits.cellBytes || value !== null && typeof value === 'object' && Buffer.from(value.base64, 'base64').length > limits.cellBytes)) throw Error(text.budget);
-        values = frame.values;
+        if (rows.length >= maxRows || starts !== 1 || frame.values.some(value => typeof value === 'string' && Buffer.byteLength(value) > (maxRows === 1 ? limits.cellBytes : 64) || value !== null && typeof value === 'object' && (maxRows !== 1 || Buffer.from(value.base64, 'base64').length > limits.cellBytes))) throw Error(text.budget);
+        rows.push(frame.values);
       } else if (frame.kind === 'rows-end') { ends++; warningCount = frame.warningCount; }
       else throw Error(text.invalid);
     },
   });
   // 紧跟原聚合诊断，任何其它身份/元数据SELECT都必须在其后，警告存在不返回部分统计。
   const warnings = (await structureTaskQuery<unknown>(context, 'SHOW WARNINGS LIMIT 21')).rows;
-  if (!Array.isArray(warnings) || warnings.length || warningCount !== 0 || starts !== 1 || ends !== 1 || !values) throw Error(text.serverWarning);
+  if (!Array.isArray(warnings) || warnings.length || warningCount !== 0 || starts !== 1 || ends !== 1) throw Error(text.serverWarning);
+  return rows;
+}
+
+async function readAggregate(context: StructureTaskContext, aggregate: TableHistogramPlan, stop: () => Promise<void>): Promise<CellValue[]> {
+  const [values] = await readStatisticsRows(context, aggregate, stop, 1);
+  if (!values) throw Error(text.serverWarning);
   return values;
 }
 
@@ -112,19 +121,38 @@ export async function readTableStatistics(context: StructureTaskContext, input: 
   // 视图可能调用存储函数；服务器只读事务保护可见表，并固定RR隔离，不依赖全局READ-UNCOMMITTED设置。
   await structureTaskQuery(context, 'SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
   await structureTaskQuery(context, 'START TRANSACTION READ ONLY');
-  const source = await readIncomingReferenceTable(context, input, true), identity = tableStatisticsSourceIdentity(source, context), plan = planTableStatistics(source, input);
-  const boundsPlan = input.histogram ? planTableHistogramBounds(source, input) : undefined;
-  const values = await readAggregate(context, plan, stop);
-  const result = decodeTableStatistics(plan, values); context.checkCancelled();
-  let histogram: TableHistogram | undefined;
-  if (boundsPlan && input.histogram) {
-    histogram = decodeTableHistogramBounds(source, input.histogram, await readAggregate(context, boundsPlan, stop), result.rowCount);
-    if (histogram.nonNull !== '0') histogram = decodeTableHistogramCounts(histogram, await readAggregate(context, planTableHistogramCounts(source, input, histogram), stop), result.rowCount);
-    assertTableHistogram(histogram, input.histogram, source.columns.find(column => column.name === input.histogram!.column), result.rowCount);
+  const source = await readIncomingReferenceTable(context, input, true), identity = tableStatisticsSourceIdentity(source, context);
+  let computed: Pick<TableStatisticsOutput, 'rowCount' | 'columns' | 'histogram' | 'calendar'>;
+  const warnings: string[] = [text.scope];
+  if (input.calendar) {
+    const calendarPlan = planTableCalendar(source, input);
+    let timeZone: string | undefined;
+    if (calendarPlan.kind === 'timestamp') {
+      const { rows } = await structureTaskQuery<{ timeZone: unknown }[]>(context, 'SELECT @@SESSION.time_zone AS timeZone');
+      if (!Array.isArray(rows) || rows.length !== 1) throw Error(text.invalid);
+      timeZone = tableCalendarTimeZoneSchema.parse(rows[0].timeZone);
+    }
+    computed = { columns: [], ...decodeTableCalendar(calendarPlan, await readStatisticsRows(context, calendarPlan, stop, tableCalendarMaxRows), timeZone) };
+  } else {
+    const plan = planTableStatistics(source, input);
+    const boundsPlan = input.histogram ? planTableHistogramBounds(source, input) : undefined;
+    const values = await readAggregate(context, plan, stop);
+    const result = decodeTableStatistics(plan, values); context.checkCancelled();
+    let histogram: TableHistogram | undefined;
+    if (boundsPlan && input.histogram) {
+      histogram = decodeTableHistogramBounds(source, input.histogram, await readAggregate(context, boundsPlan, stop), result.rowCount);
+      if (histogram.nonNull !== '0') histogram = decodeTableHistogramCounts(histogram, await readAggregate(context, planTableHistogramCounts(source, input, histogram), stop), result.rowCount);
+      assertTableHistogram(histogram, input.histogram, source.columns.find(column => column.name === input.histogram!.column), result.rowCount);
+      warnings.push(tableHistogramMessages.scope);
+    }
+    if (plan.columns.some(column => column.capability.approximate)) warnings.push(text.approximate);
+    if (plan.columns.some(column => column.distinct)) warnings.push(text.distinct);
+    computed = { ...result, ...(histogram ? { histogram } : {}) };
   }
   const after = await readIncomingReferenceTable(context, input, true), afterIdentity = tableStatisticsSourceIdentity(after, context);
   if (identity.digest !== afterIdentity.digest || identity.conservative !== afterIdentity.conservative) throw Error(text.stale);
-  const output: TableStatisticsOutput = { source, sourceDigest: identity.digest, ...result, ...(histogram ? { histogram } : {}), warnings: [text.scope, ...(histogram ? [tableHistogramMessages.scope] : []), ...(plan.columns.some(column => column.capability.approximate) ? [text.approximate] : []), ...(plan.columns.some(column => column.distinct) ? [text.distinct] : []), ...(identity.conservative ? [text.conservative] : [])] };
+  if (identity.conservative) warnings.push(text.conservative);
+  const output: TableStatisticsOutput = { source, sourceDigest: identity.digest, ...computed, warnings };
   if (Buffer.byteLength(JSON.stringify(output)) > limits.bytes) throw Error(text.budget);
   // 正常路径显式结束本独立只读事务；失败/取消只由原物理连接收尾，不开新连接回滚或重放。
   await structureTaskQuery(context, 'ROLLBACK AND NO CHAIN NO RELEASE'); context.checkCancelled(); return output;
