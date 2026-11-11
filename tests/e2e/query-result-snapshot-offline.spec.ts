@@ -20,6 +20,7 @@ function register(): void {
   const executeFile = promisify(execFile);
   const { zh } = require('../../src/renderer/locales/zh-CN') as typeof import('../../src/renderer/locales/zh-CN');
   const { queryResultSnapshotUiZh: text } = require('../../src/renderer/locales/queryResultSnapshot.zh-CN') as typeof import('../../src/renderer/locales/queryResultSnapshot.zh-CN');
+  const { queryResultNavigatorZh: navigatorText } = require('../../src/renderer/locales/queryResultNavigator.zh-CN') as typeof import('../../src/renderer/locales/queryResultNavigator.zh-CN');
   const { queryResultSnapshotFileMessages: filesText } = require('../../src/main/queryResultSnapshotFiles') as typeof import('../../src/main/queryResultSnapshotFiles');
   const executable = require('electron') as string;
   const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -154,6 +155,16 @@ function register(): void {
         expect(Object.hasOwn(independent.result.rows[0], '__proto__')).toBe(true); expect(independent.result.rows[0].negativeZero).toEqual({ type: 'number', text: '-0' });
       }
       await step(async () => (await navigationMenuItem(query, { name: zh.query.currentResults, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(query.locator('.results-grid')).toHaveCount(0)); await step(async () => (await navigationMenuItem(query.locator('.pinned-result'), { name: label, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(query.locator('.results-grid')).toBeVisible());
+      await step(async () => (await navigationMenuItem(query, { name: zh.query.currentResults, exact: true }, () => clock.assertCurrent())).click());
+      await step(() => expect(grid).toHaveCount(0));
+      await step(() => query.getByRole('button', { name: navigatorText.open, exact: true }).click());
+      const navigator = page.getByRole('dialog', { name: navigatorText.open, exact: true });
+      const search = navigator.getByRole('combobox', { name: navigatorText.input, exact: true });
+      await step(() => search.fill('offline-snapshot-source'));
+      await step(() => expect(navigator.getByRole('option')).toHaveCount(1));
+      await step(() => expect(navigator.getByRole('option')).toContainText(label));
+      await step(() => search.press('Enter'));
+      await step(() => expect(grid).toBeVisible());
       const after = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))); expect(after).toEqual(baseline); expect(JSON.stringify(after)).not.toContain('offline-snapshot-source'); expect(JSON.stringify(after)).not.toContain('18446744073709551615');
       expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual([]); expect(await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})))).toEqual([]); expect(await step(() => page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]); expect(runtime.pageErrors).toEqual([]);
       const result = await step(audit); expect(result.pending).toBe(0); expect(result.engineStarts).toBe(0); expect(result.denied).toEqual([]); expect(result.opened).toBe(1); expect(result.saved).toBe(mode === 'save' ? 1 : 0); expect(result.chooserCalls).toBe(mode === 'save' ? 2 : 1); expect(result.calls.every(call => call.ok)).toBe(true);

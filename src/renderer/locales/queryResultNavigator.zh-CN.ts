@@ -4,6 +4,8 @@ export const queryResultNavigatorZh = {
   placeholder: '输入名称、字段名、SQL 或 #序号',
   receiptHint: 'SQL 搜索仅覆盖结果附带的预览，长语句可能已截断。',
   list: '匹配结果集',
+  source: '结果来源',
+  sources: { all: '全部', current: '本次执行', pinned: '固定快照' },
   result: (ordinal: number) => `结果 ${ordinal}`,
   rows: (rows: number) => `${rows} 行`,
   affected: (rows: number) => `影响 ${rows} 行`,

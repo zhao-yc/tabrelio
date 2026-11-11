@@ -2258,7 +2258,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function pinResult() {
     if (busy || !outcome || !result || pin) return;
     try {
-      const next = snapshotQueryResult(pins, sourceResult!, uid(), formatText(zh.query.pinLabel, pinSequence.current + 1));
+      const base = formatText(zh.query.pinLabel, pinSequence.current + 1), name = resultNames[resultIndex];
+      const next = snapshotQueryResult(pins, sourceResult!, uid(), name ? formatText(zh.query.namedResultLabel, base, name) : base);
       invalidateResultSelection(); pinSequence.current++; setPins([...pins, next]); setSelectedPin(next.id); setError('');
     } catch (reason) { setError(errorMessage(reason)); }
   }
@@ -2755,6 +2756,19 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     setShowPinSql(null);
   }
 
+  function pinNavigationCurrent(): boolean {
+    return queryMenuCurrent() && !busyRef.current && !queryRunning && !resultModal && !fileSource.isBusy() &&
+      !useWorkspace.getState().activeJobs[tab.id] && snapshotView.current.pins === pins;
+  }
+
+  /** 固定结果条与查找窗口复用原快照身份和切换流程。 */
+  function selectPinnedResult(next?: PinnedQueryResult): void {
+    if (snapshotView.current.pins !== pins || next && !pins.includes(next)) return;
+    invalidateResultSelection();
+    setSelectedPin(next?.id ?? '');
+    setShowPinSql(null);
+  }
+
   return <div ref={layoutRoot} className="workspace-tab query-tab" data-result-layout={resultLayout}
     onKeyDownCapture={event => {
       const focused = () => !!editor.current?.hasTextFocus();
@@ -2818,9 +2832,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         return <button className={!pin && resultIndex === index ? 'selected' : ''} aria-label={label} title={label}
           aria-pressed={!pin && resultIndex === index} onClick={() => selectCurrentResult(index)} key={index}>{name ?? ordinal}</button>;
       })}</div>
-      {results.length > 1 && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames} selected={pin ? undefined : resultIndex}
-        disabled={busy || queryRunning || resultModal || fileSource.busy || !outcome}
-        isCurrent={() => queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()} onSelect={selectCurrentResult}/>}
+      {(results.length > 1 || pins.length > 0) && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames}
+        selected={pin ? undefined : resultIndex} pins={pins} selectedPin={pin}
+        disabled={busy || queryRunning || resultModal || fileSource.busy}
+        isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
       <ActionMenu label={queryLayoutZh.placement} contextKey={JSON.stringify([queryMenuKey, resultLayout, preferredPlacement])} isCurrent={queryMenuCurrent}>
         {(['below', 'beside', 'results'] as const).map(value => <button key={value} className={(resultsOnly ? 'results' : preferredPlacement) === value ? 'selected' : undefined} onClick={() => changeResultLayout(value)} title={value === 'beside' && !besideAvailable ? queryLayoutZh.besideNarrow : undefined}>{queryLayoutZh[value]}</button>)}
       </ActionMenu>
@@ -2882,7 +2897,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           <ActionMenuSection label={menuText.snapshots}>{snapshotActions}</ActionMenuSection>
         </>}/>
 
-    </div>}/>{pins.length > 0 && <div className="pinned-results" role="group" aria-label={zh.query.pinSection}><span>{zh.query.pinSection}</span><button className={`current-results ${!pin ? 'selected' : ''}`} aria-pressed={!pin} onClick={() => { invalidateResultSelection(); setSelectedPin(''); setShowPinSql(null); }}>{zh.query.currentResults}</button>{pins.map(item => <div key={item.id} className={`pinned-result ${pin?.id === item.id ? 'selected' : ''}`}><button aria-pressed={pin?.id === item.id} title={item.result.statement} onClick={() => { invalidateResultSelection(); setSelectedPin(item.id); setShowPinSql(null); }}><Pin size={11}/>{item.label}</button><button aria-label={formatText(zh.query.releasePin, item.label)} onClick={() => releasePin(item.id)}><X size={11}/></button></div>)}</div>}<ErrorBox message={error}/>{outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length} locateAvailable={failure => scriptFailureRanges.current.has(failure) && !!failureLocator?.available()} onLocate={locateScriptFailure}/>}{outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length} locateAvailable={!!failureLocator?.available()} onLocate={() => { failureLocator?.locate(); }}/>}<div className="query-result-filter-bar">{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><span>{filterText.counts(sourceResult.rows.length,filterView?.result.rows.length??sourceResult.rows.length)}</span>{sourceResult.truncated&&<strong>{filterText.truncated}</strong>}</>:null}{resultMemory&&<span role="status" title={memoryText.hint}>{memoryText.saved}</span>}</div>{activeFilterLease&&<QueryResultFilterPanel binding={activeFilterLease.binding} initial={activeFilterLease.view} seed={activeFilterLease.seed} isCurrent={()=>filterPanelCurrent(activeFilterLease)} onApply={expression=>applyFilterRules(activeFilterLease,expression)} onClose={()=>closeFilterPanel(activeFilterLease)}/>}{activeSortLease&&<QueryResultSortPanel binding={activeSortLease.binding} initial={activeSortLease.view} isCurrent={()=>sortPanelCurrent(activeSortLease)} onApply={rules=>applySortPanel(activeSortLease,rules)} onClose={()=>closeSortPanel(activeSortLease)}/>}<div className="query-result-sort-scope">{result?.columns.length && (pin || !(outcome?.explain || outcome?.analysis)) && (!!sortView?.rules.length || !sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal) ? <>{!sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal && <strong>{sortText.budget}</strong>}<button disabled={!sortView?.rules.length || !selectionBinding || !!activeColumnLease || !!activeFilterLease} onClick={() => sortResult([])}>{sortText.clear}</button>{!!sortView?.rules.length && <ol className="query-result-sort-priorities" aria-label={sortText.priorities}>{sortView.rules.map((rule,index)=>{
+    </div>}/>{pins.length > 0 && <div className="pinned-results" role="group" aria-label={zh.query.pinSection}><span>{zh.query.pinSection}</span><button className={`current-results ${!pin ? 'selected' : ''}`} aria-pressed={!pin} onClick={() => selectPinnedResult()}>{zh.query.currentResults}</button>{pins.map(item => <div key={item.id} className={`pinned-result ${pin?.id === item.id ? 'selected' : ''}`}><button aria-pressed={pin?.id === item.id} title={item.result.statement} onClick={() => selectPinnedResult(item)}><Pin size={11}/>{item.label}</button><button aria-label={formatText(zh.query.releasePin, item.label)} onClick={() => releasePin(item.id)}><X size={11}/></button></div>)}</div>}<ErrorBox message={error}/>{outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length} locateAvailable={failure => scriptFailureRanges.current.has(failure) && !!failureLocator?.available()} onLocate={locateScriptFailure}/>}{outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length} locateAvailable={!!failureLocator?.available()} onLocate={() => { failureLocator?.locate(); }}/>}<div className="query-result-filter-bar">{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><span>{filterText.counts(sourceResult.rows.length,filterView?.result.rows.length??sourceResult.rows.length)}</span>{sourceResult.truncated&&<strong>{filterText.truncated}</strong>}</>:null}{resultMemory&&<span role="status" title={memoryText.hint}>{memoryText.saved}</span>}</div>{activeFilterLease&&<QueryResultFilterPanel binding={activeFilterLease.binding} initial={activeFilterLease.view} seed={activeFilterLease.seed} isCurrent={()=>filterPanelCurrent(activeFilterLease)} onApply={expression=>applyFilterRules(activeFilterLease,expression)} onClose={()=>closeFilterPanel(activeFilterLease)}/>}{activeSortLease&&<QueryResultSortPanel binding={activeSortLease.binding} initial={activeSortLease.view} isCurrent={()=>sortPanelCurrent(activeSortLease)} onApply={rules=>applySortPanel(activeSortLease,rules)} onClose={()=>closeSortPanel(activeSortLease)}/>}<div className="query-result-sort-scope">{result?.columns.length && (pin || !(outcome?.explain || outcome?.analysis)) && (!!sortView?.rules.length || !sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal) ? <>{!sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal && <strong>{sortText.budget}</strong>}<button disabled={!sortView?.rules.length || !selectionBinding || !!activeColumnLease || !!activeFilterLease} onClick={() => sortResult([])}>{sortText.clear}</button>{!!sortView?.rules.length && <ol className="query-result-sort-priorities" aria-label={sortText.priorities}>{sortView.rules.map((rule,index)=>{
     const column=sourceResult?.columns.find(column=>column.key===rule.column),name=column?.name ?? rule.column;
     return <li key={rule.column}>
       <span>{sortText.priority(index+1,name)} · {rule.direction==='ASC'?sortText.ascending:sortText.descending}</span>

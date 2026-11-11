@@ -186,6 +186,7 @@ interface StatisticsDraft { binding: ResultSelectionBinding; owner: string; colu
 interface PresetDraft { binding: ResultSelectionBinding; owner: string; value: QueryResultPresetValue; }
 interface ResultLayout { source: QueryResult; layout: QueryResultColumnLayout; columns: ResultColumn[]; }
 interface PinState { items: PinnedQueryResult[]; selected?: string; sequence: number; }
+const emptyResults: QueryResult[] = [];
 interface ComparisonDraft { pins: PinnedQueryResult[]; owner: string; }
 /** PostgreSQL查询复用原编辑器、结果网格、文件来源及保存查询；驱动任务和事务明确独立。 */
 export function PostgresQueryTab({
@@ -1012,7 +1013,7 @@ export function PostgresQueryTab({
     if (closeRequest) snapshotOperation.current?.invalidate();
   }, [closeRequest]);
   const pin = pinState.items.find(item => item.id === pinState.selected);
-  const results = outcome?.results ?? [],
+  const results = outcome?.results ?? emptyResults,
     result = pin?.result ?? results[selected],
     controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!archiveOutcome || !!originsView || !!recordEdit || !!recordReference || !!resultSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
@@ -2348,14 +2349,15 @@ export function PostgresQueryTab({
             <button disabled={locked || pinState.items.length < 2} title={pinState.items.length < 2 ? comparisonText.requireTwo : comparisonText.notice}
               onClick={openResultComparison}>{comparisonText.open}</button>
           </div>}
-          {(!pin && results.length > 1 || dataResult) && (
+          {(!pin && results.length > 1 || dataResult || pinState.items.length > 0) && (
             <div className="postgres-result-actions">
               {!pin && results.length > 1 && <select aria-label="PostgreSQL结果集" value={selected} disabled={locked}
                 onChange={event => selectCurrentResult(Number(event.target.value))}>
                 {results.map((r, i) => <option key={i} value={i}>{text.result(resultSources?.[i]?.statementOrdinal ?? i + 1, r.postgresCommand ?? '', r.rows.length, resultNames[i])}</option>)}
               </select>}
-              {results.length > 1 && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames} selected={pin ? undefined : selected}
-                disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult}/>}
+              {(results.length > 1 || pinState.items.length > 0) && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames}
+                selected={pin ? undefined : selected} pins={pinState.items} selectedPin={pin}
+                disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
               {archiveAvailable && <button disabled={locked} onClick={() => {
                 if (outcome && resultScopeCurrent() && !document.querySelector(appModalSelector)) setArchiveOutcome(outcome);
               }}>{archiveText.open}</button>}

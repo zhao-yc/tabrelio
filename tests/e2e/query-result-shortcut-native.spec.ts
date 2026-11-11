@@ -6,6 +6,7 @@ import { navigationMenuItem } from './navigation-menu';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { queryFailureSourceZh } from '../../src/renderer/locales/queryFailureSource.zh-CN';
+import { queryResultNavigatorZh as resultNavigatorText } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -171,6 +172,22 @@ test('原生查询运行、停止与结果数字切换各自遵循焦点和原�
     await expect.poll(async () => (await history()).length).toBe(beforeHistory.length + 2);
     const ran = (await history()).slice(0, 2).map(entry => entry.sql.trim().replace(/;$/, ''));
     expect(ran).toEqual([statements[2].slice(0, -1), statements[1].slice(0, -1)]);
+
+    const beforeNavigation = await history();
+    const navigator = result.getByRole('button', { name: resultNavigatorText.open, exact: true });
+    const resultList = page.getByRole('dialog', { name: resultNavigatorText.open, exact: true });
+    const resultSearch = resultList.getByRole('combobox', { name: resultNavigatorText.input, exact: true });
+    await navigator.click();
+    await resultSearch.fill('结果数据-2');
+    await expect(resultList.getByRole('option')).toHaveCount(1);
+    await expect(resultList.getByRole('option')).toContainText(resultNavigatorText.sources.pinned);
+    await resultSearch.press('Enter');
+    await expect(cell(2)).toBeVisible();
+    await navigator.click();
+    await resultSearch.fill('#1');
+    await resultSearch.press('Enter');
+    await expect(body.getByRole('gridcell', { name: '仅执行选区', exact: true })).toBeVisible();
+    expect(await history()).toEqual(beforeNavigation);
 
     if (!sqlite && !postgres) {
       const locate = () => navigationMenuItem(result, { name: queryFailureSourceZh.locateResult, exact: true });
