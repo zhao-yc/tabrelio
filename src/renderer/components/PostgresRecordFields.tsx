@@ -18,6 +18,7 @@ import { postgresBinaryEditBytes, postgresBinaryInputHex } from '../postgresBina
 import { postgresByteaZh as byteaText } from '../locales/postgresBytea.zh-CN';
 import { recordTemporalSpec } from '../recordTemporal';
 import { RecordTemporalControls } from './RecordTemporalControls';
+import { RecordEnumerationInput } from './RecordEnumerationPicker';
 import { ErrorBox, Modal } from './ui';
 import '../recordProjections.css';
 
@@ -120,6 +121,11 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
         {inputOpen && value?.mode === 'binary' ? <BinaryCellViewer value={emptyBinary} hexInput={value.value} label={valueLabel}
           reason={disabled ? viewText.expired : undefined} source={[original, column, fields]} isCurrent={filesCurrent}
           onHexChange={disabled ? undefined : writeHex}/>
+        : column.enumeration && value?.mode === 'text' ? <RecordEnumerationInput enumeration={column.enumeration}
+          value={value.value} label={valueLabel} disabled={disabled} onChange={next => onChange(previous => {
+            if (previous.get(column.key) !== value) return previous;
+            return new Map(previous).set(column.key, { mode: 'text', value: next });
+          })}>{valueInput}</RecordEnumerationInput>
         : temporal && value?.mode === 'text' ? <div className="record-temporal-text">{valueInput}
           <RecordTemporalControls spec={temporal} value={value.value} disabled={disabled} onChange={next => onChange(previous => {
             if (previous.get(column.key) !== value) return previous;

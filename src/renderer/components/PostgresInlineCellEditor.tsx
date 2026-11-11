@@ -5,6 +5,7 @@ import { errorMessage } from '../lib';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
 import { recordTemporalSpec } from '../recordTemporal';
 import { RecordTemporalControls } from './RecordTemporalControls';
+import { RecordEnumerationInput } from './RecordEnumerationPicker';
 import { ErrorBox } from './ui';
 
 export type PostgresInlineCellValue = Exclude<PostgresTableField['value'], { mode: 'binary' }>;
@@ -56,6 +57,9 @@ export function PostgresInlineCellEditor({ anchor, column, originalText, initial
     try { onStage(mode === 'text' ? { mode, value } : { mode }); }
     catch (reason) { setError(errorMessage(reason)); }
   }
+  const textInput = <textarea ref={input} rows={2} aria-label={text.value} value={value} maxLength={postgresTableLimits.value}
+    onChange={event => changeValue(event.target.value)}/>;
+  function changeValue(next: string) { setValue(next); setError(''); }
 
   return createPortal(<form ref={panel} className="pg-inline-cell-editor" role="region" hidden={!visible}
     aria-label={text.cellEdit(column.name)} onSubmit={event => { event.preventDefault(); stage(); }}
@@ -79,8 +83,8 @@ export function PostgresInlineCellEditor({ anchor, column, originalText, initial
         <option value="default">{text.default}</option>
       </select>
     </label>
-    {mode === 'text' && <textarea ref={input} rows={2} aria-label={text.value} value={value} maxLength={postgresTableLimits.value}
-      onChange={event => { setValue(event.target.value); setError(''); }}/>}
+    {mode === 'text' && (column.enumeration ? <RecordEnumerationInput enumeration={column.enumeration} value={value}
+      focus={visible && typed === undefined} preferText={typed !== undefined} disabled={!visible} onChange={changeValue}>{textInput}</RecordEnumerationInput> : textInput)}
     {temporal && <RecordTemporalControls spec={temporal} value={value} disabled={!visible} onChange={next => { setValue(next); setError(''); }}/>}
     <ErrorBox message={error}/>
     <div className="pg-inline-cell-actions">

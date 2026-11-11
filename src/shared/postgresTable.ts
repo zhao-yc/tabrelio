@@ -8,7 +8,7 @@ import { recordImportFormats, xmlImportOptionsSchema } from './xmlImport';
 import { importFileSourceSchema } from './importNewTable';
 import { fileImportConflictModes, type FileImportConflictCounts } from './fileImportConflict';
 import { z } from 'zod';
-import type { DataRow, ResultColumn, SortRule } from './contracts';
+import type { ColumnEnumeration, DataRow, ResultColumn, SortRule } from './contracts';
 import { csvExportDelimiters } from './csvExport';
 import { FILTER_LIMITS, filterGroupSchema, filterRuleSchema, sortRulesSchema, validateFilterGroup } from './filtering';
 import { strictTableLayoutPreferences } from './tablePreferences';
@@ -349,6 +349,8 @@ export interface PostgresTableColumn extends ResultColumn {
   /** 表头使用有界目录注释，排序和写入仍沿用原列契约。 */
   comment?: string;
   valueOptions?: true;
+  /** 当前页的枚举目录提示。服务器仍按实际字段类型核验暂存值。 */
+  enumeration?: ColumnEnumeration;
   /** 当前表页可从此字段进入外键候选，实际约束和权限仍由候选读取重查。 */
   referenceChoice?: true;
   nullable: boolean;

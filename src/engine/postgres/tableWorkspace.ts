@@ -35,6 +35,7 @@ import { readPostgresTableReferences, type PostgresReferenceSourceRow, type Post
 import { readPostgresColumnStatistics } from './tableStatistics';
 import { hasPostgresRoundtripFloatText, readPostgresTableHistogram } from './tableHistogram';
 import { readPostgresTableCalendar } from './tableCalendar';
+import { readPostgresTableEnumerations } from './tableEnumerations';
 import { assertStatisticsSample, statisticsRowCount } from '../../shared/tableStatistics';
 import { readTableValueOptionsOrder } from '../../shared/tableValueOptions';
 import { valueDistributionSchema } from '../../shared/valueDistribution';
@@ -117,7 +118,7 @@ const pageScope = ({ filter, sort }: Snapshot['options']) =>
 
 /** 每次从实际库读取关系、主键顺序、列权限与结构；标识符及类型显示均来自目录。 */
 export async function readRelation(connection: PostgresConnection, table: string,
-  { catalogueOnly = false, headerComments = false, referenceHints = false } = {}): Promise<Relation> {
+  { catalogueOnly = false, headerComments = false, referenceHints = false, enumHints = false } = {}): Promise<Relation> {
   const { schema, name } = postgresRelationName(table);
   const header = await connection.query(`
     SELECT c.oid, pg_catalog.pg_relation_filenode(c.oid), c.relkind, c.relispartition, c.relhasrules,
@@ -126,6 +127,8 @@ export async function readRelation(connection: PostgresConnection, table: string
            (SELECT i.indexrelid FROM pg_catalog.pg_index i WHERE i.indrelid = c.oid AND i.indisprimary AND i.indisvalid),
            CASE WHEN c.relkind IN ('v','m') THEN pg_catalog.pg_get_viewdef(c.oid, false) END,
            pg_catalog.row_security_active(c.oid), c.relispopulated, pg_catalog.has_table_privilege(c.oid, 'SELECT')
+           ${enumHints ? `, pg_catalog.has_table_privilege('pg_catalog.pg_type'::regclass, 'SELECT')
+             AND pg_catalog.has_table_privilege('pg_catalog.pg_enum'::regclass, 'SELECT')` : ''}
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname::text = $1 AND c.relname::text = $2 AND c.relkind IN ('r','p','v','m','f')
       AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
@@ -134,6 +137,7 @@ export async function readRelation(connection: PostgresConnection, table: string
   const info = header.rows[0];
   if (!info || typeof info.c0 !== 'string') throw Error('PostgreSQL关系不存在、已改名或无权查看');
   if (info.c2 === 'm' && info.c11 === 'f') throw Error('PostgreSQL 物化视图尚未填充数据，请从「查看结构」执行刷新。');
+  const lookupEnums = enumHints && info.c13 === 't' && info.c2 === 'r' && info.c3 === 'f' && info.c4 === 'f' && (info.c5 === 't' || info.c6 === 't');
   // 复制记录根据标识属性和默认表达式的序列依赖省略字段，避免猜测 DEFAULT 文本。
   // 数据搜索每次只投影少量列，目录可读取宽表的全部列而不放宽表页结果预算。
   const maxColumns = catalogueOnly ? 1600 : 1022;
@@ -169,10 +173,12 @@ export async function readRelation(connection: PostgresConnection, table: string
              WHERE dependency.classid = 'pg_catalog.pg_attrdef'::regclass AND dependency.objid = d.oid
                AND dependency.refclassid = 'pg_catalog.pg_class'::regclass AND dependency.refobjsubid = 0
            )
-           ${headerComments || referenceProjection ? ', ' + (headerComments ? 'pg_catalog.left(pg_catalog.col_description(a.attrelid, a.attnum), ' + (postgresHeaderCommentLimit + 1) + ')' : 'NULL::text') : ''}
-           ${referenceProjection}
+           ${headerComments || referenceProjection || lookupEnums ? ', ' + (headerComments ? 'pg_catalog.left(pg_catalog.col_description(a.attrelid, a.attnum), ' + (postgresHeaderCommentLimit + 1) + ')' : 'NULL::text') : ''}
+           ${referenceProjection || (lookupEnums ? ', NULL::boolean' : '')}
+           ${lookupEnums ? ', t.typtype' : ''}
     FROM pg_catalog.pg_attribute a
     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+    ${lookupEnums ? 'JOIN pg_catalog.pg_type t ON t.oid = a.atttypid' : ''}
     WHERE a.attrelid = $1::oid AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum
   `, [info.c0], catalogueOnly ? { rows: maxColumns + 1, bytes: 4 * 1024 * 1024 } :
     { ...small(), bytes: small().bytes + (headerComments ? maxColumns * ((postgresHeaderCommentLimit + 1) * 4 + 76) : 0) });
@@ -186,6 +192,20 @@ export async function readRelation(connection: PostgresConnection, table: string
     ...(typeof field.c12 === 'string' && field.c12 ? { comment: postgresHeaderComment(field.c12) } : {}),
     ...(field.c13 === 't' ? { referenceChoice: true } : {}),
   }));
+  if (lookupEnums) {
+    const types = new Set(fields.rows.flatMap((field, index) => (field.c14 === 'e' || field.c14 === 'd') &&
+      !columns[index].generated && typeof field.c6 === 'string' ? [field.c6] : []));
+    const enumerations = await readPostgresTableEnumerations(connection, [...types]);
+    const sizes = new Map([...enumerations].map(([type, value]) => [type, Buffer.byteLength(JSON.stringify(value))]));
+    // 重复使用同一类型的宽表也要控制随页返回的元数据体积。
+    let remaining = 512 * 1024;
+    fields.rows.forEach((field, index) => {
+      const type = String(field.c6), enumeration = enumerations.get(type), bytes = sizes.get(type) ?? 0;
+      if (!enumeration || columns[index].generated || bytes > remaining) return;
+      columns[index].enumeration = enumeration;
+      remaining -= bytes;
+    });
+  }
   const keys = fields.rows.map((field, index) => ({ index, position: Number(field.c7) }))
     .filter(item => item.position > 0).sort((a, b) => a.position - b.position)
     .map(item => columns[item.index].name);
@@ -194,9 +214,10 @@ export async function readRelation(connection: PostgresConnection, table: string
   const syncEligible = editable && info.c12 === 't' && info.c10 === 'f';
   const syncColumns = columns.filter((_, index) => fields.rows[index].c6 === '114' ||
     valueOptionTypes.has(String(fields.rows[index].c6))).map(column => column.name);
+  const { c13: _enumPrivilege, ...identity } = info;
   return {
     oid: info.c0, sql: postgresIdentifier(schema) + '.' + postgresIdentifier(name), kind, columns, keys,
-    fingerprint: digest([info, fields.rows.map(({ c12: _comment, c13: _reference, ...field }) => field)]),
+    fingerprint: digest([identity, fields.rows.map(({ c12: _comment, c13: _reference, c14: _enumType, ...field }) => field)]),
     syncColumns,
     syncCompatible: syncEligible &&
       (info.c5 === 't' || info.c6 === 't' || info.c7 === 't') &&
@@ -355,7 +376,7 @@ export class PostgresTableWorkspace {
         const locked = await connection.query('LOCK TABLE ONLY ' + postgresIdentifier(schema) + '.' + postgresIdentifier(name) +
           ' IN ACCESS SHARE MODE', undefined, small());
         if (locked.postgresCommand !== 'LOCK') throw Error('PostgreSQL 原记录的表锁未确认');
-        const relation = await readRelation(connection, input.table, { headerComments: capability !== 'reference' });
+        const relation = await readRelation(connection, input.table, { headerComments: capability !== 'reference', enumHints: capability === 'insert' || capability === 'update' });
         if (capability !== 'reference' && !relation.capabilities[capability])
           throw Error('此 PostgreSQL 表没有本次操作需要的写入权限');
         const { originals, checkServer } = await verify(connection, relation);
@@ -433,7 +454,7 @@ export class PostgresTableWorkspace {
       }
       const result = await connect(async connection => {
         await begin(connection, 'page');
-        const relation = await readRelation(connection, input.table, { headerComments: true, referenceHints: true });
+        const relation = await readRelation(connection, input.table, { headerComments: true, referenceHints: true, enumHints: true });
         const restored = file ? await this.verifyDraft(connection, relation, file) : undefined;
         let counted: ReturnType<typeof postgresCountedWindow> | undefined, countSql: string | undefined;
         if (input.navigation) {
@@ -771,7 +792,7 @@ export class PostgresTableWorkspace {
       const { relation, row } = await connect(async connection => {
         await begin(connection, 'page');
         await this.verifyRelated(connection, scope);
-        const relation = await readRelation(connection, input.table, { headerComments: true });
+        const relation = await readRelation(connection, input.table, { headerComments: true, enumHints: true });
         if (!relation.capabilities.update || relation.fingerprint !== source.relation.fingerprint)
           throw Error('关联目标结构或编辑权限已变化，请刷新');
         const row = await readOriginalRow(connection, relation, original);
