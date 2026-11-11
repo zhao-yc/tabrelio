@@ -6,6 +6,7 @@ import { buildSqliteColumnsPlan, type SqliteColumnsInspectOutput, type SqliteCol
 import { sqliteColumnsFactMessage } from '../../src/shared/sqliteColumnsFact';
 import type { SqliteColumnsServices } from '../../src/renderer/components/SqliteColumnsDialog';
 import { sqliteColumnsZh as text } from '../../src/renderer/locales/sqliteColumns.zh-CN';
+import { tableElementsZh } from '../../src/renderer/locales/tableElements.zh-CN';
 
 const { request, sequence } = vi.hoisted(() => ({ request: vi.fn(), sequence: { value: 0 } }));
 vi.mock('../../src/renderer/lib', async original => ({ ...await original<object>(), invoke: request, uid: () => 'columns-ui-' + ++sequence.value }));
@@ -32,12 +33,12 @@ async function click(label: string) { const node = button(label); expect(node.di
 async function input(label: string, value: string) { const node = control(label); expect(node.disabled, label).toBe(false); await act(async () => props(node).onChange({ target: { value } })); }
 async function check(label: string, checked: boolean) { const node = control(label); expect(node.disabled, label).toBe(false); await act(async () => props(node).onChange({ target: { checked } })); }
 /** 只有IPC是RAM端口，真实Dialog/schema/草稿处理器/同步store订阅完整执行。 */
-async function mount(readOnly = false, overrides: Partial<SqliteColumnsServices> = {}) {
+async function mount(readOnly = false, overrides: Partial<SqliteColumnsServices> = {}, focusName?: string) {
   const profile: SqliteConnectionProfile = { id: 'c', name: '原SQLite', group: '', color: '#123456', dialect: 'sqlite', sqlite: { filePath: 'D:\\synthetic\\columns.sqlite', readOnly, busyTimeoutMs: 1000 } }; useWorkspace.setState({ connections: [profile], connectionVersions: { c: 3 }, activeJobs: {} });
   const inspect = vi.fn<SqliteColumnsServices['inspect']>(async () => catalogue(readOnly)), preview = vi.fn<SqliteColumnsServices['preview']>(async (input): Promise<SqliteColumnsPreviewOutput> => ({ previewId: 'preview-' + input.taskId, catalogueId: input.catalogueId, target, sql: buildSqliteColumnsPlan(target, input.actions).sql, added: input.actions.filter(action => action.kind === 'add').length, renamed: input.actions.filter(action => action.kind === 'rename').length, removed: input.actions.filter(action => action.kind === 'drop').length, nullabilityChanged: input.actions.filter(action => action.kind === 'nullable').length, confirmation: 'main.subject', expiresAt: new Date(Date.now() + 60000).toISOString() }));
   const apply = vi.fn<SqliteColumnsServices['apply']>(async (): Promise<SqliteColumnsOutcome> => outcome((await preview.mock.results.at(-1)!.value).sql.length)), release = vi.fn<SqliteColumnsServices['release']>(async () => {}), cancel = vi.fn<SqliteColumnsServices['cancel']>(async () => undefined); let listener!: (event: TaskEvent) => void;
   const services: SqliteColumnsServices = { inspect, preview, apply, release, cancel, subscribe: fn => { listener = fn; return () => {}; }, ...overrides }, onClose = vi.fn(), onApplied = vi.fn(), onDirtyChange = vi.fn(), onExecutionUncertain = vi.fn(), base = { target, targetVersion: 3, services, onClose, onApplied, onDirtyChange, onExecutionUncertain };
-  const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any); await act(async () => root!.render(<Dialog {...base}/>));
+  const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any); await act(async () => root!.render(<Dialog {...base} focusName={focusName}/>));
   return { profile, inspect, preview, apply, release, cancel, onClose, onApplied, onDirtyChange, onExecutionUncertain, async emit(event: TaskEvent) { await act(async () => listener(event)); }, async rerender(patch: Partial<ComponentProps<typeof Dialog>> = {}) { await act(async () => root!.render(<Dialog {...base} {...patch}/>)); } };
 }
 async function add(name = 'new_column') { await click(text.add); await input(text.editingName, name); await click(text.saveDesign); }
@@ -92,4 +93,14 @@ it('原请求先返回unknown且release held，后来准确同op ACK可单向收
 it.each(['wrong-target', 'wrong-count'] as const)('%s错误raw结果中的ACK不能补造成功：无准确Main强事实仍unknown且不重放', async mode => {
   const f = await mount(); await ready(); await confirm(); const original = outcome(mode === 'wrong-count' ? 2 : 1), target = mode === 'wrong-target' ? { ...original.target, table: 'other' } : original.target;
   f.apply.mockResolvedValueOnce({ ...original, target, fact: { ...original.fact, target } }); await click(text.apply); expect(f.onApplied).not.toHaveBeenCalled(); expect(f.onExecutionUncertain).toHaveBeenCalledOnce(); expect(document.body.textContent).toContain(text.unknown); expect(button(text.apply).disabled).toBe(true); expect(button(text.preview).disabled).toBe(true); expect(document.querySelector('[aria-label="' + text.factTitle + '"]')).toBeNull(); expect(f.apply).toHaveBeenCalledOnce();
+});
+
+it('对象树定位自动读取原表，改名后大小写相近的字段也不替代原目标', async () => {
+  const fixture = await mount(true, {}, 'Code');
+  expect(fixture.inspect).toHaveBeenCalledTimes(1);
+  expect(fixture.inspect).toHaveBeenCalledWith(expect.objectContaining(target));
+  expect(document.body.textContent).toContain(tableElementsZh.missing('Code'));
+  expect(document.querySelector('[data-structure-focus]')).toBeNull();
+  expect(fixture.preview).not.toHaveBeenCalled();
+  expect(fixture.apply).not.toHaveBeenCalled();
 });

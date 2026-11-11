@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { useStructureElementFocus } from '../structureElementFocus';
+import { tableElementsZh } from '../locales/tableElements.zh-CN';
 import type { ForeignKeyAction, ForeignKeyDefinition, ForeignKeyPatch } from '../../shared/tableForeignKeyPatches';
 import { tableForeignKeyPatchLimits } from '../../shared/tableForeignKeyPatches';
 import { foreignKeyTaskLimits, type ForeignKeyTableTarget, type TableForeignKeyApplyInput, type TableForeignKeyApplyOutput, type TableForeignKeyApplyProgress, type TableForeignKeyGetInput, type TableForeignKeyGetOutput, type TableForeignKeyPreviewInput, type TableForeignKeyPreviewOutput, type TableForeignKeyReleaseInput, type TableForeignKeyTarget, type TableForeignKeyView } from '../../shared/tableForeignKeyTasks';
@@ -20,6 +22,7 @@ export interface ForeignKeyPatchServices {
   subscribe?(listener: (event: { taskId: string; progress: TableForeignKeyApplyProgress }) => void): () => void;
 }
 export interface ForeignKeyPatchDialogProps {
+  focusName?: string;
   target: TableForeignKeyTarget; targetVersion: number; services: ForeignKeyPatchServices;
   onClose(): void; onCleanupError(message: string): void; onDirtyChange(dirty: boolean): void;
   onApplied(result: TableForeignKeyApplyOutput): void;
@@ -32,7 +35,7 @@ interface Operation { guard: ForeignKeyRequestFence; generation: number; taskId:
 interface Confirmation { message: string; run(): void; }
 
 /** 窗口固定目标和连接版本；一次预览只允许一次 apply，取消等待原请求和释放终态。 */
-export function ForeignKeyPatchDialog({ target, targetVersion, services, onClose, onCleanupError, onDirtyChange, onApplied, beforeApply, onExecutionUncertain }: ForeignKeyPatchDialogProps) {
+export function ForeignKeyPatchDialog({ target, targetVersion, focusName, services, onClose, onCleanupError, onDirtyChange, onApplied, beforeApply, onExecutionUncertain }: ForeignKeyPatchDialogProps) {
   const fixed = useRef({ target: structuredClone(target), version: targetVersion });
   const service = useRef(services); service.current = services;
   // 结果回调固定到最初目标；配置变化后不能将旧 DDL 的事实刷新到另一服务器。
@@ -229,6 +232,7 @@ export function ForeignKeyPatchDialog({ target, targetVersion, services, onClose
   const selectedParent = snapshot?.parents.find(value => value.parentRef === editor?.definition.parentRef);
   const canAddPair = !!editor && !!snapshot && editor.definition.pairs.length < tableForeignKeyPatchLimits.keyParts && snapshot.columns.some(value => foreignKeyColumnSelectable(value) && !editor.definition.pairs.some(pair => pair.childColumnRef === value.columnRef)) && selectedParent?.columns.some(value => foreignKeyColumnSelectable(value) && !editor.definition.pairs.some(pair => pair.parentColumnRef === value.columnRef));
 
+  const elementFocus = useStructureElementFocus(focusName, !preview && !mismatch && snapshotUsable ? snapshot?.foreignKeys : undefined);
   return <Modal title={text.title} wide onClose={requestClose}><div className="modal-content foreign-key-patch-content">
     <strong>{fixed.current.target.database} / {fixed.current.target.table}</strong>
     <p className="muted small">{snapshot?.capabilities ? `${snapshot.capabilities.dialect} ${snapshot.capabilities.serverVersion}` : text.capabilityUnknown}</p>
@@ -243,11 +247,11 @@ export function ForeignKeyPatchDialog({ target, targetVersion, services, onClose
       <div className="foreign-key-patch-fields"><Field label={text.extraDatabase}><input aria-label={text.extraDatabase} value={parentDatabase} onChange={event => setParentDatabase(event.target.value)}/></Field><Field label={text.extraTable}><input aria-label={text.extraTable} value={parentTable} onChange={event => setParentTable(event.target.value)}/></Field></div>
       <button disabled={parents.length >= foreignKeyTaskLimits.extraParents || !parentDatabase || !parentTable} onClick={loadParent}>{text.loadParent}</button>
     </fieldset>}
-    {!preview && snapshot && <><p>{formatText(text.patches, patches.length)}</p><div className="foreign-key-patch-list">
+    {!preview && snapshot && <>{focusName !== undefined && elementFocus.missing && <ErrorBox message={tableElementsZh.missing(focusName)}/>}<p>{formatText(text.patches, patches.length)}</p><div className="foreign-key-patch-list">
       {snapshot.foreignKeys.map(value => {
         const patch = patches.find(item => item.op !== 'add' && item.foreignKeyRef === value.foreignKeyRef);
         const reasons = [...new Set([...value.unsupportedReasons, ...value.access.replace.reasons, ...value.access.drop.reasons])];
-        return <section className={`foreign-key-patch-item ${patch?.op === 'drop' ? 'deleted' : ''}`} key={value.foreignKeyRef} aria-label={value.name}>
+        return <section className={`foreign-key-patch-item ${patch?.op === 'drop' ? 'deleted' : ''}`} key={value.foreignKeyRef} {...elementFocus.rowProps(value)} aria-label={value.name}>
           <div className="foreign-key-patch-row"><strong>{value.name}</strong><span>{patch?.op === 'drop' ? text.deleted : patch ? text.changed : text.unchanged}</span><button disabled={editingDisabled || !foreignKeyEditable(value) || patch?.op === 'drop'} aria-label={formatText(text.editNamed, value.name)} onClick={() => edit(value)}>{text.edit}</button><button disabled={editingDisabled || !value.access.drop.allowed || patch?.op === 'drop'} aria-label={formatText(text.dropNamed, value.name)} onClick={() => drop(value)}>{text.drop}</button>{patch && <button disabled={editingDisabled} aria-label={formatText(text.undoNamed, value.name)} onClick={() => undo(value.foreignKeyRef, 'existing')}>{text.undo}</button>}</div>
           <p className="muted small">{value.childColumnNames.join('、')} → {value.parentTarget ? `${value.parentTarget.database} / ${value.parentTarget.table}` : ''} ({value.parentColumnNames.join('、')})</p>
           <details><summary>{text.original}</summary><pre className="foreign-key-patch-raw">{value.rawSql}</pre></details>{reasons.map((reason, i) => <p className="warning-text small" key={i}>{reason}</p>)}

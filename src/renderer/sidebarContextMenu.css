@@ -17,11 +17,14 @@
 .table-element>svg{flex:none;color:var(--muted)}
 .table-element>span{flex:1 1 auto}
 .table-element>small{flex:0 1 auto;max-width:48%;color:var(--muted);font-size:inherit}
+.table-element-design{width:100%;min-height:24px;border:0;background:transparent;padding:0 2px;text-align:left}
+.table-element-design:hover:not(:disabled),.table-element-design:focus-visible{background:var(--surface-3)}
 .table-element-reference summary{display:flex;align-items:center;gap:5px;min-height:24px;min-width:0;cursor:pointer;font-size:11px}
 .table-element-reference summary::before{content:'▸';color:var(--muted)}
 .table-element-reference[open] summary::before{content:'▾'}
 .table-element-mapping{padding:2px 0 6px 12px;color:var(--muted);font-size:11px;overflow-wrap:anywhere}
 .table-element-mapping strong{color:var(--text);font-weight:500}
+.table-element-mapping-action{min-height:22px;margin-top:3px;padding:0 5px;font-size:inherit;white-space:normal}
 .sidebar-context-menu{position:fixed;z-index:90;width:240px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;padding:5px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow);font-size:11px}
 .sidebar-context-menu-title{padding:6px 8px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sidebar-context-menu>button{display:flex;align-items:center;justify-content:flex-start;gap:9px;width:100%;min-height:30px;height:auto;padding:6px 8px;border:0;background:transparent;text-align:left;white-space:normal;overflow-wrap:anywhere}

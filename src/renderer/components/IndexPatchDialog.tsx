@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { useStructureElementFocus } from '../structureElementFocus';
+import { tableElementsZh } from '../locales/tableElements.zh-CN';
 import type { IndexDefinition, IndexPatch, TableIndexView } from '../../shared/tableIndexPatches';
 import { indexMethodForKind, isSpecialIndexKind } from '../../shared/specialIndexRules';
 import type { TableIndexApplyInput, TableIndexApplyOutput, TableIndexApplyProgress, TableIndexGetInput, TableIndexGetOutput, TableIndexPatchTarget, TableIndexPreviewInput, TableIndexPreviewOutput, TableIndexReleaseInput } from '../../shared/tableIndexTasks';
@@ -25,13 +27,14 @@ interface EditRow { key: string; original?: TableIndexView; definition: IndexDef
 interface OptimizerRow { index: TableIndexView; intent: IndexOptimizerIntent; visible: boolean; }
 interface Operation { guard: IndexRequestFence; generation: number; taskId: string; }
 export interface IndexPatchDialogProps {
+  focusName?: string;
   target: TableIndexPatchTarget; targetVersion: number; services: IndexPatchServices;
   onClose(): void; onCleanupError(message: string): void; onDirtyChange(dirty: boolean): void;
   onApplied(result: TableIndexApplyOutput): void; beforeApply(): void; onExecutionUncertain(message: string): void;
 }
 
 /** 一次弹窗固定目标和连接版本，预览、执行及资源清理共享同步互斥。 */
-export function IndexPatchDialog({ target, targetVersion, services, onClose, onCleanupError, onDirtyChange, onApplied, beforeApply, onExecutionUncertain }: IndexPatchDialogProps) {
+export function IndexPatchDialog({ target, targetVersion, focusName, services, onClose, onCleanupError, onDirtyChange, onApplied, beforeApply, onExecutionUncertain }: IndexPatchDialogProps) {
   const fixed = useRef({ target: structuredClone(target), version: targetVersion });
   const service = useRef(services); service.current = services;
   // 结果回调和最初目标绑定，连接版本变化不能把旧目标的结果刷新到新目标。
@@ -292,6 +295,7 @@ export function IndexPatchDialog({ target, targetVersion, services, onClose, onC
   const canRename = !!editor && (!editor.original || editorRename?.allowed);
   const snapshotWarnings = snapshot?.warnings ?? [];
 
+  const elementFocus = useStructureElementFocus(focusName, !preview && !mismatch && snapshotUsable ? snapshot?.indexes : undefined);
   return <Modal title={text.title} wide onClose={() => void close()}><div className="modal-content index-patch-content">
     <strong>{fixed.current.target.database} / {fixed.current.target.table}</strong>
     <p className="muted small">{snapshot?.capabilities ? `${snapshot.capabilities.dialect} ${snapshot.capabilities.serverVersion}` : text.capabilityUnknown}</p>
@@ -299,13 +303,13 @@ export function IndexPatchDialog({ target, targetVersion, services, onClose, onC
     {mismatch && <ErrorBox message={text.targetChanged}/>}{(snapshotExpired || previewExpired) && <ErrorBox message={text.expired}/>}
     {snapshot && (!snapshot.writable || !snapshot.capabilities) && <p className="warning-text">{text.readonlyTable}</p>}
     {snapshot?.incomingCoverage.kind === 'partial' && <p className="warning-text">{text.incomingPartial}</p>}
-    {!preview && snapshot && <><p>{formatText(text.patches, patches.length)}</p><div className="index-patch-list">
+    {!preview && snapshot && <>{focusName !== undefined && elementFocus.missing && <ErrorBox message={tableElementsZh.missing(focusName)}/>}<p>{formatText(text.patches, patches.length)}</p><div className="index-patch-list">
       {snapshot.indexes.map(index => {
         const patch = patches.find(item => item.op !== 'add' && item.indexRef === index.indexRef);
         const permissions = { drop: indexDraftPermission(snapshot, index.indexRef, 'drop', patches), rename: indexDraftPermission(snapshot, index.indexRef, 'rename', patches), replace: indexDraftPermission(snapshot, index.indexRef, 'replace', patches) };
         const editable = permissions.rename.allowed || permissions.replace.allowed;
         const reasons = [...new Set([...index.unsupportedReasons, ...(!index.access.rename.allowed ? index.access.rename.reasons : []), ...(!index.access.replace.allowed ? index.access.replace.reasons : []), ...(!index.access.drop.allowed ? index.access.drop.reasons : [])])];
-        return <section key={index.indexRef} className={`index-patch-item ${patch?.op === 'drop' ? 'deleted' : ''}`} aria-label={index.name}>
+        return <section key={index.indexRef} {...elementFocus.rowProps(index)} className={`index-patch-item ${patch?.op === 'drop' ? 'deleted' : ''}`} aria-label={index.name}>
           <div className="index-patch-row"><strong>{index.name}</strong><span>{text[index.kind]} · {patch?.op === 'drop' ? text.deleted : patch ? text.changed : text.unchanged}</span>
             <button aria-label={formatText(text.editNamed, index.name)} disabled={editingDisabled || !editable || patch?.op === 'drop' || !!optimizerEditor || hasIndexOptimizerPatch(patches)} onClick={() => edit(index)}>{text.edit}</button>
             <button aria-label={formatText(text.dropNamed, index.name)} disabled={editingDisabled || !permissions.drop.allowed || !!optimizerEditor || hasIndexOptimizerPatch(patches)} onClick={() => drop(index)}>{text.drop}</button>

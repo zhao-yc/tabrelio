@@ -5,12 +5,18 @@ import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../
 import { tableElementsZh as text } from '../../src/renderer/locales/tableElements.zh-CN';
 import { tablePresetsZh } from '../../src/renderer/locales/tablePresets.zh-CN';
 import { sidebarContextMenuZh } from '../../src/renderer/locales/sidebarContextMenu.zh-CN';
+import { columnPatchZh } from '../../src/renderer/locales/columnPatches.zh-CN';
+import { indexPatchZh } from '../../src/renderer/locales/indexPatches.zh-CN';
+import { foreignKeyPatchZh } from '../../src/renderer/locales/foreignKeyPatches.zh-CN';
+import { sqliteColumnsZh } from '../../src/renderer/locales/sqliteColumns.zh-CN';
+import { sqliteIndexesZh } from '../../src/renderer/locales/sqliteIndexes.zh-CN';
+import { postgresStructureZh } from '../../src/renderer/locales/postgresStructure.zh-CN';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { clickSidebarAction } from './sidebar-menu';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
-test('在原生对象树查看字段、索引和复合外键', async ({}, info) => {
+test('在原生对象树查看结构并定位原表设计器', async ({}, info) => {
   const dialect = process.env.DBARK_TREE_ELEMENTS_DIALECT;
   test.skip(!dialect, '需显式启用表结构子节点专项');
   const sqlite = dialect === 'sqlite', postgres = dialect === 'postgresql';
@@ -113,6 +119,36 @@ test('在原生对象树查看字段、索引和复合外键', async ({}, info) 
     expect(await tree.locator('.tree-scroll').evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
     await expect(foreign.getByText(/parent_catalog/)).toBeVisible();
     await page.screenshot({ path: info.outputPath('最窄侧栏结构.png') });
+
+    async function checkDesigner(title: string, name: string, screenshot?: string) {
+      const dialog = page.getByRole('dialog', { name: title, exact: true });
+      const chosen = dialog.locator('[data-structure-focus][aria-current="true"]');
+      await expect(chosen).toHaveCount(1);
+      await expect(chosen).toContainText(name);
+      await expect(chosen).toBeFocused();
+      if (screenshot) await page.screenshot({ path: info.outputPath(screenshot) });
+      await page.keyboard.press('Escape');
+      await expect(dialog).toHaveCount(0);
+    }
+    const columnButton = fields.getByRole('button', { name: text.designNamed('derived'), exact: true });
+    const columnTitle = postgres ? postgresStructureZh.title : sqlite ? sqliteColumnsZh.title : columnPatchZh.title;
+    await columnButton.click();
+    await expect(page.getByRole('dialog', { name: columnTitle, exact: true })).toHaveCount(0);
+    await columnButton.dblclick();
+    await checkDesigner(columnTitle, 'derived', '从对象树定位字段.png');
+    await expect(columnButton).toBeFocused();
+    const indexButton = index.getByRole('button', { name: text.designNamed('idx_parent_pair'), exact: true });
+    await indexButton.press('Enter');
+    await checkDesigner(postgres ? postgresStructureZh.title : sqlite ? sqliteIndexesZh.title : indexPatchZh.title, 'idx_parent_pair');
+    await expect(indexButton).toBeFocused();
+    const foreignDesign = foreign.getByRole('button', { name: text.design, exact: true });
+    if (sqlite) await expect(foreignDesign).toHaveCount(0);
+    else {
+      await foreignDesign.press('Enter');
+      await checkDesigner(postgres ? postgresStructureZh.title : foreignKeyPatchZh.title, 'fk_parent_pair');
+      await expect(foreignDesign).toBeFocused();
+    }
+    expect((await settings()).tabs).toEqual(originalTabs);
 
     const presets = row.getByRole('button', { name: tablePresetsZh.treeExpand(name), exact: true });
     await presets.click();

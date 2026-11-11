@@ -4,6 +4,8 @@ import type { PostgresStructureInput, PostgresStructureResult } from '../../shar
 import { postgresIdentifier } from '../../shared/postgresSql';
 import { errorMessage, invoke } from '../lib';
 import { postgresStructureZh as text } from '../locales/postgresStructure.zh-CN';
+import { tableElementsZh } from '../locales/tableElements.zh-CN';
+import { useStructureElementFocus } from '../structureElementFocus';
 import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
 import { PostgresMaterializedColumnNamesPanel } from './PostgresMaterializedColumnNamesPanel';
@@ -45,7 +47,7 @@ import { Empty, ErrorBox, Modal, Spinner } from './ui';
 import './PostgresStructureDialog.css';
 
 type Section = keyof typeof text.sections;
-export interface PostgresStructureSearchFocus { section: Section; name?: string; }
+export interface PostgresStructureSearchFocus { section: Section; name?: string; constraintKind?: 'f'; }
 const editors = {
   materialized: { Panel: PostgresMaterializedRefreshPanel, label: refreshText.title },
   materializedColumns: { Panel: PostgresMaterializedColumnNamesPanel, label: postgresMaterializedColumnNamesZh.title },
@@ -90,14 +92,17 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
   const [copy, setCopy] = useState<{ source: PostgresCreateViewCopyDraft; kind: 'ordinary' | 'materialized' }>();
   const [view, setView] = useState<{ key: string; output?: PostgresStructureResult; error?: string }>();
   const owner = useRef<object | undefined>(undefined);
-  const matched = useRef<HTMLTableRowElement>(null);
   const { connectionId, database, table } = target;
   const scope = JSON.stringify([connectionId, database, table, version, attempt]);
   const currentView = view?.key === scope && dialect === 'postgresql' ? view : undefined;
   const output = currentView?.output;
   const busy = !currentView && dialect === 'postgresql';
+  const focusedItems = output && !editing && section === searchFocus?.section
+    ? section === 'columns' ? output.columns : section === 'indexes' ? output.indexes
+      : section === 'constraints' ? output.constraints.filter(item => !searchFocus.constraintKind || item.kind === searchFocus.constraintKind) : undefined
+    : undefined;
+  const elementFocus = useStructureElementFocus(searchFocus?.name, focusedItems);
   useEffect(() => { setEditing(undefined); }, [scope]);
-  useEffect(() => { if (output && section === searchFocus?.section) matched.current?.scrollIntoView?.({ block: 'nearest' }); }, [output, section, searchFocus]);
 
   useEffect(() => {
     if (dialect !== 'postgresql') return;
@@ -190,10 +195,11 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
           {sections.map(key => <button key={key} aria-pressed={key === section} className={key === section ? 'primary' : undefined}
             onClick={() => setSection(key)}>{text.sections[key]}</button>)}
         </nav>
+        {searchFocus?.name !== undefined && elementFocus.missing && <ErrorBox message={tableElementsZh.missing(searchFocus.name)}/>}
         {section === 'columns' && <CatalogTable empty={!output.columns.length} headers={[
           text.position, text.name, text.type, text.nullable, text.defaultExpression, text.generatedExpression, text.identity, text.collation, text.comment,
         ]}>{output.columns.map(column => <tr key={column.position}
-          {...(searchFocus?.section === section && searchFocus.name === column.name ? { ref: matched, 'aria-current': true } : {})}>
+          {...elementFocus.rowProps(column)}>
           <td>{column.position}</td><th scope="row">{column.name}</th><td><code>{column.type}</code></td>
           <td>{column.nullable ? text.yes : text.no}</td><td><code>{column.defaultExpression ?? '—'}</code></td>
           <td><code>{column.generationExpression ?? '—'}</code>{column.generation && <small>{column.generation === 's' ? text.stored : text.virtual}</small>}</td>
@@ -202,7 +208,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
         </tr>)}</CatalogTable>}
         {section === 'constraints' && <CatalogTable empty={!output.constraints.length} headers={[text.name, text.type, text.definition, text.status]}>
           {output.constraints.map((constraint, index) => <tr key={index}
-            {...(searchFocus?.section === section && searchFocus.name === constraint.name ? { ref: matched, 'aria-current': true } : {})}>
+            {...elementFocus.rowProps(constraint)}>
             <th scope="row">{constraint.name}</th><td>{text.kindsOfConstraint[constraint.kind]}</td><td><code>{constraint.definition}</code></td>
             <td>{[constraint.deferrable && text.deferrable, constraint.initiallyDeferred && text.deferred,
               !constraint.validated && text.unvalidated, (constraint.foreign?.enforced === false || constraint.check?.enforced === false) && postgresForeignEditZh.unenforced, constraint.inherited && text.inherited].filter(Boolean).join(' · ') || '—'}</td>
@@ -210,7 +216,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
         </CatalogTable>}
         {section === 'indexes' && <CatalogTable empty={!output.indexes.length} headers={[text.name, text.method, text.definition, text.constraint, text.status]}>
           {output.indexes.map(index => <tr key={index.name}
-            {...(searchFocus?.section === section && searchFocus.name === index.name ? { ref: matched, 'aria-current': true } : {})}>
+            {...elementFocus.rowProps(index)}>
             <th scope="row">{index.name}</th><td>{index.method}</td><td><code>{index.definition}</code></td><td>{index.constraint ?? '—'}</td>
             <td>{[index.primary && text.primary, index.unique && text.unique, index.replicaIdentity && postgresIndexEditZh.replicaIdentity,
               index.valid ? text.valid : text.invalid,

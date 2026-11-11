@@ -8,4 +8,6 @@ export const tableElementsZh = {
   primary: '主键', generated: '生成列', unique: '唯一', partial: '部分索引',
   ordinal: (ordinal: number) => '外键 #' + ordinal,
   implicitPrimary: '目标主键', noDeclaredType: '未声明类型',
+  design: '在设计器中定位', designNamed: (name: string) => '在设计器中定位 ' + name,
+  missing: (name: string) => '最新目录中无法定位「' + name + '」，可刷新对象树核对。',
 } as const;
