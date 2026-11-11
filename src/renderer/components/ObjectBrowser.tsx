@@ -2,7 +2,7 @@ import { postgresSequenceZh } from '../locales/postgresSequence.zh-CN';
 import { postgresRoutineZh } from '../locales/postgresRoutine.zh-CN';
 import { sqliteObjectsZh } from '../locales/sqliteObjects.zh-CN';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { Columns3, Database, RefreshCw, Table2 } from 'lucide-react';
+import { Columns3, Database, Network, RefreshCw, Table2 } from 'lucide-react';
 import type { ConnectionProfile, DatabaseObject } from '../../shared/contracts';
 import { objectCategories, type ObjectCategory } from '../../shared/objectBrowser';
 import { useWorkspace, type WorkspaceTab } from '../store';
@@ -16,15 +16,18 @@ import { WorkbookExportDialog } from './WorkbookExportDialog';
 import { sqliteWorkbookExportZh } from '../locales/workbookExport.zh-CN';
 import { importNewTableZh } from '../locales/importNewTable.zh-CN';
 import { compareBrowserObjects, defaultObjectProperty, numericObjectProperty, objectProperties, objectPropertyText, objectPropertyWidths, type ObjectProperty } from '../objectBrowserDetails';
+import { ObjectBrowserDiagram } from './ObjectBrowserDiagram';
+import { relationshipDiagramZh as diagramText } from '../locales/relationshipDiagram.zh-CN';
 
-interface Props { tab: WorkspaceTab; active: boolean; refreshVersion: number; onOpen(object: DatabaseObject): void; onNewTable(): void; onNewSequence?(): void; onNewRoutine?(): void; onSqliteCreate?(kind: 'view' | 'trigger'): void; onImportNewTable?(): void; actions(object: DatabaseObject, refresh: () => void): ReactNode; }
+interface Props { tab: WorkspaceTab; active: boolean; refreshVersion: number; onOpen(object: DatabaseObject): void; onDesignTable(table: string): void; onNewTable(): void; onNewSequence?(): void; onNewRoutine?(): void; onSqliteCreate?(kind: 'view' | 'trigger'): void; onImportNewTable?(): void; actions(object: DatabaseObject, refresh: () => void): ReactNode; }
 /** 目录标签只读取元数据，固定行高虚拟滚动，不取得查询会话或自动执行用户SQL。 */
-export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable, onNewSequence, onNewRoutine, onSqliteCreate, onImportNewTable, actions }: Props) {
+export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onDesignTable, onNewTable, onNewSequence, onNewRoutine, onSqliteCreate, onImportNewTable, actions }: Props) {
   const workspace = useWorkspace();
   const profile = workspace.connections.find(item => item.id === tab.connectionId), version = workspace.connectionVersions[tab.connectionId] ?? 0;
   const [objects, setObjects] = useState<DatabaseObject[]>([]), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [search, setSearch] = useState(''), [refresh, setRefresh] = useState(0);
   const [detailMode, setDetailMode] = useState(false), [columnPicker, setColumnPicker] = useState(false);
+  const [diagramMode, setDiagramMode] = useState(false);
   const [visibility, setVisibility] = useState<Partial<Record<ObjectProperty, boolean>>>({});
   const [sort, setSort] = useState<{ property: 'name' | ObjectProperty; descending: boolean }>({ property: 'name', descending: false });
   const [scrollTop, setScrollTop] = useState(0), [height, setHeight] = useState(400), viewport = useRef<HTMLDivElement>(null);
@@ -35,7 +38,9 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
   const catalog = useRef<{ owner: object; objects: DatabaseObject[]; profile: ConnectionProfile; version: number; connectionId: string; database: string } | undefined>(undefined);
   const [workbook, setWorkbook] = useState<{ objects: DatabaseObject[]; current(): boolean }>();
   const category = tab.objectCategory ?? 'table';
-  const tableDetails = detailMode && category === 'table' && !!profile;
+  const supportsDiagram = category === 'table' && !!profile && (profile.dialect !== 'sqlite' || tab.database === 'main');
+  const showDiagram = supportsDiagram && diagramMode;
+  const tableDetails = detailMode && category === 'table' && !!profile && !showDiagram;
   const available = tableDetails ? objectProperties(profile.dialect) : [];
   const visible = available.filter(property => visibility[property] ?? defaultObjectProperty(property));
   const { property: sortProperty, descending } = sort.property === 'name' || visible.includes(sort.property)
@@ -86,8 +91,8 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
     const node = viewport.current; if (!node) return;
     const observer = new ResizeObserver(() => setHeight(node.clientHeight)); observer.observe(node); setHeight(node.clientHeight);
     return () => observer.disconnect();
-  }, []);
-  useEffect(() => { if (viewport.current) viewport.current.scrollTop = 0; setScrollTop(0); }, [category, search, sortProperty, descending]);
+  }, [showDiagram]);
+  useEffect(() => { if (viewport.current) viewport.current.scrollTop = 0; setScrollTop(0); }, [category, search, sortProperty, descending, showDiagram]);
   useEffect(() => { setColumnPicker(false); }, [active, tab]);
   const filtered = useMemo(() => objects.filter(object => (category === 'routine' ? object.kind === 'procedure' || object.kind === 'function' : object.kind === category)
     && object.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
@@ -106,12 +111,13 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
       onClick={() => changeSort(property)}>{label}{selected && <span aria-hidden="true">{descending ? '↓' : '↑'}</span>}</button>;
   }
   /** 刷新意图在React提交前已撤销旧目录；原行菜单不得趁此窗口使用旧动作。 */
-  const actionCurrent = () => {
+  const actionCurrent = (requireNoDialog = true) => {
     const proof = catalog.current, now = useWorkspace.getState(), current = latest.current;
-    return contextCurrent() && !!proof && proof.owner === generation.current && proof.objects === objects && current.active && now.settings.activeTabId === tab.id
+    return contextCurrent(requireNoDialog) && !!proof && proof.owner === generation.current && proof.objects === objects && current.active && now.settings.activeTabId === tab.id
       && current.tab.connectionId === proof.connectionId && current.tab.database === proof.database
       && now.connections.find(item => item.id === proof.connectionId) === proof.profile && (now.connectionVersions[proof.connectionId] ?? 0) === proof.version;
   };
+  const diagramSource = showDiagram && !busy && actionCurrent(false) ? catalog.current : undefined;
   const workbookDialect = tab.database && (profile?.dialect !== 'sqlite' || tab.database === 'main') ? profile?.dialect : undefined;
   const workbookObjects = useMemo(() => objects.filter(object => object.kind === 'table' || object.kind === 'view'), [objects]);
   function openWorkbook() {
@@ -134,12 +140,21 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
       {category === 'table' && profile && <button type="button" aria-pressed={tableDetails} onClick={() => {
         if (!contextCurrent()) return;
         generation.current = {};
-        setDetailMode(!tableDetails);
+        setDiagramMode(false); setDetailMode(!tableDetails);
       }}><Columns3 size={13}/>{text.tableDetails}</button>}
+      {supportsDiagram && <button type="button" aria-pressed={showDiagram} onClick={() => {
+        if (!contextCurrent()) return;
+        if (detailMode) generation.current = {};
+        setDiagramMode(!showDiagram);
+      }}><Network size={13}/>{diagramText.browserView}</button>}
       {tableDetails && <button type="button" onClick={() => { if (contextCurrent()) setColumnPicker(true); }}>{text.objectColumns}</button>}
       {busy && <Spinner/>}</div>
     <ErrorBox message={error}/>
-    <div className="object-browser-grid objects-browser-scroll" ref={viewport} onScroll={event => setScrollTop(event.currentTarget.scrollTop)}>
+    {showDiagram ? diagramSource && <ObjectBrowserDiagram key={JSON.stringify([version, refreshVersion, refresh])}
+      profile={diagramSource.profile} database={diagramSource.database}
+      tables={filtered.map(table => table.name)} current={() => actionCurrent(false) && catalog.current === diagramSource}
+      onDesign={table => { if (actionCurrent() && catalog.current === diagramSource && objects.some(object => object.kind === 'table' && object.name === table)) onDesignTable(table); }}/>
+      : <div className="object-browser-grid objects-browser-scroll" ref={viewport} onScroll={event => setScrollTop(event.currentTarget.scrollTop)}>
       <div style={detailLayout}>
       <div className="object-browser-columns">{heading('name')}<span className="object-browser-kind">{text.type}</span>{visible.map(heading)}</div>
       {!filtered.length && !busy ? <div className="object-browser-empty">{text.noObjects}</div> : <div style={{ height: filtered.length * 31, position: 'relative' }}>
@@ -155,7 +170,7 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
               })}</button></SidebarTreeRow>;
         })}</div></div>}
       </div>
-    </div><div className="object-browser-footer">{text.records(filtered.length, objects.length)}</div>
+    </div>}<div className="object-browser-footer">{text.records(filtered.length, objects.length)}</div>
     {columnPicker && active && tableDetails && <Modal title={text.objectColumns} onClose={() => setColumnPicker(false)}>
       <div className="modal-content object-column-picker">{available.map(property => <label key={property}>
         <input type="checkbox" checked={visible.includes(property)} onChange={event => {

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。对象浏览的表分类新增 ER 图。MySQL、MariaDB、PostgreSQL 和 SQLite 可按名称筛选表，查看外键、复合字段映射和未读目标，并从图中打开已读表的结构入口。W02 增加目录 ER 图入口，E01 增加四种数据库的关系查看。[Navicat 对象页 ER 图](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#er-diagram-view-available-only-in-enterprise-and-standard-edition)
+
 2026-11-12 源码增量。信息窗格可新建 SQL 片段，并把自定义片段或内置模板拖到查询编辑器的实际落点。模板保留 Tab 字段，原选中文字保持，目录或查询变化会撤销迟到的拖放。Q01、W02 增加片段新建和拖放。[Navicat SQL 片段说明](https://www.navicat.com/en/company/aboutus/blog/693-using-navicat-code-snippets.html)
 
 2026-11-12 源码增量。对象信息窗格可搜索、按分组浏览和预览 SQL 片段。双击或按插入按钮将原文写入活动查询选区，内置模板沿用对应方言和 Tab 字段。片段库修改后窗格自动刷新。Q01、W02 增加就地片段浏览和插入。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#information-pane)

@@ -11,6 +11,9 @@ export const relationshipDiagramZh = {
   selectionChanged: '表选择已改变；当前仍显示上一次读取的结构。', catalogChanged: '目录读取成功；表选择仍须明确读取。',
   limit: '每次最多读取40张表、2000个字段及300个外键；超限整份拒绝，不截断关系。',
   progress: (done: number, total: number) => `已读取 ${done} / ${total} 张表`,
+  browserView: 'ER 图', browserRead: '读取匹配表结构', browserReading: '正在读取表结构…', browserDesign: '设计所选表',
+  browserMatches: (count: number) => `${count} 张匹配表`,
+  browserLimit: (limit: number) => `请搜索表名，将本次关系图范围缩小至 ${limit} 张表以内。`,
   counts: (tables: number, external: number, edges: number) => `${tables} 张已读表 · ${external} 个未读目标 · ${edges} 个外键`,
   mappings: '字段映射', update: '更新规则', remove: '删除规则', sameTable: '自引用', tableList: '选择关系图中的表',
 };

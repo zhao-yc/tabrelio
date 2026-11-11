@@ -16,6 +16,8 @@ import { sqliteColumnsZh } from '../../src/renderer/locales/sqliteColumns.zh-CN'
 import { sqliteIndexesZh } from '../../src/renderer/locales/sqliteIndexes.zh-CN';
 import { postgresStructureZh } from '../../src/renderer/locales/postgresStructure.zh-CN';
 import { postgresColumnEditZh } from '../../src/renderer/locales/postgresColumnEdit.zh-CN';
+import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
+import { relationshipDiagramZh as diagramText } from '../../src/renderer/locales/relationshipDiagram.zh-CN';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { clickSidebarAction } from './sidebar-menu';
 
@@ -376,6 +378,55 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     await page.locator('[data-workspace-tab-id=' + JSON.stringify(tableId) + '] .tab-select').click();
     await inspector.getByRole('button', { name: information.close, exact: true }).click();
     await expect(inspector).toHaveCount(0);
+    await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();
+    expect((await settings()).tabs).toEqual(tableTabs);
+    await databaseRow.locator('.tree-label').click({ button: 'right' });
+    await page.keyboard.press('Escape');
+    await page.locator('.navigation-toolbar').getByRole('button', { name: navigationZh.table, exact: true }).click();
+    const browser = page.locator('.object-browser:visible');
+    await expect(browser.locator('.object-list-row')).toHaveCount(2);
+    const switchDiagram = browser.getByRole('button', { name: diagramText.browserView, exact: true });
+    await switchDiagram.click();
+    const diagram = browser.getByRole('region', { name: diagramText.browserView, exact: true });
+    const child = diagram.getByRole('button', { name: database + '.' + name, exact: true });
+    const parent = diagram.getByRole('button', { name: database + '.' + parentName, exact: true });
+    const design = diagram.getByRole('button', { name: diagramText.browserDesign, exact: true });
+    await expect(diagram).toContainText(diagramText.counts(2, 0, 1));
+    await expect(child).toBeVisible();
+    await expect(parent).toBeVisible();
+    const relation = diagram.locator('details');
+    await relation.locator('summary').click();
+    await expect(relation.getByRole('listitem')).toHaveText(['scope_id → scope_id', 'parent_id → id']);
+    await page.screenshot({ path: info.outputPath('对象浏览ER图.png') });
+    if (!sqlite && !postgres) {
+      await parent.dblclick();
+      const parentStructure = page.getByRole('dialog', { name: '设计表 · ' + parentName, exact: true });
+      await expect(parentStructure.locator('input[value="scope_id"]')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(parentStructure).toHaveCount(0);
+    }
+    await browser.getByLabel(navigationZh.search, { exact: true }).fill('a_small');
+    await expect(diagram).toContainText(diagramText.selectionChanged);
+    await expect(diagram).toContainText(diagramText.counts(2, 0, 1));
+    await diagram.getByRole('button', { name: diagramText.browserRead, exact: true }).click();
+    await expect(diagram).toContainText(diagramText.counts(1, 1, 1));
+    await parent.click();
+    await expect(parent.locator('..')).toHaveClass(/\bexternal\b/);
+    await expect(design).toBeDisabled();
+    await child.click();
+    await design.click();
+    const structure = page.getByRole('dialog', { name: postgres ? postgresStructureZh.title :
+      sqlite ? sqliteColumnsZh.title : '查看表定义 · ' + name, exact: true });
+    await expect(structure).toBeVisible();
+    if (sqlite) await structure.getByRole('button', { name: sqliteColumnsZh.read, exact: true }).click();
+    if (sqlite || postgres) await expect(structure).toContainText('derived');
+    else await expect(structure.locator('.view-lines')).toContainText('derived');
+    await page.keyboard.press('Escape');
+    await expect(structure).toHaveCount(0);
+    await switchDiagram.click();
+    await expect(diagram).toHaveCount(0);
+    await expect(browser.locator('.object-list-row')).toHaveCount(1);
+    await page.locator('.tab-strip [data-active-workspace-tab="true"] .tab-close').click();
     await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();
     expect((await settings()).tabs).toEqual(tableTabs);
     if (sqlite) {
