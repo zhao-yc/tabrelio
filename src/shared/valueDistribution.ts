@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-const countPattern = /^(?:0|[1-9]\d{0,18})$/;
-const countSchema = z.string().refine(value => countPattern.test(value) && value === value.trim() && BigInt(value) <= 9223372036854775807n);
+const countPattern = /^(?:0|[1-9]\d{0,19})$/;
+const countSchema = z.string().refine(value => countPattern.test(value) && value === value.trim() && BigInt(value) <= 18446744073709551615n);
 export const valueDistributionSchema = z.object({ rows: countSchema, groups: countSchema }).strict();
 export type ValueDistribution = z.infer<typeof valueDistributionSchema>;
 

@@ -55,7 +55,7 @@ export function buildTableValueOptionsConditions(original: TableValueOptionsCond
   }
 }
 /** 完整绑定源元数据、搜索原文与列；回执计数只作为精确十进制字符串展示。 */
-export function checkTableValueOptionsOutput(source: TableInfo, column: string, searchPattern: string, output: TableValueOptionsOutput, order?: TableValueOptionsOrder): void {
-  validateTableValueOptionsOutput(output, { database: source.database, table: source.name, column, searchPattern, order });
+export function checkTableValueOptionsOutput(source: TableInfo, column: string, searchPattern: string, output: TableValueOptionsOutput, order?: TableValueOptionsOrder, distribution?: true): void {
+  validateTableValueOptionsOutput(output, { database: source.database, table: source.name, column, searchPattern, order, distribution });
   if (tableCopyMetadataKey(output.source) !== tableCopyMetadataKey(source)) throw Error(text.mismatch);
 }

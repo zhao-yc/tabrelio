@@ -1,10 +1,11 @@
 import type { CellValue, FilterGroup, FilterMode, FilterRule, TableInfo } from './contracts';
+import { valueDistributionRemainder, type ValueDistribution } from './valueDistribution';
 
 export const tableValueOptionsLimits = { groups: 500, pageSize: 50, searchCharacters: 256, cellBytes: 256 * 1024, bytes: 8 * 1024 * 1024, metadataRows: 4096, sortBufferBytes: 8 * 1024 * 1024 } as const;
 export type TableValueOptionsOrder = 'value' | 'count-desc' | 'count-asc';
-export interface TableValueOptionsInput { connectionId: string; database: string; table: string; column: string; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; searchPattern?: string; order?: TableValueOptionsOrder; taskId: string; }
+export interface TableValueOptionsInput { connectionId: string; database: string; table: string; column: string; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; searchPattern?: string; order?: TableValueOptionsOrder; distribution?: true; taskId: string; }
 export interface TableValueOption { value: CellValue; count: string; }
-export interface TableValueOptionsOutput { source: TableInfo; sourceDigest: string; column: string; searchPattern?: string; order?: TableValueOptionsOrder; values: TableValueOption[]; truncated: boolean; warnings: string[]; }
+export interface TableValueOptionsOutput { source: TableInfo; sourceDigest: string; column: string; searchPattern?: string; order?: TableValueOptionsOrder; values: TableValueOption[]; truncated: boolean; warnings: string[]; distribution?: ValueDistribution; }
 export type TableValueOptionsCapability = 'text' | 'integer' | 'decimal' | 'floating' | 'temporal' | 'unsupported';
 export const tableValueOptionsMessages = {
   invalid: '服务器不同值、字段元数据或原读取来源无效，请重新读取。',
@@ -76,7 +77,7 @@ export function validateTableValueOptionValue(value: unknown, capability: TableV
 }
 
 /** 服务回执严格绑定原目标及LIKE模式；元数据、计数和字节必须全部可信才能参与筛选。 */
-export function validateTableValueOptionsOutput(value: unknown, expected: { database: string; table: string; column: string; searchPattern?: string; order?: TableValueOptionsOrder }): TableValueOptionsOutput {
+export function validateTableValueOptionsOutput(value: unknown, expected: Pick<TableValueOptionsInput, 'database' | 'table' | 'column' | 'searchPattern' | 'order' | 'distribution'>): TableValueOptionsOutput {
   plainData(value);
   if (byteLength(JSON.stringify(value)) > tableValueOptionsLimits.bytes) throw Error(tableValueOptionsMessages.budget);
   const output = value as TableValueOptionsOutput, source = output?.source;
@@ -115,5 +116,7 @@ export function validateTableValueOptionsOutput(value: unknown, expected: { data
     const key = JSON.stringify([typeof option.value, option.value]); if (values.has(key)) throw Error(tableValueOptionsMessages.invalid); values.add(key);
   }
   if (capability === 'unsupported') throw Error(tableValueOptionsMessages.unsupported);
+  if (expected.distribution) valueDistributionRemainder(output.distribution, output.values, output.truncated);
+  else if (Object.hasOwn(output, 'distribution')) throw Error(tableValueOptionsMessages.invalid);
   return output;
 }

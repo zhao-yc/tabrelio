@@ -3,9 +3,11 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Locator, TestInfo } from '@playwright/test';
+import type { NetworkConnectionProfile } from '../../src/shared/contracts';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import { sqliteValueOptionsZh as sqlite } from '../../src/renderer/locales/sqliteValueOptions.zh-CN';
+import { tableValueOptionsZh as mysql } from '../../src/renderer/locales/tableValueOptions.zh-CN';
 import { postgresTableZh as postgres } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { valueDistributionZh as distribution } from '../../src/renderer/locales/valueDistribution.zh-CN';
 import { gridHeaderMenuZh as header } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
@@ -14,7 +16,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
 /** 用独立准备的固定数据验证分母和余数，搜索变更与本地翻页仍由原窗口处理。 */
-async function inspectDistribution(dialog: Locator, controls: { read: Locator; search: Locator; order: Locator; next: Locator }, info: TestInfo, screenshot: string) {
+async function inspectDistribution(dialog: Locator, controls: { read: Locator; search: Locator; order: Locator; next: Locator }, info: TestInfo, screenshot: string, searchTerm = 's052') {
   const chart = dialog.getByRole('table', { name: distribution.title, exact: true });
   const summary = dialog.getByRole('group', { name: distribution.title, exact: true });
   const toggle = dialog.getByRole('checkbox', { name: distribution.enable, exact: true });
@@ -28,12 +30,12 @@ async function inspectDistribution(dialog: Locator, controls: { read: Locator; s
   await expect(summary).toContainText(distribution.remainder('29', '29', '4.53%'));
   await expect(hot.getByRole('cell', { name: '15.63%', exact: true })).toBeVisible();
   await expect(chart.getByRole('row').filter({ hasText: '"NULL"' })).toHaveCount(1);
-  await expect(chart.getByRole('row').filter({ hasText: /(?:^| · )NULL10/ })).toHaveCount(1);
+  await expect(chart.getByRole('row').filter({ has: page.getByRole('cell', { name: '10', exact: true }) })).toContainText('NULL');
   await dialog.screenshot({ path: info.outputPath(screenshot) });
   await controls.next.click();
   await expect(hot).toHaveCount(0);
   await expect(summary).toContainText(distribution.totals('640', '529'));
-  await controls.search.fill('s052');
+  await controls.search.fill(searchTerm);
   await controls.read.click();
   await expect(summary).toContainText(distribution.totals('6', '6'));
   await expect(chart.getByRole('cell', { name: '16.67%', exact: true })).toHaveCount(6);
@@ -128,6 +130,95 @@ test.describe('SQLite 类别分布', () => {
       expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
       expect(pageErrors).toEqual([]);
       expect(hash()).toBe(before);
+      await confirmOwnedDesktopExit(info);
+    } catch (reason) {
+      retainOwnedDesktopResources(info);
+      throw reason;
+    }
+  });
+});
+
+test.describe('MySQL 和 MariaDB 类别分布', () => {
+  test.skip(!process.env.DBARK_MYSQL_CATEGORY_DIALECT, '仅在显式启用的隔离 MySQL 或 MariaDB 源码窗口运行');
+  test('总计、原值筛选及全 NULL 视图按同次分组读取', async ({}, info) => {
+    const dialect = process.env.DBARK_MYSQL_CATEGORY_DIALECT, database = process.env.DBARK_MYSQL_CATEGORY_DATABASE ?? '';
+    const password = process.env.DBARK_MYSQL_CATEGORY_PASSWORD ?? '', port = Number(process.env.DBARK_MYSQL_CATEGORY_PORT);
+    if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_DEV_URL ||
+        dialect !== 'mysql' && dialect !== 'mariadb' || !/^tabrelio_js_[a-f0-9]{12}$/.test(database) ||
+        !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535)
+      throw Error('只允许本例源码与隔离回环数据库');
+    try {
+      const profile: NetworkConnectionProfile = { id: '', name: '类别分布验收', dialect, group: '', color: '#123456', host: '127.0.0.1',
+        port, user: database, database, password, rememberPassword: false };
+      await page.evaluate(async input => {
+        const connection = await window.dbark.invoke('connections.save', input);
+        const settings = await window.dbark.invoke('settings.get', {});
+        await window.dbark.invoke('settings.save', { ...settings, pageSize: 50, activeTabId: 'events',
+          tabs: ['events', 'null_categories'].map(name => ({
+            id: name, title: name, kind: 'table', connectionId: connection.id, database: input.database, table: name,
+          })),
+        });
+      }, profile);
+      await page.reload();
+      const tab = page.locator('.table-tab:visible'), grid = tab.getByRole('grid');
+      await expect(grid).toBeVisible();
+      const excluded = grid.getByRole('gridcell', { name: '-10', exact: true });
+      await expect(excluded).toBeVisible();
+      await (await navigationMenuItem(tab, { name: zh.table.text006, exact: true })).click();
+      const filter = tab.locator('.filter-rule-form');
+      await filter.getByLabel(zh.table.text009, { exact: true }).selectOption('bucket');
+      await filter.getByLabel(zh.table.filterOperatorLabel, { exact: true }).selectOption('=');
+      await filter.getByLabel(zh.table.text011, { exact: true }).fill('1');
+      await filter.getByRole('button', { name: zh.table.text013, exact: true }).click();
+      await expect(excluded).toHaveCount(0);
+      await expect(tab.locator('.expanded-filter-panel')).toContainText('bucket');
+      await expect(tab.locator('.table-action-bar')).toContainText(zh.table.text016.replace('{0}', '50'));
+
+      const dialog = page.getByRole('dialog', { name: mysql.title, exact: true });
+      const read = dialog.getByRole('button', { name: /^(?:重新)?读取不同值$/ });
+      const open = async (column = 'category') => {
+        await expect(tab.getByLabel(zh.table.text021, { exact: true })).toBeEnabled();
+        await (await navigationMenuItem(tab, { name: mysql.open, exact: true })).click();
+        await dialog.getByLabel(mysql.column, { exact: true }).selectOption(column);
+      };
+      const lookups = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'table.valueOptions'));
+      await open();
+      expect(await lookups()).toHaveLength(0);
+      await inspectDistribution(dialog, { read, search: dialog.getByLabel(mysql.search, { exact: true }), order: dialog.getByLabel(mysql.order, { exact: true }),
+        next: dialog.getByRole('button', { name: mysql.next, exact: true }) }, info, 'MySQL兼容类别分布.png', 's052%');
+      expect((await lookups()).map(task => task.status)).toEqual(Array(4).fill('completed'));
+      await dialog.getByRole('button', { name: mysql.apply, exact: true }).click();
+      await expect(grid.getByRole('gridcell', { name: /^hot$/i }).first()).toBeVisible();
+      await expect(grid.getByRole('gridcell', { name: 's0001', exact: true })).toHaveCount(0);
+      await verifyAppliedCategory(open, dialog, mysql.read, mysql.close);
+      const chart = dialog.getByRole('table', { name: distribution.title, exact: true });
+      const totals = dialog.getByRole('group', { name: distribution.title, exact: true });
+      for (const [column, labels] of [
+        ['rank_value', ['"z"', '"a"']],
+        ['amount', ['"9007199254740993.0001"', '"9007199254740993.0002"']],
+      ] as const) {
+        await open(column);
+        await dialog.getByRole('checkbox', { name: distribution.enable, exact: true }).check();
+        await read.click();
+        await expect(totals).toContainText(distribution.totals('100', '2'));
+        await expect(chart.getByRole('rowheader')).toHaveText([...labels]);
+        await expect(chart.getByRole('cell', { name: '50.00%', exact: true })).toHaveCount(2);
+        await dialog.getByRole('button', { name: mysql.close, exact: true }).click();
+      }
+
+      await page.locator('[data-workspace-tab-id="null_categories"]').getByRole('button', { name: 'null_categories', exact: true }).click();
+      await expect(grid).toBeVisible();
+      await expect(tab.locator('.table-action-bar')).toContainText(zh.table.text016.replace('{0}', '10'));
+      await open();
+      await dialog.getByRole('checkbox', { name: distribution.enable, exact: true }).check();
+      await read.click();
+      await expect(totals).toContainText(distribution.totals('10', '1'));
+      await expect(chart.getByRole('rowheader')).toHaveText('NULL（空值）');
+      await expect(chart.getByRole('cell', { name: '100.00%', exact: true })).toBeVisible();
+      await dialog.getByRole('button', { name: mysql.close, exact: true }).click();
+      await expect.poll(async () => (await lookups()).map(task => task.status)).toEqual(Array(8).fill('completed'));
+      expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+      expect(pageErrors).toEqual([]);
       await confirmOwnedDesktopExit(info);
     } catch (reason) {
       retainOwnedDesktopResources(info);

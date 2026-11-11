@@ -55,6 +55,40 @@ beforeEach(() => {
 });
 
 describe('不同值独立只读事务、原binary流与全部前后证据', () => {
+  it('类别总计、原值和探测行来自同条 ROLLUP，截断时只保留前 500 组', async () => {
+    aliases.push('totalGroups');
+    rowValues = [[null, '600', null, '3', '501'], [null, '100', null, null, null],
+      ...Array.from({ length: 500 }, (_, index) => [String(index), '1', String(String(index).length), String(String(index).length), null])];
+    const result = await readTableValueOptions(context, { ...input, order: 'count-desc', distribution: true }, stop);
+    expect(result).toMatchObject({ distribution: { rows: '600', groups: '501' }, truncated: true });
+    expect(result.values).toHaveLength(500);
+    expect(result.values[0]).toEqual({ value: null, count: '100' });
+    expect(sent.filter(sql => sql.includes('WITH ROLLUP'))).toHaveLength(1);
+    expect(sent.at(-1)).toBe(controls[4]);
+  });
+  it('全 NULL 区分总计与真实组，空结果及有标记的零总计均可验证', async () => {
+    aliases.push('totalGroups');
+    const nullGroup = [null, '18446744073709551615', null, null, null];
+    rowValues = [nullGroup, nullGroup];
+    const request = { ...input, distribution: true as const };
+    expect(await readTableValueOptions(context, request, stop)).toMatchObject({
+      distribution: { rows: '18446744073709551615', groups: '1' }, values: [{ value: null, count: '18446744073709551615' }],
+    });
+    for (const rows of [[], [[null, '0', null, null, '0']]]) {
+      rowValues = rows;
+      expect(await readTableValueOptions(context, request, stop)).toMatchObject({ distribution: { rows: '0', groups: '0' }, values: [] });
+    }
+  });
+  it('总计缺失、错位、超长未返回组或剩余计数不守恒时拒绝整份结果', async () => {
+    aliases.push('totalGroups');
+    const request = { ...input, distribution: true as const }, item = ['A', '1', '1', '1', null];
+    for (const rows of [[item], [item, [null, '1', null, '1', '1']], [[null, '2', null, '1', '1'], item]]) {
+      rowValues = rows;
+      await expect(readTableValueOptions(context, request, stop)).rejects.toThrow();
+    }
+    rowValues = [[null, '1', null, '262145', '1'], item];
+    await expect(readTableValueOptions(context, request, stop)).rejects.toThrow('预算');
+  });
   it.each(['count-desc', 'count-asc'] as const)('次数排序%s使用同一真实binary帧与原回包身份', async order => {
     if (order === 'count-asc') rowValues.reverse();
     const result = await readTableValueOptions(context, { ...input, order }, stop); expect(result.order).toBe(order); expect(result.warnings).toContain(text.frequency);

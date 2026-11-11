@@ -5,8 +5,10 @@ import { tableValueOptionsColumnCapability, tableValueOptionsLimits, tableValueO
 import { buildTableValueOptionsConditions, checkTableValueOptionsOutput, tableValueOptionsLiteral, type TableValueOptionsConditions } from '../tableValueOptionsUi';
 import { errorMessage, uid } from '../lib';
 import { tableValueOptionsZh as text } from '../locales/tableValueOptions.zh-CN';
-import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
+import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import { readTableValueOptionsOrder, type TableValueOptionsOrder } from '../../shared/tableValueOptions';
+import { ValueDistributionCells, ValueDistributionSummary } from './ValueDistribution';
+import { valueDistributionZh as distributionText } from '../locales/valueDistribution.zh-CN';
 
 export interface TableValueOptionsServices { read(input: TableValueOptionsInput): Promise<TableValueOptionsOutput>; cancel(taskId: string): Promise<unknown>; }
 export interface TableValueOptionsDialogProps {
@@ -14,7 +16,7 @@ export interface TableValueOptionsDialogProps {
   conditions: TableValueOptionsConditions; isCurrent(): boolean; services: TableValueOptionsServices;
   onApply(conditions: TableValueOptionsConditions): boolean; onClose(): void; onCleanupError(message: string): void; onActivity?(delta: 1 | -1): void;
 }
-type Draft = { column: string; query: string; order: TableValueOptionsOrder; exclude: boolean; selected: readonly number[]; page: number; receipt?: TableValueOptionsOutput; needsRead?: boolean; problem?: string; prompt?: 'read' | 'close' };
+type Draft = { column: string; query: string; order: TableValueOptionsOrder; distribution?: true; exclude: boolean; selected: readonly number[]; page: number; receipt?: TableValueOptionsOutput; needsRead?: boolean; problem?: string; prompt?: 'read' | 'close' };
 type Operation = { id: string; cancelled: boolean; settled: Promise<void>; cancel?: Promise<void> };
 
 /** 显式服务器读取与本地勾选分离；原Promise终结前始终占有任务门，取消ACK不能提前解锁。 */
@@ -60,14 +62,14 @@ export function TableValueOptionsDialog(props: TableValueOptionsDialogProps) {
       const info = source.columns.find(value => value.name === draft.column);
       if (!info || tableValueOptionsColumnCapability(info.type) === 'unsupported') throw Error(text.unsupported);
     } catch (reason) { problem(reason); return; }
-    const id = uid(), readColumn = draft.column, query = draft.query, order = draft.order;
+    const id = uid(), readColumn = draft.column, query = draft.query, order = draft.order, distribution = draft.distribution;
     const next = { ...draft, receipt: undefined, needsRead: false, selected: [], page: 0, problem: undefined, prompt: undefined }; replace(next);
     let active: Operation;
     const settled = Promise.resolve().then(async () => {
       if (!current() || active.cancelled || operation.current !== active) return;
-      const output = await origin.services.read({ ...origin.target, column: readColumn, taskId: id, ...structuredClone(origin.conditions), filters: structuredClone(origin.conditions.filters) as TableValueOptionsInput['filters'], ...(searchPattern === undefined ? {} : { searchPattern }), ...(order === 'value' ? {} : { order }) });
+      const output = await origin.services.read({ ...origin.target, column: readColumn, taskId: id, ...structuredClone(origin.conditions), filters: structuredClone(origin.conditions.filters) as TableValueOptionsInput['filters'], ...(searchPattern === undefined ? {} : { searchPattern }), ...(order === 'value' ? {} : { order }), ...(distribution ? { distribution } : {}) });
       if (!current() || active.cancelled || operation.current !== active || live.current !== next) return;
-      checkTableValueOptionsOutput(origin.source, readColumn, query, output, order);
+      checkTableValueOptionsOutput(origin.source, readColumn, query, output, order, distribution);
       replace({ ...next, receipt: output });
     }).catch(reason => { if (mounted.current && !closed.current && operation.current === active && !active.cancelled && !invalid.current) replace({ ...live.current, problem: errorMessage(reason) }); }).finally(async () => {
       // 读取先终结时也保留取消门；原取消ACK结算前不能重读、关闭或释放父标签占用。
@@ -77,9 +79,13 @@ export function TableValueOptionsDialog(props: TableValueOptionsDialogProps) {
     });
     active = { id, cancelled: false, settled }; operation.current = active; setBusy(true); latest.current.onActivity?.(1);
   }
-  /** 搜索、选列或排序保留原候选与勾选供核对，标记待重读；旧回执不能冒充新条件结果。 */
-  function change(field: 'query' | 'column' | 'order', value: string): void { if (!editable() || field === 'order' && composition.current) return; if (field === 'order') { try { readTableValueOptionsOrder(value); } catch { return; } } replace({ ...draft, [field]: value, needsRead: true, page: 0, prompt: undefined, problem: undefined }); }
-  const receiptMatches = !draft.needsRead && !!draft.receipt && draft.receipt.column === draft.column && (draft.receipt.searchPattern ?? '') === draft.query && readTableValueOptionsOrder(draft.receipt.order) === draft.order;
+  /** 读取选项变更保留原候选与勾选供核对，标记待重读。 */
+  function change(patch: Partial<Pick<Draft, 'query' | 'column' | 'order' | 'distribution'>>): void {
+    if (!editable() || composition.current && !Object.hasOwn(patch, 'query')) return;
+    replace({ ...draft, ...patch, needsRead: true, page: 0, prompt: undefined, problem: undefined });
+  }
+  const receiptMatches = !draft.needsRead && !!draft.receipt && draft.receipt.column === draft.column && (draft.receipt.searchPattern ?? '') === draft.query &&
+    readTableValueOptionsOrder(draft.receipt.order) === draft.order && (draft.receipt.distribution ? true : undefined) === draft.distribution;
   function toggle(id: number, checked: boolean): void {
     if (!editable() || composition.current || !receiptMatches || !draft.receipt?.values[id]) return;
     const next = new Set(draft.selected); if (checked) next.add(id); else next.delete(id);
@@ -96,7 +102,7 @@ export function TableValueOptionsDialog(props: TableValueOptionsDialogProps) {
   function apply(): void {
     if (!editable() || composition.current || !receiptMatches || !draft.receipt || !draft.selected.length || draft.prompt) return;
     try {
-      checkTableValueOptionsOutput(origin.source, draft.column, draft.query, draft.receipt, draft.order);
+      checkTableValueOptionsOutput(origin.source, draft.column, draft.query, draft.receipt, draft.order, draft.distribution);
       const next = buildTableValueOptionsConditions(origin.conditions, draft.column, draft.selected.map(index => draft.receipt!.values[index].value), draft.exclude, origin.source.columns.find(info => info.name === draft.column)?.type);
       if (!editable()) return;
       applying.current = true; let accepted = false;
@@ -130,18 +136,48 @@ export function TableValueOptionsDialog(props: TableValueOptionsDialogProps) {
     return () => { mounted.current = false; cancel(); document.removeEventListener('keydown', block, true); };
   }, []);
   const valid = current(), disabled = !valid || busy || closing, options = draft.receipt?.values ?? [], pages = Math.max(1, Math.ceil(options.length / tableValueOptionsLimits.pageSize)), page = Math.min(draft.page, pages - 1), selected = new Set(draft.selected);
+  const start = page * tableValueOptionsLimits.pageSize, visible = options.slice(start, start + tableValueOptionsLimits.pageSize);
+  const totals = draft.receipt?.distribution;
+  const warnings = draft.receipt?.warnings.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>);
   /** 标签仅省略展示，详情和条件构造始终读取服务器完整原值。 */
   function label(value: typeof options[number]['value'], short = false): string { const full = text.value(tableValueOptionsLiteral(value, origin.source.columns.find(info => info.name === draft.receipt?.column)?.type)); return short && full.length > 80 ? full.slice(0, 80) + text.displayTruncated : full; }
+  function choice(option: typeof options[number], id: number) {
+    const full = label(option.value), short = label(option.value, true);
+    return <div key={id}>
+      <label title={full} className={totals ? 'check' : undefined}>
+        <input type="checkbox" aria-label={short} checked={selected.has(id)} disabled={disabled || composing || !receiptMatches} onChange={event => toggle(id, event.target.checked)}/>
+        <code>{short}</code>{!totals && <> <span>{text.count(option.count)}</span></>}
+      </label>
+      {full.length > 80 && <details><summary>{text.complete(id + 1)}</summary><pre>{full}</pre></details>}
+    </div>;
+  }
   return <Modal title={text.title} wide onClose={() => close()}><div className="modal-content" data-table-value-options-dialog onKeyDown={keyDown} aria-busy={busy || closing}>
-    <p>{source.database}.{source.name}</p><p>{text.scope}</p><UsageHelp><p>{text.semantics}</p><p>{text.bounded}</p><p>{text.searchHint}</p></UsageHelp>{tableValueOptionsColumnCapability(source.columns.find(info => info.name === draft.column)?.type ?? '') === 'floating' && <p className="warning-text">{text.approximate}</p>}
-    <label>{text.column}<select aria-label={text.column} value={draft.column} disabled={disabled || composing} onChange={event => change('column', event.target.value)}>{source.columns.map(info => <option key={info.name} value={info.name} disabled={tableValueOptionsColumnCapability(info.type) === 'unsupported'}>{info.name} · {info.type}</option>)}</select></label>
-    <label>{text.search}<input aria-label={text.search} value={draft.query} disabled={disabled} onChange={event => change('query', event.target.value)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/></label>
-    <label>{text.order}<select aria-label={text.order} value={draft.order} disabled={disabled || composing} onChange={event => change('order', event.target.value)}><option value="value">{text.orderValue}</option><option value="count-desc">{text.orderMost}</option><option value="count-asc">{text.orderLeast}</option></select></label><p>{text.orderHint}</p>
-    <label>{text.mode}<select aria-label={text.mode} value={draft.exclude ? 'exclude' : 'include'} disabled={disabled || composing} onChange={event => { if (!editable() || composition.current) return; const value = event.target.value; if (value === 'include' || value === 'exclude') replace({ ...draft, exclude: value === 'exclude', prompt: undefined }); }}><option value="include">{text.include}</option><option value="exclude">{text.exclude}</option></select></label>
+    <p>{source.database}.{source.name}</p><p>{text.scope}</p><UsageHelp><p>{text.semantics}</p><p>{text.bounded}</p><p>{text.searchHint}</p><p>{text.orderHint}</p>{totals && warnings}</UsageHelp>{tableValueOptionsColumnCapability(source.columns.find(info => info.name === draft.column)?.type ?? '') === 'floating' && <p className="warning-text">{text.approximate}</p>}
+    <div className="pg-table-controls">
+      <Field label={text.column}><select aria-label={text.column} value={draft.column} disabled={disabled || composing} onChange={event => change({ column: event.target.value })}>{source.columns.map(info => <option key={info.name} value={info.name} disabled={tableValueOptionsColumnCapability(info.type) === 'unsupported'}>{info.name} · {info.type}</option>)}</select></Field>
+      <Field label={text.search}><input aria-label={text.search} value={draft.query} disabled={disabled} onChange={event => change({ query: event.target.value })} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/></Field>
+      <Field label={text.order}><select aria-label={text.order} value={draft.order} disabled={disabled || composing} onChange={event => {
+        try { change({ order: readTableValueOptionsOrder(event.target.value) }); } catch { /* 忽略无效排序项。 */ }
+      }}><option value="value">{text.orderValue}</option><option value="count-desc">{text.orderMost}</option><option value="count-asc">{text.orderLeast}</option></select></Field>
+      <Field label={text.mode}><select aria-label={text.mode} value={draft.exclude ? 'exclude' : 'include'} disabled={disabled || composing} onChange={event => { if (!editable() || composition.current) return; const value = event.target.value; if (value === 'include' || value === 'exclude') replace({ ...draft, exclude: value === 'exclude', prompt: undefined }); }}><option value="include">{text.include}</option><option value="exclude">{text.exclude}</option></select></Field>
+      <label className="check"><input type="checkbox" aria-label={distributionText.enable} checked={draft.distribution === true} disabled={disabled || composing}
+        onChange={event => change({ distribution: event.target.checked ? true : undefined })}/>{distributionText.enable}</label>
+    </div>
     {busy && <Spinner text={text.loading}/>}<ErrorBox message={!valid ? text.stale : draft.problem}/>{closing && <p>{text.closing}</p>}
-    {draft.receipt && <section aria-label={text.title}><p aria-live="polite">{text.selected(options.length, draft.selected.length)}</p>{!receiptMatches && <p className="warning-text">{text.searchPending}</p>}{draft.receipt.truncated && <p className="warning-text">{text.truncated}</p>}{draft.receipt.warnings.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}
+    {draft.receipt && <section aria-label={text.title}><p aria-live="polite">{text.selected(options.length, draft.selected.length)}</p>{!receiptMatches && <p className="warning-text">{text.searchPending}</p>}{draft.receipt.truncated && !totals && <p className="warning-text">{text.truncated}</p>}{!totals && warnings}
       <button disabled={disabled || composing || !receiptMatches || !options.length} onClick={selectAll}>{text.selectAll}</button><button disabled={disabled || composing || !draft.selected.length} onClick={() => { if (editable() && !composition.current) replace({ ...draft, selected: [], problem: undefined, prompt: undefined }); }}>{text.clear}</button>
-      <div>{options.slice(page * 50, (page + 1) * 50).map((option, index) => { const id = page * 50 + index, full = label(option.value); return <div key={id}><label title={full}><input type="checkbox" aria-label={label(option.value, true)} checked={selected.has(id)} disabled={disabled || composing || !receiptMatches} onChange={event => toggle(id, event.target.checked)}/><code>{label(option.value, true)}</code> <span>{text.count(option.count)}</span></label>{full.length > 80 && <details><summary>{text.complete(id + 1)}</summary><pre>{full}</pre></details>}</div>; })}{!options.length && <p>{text.empty}</p>}</div>
+      {totals ? <>
+        <ValueDistributionSummary totals={totals} options={options} truncated={draft.receipt.truncated}/>
+        {!!visible.length && <div className="query-result-frequency value-distribution-options">
+          <table aria-label={distributionText.title}><thead><tr>
+            {[distributionText.value, distributionText.count, distributionText.percent, distributionText.bar].map(item => <th scope="col" key={item}>{item}</th>)}
+          </tr></thead><tbody>{visible.map((option, index) => <tr key={start + index}>
+            <th scope="row">{choice(option, start + index)}</th><td>{option.count}</td>
+            <ValueDistributionCells count={option.count} total={totals.rows}/>
+          </tr>)}</tbody></table>
+        </div>}
+      </> : <div>{visible.map((option, index) => choice(option, start + index))}</div>}
+      {!options.length && <p>{text.empty}</p>}
       <button disabled={disabled || composing || page === 0} onClick={() => { if (editable() && !composition.current) replace({ ...draft, page: page - 1 }); }}>{text.previous}</button><span>{text.page(page + 1, pages)}</span><button disabled={disabled || composing || page + 1 >= pages} onClick={() => { if (editable() && !composition.current) replace({ ...draft, page: page + 1 }); }}>{text.next}</button>
     </section>}
     {draft.prompt && <section role="alertdialog" aria-label={draft.prompt === 'read' ? text.discardRead : text.discardClose}><p>{draft.prompt === 'read' ? text.discardRead : text.discardClose}</p><button disabled={disabled || composing} onClick={() => { if (editable()) replace({ ...draft, prompt: undefined }); }}>{text.keep}</button><button disabled={busy || closing || composing} onClick={() => { if (draft.prompt === 'read') read(true); else close(true); }}>{draft.prompt === 'read' ? text.confirmRead : text.confirmClose}</button></section>}

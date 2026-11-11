@@ -5,6 +5,7 @@ import type { TableValueOptionsOutput } from '../../src/shared/tableValueOptions
 import type { TableValueOptionsConditions } from '../../src/renderer/tableValueOptionsUi';
 import type { TableValueOptionsDialogProps, TableValueOptionsServices } from '../../src/renderer/components/TableValueOptionsDialog';
 import { tableValueOptionsZh as text } from '../../src/renderer/locales/tableValueOptions.zh-CN';
+import { valueDistributionZh as distributionText } from '../../src/renderer/locales/valueDistribution.zh-CN';
 import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
 
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
@@ -47,7 +48,9 @@ const source = (): TableInfo => ({ database: 'db', name: 't', objectKind: 'table
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 async function mount(values: CellValue[] = [null, '', 'NULL', 'one'], override?: Partial<TableValueOptionsServices>) {
   const info = source(), conditions: TableValueOptionsConditions = { filters: [{ column: 'a', operator: '!=', value: 'old', enabled: false }], filterMode: 'any' }; let allowed = true;
-  const result = (input: { column: string; searchPattern?: string; order?: TableValueOptionsOutput['order'] }): TableValueOptionsOutput => ({ source: structuredClone(info), sourceDigest: 'a'.repeat(64), column: input.column, ...(input.searchPattern ? { searchPattern: input.searchPattern } : {}), ...(input.order === undefined ? {} : { order: input.order }), values: values.map(value => ({ value, count: '9007199254740993' })), truncated: false, warnings: ['服务器字段排序规则分组'] });
+  const result = (input: { column: string; searchPattern?: string; order?: TableValueOptionsOutput['order']; distribution?: true }): TableValueOptionsOutput => ({ source: structuredClone(info), sourceDigest: 'a'.repeat(64), column: input.column, ...(input.searchPattern ? { searchPattern: input.searchPattern } : {}), ...(input.order === undefined ? {} : { order: input.order }), values: values.map(value => ({ value, count: '9007199254740993' })), truncated: false, warnings: ['服务器字段排序规则分组'],
+    ...(input.distribution ? { distribution: { rows: String(9007199254740993n * BigInt(values.length)), groups: String(values.length) } } : {}),
+  });
   const read = vi.fn(async (input: Parameters<TableValueOptionsServices['read']>[0]) => result(input)), cancel = vi.fn(async () => undefined), onApply = vi.fn((_conditions: TableValueOptionsConditions) => true), onClose = vi.fn(), onCleanupError = vi.fn(), onActivity = vi.fn(), isCurrent = vi.fn(() => allowed);
   let props: TableValueOptionsDialogProps = { target: { connectionId: 'c', database: 'db', table: 't' }, source: info, column: 'a', conditions, services: { read, cancel, ...override }, isCurrent, onApply, onClose, onCleanupError, onActivity };
   const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as unknown as Element);
@@ -57,7 +60,7 @@ async function mount(values: CellValue[] = [null, '', 'NULL', 'one'], override?:
 function button(label: string): MemoryNode { const node = document.querySelectorAll('button').find(item => item.textContent === label); expect(node, label).toBeDefined(); return node!; }
 function input(label: string = text.search): MemoryNode { const node = document.querySelectorAll('input').find(item => item.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
 function select(label: string): MemoryNode { const node = document.querySelectorAll('select').find(item => item.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
-function boxes(): MemoryNode[] { return document.querySelectorAll('input').filter(item => item.type === 'checkbox'); }
+function boxes(): MemoryNode[] { return document.querySelectorAll('input').filter(item => item.type === 'checkbox' && item.getAttribute('aria-label') !== distributionText.enable); }
 function callback(node: MemoryNode, name = 'onClick'): (...args: unknown[]) => unknown { const key = Object.keys(node).find(value => value.startsWith('__reactProps$')); if (!key) throw Error('缺少真实React事件'); const handler = (Reflect.get(node, key) as Record<string, unknown>)[name]; if (typeof handler !== 'function') throw Error('缺少真实回调'); return handler as (...args: unknown[]) => unknown; }
 async function click(label: string): Promise<void> { const node = button(label); expect(node.disabled, label).toBe(false); await act(async () => { node.dispatchEvent(new MemoryEvent('click')); }); }
 async function fill(value: string): Promise<void> { const node = input(); expect(node.disabled).toBe(false); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('input')); }); }
@@ -65,6 +68,19 @@ async function check(label: string, checked = true): Promise<void> { const node 
 async function mode(value: string, label: string = text.mode): Promise<void> { const node = select(label); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('change')); }); }
 
 describe('表页服务器不同值真实React RAM交互（非原生验收）', () => {
+  it('类别开关只改变本地选项，明确读取后才展示占比并使用原值筛选', async () => {
+    const f = await mount(['one', 'two']);
+    await check(distributionText.enable);
+    expect(f.read).not.toHaveBeenCalled();
+    await click(text.read);
+    expect(f.read.mock.calls[0][0].distribution).toBe(true);
+    expect(document.body.textContent).toContain(distributionText.totals('18014398509481986', '2'));
+    expect(document.body.textContent).toContain('50.00%');
+    await check(text.value('one'));
+    await check(distributionText.enable, false);
+    expect(button(text.apply).disabled).toBe(true);
+    expect(f.read).toHaveBeenCalledOnce();
+  });
   it('次数排序只改草稿，显式读取才冻结到原任务；计数保留大整数字符串', async () => {
     const f = await mount(); expect(select(text.order).value).toBe('value'); await mode('count-desc', text.order); expect(f.read).not.toHaveBeenCalled();
     await click(text.read); expect(f.read.mock.calls[0][0].order).toBe('count-desc'); expect(document.body.textContent).toContain('9007199254740993 行'); expect(boxes()).toHaveLength(4);

@@ -11,7 +11,7 @@ export const tableValueOptionsZh = Object.freeze({
   loading: '正在读取服务器不同值…', cancelling: '已请求取消，等待原读取任务结束…', closing: '等待原任务和取消请求结束后关闭…',
   cancelTask: '取消读取', close: '关闭', apply: '应用到表页筛选', clear: '清空勾选', selectAll: '勾选本次返回的全部候选',
   empty: '服务器没有返回匹配候选。', truncated: '返回已达 500 组上限，仍有其他候选；请使用服务器搜索缩小范围。',
-  searchPending: '字段、搜索模式或排序已修改，请明确重新读取后再应用；原候选及勾选暂时保留。',
+  searchPending: '读取选项已修改，请明确重新读取后再应用；原候选及勾选暂时保留。',
   selected: (total: number, selected: number) => `本次返回 ${total} 组，已勾选 ${selected} 种值`,
   count: (count: string) => `${count} 行`, value: (value: string | null) => value === null ? 'NULL（空值）' : value === '' ? '""（空字符串）' : JSON.stringify(value),
   displayTruncated: '…（仅省略显示）', complete: (index: number) => `查看第 ${index} 个候选的完整值`,

@@ -7,20 +7,22 @@ import { buildTableFilterSql, identifier, inlineParameters, qualified } from './
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { tableStatisticsSourceIdentity } from './tableStatistics';
 import { readTableValueOptionsOrder, type TableValueOptionsOrder } from '../shared/tableValueOptions';
+import { valueDistributionSchema, type ValueDistribution } from '../shared/valueDistribution';
 
-export interface TableValueOptionsPlan { sql: string; aliases: readonly ['value', 'count', 'valueBytes', 'groupBytes']; column: ColumnInfo; capability: TableValueOptionsCapability; searchPattern?: string; order?: TableValueOptionsOrder; }
+export interface TableValueOptionsPlan { sql: string; aliases: readonly string[]; column: ColumnInfo; capability: TableValueOptionsCapability; searchPattern?: string; order?: TableValueOptionsOrder; distribution?: true; }
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const unsigned = (value: unknown): value is string => typeof value === 'string' && /^(?:0|[1-9]\d{0,31})$/.test(value);
 
 /** 原列直接参与GROUP BY与ORDER BY；展示投影不反向影响原列相等、NULL或排序语义。 */
-export function planTableValueOptions(source: TableInfo, input: Pick<TableValueOptionsInput, 'column' | 'filters' | 'filterMode' | 'filterGroup' | 'searchPattern' | 'order'>): TableValueOptionsPlan {
+export function planTableValueOptions(source: TableInfo, input: Pick<TableValueOptionsInput, 'column' | 'filters' | 'filterMode' | 'filterGroup' | 'searchPattern' | 'order' | 'distribution'>): TableValueOptionsPlan {
   const matches = source.columns.filter(column => column.name === input.column);
   if (matches.length !== 1) throw Error(text.invalid);
   const column = matches[0], capability = tableValueOptionsColumnCapability(column.type), searchPattern = tableValueOptionsSearchPattern(input.searchPattern);
   if (capability === 'unsupported') throw Error(text.unsupported);
   const readOrder = readTableValueOptionsOrder(input.order);
-  // 内部v/n/b/s别名不能遮蔽同名原列；仅此类字段补全原表限定，普通名称沿用旧SQL形状。
-  const rawName = identifier(column.name), name = ['v', 'n', 'b', 's'].includes(column.name.toLowerCase()) ? qualified(source.database, source.name) + '.' + rawName : rawName;
+  if (input.distribution !== undefined && input.distribution !== true) throw Error(text.invalid);
+  // 分组必须解析为原列，不能被投影中同名的聚合别名遮蔽。
+  const rawName = identifier(column.name), name = (input.distribution ? ['v', 'n', 'b', 's', 'p', 'd'] : ['v', 'n', 'b', 's']).includes(column.name.toLowerCase()) ? qualified(source.database, source.name) + '.' + rawName : rawName;
   const filter = buildTableFilterSql(source, input.filters, input.filterMode, input.filterGroup), conditions = filter.where ? [`(${filter.where})`] : [], params = [...filter.params];
   if (searchPattern !== undefined) { conditions.push(`${name} LIKE ?`); params.push(searchPattern); }
   const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
@@ -32,14 +34,24 @@ export function planTableValueOptions(source: TableInfo, input: Pick<TableValueO
   const direction = readOrder === 'count-desc' ? 'DESC' : 'ASC';
   const innerOrder = readOrder === 'value' ? name : `COUNT(*) ${direction},${name}`, outerOrder = readOrder === 'value' ? order : `\`g\`.\`n\` ${direction},${order}`;
   // 分组长度必须取组内MAX，不能让前缀相同的超长行被短代表值或PAD SPACE相等组掩盖。
-  const sql = inlineParameters(`SELECT CASE WHEN \`g\`.\`b\`<=${limits.cellBytes} THEN ${value} ELSE NULL END AS \`value\`,CAST(\`g\`.\`n\` AS CHAR) AS \`count\`,CAST(${bytes} AS CHAR) AS \`valueBytes\`,CAST(\`g\`.\`b\` AS CHAR) AS \`groupBytes\` FROM (SELECT ${name} AS \`v\`,COUNT(*) AS \`n\`,MAX(OCTET_LENGTH(CONVERT(${name} USING utf8mb4))) AS \`b\`${ordinal ? `,MIN(${name}+0) AS \`s\`` : ''} FROM ${qualified(source.database, source.name)}${where} GROUP BY ${name} ORDER BY ${innerOrder} LIMIT ${limits.groups + 1}) AS \`g\` ORDER BY ${outerOrder}`, params);
+  const grouping = `SELECT ${name} AS \`v\`,COUNT(*) AS \`n\`,MAX(OCTET_LENGTH(CONVERT(${name} USING utf8mb4))) AS \`b\`${ordinal ? `,MIN(${name}+0) AS \`s\`` : ''}`;
+  const from = ` FROM ${qualified(source.database, source.name)}${where} GROUP BY ${name}`;
+  // ROLLUP 在同一次读取里汇总原列。外层保留总计及候选探测行，兼容 MySQL 5.7 的排序限制。
+  const grouped = input.distribution ? `${grouping},COUNT(${name}) AS \`p\`,COUNT(DISTINCT ${name}) AS \`d\`${from} WITH ROLLUP` :
+    `${grouping}${from} ORDER BY ${innerOrder} LIMIT ${limits.groups + 1}`;
+  const summary = '\`g\`.\`v\` IS NULL AND (\`g\`.\`p\`>0 OR \`g\`.\`n\`=0)';
+  const totals = input.distribution ? `,CASE WHEN ${summary} THEN CAST(\`g\`.\`d\`+(\`g\`.\`p\`<\`g\`.\`n\`) AS CHAR) ELSE NULL END AS \`totalGroups\`` : '';
+  const ordering = input.distribution ? `(${summary}) DESC,${outerOrder} LIMIT ${limits.groups + 2}` : outerOrder;
+  const sql = inlineParameters(`SELECT CASE WHEN \`g\`.\`b\`<=${limits.cellBytes} THEN ${value} ELSE NULL END AS \`value\`,CAST(\`g\`.\`n\` AS CHAR) AS \`count\`,CAST(${bytes} AS CHAR) AS \`valueBytes\`,CAST(\`g\`.\`b\` AS CHAR) AS \`groupBytes\`${totals} FROM (${grouped}) AS \`g\` ORDER BY ${ordering}`, params);
   if (Buffer.byteLength(sql) > limits.bytes) throw Error(text.budget);
-  return { sql, aliases: ['value', 'count', 'valueBytes', 'groupBytes'], column, capability, ...(searchPattern !== undefined ? { searchPattern } : {}), ...(input.order === undefined ? {} : { order: readOrder }) };
+  return { sql, aliases: ['value', 'count', 'valueBytes', 'groupBytes', ...(input.distribution ? ['totalGroups'] : [])], column, capability,
+    ...(searchPattern !== undefined ? { searchPattern } : {}), ...(input.order === undefined ? {} : { order: readOrder }),
+    ...(input.distribution ? { distribution: true } : {}) };
 }
 
 /** 解码原行必须同时满足服务器长度事实与完整原值预算；超长保护NULL不是实际NULL候选。 */
 export function decodeTableValueOption(plan: TableValueOptionsPlan, cells: CellValue[]): TableValueOption {
-  if (!Array.isArray(cells) || cells.length !== plan.aliases.length) throw Error(text.invalid);
+  if (!Array.isArray(cells) || cells.length !== plan.aliases.length || plan.distribution && cells[4] !== null) throw Error(text.invalid);
   const [value, count, bytes, groupBytes] = cells;
   if (!unsigned(count) || count === '0') throw Error(text.invalid);
   if (groupBytes === null) { if (bytes !== null || value !== null || plan.searchPattern !== undefined || !plan.column.nullable) throw Error(text.invalid); return { value: null, count }; }
@@ -51,6 +63,14 @@ export function decodeTableValueOption(plan: TableValueOptionsPlan, cells: CellV
   // 浮点length反映服务器显示文本，不假装与binary实际IEEE宽化值的String一致。
   if (typeof value === 'string' && BigInt(Buffer.byteLength(value)) !== BigInt(bytes)) throw Error(text.invalid);
   return { value, count };
+}
+
+function decodeValueDistribution(cells: CellValue[]): ValueDistribution {
+  const [value, rows, bytes, maxBytes, groups] = cells;
+  if (cells.length !== 5 || value !== null || bytes !== null || maxBytes !== null && !unsigned(maxBytes)) throw Error(text.invalid);
+  // 总计覆盖未返回组。任何超长值都可能超出服务器排序长度，整份拒绝截断分组。
+  if (maxBytes !== null && BigInt(maxBytes) > BigInt(limits.cellBytes)) throw Error(text.budget);
+  return valueDistributionSchema.parse({ rows, groups });
 }
 
 /** 同一真实连接前后读取身份、字符会话及版本；任何未知项都不能默认为同一来源。 */
@@ -82,17 +102,29 @@ export async function readTableValueOptions(context: StructureTaskContext, input
   const source = await readIncomingReferenceTable(context, input, true), identity = tableStatisticsSourceIdentity(source, context), serverIdentity = await readTableValueOptionsServerIdentity(context), plan = planTableValueOptions(source, input);
   const values: TableValueOption[] = [], seen = new Set<string>();
   let starts = 0, ends = 0, warningCount: number | undefined, rows = 0, bytes = Buffer.byteLength(JSON.stringify(source));
+  let distribution: ValueDistribution | undefined;
   await consumeQueryFrames(context.managed, plan.sql, 'binary', {
     statementOrdinal: 1, ordinals: { results: 0, rows: 0 }, checkCancelled: context.checkCancelled, commandStarted: context.commandStarted, stop,
     async consume(frame) {
       if (frame.kind === 'rows-start') {
         if (++starts !== 1 || frame.columns.length !== plan.aliases.length || frame.columns.some((column, index) => column.name !== plan.aliases[index])) throw Error(text.invalid);
       } else if (frame.kind === 'row') {
-        if (starts !== 1 || ends || ++rows > limits.groups + 1) throw Error(text.invalid);
+        if (starts !== 1 || ends || ++rows > limits.groups + (plan.distribution ? 2 : 1)) throw Error(text.invalid);
+        if (plan.distribution && frame.values[4] !== null) {
+          if (rows !== 1) throw Error(text.invalid);
+          distribution = decodeValueDistribution(frame.values);
+          return;
+        }
         const option = decodeTableValueOption(plan, frame.values), key = JSON.stringify([typeof option.value, option.value]);
-        if (seen.has(key)) throw Error(text.invalid); seen.add(key);
+        if (seen.has(key)) {
+          // 全 NULL 时总计行与真实 NULL 组相同；严格核对两行后只保留原组。
+          if (!plan.distribution || distribution || rows !== 2 || option.value !== null || values[0].count !== option.count) throw Error(text.invalid);
+          distribution = valueDistributionSchema.parse({ rows: option.count, groups: '1' });
+          return;
+        }
+        seen.add(key);
         bytes += Buffer.byteLength(JSON.stringify(option)); if (bytes > limits.bytes) throw Error(text.budget);
-        if (rows <= limits.groups) values.push(option);
+        if (seen.size <= limits.groups) values.push(option);
       } else if (frame.kind === 'rows-end') { if (++ends !== 1 || starts !== 1) throw Error(text.invalid); warningCount = frame.warningCount; }
       else throw Error(text.invalid);
     },
@@ -103,10 +135,11 @@ export async function readTableValueOptions(context: StructureTaskContext, input
   context.checkCancelled();
   const after = await readIncomingReferenceTable(context, input, true), afterIdentity = tableStatisticsSourceIdentity(after, context);
   if (identity.digest !== afterIdentity.digest || identity.conservative !== afterIdentity.conservative || serverIdentity !== await readTableValueOptionsServerIdentity(context)) throw Error(text.stale);
-  const truncated = rows > limits.groups;
+  if (plan.distribution && !rows) distribution = { rows: '0', groups: '0' };
+  const truncated = seen.size > limits.groups;
   // metadata含仅供旧设计器使用的非枚举内部标记；按原IPC克隆行为只投影公开枚举字段。
   // 原source继续用于完整前后身份核验，不放宽回执对非枚举字段或getter的拒绝。
-  const output: TableValueOptionsOutput = { source: { ...source }, sourceDigest: hash([identity.digest, serverIdentity]), column: plan.column.name, ...(plan.searchPattern !== undefined ? { searchPattern: plan.searchPattern } : {}), ...(plan.order === undefined ? {} : { order: plan.order }), values, truncated, warnings: [text.scope, text.equality, ...(plan.order && plan.order !== 'value' ? [text.frequency] : []), ...(plan.searchPattern !== undefined ? [text.search] : []), ...(truncated ? [text.truncated] : []), ...(plan.capability === 'floating' ? [text.approximate] : []), ...(identity.conservative ? [text.conservative] : [])] };
+  const output: TableValueOptionsOutput = { source: { ...source }, sourceDigest: hash([identity.digest, serverIdentity]), column: plan.column.name, ...(plan.searchPattern !== undefined ? { searchPattern: plan.searchPattern } : {}), ...(plan.order === undefined ? {} : { order: plan.order }), values, truncated, ...(distribution ? { distribution } : {}), warnings: [text.scope, text.equality, ...(plan.order && plan.order !== 'value' ? [text.frequency] : []), ...(plan.searchPattern !== undefined ? [text.search] : []), ...(truncated ? [text.truncated] : []), ...(plan.capability === 'floating' ? [text.approximate] : []), ...(identity.conservative ? [text.conservative] : [])] };
   validateTableValueOptionsOutput(output, input);
   // 正常结束本独立事务；失败/取消保持原连接真实收尾，不重放分组或借新连接回滚。
   await structureTaskQuery(context, 'ROLLBACK AND NO CHAIN NO RELEASE'); context.checkCancelled(); return output;
