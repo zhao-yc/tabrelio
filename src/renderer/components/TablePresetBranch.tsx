@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, ListFilter } from 'lucide-react';
+import { ListFilter } from 'lucide-react';
 import type { TablePresetSnapshot, TablePresetTarget } from '../../shared/tablePresets';
 import { tablePresetTabId, type TablePresetTabKind } from '../../shared/tablePresetTab';
 import { errorMessage, invoke, uid } from '../lib';
@@ -61,7 +61,7 @@ export function TablePresetBranch({ kind, connectionId, database, table, connect
   }
 
   return <>{children(<button type="button" className="icon-button table-preset-toggle" aria-label={label} title={label} aria-expanded={open} onClick={toggle}>
-    {open ? <ChevronDown size={12}/> : <ChevronRight size={12}/>}
+    <ListFilter size={12}/>
   </button>)}
     {open && <div className="table-preset-branch" role="group" aria-label={label}>
       {error ? <><ErrorBox message={error}/><button onClick={() => void load()}>{text.treeRetry}</button></> :

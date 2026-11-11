@@ -1,5 +1,6 @@
 import type { DatabaseObject, DatabaseObjectDetails, ForeignKeyInfo, IndexInfo, ObjectKind, TableInfo } from '../shared/contracts';
 import { catalogUnsignedInteger } from '../shared/objectBrowser';
+import type { TableElements } from '../shared/tableElements';
 import { execute, type ManagedConnection } from './connection';
 import { foreignKeyActions } from './references';
 import { mariaDefault, qualified, temporalDefault } from './sql';
@@ -70,6 +71,20 @@ export async function objects(connection: ManagedConnection, database: string, t
   const events = await execute<{ name: string }[]>(connection, 'SELECT EVENT_NAME AS name FROM information_schema.EVENTS WHERE EVENT_SCHEMA = ? ORDER BY EVENT_NAME', [database]);
   result.push(...events.rows.map(row => ({ name: row.name, kind: 'event' as const })));
   return result;
+}
+
+/** 复用真实表目录及复合键顺序，只交付侧栏所需的结构信息。 */
+export async function tableElements(connection: ManagedConnection, database: string, table: string): Promise<TableElements> {
+  const info = await tableInfo(connection, database, table);
+  if (info.objectKind === 'view') throw Error('目标已变为视图，请刷新对象树');
+  return {
+    columns: info.columns.map(column => ({ name: column.name, type: column.type, primary: info.primaryKey.includes(column.name), generated: column.generated })),
+    indexes: info.indexes.map(index => ({ name: index.name, primary: index.name === 'PRIMARY', unique: index.unique })),
+    foreignKeys: info.foreignKeys.map(key => ({ name: key.name, reference: {
+      namespace: key.referencedDatabase, table: key.referencedTable,
+      pairs: key.columns.map((local, index) => ({ local, remote: key.referencedColumns[index] })),
+    } })),
+  };
 }
 
 /** SHOW CREATE 的对象类型来自固定映射，名称独立引用。 */

@@ -5,6 +5,7 @@ import { sqliteTableRebuildZh as text } from '../../src/renderer/locales/sqliteT
 import { sqliteColumnsZh } from '../../src/renderer/locales/sqliteColumns.zh-CN';
 import { sidebarContextMenuZh } from '../../src/renderer/locales/sidebarContextMenu.zh-CN';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
+import { tableElementsZh as elementsText } from '../../src/renderer/locales/tableElements.zh-CN';
 let document:ReturnType<typeof memoryDocument>,createRoot:typeof import('react-dom/client')['createRoot'],root:ReturnType<typeof createRoot>|undefined;
 let Sidebar:typeof import('../../src/renderer/components/Sidebar')['Sidebar'],Provider:typeof import('../../src/renderer/components/SidebarContextMenu')['SidebarTreeProvider'],useWorkspace:typeof import('../../src/renderer/store')['useWorkspace'],useWorkbench:typeof import('../../src/renderer/workbench')['useWorkbench'],baseline:ReturnType<typeof useWorkspace.getState>;
 const globals=['window','document','navigator','IS_REACT_ACT_ENVIRONMENT','MutationObserver'].map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)]as const),connected=Object.getOwnPropertyDescriptor(MemoryNode.prototype,'isConnected');
@@ -19,7 +20,7 @@ async function mount(database='main',kind:'table'|'view'='table',dialect:'sqlite
  const query={id:'q',kind:'query'as const,title:'原查询',connectionId:'other',database:'another',sql:'SELECT 原SQL'};
  useWorkspace.setState({connections:[profile],connectionVersions:{c:3},selection:undefined,activeJobs:{},settings:{...baseline.settings,tabs:[query],activeTabId:'q'}});
  useWorkbench.setState({ready:true,busy:false,snapshot:{revision:0,document:{...useWorkbench.getState().snapshot.document,groups:[],favorites:[]}}});
- const calls:{command:string;resolve(value:unknown):void}[]=[],invoke=vi.fn((command:string)=>{if(!['connections.open','metadata.databases','metadata.objects'].includes(command))throw Error('入口不允许其它IPC：'+command);return new Promise(resolve=>calls.push({command,resolve}));});(window as any).dbark={invoke};
+ const calls:{command:string;resolve(value:unknown):void}[]=[],invoke=vi.fn((command:string)=>{if(!['connections.open','metadata.databases','metadata.objects','metadata.tableElements'].includes(command))throw Error('入口不允许其它IPC：'+command);return new Promise(resolve=>calls.push({command,resolve}));});(window as any).dbark={invoke};
  const open=vi.fn(),noop=()=>{},host=document.createElement('div');document.body.appendChild(host);root=createRoot(host as any);
  await act(async()=>root!.render(<Provider><Sidebar onNewConnection={noop} onEditConnection={noop} onCopyConnection={noop} onDesign={noop} onColumnPatches={noop} onIndexPatches={noop} onForeignKeyPatches={noop} onTableRename={noop} onTableAutoIncrement={noop} onTableComment={noop} onTableDefaultEncoding={noop} onDdl={noop} onOpenWorkbench={async()=>true} onSqliteTableRebuild={open} refreshVersion={0}/></Provider>));
  await click(byText('原连接'));await act(async()=>calls[0].resolve({dialect,version:dialect==='sqlite'?'3.51.0':'8.4.0',connectionId:1}));await act(async()=>calls[1].resolve([database]));await click(byText(database));await act(async()=>calls[2].resolve([{name:'Subject',kind}]));
@@ -29,3 +30,20 @@ async function mount(database='main',kind:'table'|'view'='table',dialect:'sqlite
 it('真实右键选中原表但不连库/打开查询，设计与结构保留旧字段管理并提供独立重建入口',async()=>{const f=await mount(),before=useWorkspace.getState().settings;expect(document.querySelectorAll('button').some(node=>node.getAttribute('aria-label')===text.entry+' Subject')).toBe(false);const entry=await f.menu();expect(entry).toBeDefined();expect(document.querySelectorAll('button').some(node=>node.getAttribute('aria-label')===sqliteColumnsZh.entry+' Subject')).toBe(true);expect(f.calls).toHaveLength(3);expect(useWorkspace.getState().selection).toEqual({connectionId:'c',database:'main'});expect(useWorkspace.getState().settings).toBe(before);await click(entry!);expect(f.open).toHaveBeenCalledExactlyOnceWith({connectionId:'c',database:'main',table:'Subject'});expect(f.calls).toHaveLength(3);expect(useWorkspace.getState().settings.tabs[0]).toBe(f.query);});
 it.each([['main','view','sqlite'],['temp','table','sqlite'],['main','table','mysql']]as const)('%s/%s/%s不展示SQLite main普通表专用重建项',async(database,kind,dialect)=>{const f=await mount(database,kind,dialect);expect(await f.menu()).toBeUndefined();expect(f.open).not.toHaveBeenCalled();expect(f.calls).toHaveLength(3);});
 it('已捕获旧菜单在连接修订改变后不执行重建',async()=>{const f=await mount(),entry=await f.menu();expect(entry).toBeDefined();await act(async()=>useWorkspace.setState({connectionVersions:{c:4}}));await click(entry!);expect(f.open).not.toHaveBeenCalled();expect(f.calls).toHaveLength(3);});
+
+it('表结构仅在展开后读取，折叠再展开期间不接受上一代目录', async () => {
+  const fixture = await mount();
+  const button = (label: string) => document.querySelectorAll('button').find(node => node.getAttribute('aria-label') === label)!;
+  const catalogue = (name: string) => ({ columns: [{ name, type: 'TEXT', primary: false, generated: false }], indexes: [], foreignKeys: [] });
+  expect(fixture.calls).toHaveLength(3);
+  await click(button(elementsText.expand('Subject')));
+  expect(fixture.invoke).toHaveBeenLastCalledWith('metadata.tableElements', { connectionId: 'c', database: 'main', table: 'Subject' });
+  await click(button(elementsText.collapse('Subject')));
+  await click(button(elementsText.expand('Subject')));
+  expect(fixture.calls).toHaveLength(5);
+  await act(async () => fixture.calls[3].resolve(catalogue('迟到旧字段')));
+  expect(document.body.textContent).not.toContain('迟到旧字段');
+  await act(async () => fixture.calls[4].resolve(catalogue('当前字段')));
+  expect(document.body.textContent).toContain('当前字段');
+  expect(useWorkspace.getState().settings.tabs).toEqual([fixture.query]);
+});

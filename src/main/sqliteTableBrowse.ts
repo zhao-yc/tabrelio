@@ -65,7 +65,7 @@ export function sqliteTableSchemaKey(schemaSql: string, xinfo: readonly (readonl
 }
 
 /** 单条查询只收完整结果；截断不能伪造目录完整、页尾或没有下一页。 */
-async function rows(driver: SqliteDriverSession, sql: string, parameters: SqliteValue[], maxRows: number, control: SqliteTableBrowseControl, header?: (columns: SqliteColumn[]) => void, maxBytes: number = limits.resultBytes, record?: (sql: string) => void): Promise<SqliteValue[][]> {
+async function rows(driver: SqliteDriverSession, sql: string, parameters: SqliteValue[], maxRows: number, control: Pick<SqliteTableBrowseControl, 'check'>, header?: (columns: SqliteColumn[]) => void, maxBytes: number = limits.resultBytes, record?: (sql: string) => void): Promise<SqliteValue[][]> {
   control.check(); const values: SqliteValue[][] = [];
   const result = await driver.execute(sql, {
     parameters, maxRows, batchRows: Math.min(200, maxRows), maxBytes,
@@ -99,7 +99,7 @@ export async function countSqliteMatchingRows(driver: SqliteDriverSession, input
 }
 
 /** 调用方已BEGIN；精确目录和完整xinfo属于同一物理读快照，导出和分页共享来源指纹。 */
-export async function readSqliteTableCatalogue(driver: SqliteDriverSession, table: string, control: SqliteTableBrowseControl, schema: 'main' | typeof sqliteCopySourceSchema = 'main'): Promise<SqliteTableCatalogue> {
+export async function readSqliteTableCatalogue(driver: SqliteDriverSession, table: string, control: Pick<SqliteTableBrowseControl, 'check'>, schema: 'main' | typeof sqliteCopySourceSchema = 'main'): Promise<SqliteTableCatalogue> {
   const actualSchema = schema === sqliteCopySourceSchema ? sqliteCopySourceSchema : 'main';
   const objects = await rows(driver, `SELECT name,type,sql FROM ${actualSchema}.sqlite_schema WHERE name = ? COLLATE BINARY AND type IN ('table','view') LIMIT 2`, [table], 2, control);
   if (objects.length !== 1 || objects[0][0] !== table || !['table', 'view'].includes(String(objects[0][1])) || typeof objects[0][2] !== 'string') throw Error('SQLite目标表或视图已不存在，请刷新对象目录');

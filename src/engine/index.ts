@@ -688,6 +688,9 @@ export class Engine {
         }
       }
       case 'metadata.objects': return this.withConnection(input.connectionId, connection => metadata.objects(connection, input.database, input.tableDetails === true));
+      case 'metadata.tableElements':
+        this.copySourceProfile(input);
+        return this.withConnection(input.connectionId, connection => metadata.tableElements(connection, input.database, input.table), undefined, true);
       case 'metadata.routineInvocation': {
         // Main注入保存配置；直接进入独立短会话，不触碰现有查询事务或先开不可取消连接。
         if (input.profile) this.copySourceProfile(input);

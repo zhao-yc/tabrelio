@@ -5,6 +5,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationZh as text } from '../../src/renderer/locales/navigation.zh-CN';
 import { actionMenuZh } from '../../src/renderer/locales/actionMenu.zh-CN';
 import type { UiCommandId } from '../../src/shared/uiCommands';
+import { productName } from '../../src/shared/productName';
 
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
 const enabled = !listing && process.env.DBARK_NAVIGATION_WORKBENCH_TEST === '1';
@@ -191,8 +192,8 @@ function register(): void {
   });
 
   test('七类原生菜单和命令状态真实联动，树选库不改当前查询，窗口命令仅切换原标签', async () => {
-    const labels = await main(({ Menu }) => Menu.getApplicationMenu()!.items.map(item => item.label).filter(label => label !== 'DBArk'));
-    expect(labels).toEqual(['文件', '编辑', '查看', '收藏夹', '工具', '窗口', '帮助']);
+    const menu = await main(({ Menu }) => ({ mac: process.platform === 'darwin', labels: Menu.getApplicationMenu()!.items.map(item => item.label) }));
+    expect(menu.labels).toEqual([...(menu.mac ? [productName] : []), '文件', '编辑', '查看', '收藏夹', '工具', '窗口', '帮助']);
     await expect.poll(() => nativeEnabled('execute')).toBe(true); await native('help');
     await expect(runtime.page.getByRole('dialog', { name: text.helpTitle, exact: true })).toBeVisible(); await expect.poll(() => nativeEnabled('execute')).toBe(false);
     await runtime.page.keyboard.press('Escape'); await expect(runtime.page.getByRole('dialog')).toHaveCount(0); await expect.poll(() => nativeEnabled('execute')).toBe(true);

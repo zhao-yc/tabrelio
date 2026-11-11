@@ -18,6 +18,7 @@ import type {
 } from '../../shared/contracts';
 import { connectionTransportChanged } from '../../shared/connectionProfile';
 import { catalogUnsignedInteger } from '../../shared/objectBrowser';
+import type { TableElements } from '../../shared/tableElements';
 import { queryFailureMessage } from '../../shared/queryFailure';
 import type { QueryParameter } from '../../shared/queryParameters';
 import { postgresParameterBindings } from './parameters';
@@ -1929,6 +1930,22 @@ export class PostgresEngine {
             )
           ).rows.map((r) => r.c0),
         );
+      case 'metadata.tableElements': {
+        const profile = input.profile as PostgresConnectionProfile | undefined;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 表结构连接');
+        return this.use(profile, input.database, async (connection): Promise<TableElements> => {
+          const relation = await readPostgresStructure(connection, input.table);
+          if (relation.kind === 'v' || relation.kind === 'm') throw Error('目标已变为视图，请刷新对象树');
+          const primary = new Set(relation.constraints.find(constraint => constraint.kind === 'p')?.keyColumns ?? []);
+          return {
+            columns: relation.columns.map(column => ({ name: column.name, type: column.type, primary: primary.has(column.name), generated: !!column.generation })),
+            indexes: relation.indexes.map(index => ({ name: index.name, primary: index.primary, unique: index.unique })),
+            foreignKeys: relation.constraints.filter(constraint => constraint.kind === 'f').map(({ name, foreign }) => ({
+              name, reference: foreign ? { namespace: foreign.schema, table: foreign.table, pairs: foreign.pairs } : undefined,
+            })),
+          };
+        });
+      }
       case 'metadata.objects':
         return this.use(this.profile(input.connectionId), input.database, async m => {
           const tableDetails = input.tableDetails === true;

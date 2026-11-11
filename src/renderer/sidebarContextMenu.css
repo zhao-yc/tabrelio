@@ -1,11 +1,27 @@
 /* 对象操作脱离树行流式布局，名称行保持固定高度与原缩进。 */
 .sidebar .tree-row{height:31px;min-height:31px;max-height:31px;flex-wrap:nowrap}
 .sidebar .tree-row>.tree-label{flex-basis:auto;width:100%;min-width:0}
-.sidebar .table-preset-toggle{flex:0 0 20px;width:20px;height:24px;padding:0;color:var(--muted)}
+.sidebar .table-preset-toggle,.sidebar .table-elements-toggle{flex:0 0 20px;width:20px;height:24px;padding:0;color:var(--muted)}
+.sidebar :is(.table-preset-toggle,.table-elements-toggle)[aria-expanded=true]{color:var(--accent)}
+.sidebar .object-row>.table-preset-toggle:first-child,.sidebar .object-row>.table-elements-toggle:first-child{margin-left:35px}
 .sidebar .table-preset-toggle + .tree-label{padding-left:2px}
 .sidebar .table-preset-branch{margin-left:42px;min-width:0}
 .sidebar .table-preset-entry{min-height:28px;width:100%;padding-left:5px}
 .sidebar .table-preset-entry svg{flex-shrink:0;color:var(--muted)}
+.table-elements-branch{margin:0 4px 4px 44px;padding-left:6px;border-left:1px solid var(--line);min-width:0}
+.sidebar .table-elements-group{min-height:26px;width:100%;gap:5px;padding:0 4px}
+.table-elements-count{margin-left:auto;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.table-elements-list{padding-left:15px}
+.table-elements-list ul{list-style:none;margin:0;padding:0}
+.table-element{display:flex;align-items:center;gap:5px;min-height:24px;min-width:0;font-size:11px}
+.table-element>svg{flex:none;color:var(--muted)}
+.table-element>span{flex:1 1 auto}
+.table-element>small{flex:0 1 auto;max-width:48%;color:var(--muted);font-size:inherit}
+.table-element-reference summary{display:flex;align-items:center;gap:5px;min-height:24px;min-width:0;cursor:pointer;font-size:11px}
+.table-element-reference summary::before{content:'▸';color:var(--muted)}
+.table-element-reference[open] summary::before{content:'▾'}
+.table-element-mapping{padding:2px 0 6px 12px;color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+.table-element-mapping strong{color:var(--text);font-weight:500}
 .sidebar-context-menu{position:fixed;z-index:90;width:240px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;padding:5px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow);font-size:11px}
 .sidebar-context-menu-title{padding:6px 8px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sidebar-context-menu>button{display:flex;align-items:center;justify-content:flex-start;gap:9px;width:100%;min-height:30px;height:auto;padding:6px 8px;border:0;background:transparent;text-align:left;white-space:normal;overflow-wrap:anywhere}

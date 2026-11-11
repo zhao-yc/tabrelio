@@ -1,4 +1,5 @@
 import { mysqlJoinPreviewSchema } from './mysqlJoinPreview';
+import { tableElementsTargetSchema } from './tableElements';
 import { manualJoinDesignScopeSchema, manualJoinDesignSelectSchema, manualJoinDesignSaveSchema } from './manualJoinDesigns';
 import { singleQueryDesignScopeSchema, singleQueryDesignSelectSchema, singleQueryDesignSaveSchema } from './singleQueryDesigns';
 import { postgresQueryRecordPageSchema } from './postgresQueryRecord';
@@ -592,6 +593,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   ]),
   'metadata.objects': z.object({ connectionId: id, database: name, tableDetails: z.literal(true).optional() }).strict(),
   'metadata.table': z.object({ ...target, taskId: id.optional() }).strict(),
+  'metadata.tableElements': tableElementsTargetSchema,
   'metadata.ddl': z.object({ connectionId: id, database: name, name, kind: z.enum(['table','view','procedure','function','trigger','event','index']) }).strict(),
   'metadata.schemaScript': networkSchemaScriptSchema,
   'metadata.routineInvocation': z.object({ connectionId: id, database: name, name, kind: z.enum(['procedure', 'function']), taskId: id }).strict().superRefine((value, context) => {

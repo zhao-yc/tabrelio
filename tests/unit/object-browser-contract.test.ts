@@ -52,6 +52,13 @@ describe('对象浏览标签设置合同', () => {
 });
 
 describe('对象详情读取与精确排序', () => {
+  it('表结构子节点只接受有明确目标的目录读取', () => {
+    const target = { connectionId: 'c', database: 'main', table: '大小写.表名' };
+    expect(validateCommand('metadata.tableElements', target)).toEqual(target);
+    for (const patch of [{ table: '' }, { database: 'x\0y' }, { connectionId: '' }, { sessionId: '用户事务' }, { sql: 'SELECT 1' }]) {
+      expect(() => validateCommand('metadata.tableElements', { ...target, ...patch })).toThrow();
+    }
+  });
   it('原调用仍合法，只有显式 true 才申请读取表详情', () => {
     const target = { connectionId: 'c', database: 'main' };
     expect(validateCommand('metadata.objects', target)).toEqual(target);

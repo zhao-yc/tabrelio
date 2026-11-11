@@ -11,6 +11,7 @@ import { readSqliteIncoming } from './sqliteIncoming';
 import { randomUUID } from 'node:crypto';
 import type { CommandMap, DatabaseObject, DatabaseObjectDetails, SqliteConnectionProfile, TaskEvent } from '../shared/contracts';
 import { catalogUnsignedInteger } from '../shared/objectBrowser';
+import type { TableElements } from '../shared/tableElements';
 import { SqliteDriverError, SqliteDriverSession } from '../engine/sqlite/session';
 import { sqliteDriverLimits, type SqliteProcessExit, type SqliteProcessTransport, type SqliteValue } from '../engine/sqlite/protocol';
 import { createSqliteProcess } from './sqliteProcess';
@@ -32,12 +33,12 @@ import { readSqliteStructureSearchPage } from './sqliteStructureSearch';
 import { objectDefinitionInputSchema, objectDefinitionLimits, objectDefinitionTaskPrefix, type ObjectDefinitionOutput } from '../shared/objectDefinition';
 import { sqliteCompletionInputSchema, sqliteCompletionLimits, sqliteCompletionTaskPrefix, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteQueryRecordIndices, sqliteTablePageSchema, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
-import { readSqliteTableCatalogue, readSqliteTablePage, SqliteTableBrowseCancelled, withSqliteReadSnapshot } from './sqliteTableBrowse';
+import { readSqliteTableCatalogue, readSqliteTablePage, readSqliteTableRows, SqliteTableBrowseCancelled, withSqliteReadSnapshot } from './sqliteTableBrowse';
 import { readSqliteValueOptions } from './sqliteValueOptions';
 import { readSqliteCalendar, readSqliteRowCount, readSqliteStatistics } from './sqliteStatistics';
 import { sqliteCalendarInputSchema, sqliteRowCountInputSchema, sqliteStatisticsInputSchema, sqliteStatisticsLimits, type SqliteCalendarInput, type SqliteCalendarOutput, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput } from '../shared/sqliteStatistics';
 import { readSqliteQueryBuilderJoinKeys } from './sqliteQueryBuilderJoinKeys';
-import { readSqliteRelationships } from './sqliteRelationships';
+import { readSqliteRelationships, readSqliteRelationshipTable } from './sqliteRelationships';
 import { readSqliteReference } from './sqliteReference';
 import { sqliteReferenceInputSchema, sqliteReferenceLimits, type SqliteReferenceInput, type SqliteReferenceOutput } from '../shared/sqliteReference';
 import { readSqliteSchemaScript } from './sqliteSchemaExport';
@@ -511,6 +512,31 @@ export class SqliteRuntime {
       check();
       return objects.map(object => object.kind === 'table' ? { ...object, details: properties.get(object.name) } : object);
     } finally { if (tableDetails && driver.isUsable && driver.transaction) await driver.execute('ROLLBACK'); }
+  }
+  /** 同一短读快照取得表元素。SQLite 外键目录只提供序号，省略目标列时保留隐式主键语义。 */
+  private async tableElements(driver: SqliteDriverSession, table: string, check: () => void): Promise<TableElements> {
+    await driver.execute('BEGIN');
+    try {
+      const metadata = await readSqliteRelationshipTable(driver, table, { check });
+      const limit = 2000;
+      const indexes = await readSqliteTableRows(driver,
+        'SELECT name,CAST("unique" AS TEXT),origin,CAST(partial AS TEXT) FROM pragma_index_list(?,\'main\') ORDER BY name LIMIT 2001',
+        [table], limit + 1, { check });
+      if (indexes.length > limit) throw Error('SQLite 索引目录超过侧栏读取预算');
+      return {
+        columns: metadata.columns.filter(column => column.hidden !== 1).map(column => ({
+          name: column.name, type: column.type, primary: column.primaryKey > 0, generated: column.hidden > 1,
+        })),
+        indexes: indexes.map(([name, unique, origin, partial]) => {
+          if (typeof name !== 'string' || (unique !== '0' && unique !== '1') ||
+              !['c', 'u', 'pk'].includes(String(origin)) || (partial !== '0' && partial !== '1')) throw Error('SQLite 索引目录格式无效');
+          return { name, unique: unique === '1', primary: origin === 'pk', partial: partial === '1' };
+        }),
+        foreignKeys: metadata.foreignKeys.map(key => ({ ordinal: key.ordinal, reference: {
+          table: key.referencedTable, pairs: key.columns.map((local, index) => ({ local, remote: key.referencedColumns?.[index] ?? null })),
+        } })),
+      };
+    } finally { if (driver.isUsable && driver.transaction) await driver.execute('ROLLBACK'); }
   }
   /** 会话关闭屏障与连接关闭屏障均先检查，状态查询仍可显示失效事实。 */
   private session(id: string, allowClosing = false): Session {
@@ -1595,6 +1621,7 @@ export class SqliteRuntime {
       case 'sqlite.tableImport.release': return this.imports.release(sqliteTableImportReleaseSchema.parse(input));
       case 'metadata.databases': return this.metadata(input, async () => ['main']);
       case 'metadata.objects': return this.metadata(input, (driver, check) => this.objectCatalog(driver, input.tableDetails === true, check));
+      case 'metadata.tableElements': return this.metadata(input, (driver, check) => this.tableElements(driver, input.table, check));
       case 'metadata.ddl': return this.metadata(input, async (driver, check) => {
         if (typeof input.name !== 'string' || !input.name || /^sqlite_/i.test(input.name) ||
             !['table', 'view', 'trigger', 'index'].includes(input.kind)) throw Error('SQLite对象定义类型或名称无效');

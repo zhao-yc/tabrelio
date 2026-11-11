@@ -321,6 +321,7 @@ export interface CommandMap {
   'search.dataRelease':{input:{connectionId:string;taskId:string};output:void};
   'metadata.objects': { input: { connectionId: string; database: string; tableDetails?: true }; output: DatabaseObject[] };
   'metadata.table': { input: { connectionId: string; database: string; table: string; taskId?: string }; output: TableInfo };
+  'metadata.tableElements': { input: import('./tableElements').TableElementsTarget; output: import('./tableElements').TableElements };
   'metadata.ddl': { input: { connectionId: string; database: string; name: string; kind: ObjectKind | 'index' }; output: string };
   'metadata.schemaScript': { input: import('./networkSchemaScript').NetworkSchemaScriptInput; output: import('./networkSchemaScript').NetworkSchemaScriptOutput };
   'metadata.routineInvocation': { input: RoutineInvocationTarget & { taskId: string }; output: RoutineInvocationMetadata };

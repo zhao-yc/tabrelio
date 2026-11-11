@@ -37,6 +37,7 @@ import { connectionGroups } from '../connectionGroups';
 import { connectionOrganizationZh } from '../../shared/connectionOrganization.zh-CN';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { TablePresetBranch } from './TablePresetBranch';
+import { TableElementsBranch } from './TableElementsBranch';
 import { FavoriteButton, WorkbenchShelf, type OpenWorkbenchTarget } from './Workbench';
 import { SidebarTreeRow } from './SidebarContextMenu';
 import { sidebarContextMenuZh } from '../locales/sidebarContextMenu.zh-CN';
@@ -189,6 +190,7 @@ function DatabaseNode({ connectionId, database, search, onImportNewTable, onDesi
   const connectionVersion = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
   const [open, setOpen] = useState(false); const [objects, setObjects] = useState<DatabaseObject[]>([]); const [busy, setBusy] = useState(false);
   const requests = useNodeRequests(connectionId), openRef = useRef(false);
+  const catalogRevision = useRef(0);
   const selection = useWorkspace(state => state.selection);
   /** 保留同步展开意图，刷新中的折叠立即撤销旧回包。 */
   function expand(value: boolean) { openRef.current = value; setOpen(value); }
@@ -201,6 +203,7 @@ function DatabaseNode({ connectionId, database, search, onImportNewTable, onDesi
   async function load(reveal = true) {
     // 结构变化必须重读目录，不能被改名前的在途加载吞掉；普通按钮连点仍只发一次。
     const request = requests.begin('load', !reveal); if (!request) return;
+    ++catalogRevision.current;
     setBusy(true);
     try { for (let ending = sidebarConnectionEnd(connectionId); ending; ending = sidebarConnectionEnd(connectionId)) { await ending; if (!requests.current(request)) return; } if (!requests.current(request)) return; const next = await invoke('metadata.objects', { connectionId, database }); if (requests.current(request)) { setObjects(next); if (reveal) expand(true); } }
     catch (error) { useWorkspace.getState().notify(errorMessage(error), true); }
@@ -211,8 +214,16 @@ function DatabaseNode({ connectionId, database, search, onImportNewTable, onDesi
     const key = `${object.kind}:${object.name}`;
     const renderRow = (leading?: ReactNode) => <SidebarTreeRow key={key} leading={leading} target={{ connectionId, database, kind: object.kind, name: object.name }} label={object.name} className="object-row" allowIdentifierDrag version={[search, refreshVersion, objects, busy, open]} actions={sidebarObjectActions({ connectionId, database, object, onOpen: () => { if (openSqliteObject(connectionId, database, object)) return; if (object.kind === 'table' || object.kind === 'view') useWorkspace.getState().openTab({ kind: 'table', title: object.name, connectionId, database, table: object.name }); else onDdl(object); }, onDesign, onDdl, onColumnPatches, onIndexPatches, onForeignKeyPatches, onTableCopyData, onTableCopyStructure, onSqliteObjects, onSqliteTableRebuild, onTableMaintenance, onTableRename, onTableAutoIncrement, onTableChecks, onTableComment, onTableDefaultEncoding, onRoutineInvocation, onRefresh: () => void load(false) })}><button className="tree-label" title={`${kindLabels[object.kind]} · ${object.name}`} onDoubleClick={() => { if (sqlite) openSqliteObject(connectionId, database, object); }} onClick={() => { useWorkspace.getState().select({ connectionId, database }); if (sqlite) return; if (object.kind === 'table' || object.kind === 'view') useWorkspace.getState().openTab({ kind: 'table', title: object.name, connectionId, database, table: object.name }); else onDdl(object); }}>{object.kind === 'table' ? <Table2 size={13}/> : <FileCode2 size={13}/>}<span className="truncate">{object.name}</span><span className="object-kind">{object.kind === 'table' ? '' : kindLabels[object.kind]}</span></button></SidebarTreeRow>;
     const presetKind = postgres ? 'postgres' : sqlite && database === 'main' ? 'sqlite' : dialect === 'mysql' || dialect === 'mariadb' ? 'mysql' : undefined;
-    return presetKind && (object.kind === 'table' || object.kind === 'view')
-      ? <TablePresetBranch key={key} kind={presetKind} connectionId={connectionId} database={database} table={object.name} connectionVersion={connectionVersion}>{renderRow}</TablePresetBranch>
-      : renderRow();
+    if (!presetKind || (object.kind !== 'table' && object.kind !== 'view')) return renderRow();
+    const withPreset = (structure?: ReactNode) => <TablePresetBranch key={key} kind={presetKind} connectionId={connectionId}
+      database={database} table={object.name} connectionVersion={connectionVersion}>
+      {preset => renderRow(<>{structure}{preset}</>)}
+    </TablePresetBranch>;
+    // 同轮刷新可能合并忙态渲染；表名相同也不能复用上一代子目录。
+    const revision = catalogRevision.current;
+    return object.kind === 'table' ? <TableElementsBranch key={JSON.stringify([key, revision])} connectionId={connectionId}
+      database={database} table={object.name} available={() => openRef.current && catalogRevision.current === revision && !requests.kind}>
+      {withPreset}
+    </TableElementsBranch> : withPreset();
   })}{!visible.length && <span className="tree-hint">{search ? zh.sidebar.text023 : zh.sidebar.text024}</span>}</div>}</div>;
 }

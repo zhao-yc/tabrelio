@@ -1398,6 +1398,19 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     return result;
   }
+  if (command === 'metadata.tableElements') {
+    const revision = store.connectionRevision();
+    const check = () => {
+      columnsMain.assertCapturedOwner(columns);
+      connectionConfig.assertAvailable(input.connectionId);
+      if (shuttingDown || revision !== store.connectionRevision()) throw Error('表结构的原窗口或连接已变化');
+    };
+    check();
+    const profile = store.resolveConnection(input.connectionId);
+    const result = await broker.request(command, { ...input, profile });
+    check();
+    return result;
+  }
   if (command === 'postgres.sequence.read' || command === 'postgres.sequence.targets' || command === 'postgres.routine.read' ||
       command === 'postgres.routine.dependencies' || command === 'postgres.routine.ownerTargets' ||
       command.startsWith('postgres.structure.') || command.startsWith('postgres.storage.') || command.startsWith('postgres.queryBuilder.') ||
@@ -3914,6 +3927,7 @@ else {
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'mysql.view.inspectQuery' || payload.command === 'mysql.view.dependencies' || payload.command === 'mysql.view.renamePreview' || payload.command === 'mysql.view.renameApply' || payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command.startsWith('postgres.archive.') || payload.command.startsWith('serverMonitor.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
+        if (payload.command === 'metadata.tableElements') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command.startsWith('postgres.backup.') || payload.command.startsWith('mysql.backup.') ||
             payload.command === 'query.cancel' && (postgresImportChecks.has((input as { taskId: string }).taskId) || ['postgres.table.import', 'postgres.compareData', 'mysql.compareData', 'postgres.compareData.batchPreview', 'mysql.compareData.batchPreview'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
               ['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute', 'mysql.backup.database'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && sqlFileTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);

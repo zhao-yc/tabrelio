@@ -9,7 +9,7 @@ function integer(value: SqliteValue, maximum: number): number {
   return Number(value.value);
 }
 /** 固定目录SQL、位置参数、有界收集，驱动截断或多语句均不能冒充完整结构。 */
-async function rows(driver: SqliteDriverSession, sql: string, parameters: SqliteValue[], maximum: number, control: SqliteTableBrowseControl): Promise<SqliteValue[][]> {
+async function rows(driver: SqliteDriverSession, sql: string, parameters: SqliteValue[], maximum: number, control: Pick<SqliteTableBrowseControl, 'check'>): Promise<SqliteValue[][]> {
   control.check(); const values: SqliteValue[][] = [];
   const result = await driver.execute(sql, { parameters, maxRows: maximum, batchRows: Math.min(200, maximum), maxBytes: limits.bytes,
     onStatement: statement => { control.check(); if (statement.index !== 0) throw Error('SQLite关系图出现额外语句'); },
@@ -20,7 +20,7 @@ async function rows(driver: SqliteDriverSession, sql: string, parameters: Sqlite
 }
 
 /** 调用方持有同一只读快照；完整读取一张真实物理表的列和外键映射。 */
-export async function readSqliteRelationshipTable(driver: SqliteDriverSession, name: string, control: SqliteTableBrowseControl, expectedSchemaKey?: string): Promise<SqliteRelationshipTable> {
+export async function readSqliteRelationshipTable(driver: SqliteDriverSession, name: string, control: Pick<SqliteTableBrowseControl, 'check'>, expectedSchemaKey?: string): Promise<SqliteRelationshipTable> {
   const catalogue = await readSqliteTableCatalogue(driver, name, control);
   if (catalogue.kind !== 'table' || /^sqlite_/i.test(name)) throw Error('SQLite关系图只接受main中的用户物理表');
   if (expectedSchemaKey && catalogue.schemaKey !== expectedSchemaKey) throw Error('SQLite原表结构已变化，请刷新表页后重新打开关系图');
