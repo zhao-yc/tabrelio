@@ -10,14 +10,14 @@ import { gridRangePasteZh as rangeText } from '../locales/gridRangePaste.zh-CN';
 import { ErrorBox, Field, Modal } from './ui';
 import '../sqliteTableClipboard.css';
 
-interface Props { page: SqliteTablePage; rows: readonly SqliteDraftRow[]; anchor: SqlitePasteAnchor; initial?: SqliteClipboardSource; shape?: GridPasteShape; queryPosition?: { row: number; column: number }; current(): boolean; onStage(plan: SqliteRangePastePlan): boolean | void; onClose(): void; }
+interface Props { page: SqliteTablePage; rows: readonly SqliteDraftRow[]; anchor: SqlitePasteAnchor; initial?: SqliteClipboardSource; shape?: GridPasteShape; appendAtEnd?: true; queryPosition?: { row: number; column: number }; current(): boolean; onStage(plan: SqliteRangePastePlan): boolean | void; onClose(): void; }
 interface Draft { raw: string; fieldEpoch: object; source?: SqliteClipboardSource; kinds: SqlitePasteKind[]; selected: number; preview?: { plan: SqliteRangePastePlan; data: SqliteRangePastePreview }; error: string; }
-/** 区域粘贴仅生成完整矩形本地计划；与新增草稿入口分离，任何错误都不部分覆盖。 */
-export function SqlitePasteRangeDialog({ page, rows, anchor, initial, shape, queryPosition, current, onStage, onClose }: Props) {
+/** 覆盖和末页新增共用一个原页计划，预览全部校验后才能暂存。 */
+export function SqlitePasteRangeDialog({ page, rows, anchor, initial, shape, appendAtEnd, queryPosition, current, onStage, onClose }: Props) {
   let orderSignature: string | undefined; try { orderSignature = JSON.stringify(sqlitePasteColumnOrder(page, anchor)); } catch { /* 非法映射由原预览门报告，不能猜测另一目标。 */ }
-  const owner = useRef({ page, rows, anchor, row: anchor.row, column: anchor.column, columns: anchor.columns, orderSignature, initial, shape, queryPosition, current, onStage, onClose }).current;
+  const owner = useRef({ page, rows, anchor, row: anchor.row, column: anchor.column, columns: anchor.columns, orderSignature, initial, shape, appendAtEnd, queryPosition, current, onStage, onClose }).current;
   const invalid = useRef(false), propsInvalid = useRef(false), closed = useRef(false), mounted = useRef(false), staging = useRef(false), consumed = useRef(new WeakSet<SqliteRangePastePlan>());
-  if (owner.page !== page || owner.rows !== rows || owner.anchor !== anchor || owner.row !== anchor.row || owner.column !== anchor.column || owner.columns !== anchor.columns || owner.orderSignature !== orderSignature || owner.initial !== initial || owner.shape !== shape || owner.queryPosition !== queryPosition) propsInvalid.current = true;
+  if (owner.page !== page || owner.rows !== rows || owner.anchor !== anchor || owner.row !== anchor.row || owner.column !== anchor.column || owner.columns !== anchor.columns || owner.orderSignature !== orderSignature || owner.initial !== initial || owner.shape !== shape || owner.appendAtEnd !== appendAtEnd || owner.queryPosition !== queryPosition) propsInvalid.current = true;
   /** native列名只供核对来源，绝不借它重排目标列或跳过生成列。 */
   function fromSource(source: SqliteClipboardSource): Draft { const encoded = encodeSqliteClipboard(source.values, source.columns), value = { ...decodeSqliteClipboard(encoded.sqlite, '', source.text), plain: source.plain }; return { raw: value.text, fieldEpoch: {}, source: value, kinds: value.values[0].map(() => 'preserve'), selected: 0, error: '' }; }
   const [draft, setDraft] = useState<Draft>(() => { try { return initial ? fromSource(initial) : { raw: '', fieldEpoch: {}, kinds: [], selected: 0, error: '' }; } catch (reason) { return { raw: initial?.text ?? '', fieldEpoch: {}, kinds: [], selected: 0, error: reason instanceof Error ? reason.message : text.invalid }; } }), live = useRef(draft); live.current = draft;
@@ -47,7 +47,8 @@ export function SqlitePasteRangeDialog({ page, rows, anchor, initial, shape, que
     try {
       const matrix = owner.shape ? fitGridRangePaste(source.values, owner.shape, { rows: sqliteClipboardLimits.pasteRows, cells: sqliteClipboardLimits.cells }) : source.values;
       const kinds = matrix === source.values ? value.kinds : Array<SqlitePasteKind>(owner.shape!.columns).fill(value.kinds[0]);
-      const plan = prepareSqliteRangePaste(owner.page, owner.rows, owner.anchor, matrix, kinds);
+      const plan = prepareSqliteRangePaste(owner.page, owner.rows, owner.anchor, matrix, kinds,
+        !!owner.appendAtEnd && !owner.shape && !owner.queryPosition);
       const data = sqliteRangePastePreview(plan, owner.page, owner.rows, owner.anchor);
       if (sourceCurrent()) replace({ ...value, preview: { plan, data } });
     }
@@ -55,7 +56,7 @@ export function SqlitePasteRangeDialog({ page, rows, anchor, initial, shape, que
   }
   /** 一次消费准确计划；父级仍须核票据并整批replaceRange，不能直接执行SQL。 */
   function stage(): void {
-    const previewed = draft.preview; if (!local() || !sourceCurrent() || !previewed || !previewed.plan.changedCells || staging.current || consumed.current.has(previewed.plan)) return;
+    const previewed = draft.preview; if (!local() || !sourceCurrent() || !previewed || !(previewed.plan.changedCells || previewed.plan.appendedRows) || staging.current || consumed.current.has(previewed.plan)) return;
     consumed.current.add(previewed.plan); staging.current = true;
     try { sqliteRangePastePlanValues(previewed.plan, owner.page, owner.rows, owner.anchor); if (!sourceCurrent()) throw Error(text.stale); if (owner.onStage(previewed.plan) === false) throw Error(text.stale); closed.current = true; owner.onClose(); }
     catch (reason) { if (mounted.current) replace({ ...live.current, preview: undefined, error: reason instanceof Error ? reason.message : text.invalid }); }
@@ -77,12 +78,13 @@ export function SqlitePasteRangeDialog({ page, rows, anchor, initial, shape, que
   const cellText = (value: SqliteClipboardCell) => value === undefined ? text.defaultValue : value.kind === 'null' ? text.kindLabels.null : text.kindLabels[value.kind] + ' · ' + value.value;
   return <Modal title={text.title} wide onClose={close}><div className="modal-content">
     <p>{owner.page.target.connectionId} / {owner.page.target.database} / {owner.page.target.table}</p><p>{text.positionHint}</p><p>{text.bindingHint}</p><p>{displayRange(1, 1)} · {targetColumn(0)}</p>
+    {owner.appendAtEnd && <p>{rangeText.appendHint}</p>}
     {owner.shape && <p>{rangeText.target(owner.shape.rows, owner.shape.columns)}</p>}
     <Field label={text.source}><textarea aria-label={text.source} value={draft.raw} maxLength={sqliteClipboardLimits.bytes} disabled={!valid || readonly} onChange={event => manual(event.target.value)} onPaste={event => { event.preventDefault(); event.stopPropagation(); pasted(event.clipboardData); }}/></Field>
     {source && <><p>{displayRange(source.values.length, source.values[0].length)}</p><Field label={text.sourceColumn}><select aria-label={text.sourceColumn} value={String(draft.selected)} disabled={!valid || readonly} onChange={event => { if (!inputCurrent() || live.current.source !== source) return; const selected = Number(event.target.value); if (Number.isInteger(selected) && selected >= 0 && selected < live.current.kinds.length) replace({ ...live.current, selected, fieldEpoch: {}, preview: undefined }); }}>{source.values[0].map((_, index) => <option key={index} value={index}>{text.column(index)}{source.columns?.[index] ? ' · ' + source.columns[index] : ''}</option>)}</select></Field>
       <p>{targetColumn(draft.selected)}</p><Field label={text.conversion + ' · ' + text.column(draft.selected)}><select aria-label={text.conversion + ' · ' + text.column(draft.selected)} disabled={!valid || readonly} value={draft.kinds[draft.selected]} onChange={event => changeKind(draft.selected, event.target.value, source, draft.fieldEpoch)}>{Object.entries(text.kindLabels).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></Field>
       <details><summary>{text.mapping}</summary><div className="sqlite-paste-preview"><table aria-label={text.mapping}><tbody>{source.values[0].map((_, index) => <tr key={index}><td>{text.column(index)}{source.columns?.[index] ? ' · ' + source.columns[index] : ''}</td><td>{targetColumn(index)}</td><td>{text.kindLabels[draft.kinds[index]]}</td></tr>)}</tbody></table></div></details></>}
-    {previewed && <section><p>{text.previewHint}</p><p>{text.changedCounts(previewed.plan.rows, previewed.plan.width, previewed.plan.changedCells)}</p><p>{displayRange(previewed.plan.rows, previewed.plan.width)}</p>{!previewed.plan.changedCells && <p>{text.noChanges}</p>}<div className="sqlite-paste-preview"><table aria-label={text.previewRows}><thead><tr><th>#</th>{previewed.data.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{previewed.data.rows.map(row => <tr key={row.row}><td>{displayRow + row.row - startRow}</td>{row.cells.map((cell, index) => <td key={index} data-changed={cell.changed ? 'true' : 'false'}><p>{text.oldValue}：{cellText(cell.oldValue)}</p><p>{text.newValue}：{cellText(cell.newValue)}</p></td>)}</tr>)}</tbody></table></div></section>}
+    {previewed && <section><p>{text.previewHint}</p><p>{text.changedCounts(previewed.plan.rows, previewed.plan.width, previewed.plan.changedCells)}</p><p>{displayRange(previewed.plan.rows, previewed.plan.width)}</p>{previewed.plan.appendedRows ? <p>{rangeText.appendPreview(previewed.plan.appendedRows)}</p> : !previewed.plan.changedCells && <p>{text.noChanges}</p>}<div className="sqlite-paste-preview"><table aria-label={text.previewRows}><thead><tr><th>#</th>{previewed.data.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{previewed.data.rows.map(row => <tr key={row.row}><td>{displayRow + row.row - startRow}{row.appended ? ' · ' + rangeText.appendedRow : ''}</td>{row.cells.map((cell, index) => <td key={index} data-changed={cell.changed ? 'true' : 'false'}><p>{text.oldValue}：{cellText(cell.oldValue)}</p><p>{text.newValue}：{cellText(cell.newValue)}</p></td>)}</tr>)}</tbody></table></div></section>}
     <ErrorBox message={!valid ? text.stale : readonly ? text.readonly : draft.error}/>
-  </div><footer className="modal-footer"><button type="button" onClick={close}>{text.cancel}</button><span className="grow"/><button type="button" disabled={!valid || readonly || !source} onClick={preview}>{text.preview}</button><button type="button" className="primary" disabled={!valid || readonly || !previewed || !previewed.plan.changedCells || consumed.current.has(previewed.plan)} onClick={stage}>{text.stage}</button></footer></Modal>;
+  </div><footer className="modal-footer"><button type="button" onClick={close}>{text.cancel}</button><span className="grow"/><button type="button" disabled={!valid || readonly || !source} onClick={preview}>{text.preview}</button><button type="button" className="primary" disabled={!valid || readonly || !previewed || !(previewed.plan.changedCells || previewed.plan.appendedRows) || consumed.current.has(previewed.plan)} onClick={stage}>{text.stage}</button></footer></Modal>;
 }

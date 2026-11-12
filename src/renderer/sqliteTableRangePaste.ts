@@ -4,9 +4,9 @@ import { encodeSqliteClipboard, decodeSqliteClipboard, convertSqliteClipboardCel
 import { sqliteTableRangePasteZh as text } from './locales/sqliteTableRangePaste.zh-CN';
 
 export interface SqlitePasteAnchor { row: SqliteDraftRow; column: number; columns?: readonly number[]; }
-export interface SqliteRangePastePlan { readonly rows: number; readonly width: number; readonly changedCells: number; readonly startRow: number; readonly endRow: number; readonly startColumn: number; readonly endColumn: number; readonly columns: readonly string[]; }
+export interface SqliteRangePastePlan { readonly rows: number; readonly width: number; readonly changedCells: number; readonly appendedRows?: number; readonly startRow: number; readonly endRow: number; readonly startColumn: number; readonly endColumn: number; readonly columns: readonly string[]; }
 export interface SqliteRangePastePreviewCell { column: string; oldValue: SqliteClipboardCell; newValue: SqliteClipboardCell; changed: boolean; }
-export interface SqliteRangePastePreview { columns: string[]; rows: { row: number; cells: SqliteRangePastePreviewCell[] }[]; }
+export interface SqliteRangePastePreview { columns: string[]; rows: { row: number; appended?: true; cells: SqliteRangePastePreviewCell[] }[]; }
 interface RowOwner { row: SqliteDraftRow; id: string; index: number | undefined; deleted: boolean; values: SqliteDraftRow['values']; width: number; }
 interface Prepared { page: SqliteTablePage; rows: readonly SqliteDraftRow[]; rowOwners: RowOwner[]; anchor: SqlitePasteAnchor; order: string; indices: number[]; schema: string; before: string[][]; values: SqliteClipboardCell[][]; }
 const plans = new WeakMap<SqliteRangePastePlan, Prepared>();
@@ -19,7 +19,7 @@ function editable(page: SqliteTablePage) {
   return edit;
 }
 /** 目录的全部字段及原定位/有效期纳入签名，不能同引用静默更换目标后沿用旧计划。 */
-function metadata(page: SqliteTablePage): string { const edit = editable(page); return JSON.stringify([page.schemaKey, page.target, page.columns, edit.snapshotId, edit.expiresAt, edit.columns, edit.locator]); }
+function metadata(page: SqliteTablePage): string { const edit = editable(page); return JSON.stringify([page.schemaKey, page.target, page.hasMore, page.result.truncated, page.columns, edit.snapshotId, edit.expiresAt, edit.columns, edit.locator]); }
 /** 稀疏、访问器和额外键数组不能把未检查内容伪装成空单元格。 */
 function pureArray(raw: unknown, maximum: number): unknown[] {
   if (!Array.isArray(raw) || Object.getPrototypeOf(raw) !== Array.prototype || raw.length > maximum || Reflect.ownKeys(raw).length !== raw.length + 1) throw Error(text.invalid);
@@ -43,28 +43,34 @@ function assertPlan(plan: SqliteRangePastePlan, page: SqliteTablePage, rows: rea
   const prepared = plans.get(plan); if (!prepared || prepared.page !== page || prepared.rows !== rows || prepared.anchor.row !== anchor?.row || prepared.anchor.column !== anchor?.column || prepared.anchor.columns !== anchor?.columns || prepared.order !== JSON.stringify(sqlitePasteColumnOrder(page, anchor)) || prepared.schema !== metadata(page) || prepared.rowOwners.length !== rows.length) throw Error(text.stale);
   for (let index = 0; index < rows.length; index++) { const row = rows[index], owner = prepared.rowOwners[index]; if (row !== owner.row || row.id !== owner.id || row.index !== owner.index || row.deleted !== owner.deleted || row.values !== owner.values || row.values.length !== owner.width) throw Error(text.stale); }
   const offset = rows.indexOf(anchor.row); if (offset !== plan.startRow - 1) throw Error(text.stale);
-  for (let row = 0; row < plan.rows; row++) for (let column = 0; column < plan.width; column++) if (signature(rows[offset + row].values[prepared.indices[column]]) !== prepared.before[row][column]) throw Error(text.stale);
+  for (let row = 0; row < plan.rows - (plan.appendedRows ?? 0); row++) for (let column = 0; column < plan.width; column++) if (signature(rows[offset + row].values[prepared.indices[column]]) !== prepared.before[row][column]) throw Error(text.stale);
   return prepared;
 }
 /** 完整矩形先预检再签发；按起点位置逐格转换，任何错误都不发布部分修改。 */
-export function prepareSqliteRangePaste(page: SqliteTablePage, rows: readonly SqliteDraftRow[], anchor: SqlitePasteAnchor, input: readonly (readonly SqliteClipboardCell[])[], kinds?: readonly SqlitePasteKind[]): SqliteRangePastePlan {
+export function prepareSqliteRangePaste(page: SqliteTablePage, rows: readonly SqliteDraftRow[], anchor: SqlitePasteAnchor,
+  input: readonly (readonly SqliteClipboardCell[])[], kinds?: readonly SqlitePasteKind[], appendAtEnd = false): SqliteRangePastePlan {
   const edit = editable(page), offset = start(page, rows, anchor), order = sqlitePasteColumnOrder(page, anchor), first = order.indexOf(anchor.column); if (Array.isArray(input) && input.length > sqliteClipboardLimits.pasteRows) throw Error(text.rowLimit);
   // 复用既有纯编码/解码的500行、10000格、2MiB、Unicode及原动态类型门；不访问任何系统剪贴板。
   const copied = encodeSqliteClipboard(input), values = decodeSqliteClipboard(copied.sqlite, '', '').values, height = values.length, width = values[0].length;
-  if (offset + height > rows.length || first + width > order.length) throw Error(text.outOfBounds);
+  const appendedRows = Math.max(0, offset + height - rows.length);
+  if (first + width > order.length || appendedRows && (!appendAtEnd || page.hasMore !== false || page.result.truncated)) throw Error(text.outOfBounds);
   const indices = order.slice(first, first + width);
   const conversions = kinds === undefined ? Array<SqlitePasteKind>(width).fill('preserve') : pureArray(kinds, width); if (conversions.length !== width || conversions.some(kind => typeof kind !== 'string' || !allowed.includes(kind as SqlitePasteKind))) throw Error(text.kindsInvalid);
   if (indices.some(index => edit.columns[index].generated)) throw Error(text.generated);
   const result: SqliteClipboardCell[][] = [], before: string[][] = []; let changedCells = 0;
   for (let rowIndex = 0; rowIndex < height; rowIndex++) {
-    const target = rows[offset + rowIndex]; if (target.deleted) throw Error(text.deleted); if (!Array.isArray(target.values) || target.values.length !== edit.columns.length || typeof target.id !== 'string' || !target.id || target.index !== undefined && (!Number.isInteger(target.index) || target.index < 0 || target.index >= edit.rows.length)) throw Error(text.invalid);
+    const target = rows[offset + rowIndex];
+    if (!target && rowIndex < height - appendedRows) throw Error(text.invalid);
+    if (target?.deleted) throw Error(text.deleted);
+    if (target && (!Array.isArray(target.values) || target.values.length !== edit.columns.length || typeof target.id !== 'string' || !target.id || target.index !== undefined && (!Number.isInteger(target.index) || target.index < 0 || target.index >= edit.rows.length))) throw Error(text.invalid);
     const next: SqliteClipboardCell[] = [], original: string[] = [];
-    for (let column = 0; column < width; column++) { const value = convertSqliteClipboardCell(values[rowIndex][column], conversions[column] as SqlitePasteKind); if (value === undefined && target.index !== undefined) throw Error(text.defaultExisting); const previous = signature(target.values[indices[column]]); if (previous !== signature(value)) changedCells++; original.push(previous); next.push(value); }
+    for (let column = 0; column < width; column++) { const value = convertSqliteClipboardCell(values[rowIndex][column], conversions[column] as SqlitePasteKind); if (value === undefined && target?.index !== undefined) throw Error(text.defaultExisting); const previous = signature(target?.values[indices[column]]); if (previous !== signature(value)) changedCells++; original.push(previous); next.push(value); }
     before.push(original); result.push(next);
   }
   // 目标转换可能放大BLOB为TEXT；重新通过整组预算再保管结果，不绕过原输入门。
   const normalized = decodeSqliteClipboard(encodeSqliteClipboard(result).sqlite, '', '').values;
-  const plan: SqliteRangePastePlan = Object.freeze({ rows: height, width, changedCells, startRow: offset + 1, endRow: offset + height, startColumn: first + 1, endColumn: first + width, columns: Object.freeze(indices.map(index => edit.columns[index].name)) });
+  const plan: SqliteRangePastePlan = Object.freeze({ rows: height, width, changedCells, ...(appendedRows ? { appendedRows } : {}),
+    startRow: offset + 1, endRow: offset + height, startColumn: first + 1, endColumn: first + width, columns: Object.freeze(indices.map(index => edit.columns[index].name)) });
   plans.set(plan, { page, rows, rowOwners: rows.map(row => ({ row, id: row.id, index: row.index, deleted: row.deleted, values: row.values, width: row.values.length })), anchor: { ...anchor }, order: JSON.stringify(order), indices, schema: metadata(page), before, values: normalized }); return plan;
 }
 /** 原页、原rows及准确起点再次核对；只交区域矩阵副本，实际editor仍要完整再校验预算和票据。 */
@@ -73,5 +79,10 @@ export function sqliteRangePastePlanValues(plan: SqliteRangePastePlan, page: Sql
 export function sqliteRangePastePreview(plan: SqliteRangePastePlan, page: SqliteTablePage, rows: readonly SqliteDraftRow[], anchor: SqlitePasteAnchor): SqliteRangePastePreview {
   const prepared = assertPlan(plan, page, rows, anchor), offset = plan.startRow - 1;
   const clone = (value: SqliteClipboardCell): SqliteClipboardCell => value === undefined ? undefined : { ...value };
-  return { columns: [...plan.columns], rows: prepared.values.slice(0, 10).map((values, index) => ({ row: offset + index + 1, cells: values.map((value, column) => ({ column: plan.columns[column], oldValue: clone(rows[offset + index].values[prepared.indices[column]]), newValue: clone(value), changed: prepared.before[index][column] !== signature(value) })) })) };
+  return { columns: [...plan.columns], rows: prepared.values.slice(0, 10).map((values, index) => {
+    const original = rows[offset + index];
+    return { row: offset + index + 1, ...(original ? {} : { appended: true as const }),
+      cells: values.map((value, column) => ({ column: plan.columns[column], oldValue: clone(original?.values[prepared.indices[column]]),
+        newValue: clone(value), changed: prepared.before[index][column] !== signature(value) })) };
+  }) };
 }

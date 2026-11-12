@@ -1218,11 +1218,13 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           range.keys.some((key, index) => gridLayout.columns[first + index]?.key !== key)) throw Error(rangePasteText.stale);
     }
     const changes = postgresGridPasteChanges(page, gridLayout.columns, range?.keys[0] ?? start, source, range?.startRow ?? cell?.index,
-      key => draftRef.current.find(entry => entry.rowKey === key)?.change, range ? { rows: range.rows.length, columns: range.keys.length } : undefined);
+      key => draftRef.current.find(entry => entry.rowKey === key)?.change,
+      range ? { rows: range.rows.length, columns: range.keys.length } : undefined, !!cell);
     if (!stageChanges(changes)) throw Error(pasteText.expired);
     if (owner) closePasteAppend(owner);
     setError('');
-    setMessage(pasteText.staged(changes.length));
+    const appended = cell ? changes.filter(change => change.kind === 'insert').length : 0;
+    setMessage(appended ? pasteText.staged(changes.length) + ' ' + rangePasteText.appended(appended) : pasteText.staged(changes.length));
   }
 
   function quickValueTarget(cell: QueryResultCopyCell, kind: GridQuickValue) {

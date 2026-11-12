@@ -35,6 +35,19 @@ describe('SQLite区域粘贴按位置完整预检', () => {
     const f = fixture(), input = [[cell('note-0')]], plan = prepareSqliteRangePaste(f.page, f.rows, f.anchor, input); expect(plan.changedCells).toBe(0);
     const preview = sqliteRangePastePreview(plan, f.page, f.rows, f.anchor); expect(preview).toEqual({ columns: ['note'], rows: [{ row: 1, cells: [{ column: 'note', oldValue: cell('note-0'), newValue: cell('note-0'), changed: false }] }] }); preview.rows[0].cells[0].newValue = cell('伪改'); expect(sqliteRangePastePlanValues(plan, f.page, f.rows, f.anchor)).toEqual(input);
   });
+  it('末页预览区分覆盖和DEFAULT新增，末页证明改变时原计划失效', () => {
+    const f = fixture(), anchor = { ...f.anchor, row: f.rows.at(-1)! }, values = [[cell('覆盖')], [undefined]];
+    expect(() => prepareSqliteRangePaste(f.page, f.rows, anchor, values)).toThrow(text.outOfBounds);
+    const plan = prepareSqliteRangePaste(f.page, f.rows, anchor, values, undefined, true);
+    expect(plan).toMatchObject({ rows: 2, appendedRows: 1, changedCells: 1 });
+    expect(sqliteRangePastePreview(plan, f.page, f.rows, anchor).rows).toMatchObject([
+      { cells: [{ oldValue: anchor.row.values[anchor.column], newValue: cell('覆盖'), changed: true }] },
+      { appended: true, cells: [{ oldValue: undefined, newValue: undefined, changed: false }] },
+    ]);
+    f.page.hasMore = true;
+    expect(() => sqliteRangePastePlanValues(plan, f.page, f.rows, anchor)).toThrow(text.stale);
+    expect(() => prepareSqliteRangePaste(f.page, f.rows, anchor, values, undefined, true)).toThrow(text.outOfBounds);
+  });
   it('预览最多10行但计划及取值保留完整批次', () => {
     const f = fixture(12), input = Array.from({ length: 12 }, (_, index) => [cell('new-' + index)]), plan = prepareSqliteRangePaste(f.page, f.rows, f.anchor, input); expect(sqliteRangePastePreview(plan, f.page, f.rows, f.anchor).rows).toHaveLength(10); expect(plan.rows).toBe(12); expect(sqliteRangePastePlanValues(plan, f.page, f.rows, f.anchor)[11]).toEqual(input[11]);
   });

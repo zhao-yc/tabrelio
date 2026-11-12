@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的可写表页支持末页从活动单元格粘贴时整批覆盖并追加超出的行。按可见列映射，未映射字段使用原默认值规则。覆盖和新增共用本地历史与集中提交。D02 增加末页混合粘贴。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#paste-data-into-grid-view)
+
 2026-11-12 源码增量。MySQL、MariaDB 和 SQLite 的记录表单与 SQLite 只读表页支持直达本页首末记录，沿用现有草稿保护。四库查询结果行详情可直达当前显示范围的首末行。D04、Q05 增加记录边界导航。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#use-navigation-bar)
 
 2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的表页及可写查询结果支持在矩形选区直接键入统一值，或按 F2 打开填充面板。表页确认后暂存，查询结果进入现有更新预览。定位键、生成列及不可写字段继续由整组选区校验。D02、Q05 增加键盘批量填充入口。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#grid-view)

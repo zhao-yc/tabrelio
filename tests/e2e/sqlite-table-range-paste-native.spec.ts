@@ -3,6 +3,8 @@ import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { sqliteTableRangePasteZh as rangeText } from '../../src/renderer/locales/sqliteTableRangePaste.zh-CN';
+import { gridRangePasteZh } from '../../src/renderer/locales/gridRangePaste.zh-CN';
+import { sqliteEditWorkspaceZh } from '../../src/renderer/locales/sqliteEditWorkspace.zh-CN';
 
 // 默认/--list不加载桌面、NodeSQLite或文件句柄，仅注册一个明确跳过项。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list=')), active = !listing && process.env.DBARK_SQLITE_TABLE_RANGE_PASTE_NATIVE_TEST === '1';
@@ -154,8 +156,13 @@ test('真实矩形按位置覆盖原行、old/new预览、单步undo/redo、Main
     stage = '无准确数据起点不得打开区域窗口，行头不能冒充数据格';
     await step(() => grid().getByRole('button', { name: '选择 SQLite 第 1 行', exact: true }).click()); expect(await dispatchPaste(packet([[{ kind: 'text', value: conflictMarker }]]))).toBe(true);
     await step(() => expect(rangeModal()).toHaveCount(0)); await step(() => expect(table().locator('.sqlite-edit-clipboard-region').getByRole('alert')).toHaveText(rangeText.anchorRequired)); await noLocalWrites(baseline);
-    stage = '矩形纵/横越界、生成列与已有行DEFAULT整组拒绝';
-    await rejectedRange(2, 'exact', firstValues, rangeText.outOfBounds, baseline);
+    stage = '末页预览区分覆盖和新增，取消后保持原页';
+    await selectCell(2, 'exact'); expect(await dispatchPaste(packet(firstValues))).toBe(true);
+    await step(() => rangeModal().getByRole('button', { name: rangeText.preview, exact: true }).click());
+    await step(() => expect(rangeModal().getByText(gridRangePasteZh.appendPreview(1), { exact: true })).toBeVisible());
+    await step(() => expect(rangeModal().getByText('3 · ' + gridRangePasteZh.appendedRow, { exact: true })).toBeVisible());
+    await closeRange(); await counts(0); await noLocalWrites(baseline);
+    stage = '矩形横向越界、生成列与已有行DEFAULT整组拒绝';
     await rejectedRange(1, 'nullable', [[{ kind: 'text', value: '前' }, { kind: 'text', value: '越界' }]], rangeText.outOfBounds, baseline);
     await rejectedRange(1, 'label', [[{ kind: 'text', value: '不可部分改' }, { kind: 'text', value: '生成列' }]], rangeText.generated, baseline);
     await rejectedRange(1, 'exact', [[{ kind: 'default' }]], rangeText.defaultExisting, baseline);
@@ -190,7 +197,7 @@ test('真实矩形按位置覆盖原行、old/new预览、单步undo/redo、Main
     const rolledBack = await applySql(); expect(rolledBack.output).toMatchObject({ outcome: 'rolled-back', counts: { insert: 0, update: 2, delete: 0 }, fact: { requestedRows: 2, appliedRows: 1, commitMayHaveBeenSent: false, commitAcknowledged: false, rollbackAcknowledged: true } }); expect(disk()).toEqual(afterObserver);
     await step(() => previewModal().getByRole('button', { name: '关闭 SQLite 修改预览', exact: true }).click()); await counts(2); const retained = await cell(1, 'exact'); await step(() => expect(retained).toHaveText('INTEGER · 7')); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toHaveLength(2);
     stage = '明确放弃保留草稿，readonly不授区域粘贴，重启保持原提交与观察者值';
-    await step(() => runtime.answerDialogs([0], application)); const dialog = page.waitForEvent('dialog'); const [prompt] = await Promise.all([dialog, step(() => table().getByRole('button', { name: '放弃 SQLite 草稿', exact: true }).click())]); check(); expect(prompt.type()).toBe('confirm'); expect(prompt.message()).toBe('当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。'); await counts(0); expect(disk()).toEqual(afterObserver);
+    await step(() => runtime.answerDialogs([0], application)); const dialog = page.waitForEvent('dialog'); const [prompt] = await Promise.all([dialog, step(() => table().getByRole('button', { name: '放弃 SQLite 草稿', exact: true }).click())]); check(); expect(prompt.type()).toBe('confirm'); expect(prompt.message()).toBe(sqliteEditWorkspaceZh.confirmDiscard); await counts(0); expect(disk()).toEqual(afterObserver);
     await openTable(roName); await step(() => expect(table().getByRole('grid')).toBeVisible()); await step(() => expect(grid()).toHaveCount(0));
     await step(() => table().getByRole('grid').evaluate((node, source) => { const data = new DataTransfer(); data.setData('application/x-dbark-sqlite-cells', source); node.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data })); }, packet(firstValues)));
     await step(() => expect(rangeModal()).toHaveCount(0)); await step(() => expect(table().getByRole('button', { name: '预览 SQLite 修改', exact: true })).toHaveCount(0)); expect(disk()).toEqual(afterObserver);

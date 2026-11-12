@@ -61,6 +61,18 @@ describe('PostgreSQL 网格粘贴', () => {
     expect(() => postgresGridPasteChanges(page, page.columns, binary.key, { plain: '值\t值' })).toThrow('生成列');
   });
 
+  it('末页单格以一个计划同时覆盖和追加，拒绝跨页、截断页、不可新增或矩形扩行', () => {
+    const paste = (target: PostgresTablePage, shape?: { rows: number; columns: number }) =>
+      postgresGridPasteChanges(target, [note], note.key, { plain: '覆盖\n新增' }, 1, undefined, shape, true);
+    expect(paste(page)).toEqual([
+      { kind: 'update', row: 1, fields: [{ column: note.key, value: { mode: 'text', value: '覆盖' } }] },
+      { kind: 'insert', fields: [{ column: note.key, value: { mode: 'text', value: '新增' } }] },
+    ]);
+    for (const target of [{ ...page, hasNext: true }, { ...page, truncated: true },
+      { ...page, capabilities: { ...page.capabilities, insert: false } }]) expect(() => paste(target)).toThrow('超出');
+    expect(() => paste(page, { rows: 2, columns: 1 })).toThrow('超出');
+  });
+
   it('拒绝非空约束、错误字节列和已丢精度的类型化数字', () => {
     for (const value of [null, { type: 'binary' as const, base64: 'AP8=' }, 2 ** 53, '值\0']) {
       const source = encodeClipboard([[value]]);

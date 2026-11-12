@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Locator } from '@playwright/test';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
+import { pasteGridRangeClipboard } from './grid-cell-range-clipboard';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 import { gridQuickValueZh as text } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridCellEditZh } from '../../src/renderer/locales/gridCellEdit.zh-CN';
@@ -18,11 +19,14 @@ import { mysqlQueryBatchEditZh } from '../../src/renderer/locales/mysqlQueryBatc
 import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
 import { sqliteTableCellFilterZh } from '../../src/renderer/locales/sqliteTableCellFilter.zh-CN';
 import { sqliteTableBrowseZh } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
+import { sqliteTableRangePasteZh } from '../../src/renderer/locales/sqliteTableRangePaste.zh-CN';
+import { gridRangePasteZh } from '../../src/renderer/locales/gridRangePaste.zh-CN';
+import { encodeSqliteClipboard } from '../../src/renderer/sqliteTableClipboard';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
-test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}, info) => {
+test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, info) => {
   const dialect = process.env.DBARK_GRID_QUICK_VALUE_DIALECT;
   test.skip(!dialect, '需要显式启用隔离单元格暂存专项');
   const local = dialect === 'sqlite', database = local ? 'main' : process.env.DBARK_GRID_QUICK_VALUE_DATABASE ?? '';
@@ -247,6 +251,37 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
     await restricted.click();
     await expect(await action(text.uuid)).toBeDisabled();
     await page.keyboard.press('Escape');
+
+    const tailLabel = local ? 'row B' : 'row C';
+    const tailRow = grid.getByRole('gridcell', { name: local ? 'TEXT · row B' : 'row C', exact: true }).locator('..');
+    const idColumn = await grid.getByRole('columnheader').filter({ hasText: /^id/ }).getAttribute('aria-colindex');
+    await tailRow.locator(`[role="gridcell"][aria-colindex="${idColumn}"]`).click();
+    const mixed = local ? encodeSqliteClipboard([
+      [{ kind: 'integer', value: '2' }, { kind: 'text', value: '覆盖末行' }, { kind: 'integer', value: '18' }],
+      [{ kind: 'integer', value: '3' }, { kind: 'text', value: '新增末行' }, { kind: 'integer', value: '19' }],
+    ]) : '9007199254740994\tB\t覆盖末行\n9007199254740995\tD\t新增末行';
+    await pasteGridRangeClipboard(page, mixed);
+    if (local) {
+      const range = page.getByRole('dialog', { name: sqliteTableRangePasteZh.title, exact: true });
+      await range.getByRole('button', { name: sqliteTableRangePasteZh.preview, exact: true }).click();
+      await expect(range.getByText(gridRangePasteZh.appendPreview(1), { exact: true })).toBeVisible();
+      await page.screenshot({ path: info.outputPath('末页粘贴范围预览.png') });
+      await range.getByRole('button', { name: sqliteTableRangePasteZh.stage, exact: true }).click();
+      await expect(range).toBeHidden();
+    } else await expect(tab.getByText(gridRangePasteZh.appended(1), { exact: !pg })).toBeVisible();
+    const overwritten = grid.getByRole('gridcell', { name: local ? 'TEXT · 覆盖末行' : '覆盖末行', exact: true });
+    const inserted = pg ? tab.getByRole('button', { name: postgresTableZh.editInsertDraft, exact: true }) :
+      grid.getByRole('gridcell', { name: local ? 'TEXT · 新增末行' : '新增末行', exact: true });
+    await expect(overwritten).toBeVisible();
+    await expect(inserted).toBeVisible();
+    await clickAction(undo);
+    await expect(overwritten).toBeHidden();
+    await expect(inserted).toBeHidden();
+    await expect(grid.getByRole('gridcell', { name: local ? 'TEXT · ' + tailLabel : tailLabel, exact: true })).toBeVisible();
+    await clickAction(local ? sqliteText.redo : draftHistoryZh.redo);
+    await expect(overwritten).toBeVisible();
+    await expect(inserted).toBeVisible();
+
     const uuidCell = await namedCell('uuid_value');
     const uuidPattern = /[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/;
     const generate = async () => {
@@ -260,7 +295,7 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
     await expect(uuidCell).toHaveText('NULL');
     const second = await generate();
     expect(second).not.toBe(first);
-    await expect(other).toBeVisible();
+    if (!local) await expect(other).toBeVisible();
     expect(await jobs()).toEqual(before);
     if (baseline) expect(await readFile(file)).toEqual(baseline);
     await page.screenshot({ path: info.outputPath('活动格 UUID 草稿.png') });
@@ -269,6 +304,14 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
     await clickAction(local ? sqliteText.preview : pg ? postgresTableZh.preview : zh.table.text019);
     const review = page.getByRole('dialog', { name: local ? sqliteText.previewTitle : pg ? postgresTableZh.preview : zh.table.text031, exact: true });
     await expect(review).toBeVisible();
+    await expect(review).toContainText(/UPDATE\s/iu);
+    if (!local && !pg) {
+      // Monaco 只渲染当前视口，跳到文档末尾核对同批新增语句。
+      const sql = review.locator('.monaco-editor').getByRole('textbox');
+      await sql.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
+    }
+    await expect(review).toContainText(/INSERT\s+INTO/iu);
+    await page.screenshot({ path: info.outputPath('覆盖和新增集中预览.png') });
     if (local) await review.getByRole('checkbox', { name: sqliteText.confirmation, exact: true }).check();
     await review.getByRole('button', { name: local ? sqliteText.submit : pg ? postgresTableZh.apply : zh.common.confirmApply, exact: true }).click();
     await expect(review).toBeHidden();
@@ -279,7 +322,7 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
       try {
         const result = check.prepare('SELECT id,label,uuid_value,typeof(uuid_value) AS storage FROM update_subject ORDER BY id').all();
         expect(result.map(row => [row.id, row.label, row.uuid_value, row.storage])).toEqual([
-          [1, 'row A', second, 'text'], [2, 'row B', null, 'null'],
+          [1, 'row A', second, 'text'], [2, '覆盖末行', null, 'null'], [3, '新增末行', null, 'null'],
         ]);
       } finally { check.close(); }
     } else {

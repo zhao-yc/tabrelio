@@ -1,6 +1,6 @@
 export const postgresGridPasteZh = {
   append: '粘贴新增记录',
-  overwriteHint: '选中起始单元格后粘贴，按当前可见列和本页行顺序暂存覆盖。',
+  overwriteHint: '选中起始单元格后粘贴，按可见列和本页行顺序暂存。末页可在原有记录之后追加。',
   appendHint: '从指定的可见列开始，按可见顺序填入字段。每行新增一条草稿，未填列使用数据库默认值。',
   firstColumn: '粘贴起始列',
   source: '粘贴数据',

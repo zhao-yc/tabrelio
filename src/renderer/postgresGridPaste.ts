@@ -39,17 +39,19 @@ export function postgresGridPasteMatrix(source: { typed?: string; plain: string 
   return matrix;
 }
 
-/** 完整计划仅使用当前页和可见列。任一越界或不可写字段导致整批拒绝。 */
+/** 末页的单格起点可同时生成更新与新增，任何目标错误都会在暂存前拒绝整批。 */
 export function postgresGridPasteChanges(
   page: PostgresTablePage, columns: readonly PostgresTableColumn[], startKey: string,
   source: { typed?: string; plain: string }, startRow?: number, prior?: (key: string) => PostgresTableChange | undefined,
-  shape?: GridPasteShape,
+  shape?: GridPasteShape, appendAtEnd = false,
 ): PostgresTableChange[] {
   const matrix = postgresGridPasteMatrix(source, shape);
   const width = matrix[0].length;
   const startColumn = columns.findIndex(column => column.key === startKey);
-  if (startColumn < 0 || startColumn + width > columns.length ||
-    (startRow !== undefined && (!Number.isSafeInteger(startRow) || startRow < 0 || startRow + matrix.length > page.rows.length))) throw Error(text.bounds);
+  const mayAppend = appendAtEnd && !shape && page.hasNext === false && !page.truncated && page.capabilities.insert;
+  if (startColumn < 0 || startColumn + width > columns.length || (startRow !== undefined &&
+    (!Number.isSafeInteger(startRow) || startRow < 0 || startRow >= page.rows.length ||
+      startRow + matrix.length > page.rows.length && !mayAppend))) throw Error(text.bounds);
   const targets = columns.slice(startColumn, startColumn + width);
   for (const column of targets) {
     if (!page.columns.includes(column)) throw Error(text.expired);
@@ -58,7 +60,7 @@ export function postgresGridPasteChanges(
   const replaced = new Set(targets.map(column => column.key));
   return matrix.map((values, index) => {
     const fields = values.map((value, column) => ({ column: targets[column].key, value: postgresClipboardFieldValue(value, targets[column]) }));
-    if (startRow === undefined) return { kind: 'insert', fields };
+    if (startRow === undefined || startRow + index >= page.rows.length) return { kind: 'insert', fields };
     const row = startRow + index, key = page.rowKeys?.[row];
     if (!key) throw Error(text.expired);
     const previous = prior?.(key);

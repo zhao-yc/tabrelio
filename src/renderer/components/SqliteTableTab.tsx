@@ -155,7 +155,7 @@ import '../sqliteTableBrowse.css';
 interface FullExportOwner { intent: SqliteTableExportIntent; acquiring: boolean; lease?: WorkspaceBusyLease; }
 interface ImportOwner { source: SqliteTableImportSource; page: SqliteTablePage; acquiring: boolean; dirty: boolean; refreshed: boolean; lease?: WorkspaceBusyLease; }
 interface EditInputTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; row: SqliteDraftRow; column?: number; duplicate?: { source: SqliteDuplicateSource; valid: boolean }; }
-interface RangeInputTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; anchor: SqlitePasteAnchor; valid: boolean; source?: SqliteClipboardSource; shape?: GridPasteShape; projection?: string; }
+interface RangeInputTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; anchor: SqlitePasteAnchor; valid: boolean; source?: SqliteClipboardSource; shape?: GridPasteShape; projection?: string; appendAtEnd?: true; }
 interface PasteInputTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; valid: boolean; source?: SqliteClipboardSource;
   transfer?: { snapshot: PostgresRecordTransfer; engine: SqliteTransferEngine; values: ReturnType<typeof queryToSqliteValues> }; }
 type FindInputTicket = {
@@ -1727,8 +1727,10 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
           selection.rows.some((item, index) => editRows[selection.startRow + index] !== item) ||
           selection.keys.some((key, index) => key !== 'c' + projection[projected + index]?.index))) throw Error(rangePasteText.stale);
       const shape = selection ? { rows: selection.rows.length, columns: selection.keys.length } : undefined;
+      const appendAtEnd = !!data && !selection && !restoredDraftRef.current && editor.page.hasMore === false && !editor.page.result.truncated;
       const ticket: RangeInputTicket = { id: uid(), editor, page: editor.page, rows: editor.view.rows,
         anchor: { row, column, ...(caret.columns ? { columns: caret.columns } : {}) }, valid: true, source, shape,
+        ...(appendAtEnd ? { appendAtEnd: true } : {}),
         projection: selection ? pasteProjection : undefined };
       rangeRef.current = ticket; editor.inputOpen(true); setRangeOpen(ticket);
     } catch (reason) { setValidation(errorMessage(reason)); }
@@ -1744,7 +1746,11 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     if (ticket.shape && (plan.rows !== ticket.shape.rows || plan.width !== ticket.shape.columns))
       throw Error(rangePasteText.shape(ticket.shape.rows, ticket.shape.columns));
     const values = sqliteRangePastePlanValues(plan, ticket.page, ticket.rows, ticket.anchor);
-    if (ticket.anchor.columns) ticket.editor.pasteCells(ticket.anchor.row.id, ticket.anchor.column, values, plan.columns.map(name => ticket.page.columns.findIndex(column => column.name === name)));
+    const columns = ticket.anchor.columns && plan.columns.map(name => ticket.page.columns.findIndex(column => column.name === name));
+    if (plan.appendedRows) {
+      if (!ticket.appendAtEnd || ticket.shape || ticket.page.hasMore !== false) throw Error(rangeText.outOfBounds);
+      ticket.editor.pasteCells(ticket.anchor.row.id, ticket.anchor.column, values, columns, true);
+    } else if (columns) ticket.editor.pasteCells(ticket.anchor.row.id, ticket.anchor.column, values, columns);
     else ticket.editor.pasteCells(ticket.anchor.row.id, ticket.anchor.column, values);
     if (rangeRef.current === ticket && editorRef.current === ticket.editor) closeRange(ticket);
   }
@@ -2051,7 +2057,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     {tableImport && <SqliteTableImportDialog key={tableImport.source.id} source={tableImport.source} onActivity={delta => importActivity(tableImport, delta)} onDirtyChange={dirty => importDirty(tableImport, dirty)} onClose={() => closeImport(tableImport)} onCommitted={(output, changed) => imported(tableImport, output, changed)} onCleanupError={message => useWorkspace.getState().notify(message, true)}/>}
     {exportData && <ResultExportDialog result={exportData.result} tabId={tab.id} scope={exportData.scope}
       allowSql={exportData.scope === 'rectangle' && !!exportData.result.sqliteStorage} sqlDialect="sqlite" onClose={() => setExportData(null)}/>}
-    {rangeOpen && <SqlitePasteRangeDialog key={rangeOpen.id} page={rangeOpen.page} rows={rangeOpen.rows} anchor={rangeOpen.anchor} initial={rangeOpen.source} shape={rangeOpen.shape} current={() => rangeCurrent(rangeOpen)} onStage={plan => stageRange(rangeOpen, plan)} onClose={() => closeRange(rangeOpen)}/>}
+    {rangeOpen && <SqlitePasteRangeDialog key={rangeOpen.id} page={rangeOpen.page} rows={rangeOpen.rows} anchor={rangeOpen.anchor} initial={rangeOpen.source} shape={rangeOpen.shape} appendAtEnd={rangeOpen.appendAtEnd} current={() => rangeCurrent(rangeOpen)} onStage={plan => stageRange(rangeOpen, plan)} onClose={() => closeRange(rangeOpen)}/>}
     {pasteOpen && (pasteOpen.transfer ? <SqliteRecordTransferDialog key={pasteOpen.id} page={pasteOpen.page}
       targetName={profile?.name ?? tab.connectionId} engine={pasteOpen.transfer.engine} snapshot={pasteOpen.transfer.snapshot} values={pasteOpen.transfer.values}
       current={() => pasteCurrent(pasteOpen)} onStage={plan => stagePaste(pasteOpen, plan)} onClose={() => closePaste(pasteOpen)}/>

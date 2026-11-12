@@ -21,7 +21,30 @@ function fixture(source = page()) {
 function capture(f: ReturnType<typeof fixture>) { const inner = f.editor as unknown as { past: unknown[]; future: unknown[]; input: boolean }; return { rows: f.editor.view.rows, past: inner.past, pastLength: inner.past.length, future: inner.future, futureLength: inner.future.length, input: inner.input, preview: f.editor.view.preview, message: f.editor.view.message, changes: structuredClone(f.editor.changes), ids: f.id.mock.calls.length, releases: f.release.mock.calls.length, previews: f.preview.mock.calls.length, applies: f.apply.mock.calls.length, changed: f.changed.mock.calls.length, dirty: f.dirty.mock.calls.length }; }
 function unchanged(f: ReturnType<typeof fixture>, before: ReturnType<typeof capture>) { const inner = f.editor as unknown as { past: unknown[]; future: unknown[]; input: boolean }; expect(f.editor.view.rows).toBe(before.rows); expect(inner.past).toBe(before.past); expect(inner.past).toHaveLength(before.pastLength); expect(inner.future).toBe(before.future); expect(inner.future).toHaveLength(before.futureLength); expect(inner.input).toBe(before.input); expect(f.editor.view.preview).toBe(before.preview); expect(f.editor.view.message).toBe(before.message); expect(f.editor.changes).toEqual(before.changes); expect(f.id).toHaveBeenCalledTimes(before.ids); expect(f.release).toHaveBeenCalledTimes(before.releases); expect(f.preview).toHaveBeenCalledTimes(before.previews); expect(f.apply).toHaveBeenCalledTimes(before.applies); expect(f.changed).toHaveBeenCalledTimes(before.changed); expect(f.dirty).toHaveBeenCalledTimes(before.dirty); }
 
-describe('SQLite连续矩形粘贴只暂存已有本地格', () => {
+describe('SQLite连续矩形粘贴的本地草稿', () => {
+  it('末页覆盖与新增只发布一次，撤销和重做保持新增 UUID', () => {
+    const f = fixture(), original = f.editor.view.rows, values = [[text('覆盖')], [undefined]];
+    expect(f.editor.pasteCells('original-2', 1, values, undefined, true)).toBe(1);
+    const staged = f.editor.view.rows;
+    expect(staged[3]).toMatchObject({ id: 'draft-1', deleted: false, values: Array(5).fill(undefined) });
+    expect(f.editor.changes).toEqual([
+      { kind: 'update', row: 2, values: [{ column: 'c1', value: text('覆盖') }] },
+      { kind: 'insert', values: [] },
+    ]);
+    expect(f.changed).toHaveBeenCalledOnce();
+    f.editor.undo(); expect(f.editor.view.rows).toBe(original);
+    f.editor.redo(); expect(f.editor.view.rows).toBe(staged);
+    expect(f.id).toHaveBeenCalledOnce(); expect(f.apply).not.toHaveBeenCalled();
+  });
+  it('页后仍有数据或最后一格非法时，不分配新增 UUID 或部分暂存', () => {
+    const f = fixture(), values = [[text('覆盖')], [{ kind: 'blob', value: 'x' } as const]];
+    const before = capture(f);
+    expect(() => f.editor.pasteCells('original-2', 1, values, undefined, true)).toThrow();
+    unchanged(f, before);
+    f.source.hasMore = true;
+    expect(() => f.editor.pasteCells('original-2', 1, [[text('覆盖')], [text('新增')]], undefined, true)).toThrow();
+    unchanged(f, before);
+  });
   it('显示映射反向/跳过隐藏列仍只改原字段，整组一次暂存及撤销', () => {
     const f = fixture(), original = f.editor.view.rows;
     expect(f.editor.pasteCells('original-0', 2, [[text('other新值'), { kind: 'integer', value: '99' }]], [2, 0])).toBe(2);

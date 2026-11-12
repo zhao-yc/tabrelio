@@ -12,7 +12,7 @@ import { gridRowSqlActions } from '../gridRowSqlActions';
 import { gridQuickValueAssignment, gridQuickValueKinds, mysqlQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { gridCellEditZh } from '../locales/gridCellEdit.zh-CN';
-import { TableEditWorkspace, type TableEditBatch, type TableEditPage, type TableEditNavigation, type TableCheckedFill, type TableCheckedRecordEdit } from '../tableEditWorkspace';
+import { TableEditWorkspace, tableEditWorkspaceLimits, type TableEditBatch, type TableEditPage, type TableEditNavigation, type TableCheckedFill, type TableCheckedRecordEdit } from '../tableEditWorkspace';
 import { tableEditWorkspaceZh as workspaceText } from '../locales/tableEditWorkspace.zh-CN';
 import { TableEditWorkspaceBar } from './TableEditWorkspaceBar';
 import { TableApplyRecovery, type TableApplyRecoveryTicket, type TableApplyRecoveryRead } from '../tableApplyRecovery';
@@ -29,6 +29,7 @@ import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport
 import { GridRangeFill, type GridRangeFillHandle } from './GridRangeFill';
 import { gridRangeFillActions, gridRangeFillSource, type GridRangeFillInput, type GridRangeFillKind } from '../gridRangeFill';
 import { fitGridRangePaste } from '../gridRangePaste';
+import { gridRangePasteZh as rangePasteText } from '../locales/gridRangePaste.zh-CN';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { GridRowJump, openFocusedGridRowJump } from './GridRowJump';
 import { focusGridColumn, GridColumnJump } from './GridColumnJump';
@@ -2199,8 +2200,28 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
         // 单值铺满仍受原类型化剪贴板的累计字节限制。
         if (values !== original) encodeClipboard(values);
       }
-      const updated = pasteCells(rows, visibleKeys, target?.rows[0].id ?? row.id, target?.keys[0] ?? column.key,
-        values, new Set(info!.columns.filter(item => item.generated).map(item => item.name)));
+      const generated = new Set(info!.columns.filter(item => item.generated).map(item => item.name));
+      const offset = rows.indexOf(row);
+      if (!target && page?.hasMore === false && !restoredDraftView && offset >= 0 && offset + values.length > rows.length) {
+        assertPasteInsertTarget();
+        if (!cellActionCurrent(row)) throw Error(rangePasteText.stale);
+        const width = values[0].length, first = visibleKeys.indexOf(column.key);
+        if (values.some(valuesRow => valuesRow.length !== width)) throw Error(pasteInsertZh.shape);
+        const existing = rows.length - offset;
+        const updated = pasteCells(rows, visibleKeys, row.id, column.key, values.slice(0, existing), generated);
+        const context = getRecordContext();
+        const plan = preparePasteInsert(context.info!, values.slice(existing), visibleKeys.slice(first, first + width));
+        const result = new PasteInsertIntent(updated, context, visibleKeys).consume(plan, updated, context, uid);
+        const retainedCount = collectChanges(tableEdits.allRows(rows)).length - collectChanges(rows).length;
+        if (retainedCount + collectChanges(result.rows).length > tableEditWorkspaceLimits.changes) throw Error(rangePasteText.draftLimit);
+        // RDG 只能替换等长行数组。混合批次完整发布一次，返回原行阻止 RDG 再提交单行。
+        setRows(result.rows);
+        result.ids.forEach(id => copiedDraftIds.current.add(id));
+        setDuplicateNotice(rangePasteText.appended(result.ids.length));
+        setError('');
+        return row;
+      }
+      const updated = pasteCells(rows, visibleKeys, target?.rows[0].id ?? row.id, target?.keys[0] ?? column.key, values, generated);
       pendingPaste.current = updated; setError(''); return updated.find(item => item.id === row.id)!;
     } catch (reason) { setError(errorMessage(reason)); return row; }
   }
