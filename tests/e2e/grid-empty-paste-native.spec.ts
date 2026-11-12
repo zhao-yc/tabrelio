@@ -1,12 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
+import type { Locator } from '@playwright/test';
+import { answerDialogs, confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipboard';
 import { encodeSqliteClipboard, sqliteCellClipboardType } from '../../src/renderer/sqliteTableClipboard';
 import { gridRangePasteZh } from '../../src/renderer/locales/gridRangePaste.zh-CN';
+import { gridRecordActionsZh } from '../../src/renderer/locales/gridRecordActions.zh-CN';
 import { pasteInsertZh } from '../../src/renderer/locales/pasteInsert.zh-CN';
 import { postgresGridPasteZh } from '../../src/renderer/locales/postgresGridPaste.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
@@ -17,7 +19,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
-test('空表从网格粘贴保留来源类型并集中提交', async ({}, info) => {
+test('空表粘贴及网格新增删除沿用集中提交', async ({}, info) => {
   const dialect = process.env.DBARK_GRID_EMPTY_PASTE_DIALECT;
   test.skip(!dialect, '需要显式启用空网格粘贴的隔离实库');
   const local = dialect === 'sqlite', pg = dialect === 'postgresql';
@@ -80,6 +82,38 @@ test('空表从网格粘贴保留来源类型并集中提交', async ({}, info) 
     const content = sqlitePacket ?? encodeClipboard([[firstId, null], [secondId, literal]]);
     const jobs = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id).sort());
     const before = await jobs();
+    const mac = process.platform === 'darwin';
+    const addKey = mac ? 'Meta+Shift+I' : 'Control+Shift+I';
+    const removeKey = mac ? 'Meta+Backspace' : 'Control+Delete';
+    const clickAction = async (name: string) => (await navigationMenuItem(tab, { name, exact: true })).click();
+    const undo = local ? sqliteTableEditZh.undo : draftHistoryZh.undo;
+    const staged = pg ? tab.getByRole('button', { name: postgresTableZh.editInsertDraft, exact: true }) : grid.locator('.row-inserted');
+    async function addThenUndo(anchor: Locator) {
+      await anchor.click();
+      await expect(anchor).toBeFocused();
+      await page.keyboard.press(addKey);
+      if (pg) {
+        const form = page.getByRole('dialog', { name: postgresTableZh.add, exact: true });
+        await expect(form).toBeVisible();
+        await form.getByRole('combobox', { name: 'id ' + postgresTableZh.valueMode, exact: true }).selectOption('text');
+        await form.getByRole('textbox', { name: 'id ' + postgresTableZh.value, exact: true }).fill('10');
+        await form.getByRole('button', { name: postgresTableZh.stage, exact: true }).click();
+        await expect(form).toBeHidden();
+      } else if (local) {
+        const form = page.getByRole('dialog', { name: sqliteTableEditZh.add, exact: true });
+        await expect(form).toBeVisible();
+        await form.getByRole('button', { name: sqliteTableEditZh.cancelInput, exact: true }).click();
+        await expect(form).toBeHidden();
+      } else {
+        await expect(staged.getByRole('gridcell').filter({ has: page.locator('.default-value') }).first()).toBeFocused();
+      }
+      await expect(staged).toHaveCount(1);
+      await clickAction(undo);
+      await expect(staged).toHaveCount(0);
+    }
+    await addThenUndo(target);
+    await expect(target).toBeVisible();
+
     const dialog = page.getByRole('dialog', {
       name: local ? sqliteTableClipboardZh.title : pg ? postgresGridPasteZh.append : pasteInsertZh.action, exact: true,
     });
@@ -116,11 +150,8 @@ test('空表从网格粘贴保留来源类型并集中提交', async ({}, info) 
     }
     await dialog.getByRole('button', { name: local ? sqliteTableClipboardZh.stage : pg ? postgresTableZh.stage : pasteInsertZh.stage, exact: true }).click();
     await expect(dialog).toBeHidden();
-    const staged = pg ? tab.getByRole('button', { name: postgresTableZh.editInsertDraft, exact: true }) :
-      grid.locator('.row-inserted');
     await expect(staged).toHaveCount(2);
-    const clickAction = async (name: string) => (await navigationMenuItem(tab, { name, exact: true })).click();
-    await clickAction(local ? sqliteTableEditZh.undo : draftHistoryZh.undo);
+    await clickAction(undo);
     await expect(staged).toHaveCount(0);
     await clickAction(local ? sqliteTableEditZh.redo : draftHistoryZh.redo);
     await expect(staged).toHaveCount(2);
@@ -140,6 +171,58 @@ test('空表从网格粘贴保留来源类型并集中提交', async ({}, info) 
       try {
         const rows = check.prepare('SELECT CAST(id AS TEXT) AS id,label,untouched FROM empty_subject ORDER BY id').all();
         expect(rows.map(row => [row.id, row.label, row.untouched])).toEqual([[firstId, null, 'fallback'], [secondId, literal, 'fallback']]);
+      } finally { check.close(); }
+    }
+
+    const rowCell = (id: string) => grid.getByRole('gridcell', { name: local ? 'INTEGER · ' + id : id, exact: true });
+    const firstCell = rowCell(firstId), secondCell = rowCell(secondId);
+    const firstRow = firstCell.locator('..'), secondRow = secondCell.locator('..');
+    const firstDeleted = pg ? firstRow.locator('.pg-grid-deleted').first() : firstRow.and(grid.locator('.row-deleted'));
+    const secondDeleted = pg ? secondRow.locator('.pg-grid-deleted').first() : secondRow.and(grid.locator('.row-deleted'));
+    const beforeDelete = await jobs();
+    await addThenUndo(secondCell);
+    expect(await jobs()).toEqual(beforeDelete);
+    const removeGesture = async (gesture: () => Promise<void>, accept = true) => {
+      if (!local) { await gesture(); return; }
+      await answerDialogs([accept ? 0 : 1]);
+      const [prompt] = await Promise.all([page.waitForEvent('dialog'), gesture()]);
+      expect(prompt.message()).toBe(sqliteTableEditZh.confirmDelete);
+    };
+    await firstRow.getByRole('checkbox').check();
+    await secondCell.click();
+    if (local) {
+      await removeGesture(() => page.keyboard.press(removeKey), false);
+      await expect(secondDeleted).toHaveCount(0);
+    }
+    await removeGesture(() => page.keyboard.press(removeKey));
+    await expect(secondDeleted).toBeVisible();
+    await expect(firstDeleted).toHaveCount(0);
+    await clickAction(undo);
+    await expect(secondDeleted).toHaveCount(0);
+    await firstRow.getByRole('checkbox').uncheck();
+    await secondRow.getByRole('checkbox').check();
+    await secondCell.click();
+    await firstCell.click({ button: 'right' });
+    const remove = page.getByRole('menuitem', { name: gridRecordActionsZh.remove, exact: true });
+    await expect(remove).toBeVisible();
+    await page.screenshot({ path: info.outputPath('右键删除命中记录.png') });
+    await removeGesture(() => remove.click());
+    await expect(firstDeleted).toBeVisible();
+    await expect(secondDeleted).toHaveCount(0);
+    expect(await jobs()).toEqual(beforeDelete);
+
+    await clickAction(local ? sqliteTableEditZh.preview : pg ? postgresTableZh.preview : zh.table.text019);
+    await expect(review).toContainText(/DELETE\s+FROM/iu);
+    if (local) await review.getByRole('checkbox', { name: sqliteTableEditZh.confirmation, exact: true }).check();
+    await review.getByRole('button', { name: local ? sqliteTableEditZh.submit : pg ? postgresTableZh.apply : zh.common.confirmApply, exact: true }).click();
+    await expect(review).toBeHidden();
+    await expect(firstCell).toBeHidden();
+    await expect(secondCell).toBeVisible();
+    if (local) {
+      const check = new DatabaseSync(file, { readOnly: true });
+      try {
+        expect(check.prepare('SELECT CAST(id AS TEXT) AS id,label,untouched FROM empty_subject').all())
+          .toEqual([{ id: secondId, label: literal, untouched: 'fallback' }]);
       } finally { check.close(); }
     }
     expect(pageErrors).toEqual([]);

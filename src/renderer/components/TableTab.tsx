@@ -144,7 +144,9 @@ import { fitGridColumnWidths, gridResizeHandleColumn, type GridColumnFitSource }
 import { gridColumnWidthBatchZh } from '../locales/gridColumnWidthBatch.zh-CN';
 import { tableGridZh } from '../locales/tableGrid.zh-CN';
 import { isBinaryCell } from '../binaryCell';
-import { blocksBinaryTextInput, tableCellEditorKey, tableCellKeyIsComposing } from '../tableCellKeyboard';
+import { blocksBinaryTextInput, isFocusedDataCell, tableCellEditorKey, tableCellKeyIsComposing } from '../tableCellKeyboard';
+import { handleGridRecordKey } from '../gridRecordActions';
+import { gridRecordActionsZh as gridRecordText } from '../locales/gridRecordActions.zh-CN';
 import '../tableGrid.css';
 import { DataTypeColor } from './DataTypeColor';
 import { catalogColorType } from '../dataTypeColors';
@@ -389,6 +391,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   useEffect(() => () => tableEdits.clear(false), [tableEdits]);
   const inputDirtyRef = useRef(false); const recordControllerRef = useRef<RecordViewController | null>(null); const rootElement = useRef<HTMLDivElement>(null);
   const selectionRef = useRef(selection); selectionRef.current = selection;
+  const gridAddFocus = useRef<typeof selection>(undefined);
   /** 所有入口同步替换同一页草稿引用，避免一次事件轮次内的迟到回调覆盖更新。 */
   function setRows(value: DraftRow[] | ((current: DraftRow[]) => DraftRow[]), mode: 'record' | 'replace' | 'replay' = 'record') {
     rowTransferIntent.current?.invalidate();
@@ -1813,9 +1816,41 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   }
 
   /** 新增使用同一草稿 UUID；表单已打开时可立即编辑该新增记录。 */
-  function addRow() {
-    try { assertGridWritable(); const row = newDraftRow(uid()); setRows(current => [...current, row]); const key = visibleKeys[0]; if (key) { selectionRef.current = { rowId: row.id, key }; setSelection(selectionRef.current); } if (record.formOpen) record.select(row.id); }
+  function addRow(focusGrid = false) {
+    try {
+      assertGridWritable();
+      const row = newDraftRow(uid()), key = focusGrid ? visibleKeys.find(name => !info?.columns.find(column => column.name === name)?.generated) : visibleKeys[0];
+      setRows(current => [...current, row]);
+      if (key) {
+        selectionRef.current = { rowId: row.id, key };
+        if (focusGrid) gridAddFocus.current = selectionRef.current;
+        setSelection(selectionRef.current);
+      }
+      if (record.formOpen) record.select(row.id);
+    }
     catch (reason) { setError(errorMessage(reason)); }
+  }
+  useLayoutEffect(() => {
+    const focus = gridAddFocus.current;
+    gridAddFocus.current = undefined;
+    // 等新增行进入网格后再归还焦点，切页或选择变化时放弃原请求。
+    if (focus && focus === selectionRef.current && tableTabCurrent() && rowsRef.current === rows) restoreGridFocus(true);
+  }, [rows]);
+
+  function gridRecordCurrent(): boolean {
+    return editable && tableTabCurrent() && rowsRef.current === rows && sortScopeRef.current === sortScope &&
+      !useWorkspace.getState().activeJobs[tab.id] && !blockedRef.current && !activeGridEditor.current && !record.hasInput();
+  }
+
+  function addGridRecord(): void { if (gridRecordCurrent()) addRow(true); }
+
+  /** 网格单行删除使用命中对象，不读取可能属于其它行的勾选。 */
+  function removeGridRecord(row: DraftRow): void {
+    if (!gridRecordCurrent() || !cellActionCurrent(row)) return;
+    try {
+      setRows(rows.map(item => item === row ? { ...item, deleted: true } : item));
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 再读工作区同步状态，不让关闭标签、切换目标或未暂存输入借旧回调追加草稿。 */
   function assertPasteInsertTarget() {
@@ -2383,6 +2418,9 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       ...(!rectangle && (fieldEditor || canOpenCellEditor(row, key)) ? [{ label: fieldEditor ?? gridCellEditZh.open, run: () => {
         if (current() && canOpenCellEditor(row, key)) record.openCell(row.id, key);
       } }] : []),
+      ...(!rectangle && gridRecordCurrent() ? [{ label: gridRecordText.remove, run: () => {
+        if (current()) removeGridRecord(row);
+      } }] : []),
       ...gridQuickValueKinds.map(kind => ({ label: quickValueText[kind], disabled: !canSetQuickValue(kind, row, key), run: () => setQuickValueAt(row, key, kind) })),
       { label: gridCellFileZh.action, disabled: ownCell(row.data, key) == null,
         run: () => { void saveGridCell(() => ownCell(row.data, key), current); } },
@@ -2586,8 +2624,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     { key: 'refresh', content: (<button data-table-refresh title={navigationZh.tableRefreshShortcut} onClick={refreshTable} disabled={blocked}><RefreshCw size={14}/>{presetNeedsOpen ? presetText.retryOpen : zh.common.refresh}</button>) },
     { key: 'column-chooser', content: <button type="button" disabled={columnChooserBlocked} {...columnChooser.toggleProps}>{tableColumnChooserZh.title}</button> },
     { key: 'read-history', content: <button type="button" disabled={blocked} {...readHistory.toggleProps}>{tableReadHistoryZh.title}</button> },
-    { key: 'insert', content: (<button disabled={!editable || blocked} onClick={addRow}><Plus size={14}/>{zh.common.add}</button>) },
-    { key: 'delete', content: (<button disabled={!editable || (!selection && !selectedRows.size) || blocked} onClick={deleteSelected}><Trash2 size={14}/>{zh.common.delete}</button>) },
+    { key: 'insert', content: (<button title={gridRecordText.addHint} disabled={!editable || blocked} onClick={() => addRow()}><Plus size={14}/>{zh.common.add}</button>) },
+    { key: 'delete', content: (<button title={gridRecordText.removeHint} disabled={!editable || (!selection && !selectedRows.size) || blocked} onClick={deleteSelected}><Trash2 size={14}/>{zh.common.delete}</button>) },
     { key: 'filter', content: (<button className={showFilter || filters.length ? 'selected' : ''} disabled={presetNeedsOpen} onClick={() => { setCellFilterSeed(undefined); setShowFilter(!showFilter); }}><Filter size={14}/>{zh.table.text006}{filters.length > 0 ? ` (${filters.length})` : ''}</button>) },
     { key: 'clear-filter', content: <button type="button" disabled={!filters.length || blocked || externalStale || restoredDraftView || gridEditing || !!filterGroups}
       onClick={clearTableFilters}>{tableFilterEnabledZh.clear}</button> },
@@ -2692,6 +2730,12 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
   }} onCellKeyDown={(args, event) => {
     if (args.mode === 'ACTIVE' && cellRange.key(args, event)) return;
+    if (args.mode === 'ACTIVE' && handleGridRecordKey(event, kind => {
+      const { row, rowIdx, column } = args;
+      if (!isFocusedDataCell(event.target) || !row || rows[rowIdx] !== row || !column || !visibleKeys.includes(column.key) || !gridRecordCurrent()) return;
+      if (kind === 'add') return addGridRecord;
+      if (!cellRange.rectangle && cellActionCurrent(row)) return () => removeGridRecord(row);
+    })) return;
     if (args.mode === 'ACTIVE' && editable && cellRange.fillValueKey(args, event, (rectangle, kind) => {
       recordPages.cancel();
       applyGridRangeFill(rectangle, kind);
@@ -2708,7 +2752,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       event.preventGridDefault(); event.preventDefault(); event.stopPropagation(); return;
     }
     recordPages.cancel(); handleGridKeyDown(args, event);
-  }} renderers={{ noRowsFallback: <GridEmptyState onPaste={editable && !blocked && !externalStale && !restoredDraftView ? openPasteInsert : undefined}/> }}/></div>{record.formOpen && <RecordFormPanel editor={record} context={getRecordContext()} rows={rows} visibleKeys={visibleKeys} pageNavigation={{ ...(tableEdits.selected ? { previousLabel: workspaceText.stagePrevious, nextLabel: workspaceText.stageNext } : {}), previous: !restoredDraftView && pageIndex > 1 && (rows.length === 0 || !!record.draft), next: !restoredDraftView && !!page?.hasMore && pageIndex < maxTablePage && !!record.draft, message: recordPageMessage.revision === recordPages.revision ? recordPageMessage.text : '', onNavigate: navigateRecordPage }} onSelect={rowId => { const key = selection?.key && visibleKeys.includes(selection.key) ? selection.key : visibleKeys[0]; if (key) jumpToMatch(rowId, key); }}/>}</div>{(page || checkedExport.value) && <TableCheckedExportActions collection={checkedExport.value}
+  }} renderers={{ noRowsFallback: <GridEmptyState onPaste={editable && !blocked && !externalStale && !restoredDraftView ? openPasteInsert : undefined}
+    onAddRow={editable && !blocked && !externalStale ? addGridRecord : undefined}/> }}/></div>{record.formOpen && <RecordFormPanel editor={record} context={getRecordContext()} rows={rows} visibleKeys={visibleKeys} pageNavigation={{ ...(tableEdits.selected ? { previousLabel: workspaceText.stagePrevious, nextLabel: workspaceText.stageNext } : {}), previous: !restoredDraftView && pageIndex > 1 && (rows.length === 0 || !!record.draft), next: !restoredDraftView && !!page?.hasMore && pageIndex < maxTablePage && !!record.draft, message: recordPageMessage.revision === recordPages.revision ? recordPageMessage.text : '', onNavigate: navigateRecordPage }} onSelect={rowId => { const key = selection?.key && visibleKeys.includes(selection.key) ? selection.key : visibleKeys[0]; if (key) jumpToMatch(rowId, key); }}/>}</div>{(page || checkedExport.value) && <TableCheckedExportActions collection={checkedExport.value}
       position={page?.page ?? -1} selected={selectedRows.size}
       ready={pageExportAvailable && settings.activeTabId === tab.id} hasDrafts={!!changes.length}
       onCollect={collectCheckedPage} onExport={exportCollectedPages}

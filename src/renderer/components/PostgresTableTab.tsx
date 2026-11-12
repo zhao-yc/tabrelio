@@ -105,6 +105,7 @@ import { PostgresDraftHistory, type PostgresDraftEntry as DraftEntry, type Postg
 import { draftHistoryKey } from '../draftHistory';
 import { draftHistoryZh as draftHistoryText } from '../locales/draftHistory.zh-CN';
 import { tableCellKeyIsComposing } from '../tableCellKeyboard';
+import { gridRecordActionsZh as gridRecordText } from '../locales/gridRecordActions.zh-CN';
 import { postgresDraftFilesZh as draftFilesText } from '../locales/postgresDraftFiles.zh-CN';
 import { postgresDraftGrid } from '../postgresDraftGrid';
 import { TableQueryTemplateDialog } from './TableQueryTemplateDialog';
@@ -479,6 +480,30 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     if (!stageChanges([change], { owner })) return;
     setForm(undefined);
     setMessage('');
+  }
+
+  /** 工具栏与网格只接收当前连接、页令牌和草稿版本。 */
+  function recordActionCurrent(): boolean {
+    return active && writable && !!page?.pageToken && issued.current === page.pageToken &&
+      pageConnectionVersion === connectionVersion && layoutScope.current.current() && draftRef.current === draft &&
+      !lease.current && !recordInput.current && !inlineOwner.current && !pasteOwner.current &&
+      !useWorkspace.getState().activeJobs[tab.id] && !document.querySelector('[role="dialog"], [role="alertdialog"]');
+  }
+
+  function addRecord(): void {
+    if (recordActionCurrent() && page?.capabilities.insert) setForm({ row: null });
+  }
+
+  function canRemoveRecord(index: number, source: DataRow | undefined): boolean {
+    const key = page?.rowKeys?.[index];
+    return !!source && !!key && !!page?.capabilities.delete && page.rows[index] === source && recordActionCurrent() &&
+      draftRef.current.find(entry => entry.rowKey === key)?.change.kind !== 'delete';
+  }
+
+  function removeRecord(index: number, source: DataRow | undefined): void {
+    if (!canRemoveRecord(index, source)) return;
+    try { stage({ kind: 'delete', row: index }); setError(''); }
+    catch (reason) { setError(errorMessage(reason)); }
   }
 
   /** 文件恢复由引擎完整核对后交付新页和整批草稿，保存仍保留现有编辑和历史。 */
@@ -1782,7 +1807,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         if (canFilteredUpdate && page && layoutScope.current.current() && !lease.current) { setError(''); setFilteredUpdate({ page }); }
       }}>{filteredUpdateText.entry}</button>
       <button disabled={!canFilteredDelete} onClick={prepareFilteredDelete}>{filteredDeleteText.entry}</button>
-      <button disabled={!writable || !page?.capabilities.insert} onClick={() => setForm({ row: null })}>{text.add}</button>
+      <button title={gridRecordText.addHint} disabled={!writable || !page?.capabilities.insert} onClick={addRecord}>{text.add}</button>
       <button disabled={!canDuplicate} onClick={openDuplicate}>{duplicateText.action}</button>
       <button disabled={!canUseTemplates} onClick={openRecordTemplates}>{templateText.open}</button>
       <button disabled={!active || !writable || !draft.length} onClick={() => setDraftFile('save')}>{draftFilesText.save}</button>
@@ -1800,9 +1825,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           usePostgresRecordTransfer.setState({ snapshot: undefined });
       }}>{transferText.discard}</button>}
       {!recordView && <button disabled={!writable || !page?.capabilities.update || row === null} onClick={() => setForm({ row })}>{text.edit}</button>}
-      <button disabled={!writable || !page?.capabilities.delete || row === null} onClick={() => {
-        if (row === null) return;
-        try { stage({ kind: 'delete', row }); } catch (reason) { setError(errorMessage(reason)); }
+      <button title={gridRecordText.removeHint} disabled={!writable || !page?.capabilities.delete || row === null} onClick={() => {
+        if (row !== null) removeRecord(row, page?.rows[row]);
       }}>{text.remove}</button>
       <button type="button" disabled={!historyEnabled || !viewDraftEntry} title={draftHistoryText.discardRowHint}
         onClick={() => { if (viewDraftEntry) discardDraftEntry(viewDraftEntry); }}>{draftHistoryText.discardRow}</button>
@@ -2032,7 +2056,11 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           try { stageGridPaste(cell.column.key, postgresClipboardInput(data), cell, undefined, range); }
           catch (reason) { setError(errorMessage(reason)); }
         }}
-        onEmptyPaste={canPasteAppend || pasteAppend ? openPasteAppend : undefined}
+        onEmptyPaste={canPasteAppend || pasteAppend || (form?.row === null && page.capabilities.insert) ? openPasteAppend : undefined}
+        recordActions={canChangeGrid ? {
+          add: page.capabilities.insert ? addRecord : undefined,
+          remove: page.capabilities.delete ? { allowed: cell => canRemoveRecord(cell.index, cell.row), run: cell => removeRecord(cell.index, cell.row) } : undefined,
+        } : undefined}
         frozenKeys={gridLayout.frozenKeys} freezeColumns={headerFreeze} columnVisibility={columnVisibility} onColumnReorder={reorderTableColumns} columnWidths={gridLayout.widths} rowHeight={layoutView.preferences.rowHeight} onRowHeightChange={layoutView.ready && !layoutView.pending ? resizeRowHeight : undefined} onColumnWidthsChange={resizeLayout}
         sort={sorted} onSortChange={frozenPage ? undefined : sort => {
           try {

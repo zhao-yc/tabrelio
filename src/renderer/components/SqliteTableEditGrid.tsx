@@ -1,5 +1,7 @@
 import { sqliteReferenceZh as referenceText } from '../locales/sqliteReference.zh-CN';
-import { tableCellEditorKey, tableCellKeyIsComposing } from '../tableCellKeyboard';
+import { isFocusedDataCell, tableCellEditorKey, tableCellKeyIsComposing } from '../tableCellKeyboard';
+import { handleGridRecordKey, type GridRecordActions } from '../gridRecordActions';
+import { gridRecordActionsZh as gridRecordText } from '../locales/gridRecordActions.zh-CN';
 import { isGridContextKey, useGridCellActionMenu, type GridCellAction } from './GridCellActionMenu';
 import { sqliteRowIdColumn, sqliteRowIdKey } from './SqliteRowIdColumn';
 import { useGridHeaderMenu, type GridHeaderColumnVisibility, type GridHeaderFreeze, type GridHeaderValueOptions } from './GridHeaderMenu';
@@ -56,9 +58,9 @@ import { tableFieldFindClass, type TableFieldFindDisplay } from './TableFieldFin
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { onChooseReference?(row: SqliteDraftRow, column: number): boolean; showGridImages?: boolean; onFindColumn?(key: string): void; onFilterColumn?(key: string): void; columnValueOptions?: GridHeaderValueOptions; onColumnStatistics?(key: string): void; showFieldType?: boolean; showRowId?: boolean; onShowFieldTypeChange?(show: boolean): void; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; matchRowsRef?: Ref<GridMatchRowsAction<string>>; isCurrent(): boolean; onOpenRowSql?(kind: RowSqlKind, sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor, range?: GridRangeTarget<SqliteDraftRow>): void; onEmptyPaste?(data: DataTransfer): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFillRange?(range: GridRangeTarget<SqliteDraftRow>, input: GridRangeFillInput): void; onExportRange?(result: GridRangeExportData): void; onFilterTableRange?: TableRangeFilter<SqliteDraftRow>; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; fieldFind?: TableFieldFindDisplay; findHighlights?: ReadonlyMap<string, ReadonlySet<number>>; rowHeight?: GridRowHeight; onRowHeightChange?(height: number): void; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; freezeColumns?: GridHeaderFreeze; columnVisibility?: GridHeaderColumnVisibility; onColumnReorder?(source: string, target: string): void; fitSource?(): GridColumnFitSource | undefined; }
+interface Props { onChooseReference?(row: SqliteDraftRow, column: number): boolean; showGridImages?: boolean; onFindColumn?(key: string): void; onFilterColumn?(key: string): void; columnValueOptions?: GridHeaderValueOptions; onColumnStatistics?(key: string): void; showFieldType?: boolean; showRowId?: boolean; onShowFieldTypeChange?(show: boolean): void; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; matchRowsRef?: Ref<GridMatchRowsAction<string>>; isCurrent(): boolean; onOpenRowSql?(kind: RowSqlKind, sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor, range?: GridRangeTarget<SqliteDraftRow>): void; onEmptyPaste?(data: DataTransfer): void; recordActions?: GridRecordActions<SqliteDraftRow>; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFillRange?(range: GridRangeTarget<SqliteDraftRow>, input: GridRangeFillInput): void; onExportRange?(result: GridRangeExportData): void; onFilterTableRange?: TableRangeFilter<SqliteDraftRow>; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; fieldFind?: TableFieldFindDisplay; findHighlights?: ReadonlyMap<string, ReadonlySet<number>>; rowHeight?: GridRowHeight; onRowHeightChange?(height: number): void; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; freezeColumns?: GridHeaderFreeze; columnVisibility?: GridHeaderColumnVisibility; onColumnReorder?(source: string, target: string): void; fitSource?(): GridColumnFitSource | undefined; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindColumn, onFilterColumn, columnValueOptions, onColumnStatistics, showFieldType, showRowId, onShowFieldTypeChange, page, rows, disabled, selected, initialCheckedRows, matchRowsRef, isCurrent, onOpenRowSql, onSelect, onEdit, onPaste, onEmptyPaste, onActiveCell, onQuickValue, onFillRange, onExportRange, onFilterTableRange, onFilterCell, cellMenuFilters, onCheckedRows, findHit, fieldFind, findHighlights, sort, onSortChange, projection, onColumnResize, freezeColumns, columnVisibility, onColumnReorder, fitSource, rowHeight, onRowHeightChange }: Props) {
+export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindColumn, onFilterColumn, columnValueOptions, onColumnStatistics, showFieldType, showRowId, onShowFieldTypeChange, page, rows, disabled, selected, initialCheckedRows, matchRowsRef, isCurrent, onOpenRowSql, onSelect, onEdit, onPaste, onEmptyPaste, recordActions, onActiveCell, onQuickValue, onFillRange, onExportRange, onFilterTableRange, onFilterCell, cellMenuFilters, onCheckedRows, findHit, fieldFind, findHighlights, sort, onSortChange, projection, onColumnResize, freezeColumns, columnVisibility, onColumnReorder, fitSource, rowHeight, onRowHeightChange }: Props) {
   const height = readGridRowHeight(rowHeight);
   const zoom = useGridZoom();
   const dimensions = gridZoomDimensions(zoom.percent, height, 42);
@@ -439,6 +441,9 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
       ...(!rectangle && canEditCell(row, key) ? [{ label: gridCellEditZh.open, run: () => {
         if (current() && canEditCell(row, key)) onEdit(row, index);
       } }] : []),
+      ...(!rectangle && recordActions?.remove?.allowed(row) ? [{ label: gridRecordText.remove, run: () => {
+        if (current()) recordActions.remove?.run(row);
+      } }] : []),
       ...gridQuickValueKinds.map(kind => ({ label: quickValueText[kind], disabled: !onQuickValue || !sqliteQuickValueAllowed(column, !!edit.strict, kind),
         run: () => quickValue.current?.({ row, column: index }, kind) })),
       { label: gridCellFileZh.action, disabled: !raw || raw.kind === 'null',
@@ -548,7 +553,9 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
       onChange={changeCheckedRows}/></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} onColumnsReorder={onColumnReorder ? reorderColumns : undefined} aria-label={text.grid} aria-keyshortcuts={page.referenceColumns?.some(index => order.includes(index)) && !disabled && onChooseReference ? referenceText.shortcut : undefined} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-zoomable grid-row-height-${height}${height >= 56 ? ' grid-row-multiline' : ''}`} style={dimensions.style} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={dimensions.rowHeight} headerRowHeight={dimensions.headerHeight}
     sortColumns={sort} onSortColumnsChange={next => { if (!disabled && baseCurrent() && noModal()) onSortChange?.(next); }} onColumnResize={onColumnResize ? (column, width) => { if (!disabled && baseCurrent() && noModal() && /^c(?:0|[1-9]\d*)$/.test(column.key) && order.includes(Number(column.key.slice(1)))) onColumnResize(column.key, width); } : undefined}
     renderers={{
-      noRowsFallback: <GridEmptyState onPaste={onEmptyPaste && (data => { if (!disabled && current() && noModal()) onEmptyPaste(data); })}/>,
+      noRowsFallback: <GridEmptyState
+        onPaste={onEmptyPaste && (data => { if (!disabled && current() && noModal()) onEmptyPaste(data); })}
+        onAddRow={recordActions?.add && (() => { if (!disabled && current() && noModal()) recordActions.add?.(); })}/>,
       renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }),
     }}
     selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={changeCheckedRows}
@@ -563,6 +570,12 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
     onCellKeyDown={(args, event) => {
       const { row, rowIdx, column, mode } = args;
       if (mode === 'ACTIVE' && cellRange.key(args, event)) return;
+      if (recordActions && mode === 'ACTIVE' && isFocusedDataCell(event.target) && handleGridRecordKey(event, kind => {
+        if (!row || rows[rowIdx] !== row || !column || !rangeKeys.includes(column.key) || !current(row) || !noModal() || disabled) return;
+        if (kind === 'add') return recordActions.add;
+        const remove = recordActions.remove;
+        if (!cellRange.rectangle && remove?.allowed(row)) return () => remove.run(row);
+      })) return;
       if (mode === 'ACTIVE' && onFillRange && cellRange.fillValueKey(args, event, applyGridRangeFill)) return;
       const fill = rangeFill.current;
       if (mode === 'ACTIVE' && fill && onFillRange && cellRange.fillTextKey(args, event, fill.beginText)) return;

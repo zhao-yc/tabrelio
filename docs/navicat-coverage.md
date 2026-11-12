@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的可写表网格可用快捷键新增和删除当前记录。单格右键可暂存删除命中的记录，草稿仍使用原撤销和集中提交。D02 增加网格记录操作。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#grid-view)
+
 2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的可写空数据网格接收粘贴，按原格式带入新增窗口，核对后再暂存。只读视图保持普通空状态。D02 增加空网格粘贴入口。[Navicat 网格粘贴手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#paste-data-into-grid-view)
 
 2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的可写表页支持末页从活动单元格粘贴时整批覆盖并追加超出的行。按可见列映射，未映射字段使用原默认值规则。覆盖和新增共用本地历史与集中提交。D02 增加末页混合粘贴。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#paste-data-into-grid-view)
