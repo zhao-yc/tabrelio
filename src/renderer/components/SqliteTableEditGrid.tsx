@@ -21,7 +21,7 @@ import { gridRangeFillActions, type GridRangeFillInput, type GridRangeFillKind }
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { tableRangeFilterActions, type TableRangeFilter } from '../tableRangeFilter';
 import { errorMessage } from '../lib';
-import { DataGrid, SelectColumn, renderCheckbox, renderHeaderCell, type Column, type DataGridHandle, type SortColumn } from 'react-data-grid';
+import { DataGrid, renderCheckbox, renderHeaderCell, type Column, type DataGridHandle, type SortColumn } from 'react-data-grid';
 import type { SqliteDraftRow } from '../sqliteTableEditor';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import { sqliteTableEditZh as text } from '../locales/sqliteTableEdit.zh-CN';
@@ -33,6 +33,7 @@ import type { SqliteCheckedRows } from '../sqliteTableSelection';
 import '../sqliteTableClipboard.css';
 import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.zh-CN';
 import { GridRowSelectionActions, mergeGridMatchSelection, type GridMatchRowsAction, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
+import { useGridCheckedRange } from './useGridCheckedRange';
 import { GridRowJump } from './GridRowJump';
 import { focusGridColumn, GridColumnJump } from './GridColumnJump';
 import { gridZoomDimensions, useGridZoom } from '../gridZoom';
@@ -180,7 +181,12 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
   function inputTarget(event: ClipboardEvent<HTMLDivElement>): boolean { const node = event.target as HTMLElement | null; return !!node && (node.isContentEditable || ['TEXTAREA', 'SELECT'].includes(node.tagName) || node.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes((node as HTMLInputElement).type)); }
   const currentFindHit = findHit?.page === page && findHit.rows === rows ? findHit : undefined;
   const rowIdFor = (row: SqliteDraftRow) => row.index === undefined ? undefined : page.rowIds?.[row.index];
-  const columns: Column<SqliteDraftRow>[] = [SelectColumn, { key: '__row', name: '#', width: 68, frozen: true, renderCell: ({ row }) => <button aria-label={text.select(rows.indexOf(row) + 1)} aria-pressed={selected === row.id} onClick={() => { if (baseCurrent(row)) { onSelect(row); captureCell(row, '__row'); } }}>{rows.indexOf(row) + 1}</button> }, ...display.map(({ index, width, frozen }, position): Column<SqliteDraftRow> => ({
+  // 表头、行复选框和页操作共用同一勾选修订与父级通知。
+  const rowSelectionKey = (row: SqliteDraftRow) => row.deleted ? undefined : row.id;
+  const rowSelectionCurrent = () => !disabled && baseCurrent() && selection.current.revision === selectionTicket && noModal();
+  const checkedRange = useGridCheckedRange(rows, owner, { keyFor: rowSelectionKey,
+    selected: () => selection.current.ids, isCurrent: rowSelectionCurrent, onChange: changeCheckedRows });
+  const columns: Column<SqliteDraftRow>[] = [checkedRange.column, { key: '__row', name: '#', width: 68, frozen: true, renderCell: ({ row }) => <button aria-label={text.select(rows.indexOf(row) + 1)} aria-pressed={selected === row.id} onClick={() => { if (baseCurrent(row)) { onSelect(row); captureCell(row, '__row'); } }}>{rows.indexOf(row) + 1}</button> }, ...display.map(({ index, width, frozen }, position): Column<SqliteDraftRow> => ({
     key: 'c' + index, name: page.columns[index].name + (page.columns[index].generated ? ' · ' + text.generated : ''), minWidth: 64, width: width ?? 180, frozen, resizable: true, draggable: !!onColumnReorder && !disabled, sortable: !!onSortChange && !disabled,
     headerCellClass: tableFieldFindClass(fieldFind, page.result.columns[index].key),
     cellClass: row => {
@@ -498,10 +504,6 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
     const row = activeCell.current.position?.row;
     return focusGridColumn(grid.current, index + 2, row ? rows.indexOf(row) : -1);
   }
-  // 表头、行复选框和页操作共用同一勾选修订与父级通知。
-  const rowSelectionKey = (row: SqliteDraftRow) => row.deleted ? undefined : row.id;
-  const rowSelectionCurrent = () => !disabled && baseCurrent() && selection.current.revision === selectionTicket && noModal();
-
   function changeCheckedRows(ids: ReadonlySet<string>) {
     if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return;
     selection.current = { owner, ids: new Set(rows.filter(row => ids.has(row.id) && !row.deleted).map(row => row.id)), revision: {} };
@@ -561,7 +563,10 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
     selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={changeCheckedRows}
     rowClass={row => row.deleted ? 'row-deleted' : row.index === undefined ? 'row-inserted' : undefined}
     onCellMouseDown={(args, event) => cellRange.mouse(args, event)}
-    onCellClick={({ row, column }) => { if (baseCurrent(row)) { onSelect(row); captureCell(row, column?.key); } }}
+    onCellClick={({ row, rowIdx, column }, event) => {
+      if (rangeKeys.includes(column.key)) checkedRange.toggle(row, rowIdx, event);
+      if (baseCurrent(row)) { onSelect(row); captureCell(row, column.key); }
+    }}
     onCellDoubleClick={({ row, column }, event) => { event.preventGridDefault(); edit(row, column.key); }}
     onCellContextMenu={({ row, column }, event) => {
       if (event.defaultPrevented || !openCellActions(row, column.key, event.target, { x: event.clientX, y: event.clientY })) return;

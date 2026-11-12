@@ -52,6 +52,7 @@ import { tableRangeFilterActions, type TableRangeFilter } from '../tableRangeFil
 import type { QueryResultFindScan } from '../queryResultFind';
 import { appModalSelector, gridDialogCurrent } from '../modalSelectors';
 import { GridRowSelectionActions, mergeGridMatchSelection, type GridMatchRowsAction, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
+import { useGridCheckedRange } from './useGridCheckedRange';
 import { GridRowJump } from './GridRowJump';
 import { focusGridColumn, GridColumnJump } from './GridColumnJump';
 import { encodeQueryResultColumn, encodeQueryResultWithHeaders, encodeTableGridCopy, writeQueryResultClipboard, type QueryResultCopyCell } from '../queryResultHeaderCopy';
@@ -168,6 +169,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
   const filterCellRef=useRef<{scope:typeof scope;capture:QueryResultCellFilterCapture}|undefined>(undefined);
   const copyCellRef=useRef<{scope:typeof scope;cell:QueryResultCopyCell}|undefined>(undefined);
   const selectedRowsRef=useRef<{scope:typeof scope;indices:ReadonlySet<number>}|undefined>(undefined);
+  const selectionBefore = selectedRowsRef.current;
   const selectedFilterRef=useRef<{scope:typeof scope;revision:number;capture:QueryResultSelectedFilterCapture}|undefined>(undefined);
   const selectedFilterErrorRef=useRef('');
   const activeCopyCell = headerCell?.scope === scope ? headerCell.cell : undefined;
@@ -177,6 +179,12 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     const element = gridRef.current?.element;
     return ownDialog ? !!element && gridDialogCurrent(element, ownDialog) : !document.querySelector(appModalSelector);
   };
+  const canSelectRows = !onActiveRowChange && (rowJump || hasResultTools);
+  const rowSelectionKey = (row: DataRow, index: number) => skipRowInInversion?.(row) ? undefined : index;
+  const rowSelectionCurrent = () => tableCopy?.enabled !== false && selectedRowsRef.current === selectionBefore && rowJumpIsCurrent();
+  const checkedRange = useGridCheckedRange(rows, rowScope, { keyFor: rowSelectionKey,
+    selected: () => selectedRowsRef.current?.scope === rowScope ? selectedRowsRef.current.indices : selectedRows,
+    isCurrent: rowSelectionCurrent, onChange: setSelectedRows });
   const columnJumpAvailable = !!isCurrent && !!selectionScope || !!rowJumpCurrent && tableCopy?.enabled === true;
   const columnJumpIsCurrent = () => columnJumpAvailable && rowJumpIsCurrent();
   /** 定位当前展示数组中的行，保留活动可见列，且不修改勾选集。 */
@@ -650,7 +658,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
       resizeColumn(column.key, width);
     } catch { useWorkspace.getState().notify(gridColumnWidthBatchZh.fitUnavailable, true); }
   }
-  const gridColumns = useMemo<Column<DataRow>[]>(() => [...(onActiveRowChange ? [] : [SelectColumn]), ...columns.map<Column<DataRow>>((column, index) => ({ key: column.key, name: column.name, draggable: !!onColumnReorder, frozen: index < frozenCount,
+  const gridColumns = useMemo<Column<DataRow>[]>(() => [...(onActiveRowChange ? [] : [canSelectRows ? checkedRange.column : SelectColumn]), ...columns.map<Column<DataRow>>((column, index) => ({ key: column.key, name: column.name, draggable: !!onColumnReorder, frozen: index < frozenCount,
     headerCellClass: (activeHit?.row === -1 && activeHit.column === index || findTarget?.row === -1 && findTarget.key === column.key) ? 'query-result-find-hit'
       : activeHighlights?.scan.hasMatch(-1, index) ? 'query-result-find-match' : findMarks?.has('-1:' + column.key) ? 'pg-find-match' : undefined,
     cellClass: row => {
@@ -681,7 +689,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
       className={['grid-row-preview', value === null && 'null-value', presentation?.className].filter(Boolean).join(' ')}
       title={presentation?.title ?? label}>{imagesShown && !skipRowInInversion?.(row) ? <GridCellImage value={value}>{label}</GridCellImage> : label}</DataTypeColor>;
   } })), ...(sqliteRowIds ? [sqliteRowIdColumn<DataRow>(row => sqliteRowIds[rowIndexes.get(row) ?? -1])] : [])],
-    [columns, columnWidths, headerDetails, sqliteRowIds, onColumnWidthsChange, onColumnReorder, frozenCount, onActiveRowChange, onSortChange, sort, sortReasons, activeHit, activeHighlights, findTarget, findMarks, cellRange.rectangle, skipRowInInversion, rowIndexes, presentCell, imagesShown, dataTypeColors, dataTypeColors ? selectedRows : null]);
+    [columns, columnWidths, headerDetails, sqliteRowIds, onColumnWidthsChange, onColumnReorder, frozenCount, onActiveRowChange, canSelectRows, checkedRange.column, onSortChange, sort, sortReasons, activeHit, activeHighlights, findTarget, findMarks, cellRange.rectangle, skipRowInInversion, rowIndexes, presentCell, imagesShown, dataTypeColors, dataTypeColors ? selectedRows : null]);
   const fitHeader = onColumnResize || onColumnWidthsChange ? fitHeaderColumn : undefined;
   const { sizeDialog, reorderColumns, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
     owner: scope, grid: () => gridRef.current?.element,
@@ -710,7 +718,10 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     visibility: headerDetails,
     columnVisibility, reorderColumns: onColumnReorder, freeze: freezeColumns, frozenCount,
   });
-  const dataGrid = <DataGrid<DataRow, unknown, number> ref={gridRef} aria-keyshortcuts={onActivateRow ? 'Enter' : undefined} onColumnsReorder={onColumnReorder ? reorderColumns : undefined} aria-description={onHistoryTravel ? historyText.shortcuts : undefined} className={`results-grid rdg-${theme} grid-row-height-${height}${height >= 56 ? ' grid-row-multiline' : ''}${zoomable ? ' grid-zoomable' : ''}`} style={dimensions.style} columns={gridColumns} rows={rows} columnWidths={onColumnWidthsChange ? controlledWidths : undefined} onColumnWidthsChange={onColumnWidthsChange ? widths => { if (actionCurrent()) onColumnWidthsChange(widths); } : undefined} onColumnResize={onColumnResize ? (column, width) => { if (actionCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]')) onColumnResize(column.key, width); } : undefined} onCellMouseDown={(args, event) => cellRange.mouse(args, event)} onCellClick={rowJump || tableCopy || selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellContextMenu={({ row, rowIdx, column }, event) => {
+  const dataGrid = <DataGrid<DataRow, unknown, number> ref={gridRef} aria-keyshortcuts={onActivateRow ? 'Enter' : undefined} onColumnsReorder={onColumnReorder ? reorderColumns : undefined} aria-description={onHistoryTravel ? historyText.shortcuts : undefined} className={`results-grid rdg-${theme} grid-row-height-${height}${height >= 56 ? ' grid-row-multiline' : ''}${zoomable ? ' grid-zoomable' : ''}`} style={dimensions.style} columns={gridColumns} rows={rows} columnWidths={onColumnWidthsChange ? controlledWidths : undefined} onColumnWidthsChange={onColumnWidthsChange ? widths => { if (actionCurrent()) onColumnWidthsChange(widths); } : undefined} onColumnResize={onColumnResize ? (column, width) => { if (actionCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]')) onColumnResize(column.key, width); } : undefined} onCellMouseDown={(args, event) => cellRange.mouse(args, event)} onCellClick={rowJump || tableCopy || selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }, event) => {
+    if (canSelectRows && columns.some(item => item.key === column.key)) checkedRange.toggle(row, rowIdx, event);
+    captureCopyCell(row, rowIdx, column);
+  } : undefined} onCellContextMenu={({ row, rowIdx, column }, event) => {
     if (event.defaultPrevented || !openCellActions(row, rowIdx, column.key, event.target, { x: event.clientX, y: event.clientY })) return;
     event.preventGridDefault();
     event.preventDefault();
@@ -726,7 +737,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
       }
     }
     viewBinary(row, column.key);
-  }} onCellKeyDown={cellKeyDown} rowHeight={dimensions.rowHeight} headerRowHeight={dimensions.headerHeight} rowKeyGetter={row => rowIndexes.get(row)!} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onActivePositionChange={({ row, rowIdx, column }) => { if (!actionCurrent()) return; cellRange.move(row, rowIdx, column?.key); captureCopyCell(row, rowIdx, column); onGridAnchor?.(column && columns.some(item => item.key === column.key) ? { row: rowIdx, key: column.key } : undefined); onActiveRowChange?.(row ?? null); onActiveRowIndexChange?.(row && Number.isSafeInteger(rowIdx) && rowIdx >= 0 && rows[rowIdx] === row ? rowIdx : null); }} sortColumns={sort?.map(rule => ({ columnKey: rule.column, direction: rule.direction }))} onSortColumnsChange={changeSortColumns} onCellCopy={({ row, column }, event) => {
+  }} onCellKeyDown={cellKeyDown} rowHeight={dimensions.rowHeight} headerRowHeight={dimensions.headerHeight} rowKeyGetter={row => rowIndexes.get(row)!} selectedRows={selectedRows} isRowSelectionDisabled={skipRowInInversion} onSelectedRowsChange={setSelectedRows} onActivePositionChange={({ row, rowIdx, column }) => { if (!actionCurrent()) return; cellRange.move(row, rowIdx, column?.key); captureCopyCell(row, rowIdx, column); onGridAnchor?.(column && columns.some(item => item.key === column.key) ? { row: rowIdx, key: column.key } : undefined); onActiveRowChange?.(row ?? null); onActiveRowIndexChange?.(row && Number.isSafeInteger(rowIdx) && rowIdx >= 0 && rows[rowIdx] === row ? rowIdx : null); }} sortColumns={sort?.map(rule => ({ columnKey: rule.column, direction: rule.direction }))} onSortColumnsChange={changeSortColumns} onCellCopy={({ row, column }, event) => {
     event.preventDefault();
     if (!actionCurrent() || !rowIndexes.has(row)) return;
     if (sqliteRowIds && column.key === sqliteRowIdKey) {
@@ -754,7 +765,6 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
   const grid = onCellPaste || fitHeader || hasHeaderMenu ? <div style={{ display: 'contents' }}
     {...(hasHeaderMenu ? headerMenu : undefined)} onPasteCapture={onCellPaste ? pasteGrid : undefined} onDoubleClickCapture={fitHeader}>{dataGrid}</div> : dataGrid;
   // 自定义行操作必须接收网格当前勾选集，避免在换页或二进制查看后使用已经清除的选择。
-  const selectionBefore = selectedRowsRef.current;
   const selectedActionCurrent = () => actionCurrent() && selectedRowsRef.current === selectionBefore &&
     (selectionBefore?.scope === rowScope ? selectionBefore.indices === selectedRows : !selectedRows.size);
   // 查找读取同一份已接纳勾选。选择提交时同步更新引用，旧凭据在 React 提交之前也会失效。
@@ -813,9 +823,6 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     });
     return encode(columns, selected, (row, key) => readTabularCopyValue(row, key, labels.invalid));
   }
-  const canSelectRows = !onActiveRowChange && (rowJump || hasResultTools);
-  const rowSelectionKey = (row: DataRow, index: number) => skipRowInInversion?.(row) ? undefined : index;
-  const rowSelectionCurrent = () => tableCopy?.enabled !== false && selectedRowsRef.current === selectionBefore && rowJumpIsCurrent();
   const jump = rowJump ? <>
     <GridRowJump grid={gridRef} scope={scope} count={rows.length} dialogShortcut={!!ownDialog}
       disabled={!columns.length} isCurrent={rowJumpIsCurrent} onJump={jumpToGridRow}/>

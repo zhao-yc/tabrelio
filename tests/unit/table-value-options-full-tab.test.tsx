@@ -91,7 +91,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
       if (target === path.join(renderer, 'lib')) return { ...lib, invoke, uid: vi.fn(() => 'UUID-' + ++counter) };
       if (target === path.join(renderer, 'components/GridCellActionMenu')) return { useGridCellActionMenu: () => ({ menu: null }) };
       // 钩子与辅助函数仍执行生产实现，展示组件只在JSX树边界停止渲染。
-      if (['TableReadHistory', 'TableColumnChooser', 'TableFieldFind'].some(name => target === path.join(renderer, 'components', name))) return load(target + '.tsx');
+      if (['TableReadHistory', 'TableColumnChooser', 'TableFieldFind', 'useGridCheckedRange'].some(name => target === path.join(renderer, 'components', name))) return load(target + '.tsx');
       // 只捕获父页交给表头的生产回调，真实菜单展示由Electron验收。
       if (target === path.join(renderer, 'components/GridHeaderMenu')) return {
         useGridHeaderMenu(_open: unknown, source: HeaderSource) { headerSource = source; return {}; },

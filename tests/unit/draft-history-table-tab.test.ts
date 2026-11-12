@@ -98,7 +98,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
       if (target === path.join(renderer, 'uiCommands')) return navigationMenuVmPort;
       if (target === path.join(renderer, 'lib')) return { ...lib, invoke, uid: vi.fn(() => 'UUID-' + ++counter) };
       if (target === path.join(renderer, 'components/GridCellActionMenu')) return { useGridCellActionMenu: () => ({ menu: null }), isGridContextKey: () => false };
-      if (['GridHeaderMenu', 'TableReadHistory', 'TableColumnChooser', 'TableFieldFind', 'GridRowSelectionActions', 'GridRowJump', 'GridColumnJump'].some(component => target === path.join(renderer, 'components', component)))
+      if (['GridHeaderMenu', 'TableReadHistory', 'TableColumnChooser', 'TableFieldFind', 'GridRowSelectionActions', 'GridRowJump', 'GridColumnJump', 'useGridCheckedRange'].some(component => target === path.join(renderer, 'components', component)))
         return load(target + '.tsx');
       if (target.startsWith(path.join(renderer, 'components') + path.sep)) return new Proxy({}, { get: (_, key) => String(key) });
       for (const extension of ['.ts', '.tsx']) if (existsSync(target + extension)) return load(target + extension);
