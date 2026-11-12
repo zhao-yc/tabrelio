@@ -1,5 +1,5 @@
 import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField, type PostgresTablePage } from '../shared/postgresTable';
-import { cellClipboardType, decodeClipboard, encodeClipboard, maxClipboardCells, type ClipboardCell } from './gridClipboard';
+import { cellClipboardType, decodeClipboard, encodeClipboard, maxClipboardCells, maxClipboardCharacters, type ClipboardCell } from './gridClipboard';
 import { fitGridRangePaste, type GridPasteShape } from './gridRangePaste';
 import { postgresGridPasteZh as text } from './locales/postgresGridPaste.zh-CN';
 
@@ -7,7 +7,9 @@ export function postgresClipboardInput(data: Pick<DataTransfer, 'getData' | 'typ
   if (!data) throw Error(text.invalid);
   const typed = data.types.includes(cellClipboardType) ? data.getData(cellClipboardType) : undefined;
   if (typed === '' || typed === undefined && !data.types.includes('text/plain')) throw Error(text.invalid);
-  return { typed, plain: data.getData('text/plain') };
+  const plain = data.getData('text/plain');
+  if ((typed?.length ?? 0) > maxClipboardCharacters || plain.length > maxClipboardCharacters) throw Error(text.invalid);
+  return { typed, plain };
 }
 
 export function postgresClipboardFieldValue(value: ClipboardCell, column: PostgresTableColumn): PostgresTableField['value'] {

@@ -8,13 +8,13 @@ import { postgresClipboardInput } from '../postgresGridPaste';
 import { ErrorBox, Modal } from './ui';
 
 /** 在明确的新增入口收集剪贴板，可见列顺序仍由原表页掌握。 */
-export function PostgresGridPasteDialog({ columns, onClose, onStage }: {
-  columns: readonly PostgresTableColumn[]; onClose(): void;
+export function PostgresGridPasteDialog({ columns, initial, onClose, onStage }: {
+  columns: readonly PostgresTableColumn[]; initial?: ReturnType<typeof postgresClipboardInput>; onClose(): void;
   onStage(start: string, source: { plain: string; typed?: string }): void;
 }) {
   const [column, setColumn] = useState(columns.find(column => !column.generated)?.key ?? '');
-  const [source, setSource] = useState<{ plain: string; typed?: string }>({ plain: '' });
-  const [hasInput, setHasInput] = useState(false);
+  const [source, setSource] = useState<{ plain: string; typed?: string }>(initial ?? { plain: '' });
+  const [hasInput, setHasInput] = useState(initial !== undefined);
   const [error, setError] = useState('');
   return <Modal title={text.append} onClose={onClose} wide>
     <div className="modal-content">
@@ -31,7 +31,6 @@ export function PostgresGridPasteDialog({ columns, onClose, onStage }: {
             event.preventDefault();
             try {
               const input = postgresClipboardInput(event.clipboardData);
-              if ((input.typed?.length ?? 0) > maxClipboardCharacters || input.plain.length > maxClipboardCharacters) throw Error(text.invalid);
               setSource(input); setHasInput(true); setError('');
             } catch (reason) { setError(errorMessage(reason)); }
           }}/>

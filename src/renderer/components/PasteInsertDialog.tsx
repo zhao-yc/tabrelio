@@ -7,12 +7,14 @@ import { pasteInsertZh as text } from '../locales/pasteInsert.zh-CN';
 import { ErrorBox, Modal, UsageHelp } from './ui';
 
 /** 独立本地预览：只接收真实paste事件或手工输入，关闭丢弃本弹窗输入，不触碰原页草稿。 */
-export function PasteInsertDialog({ info, visibleKeys, invalidReason, onStage, onClose }: {
-  info: TableInfo; visibleKeys: readonly string[]; invalidReason: string; onStage(plan: PasteInsertPlan): void; onClose(): void;
+export function PasteInsertDialog({ info, visibleKeys, initial, invalidReason, onStage, onClose }: {
+  info: TableInfo; visibleKeys: readonly string[]; initial?: ReturnType<typeof readPasteInsert>; invalidReason: string;
+  onStage(plan: PasteInsertPlan): void; onClose(): void;
 }) {
-  const [input, setInput] = useState(''), inputRef = useRef('');
-  const [matrix, setMatrix] = useState<ClipboardCell[][] | null>(null), matrixRef = useRef<ClipboardCell[][] | null>(null);
-  const [mapping, setMapping] = useState<PasteInsertMapping>([]), mappingRef = useRef<PasteInsertMapping>([]);
+  const [input, setInput] = useState(initial?.plain ?? ''), inputRef = useRef(input);
+  const [matrix, setMatrix] = useState<ClipboardCell[][] | null>(initial?.values ?? null), matrixRef = useRef(matrix);
+  const [mapping, setMapping] = useState<PasteInsertMapping>(() => initial ? defaultPasteInsertMapping(info, visibleKeys, initial.values[0].length) : []),
+    mappingRef = useRef(mapping);
   const [plan, setPlan] = useState<PasteInsertPlan | null>(null), planRef = useRef<PasteInsertPlan | null>(null);
   const [error, setError] = useState(''), [mappingPage, setMappingPage] = useState(0), [columnPage, setColumnPage] = useState(0);
   const invalidRef = useRef(invalidReason); invalidRef.current = invalidReason;

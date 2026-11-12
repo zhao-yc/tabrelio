@@ -43,7 +43,7 @@ function fixture(filterGroup: FilterGroup | undefined = undefined) {
     record: { hasInput: () => false, dirty: false, request: vi.fn() }, mounted: { current: true }, rootElement: { current: { querySelector: () => null } }, document: { querySelector: () => null }, getRecordContext: () => current,
     useWorkspace: { getState: () => workspace }, rowsRef: { current: [row] }, visibleKeys: ['id', 'note'], pasteInsertIntent: { current: null }, pasteInsertEnvironment: { current: [] }, copiedDraftIds: { current: new Set() },
     selectedRows: new Set(['old']), selectionRef: { current: { rowId: 'old', key: 'note' } }, setSelection: vi.fn(), setSelectedRows: vi.fn(), uid: vi.fn(() => 'new-' + ++id), setRows,
-    setPasteInsertDialog: vi.fn(), setError: vi.fn(), setDuplicateNotice: vi.fn(), invoke, blockedRef: { current: false }, previewingRef: { current: false }, applyingRef: { current: false }, preview: null, referenceCount: { current: 0 }, loadGeneration: { current: 1 }, recordContextRef: { current }, setPreviewing: vi.fn(), setPreview: vi.fn(), loadingCount: { current: 0 }, preferencesLock: { current: false }, copyPendingRef: { current: false }
+    setPasteInsertInput: vi.fn(), setError: vi.fn(), setDuplicateNotice: vi.fn(), invoke, blockedRef: { current: false }, previewingRef: { current: false }, applyingRef: { current: false }, preview: null, referenceCount: { current: 0 }, loadGeneration: { current: 1 }, recordContextRef: { current }, setPreviewing: vi.fn(), setPreview: vi.fn(), loadingCount: { current: 0 }, preferencesLock: { current: false }, copyPendingRef: { current: false }
   });
   // 真实渲染范围显式包含缺省分组；有分组场景保持叶规则与树完整对应。
   port.filterGroup = filterGroup;

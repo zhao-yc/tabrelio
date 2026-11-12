@@ -175,8 +175,9 @@ import { recordDuplicateZh } from '../locales/recordDuplicate.zh-CN';
 import { beginRecordCopyRead, consumeRecordCopyRead, recordCopySourceReady, recordCopyMetadataReason, type RecordCopyReadIntent, type RecordCopyPage } from '../recordCopySource';
 import { recordCopySourceZh } from '../locales/recordCopySource.zh-CN';
 import { tableCopyMetadataKey, type TableCopyPageSources } from '../../shared/tableCopySource';
-import { PasteInsertIntent, preparePasteInsert, type PasteInsertPlan } from '../pasteInsert';
+import { PasteInsertIntent, preparePasteInsert, readPasteInsert, type PasteInsertPlan } from '../pasteInsert';
 import { PasteInsertDialog } from './PasteInsertDialog';
+import { GridEmptyState } from './GridEmptyState';
 import { pasteInsertZh } from '../locales/pasteInsert.zh-CN';
 import { BatchFillIntent, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow, prepareBatchFillSequence, type BatchFillAssignment } from '../recordBatchFill';
 import type { RecordInput } from '../recordViews';
@@ -289,7 +290,9 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   const copySources = useRef<{ connectionId: string; source: TableCopyPageSources } | null>(null); const copyRowRefs = useRef(new Map<string, string>());
   const copyPage = useRef<RecordCopyPage | null>(null);
   const pendingPaste = useRef<DraftRow[] | null>(null);
-  const pasteInsertIntent = useRef<PasteInsertIntent | null>(null); const [pasteInsertDialog, setPasteInsertDialog] = useState<PasteInsertIntent | null>(null);
+  const pasteInsertIntent = useRef<PasteInsertIntent | null>(null);
+  const [pasteInsertInput, setPasteInsertInput] = useState<{ intent: PasteInsertIntent; initial?: ReturnType<typeof readPasteInsert> }>();
+  const pasteInsertDialog = pasteInsertInput?.intent;
   const pasteInsertEnvironment = useRef<unknown[]>([]);
   type TemplateDialog = { lease: RecordTemplateLease; insert: PasteInsertIntent; candidate?: RecordTemplateCandidate; columns: RecordTemplateColumn[] };
   const templateRef = useRef<TemplateDialog | undefined>(undefined), [templateDialog, setTemplateDialog] = useState<TemplateDialog>();
@@ -1820,16 +1823,19 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), context = getRecordContext();
     if (!mounted.current || workspace.settings.activeTabId !== tab.id || !current || !workspace.connections.some(item => item.id === current.connectionId) || recordTargetKey({ connectionId: current.connectionId, database: current.database ?? '', table: current.table ?? '' }) !== recordTargetKey(context.target) || (workspace.connectionVersions[current.connectionId] ?? 0) !== context.connectionVersion || record.dirty || rootElement.current?.querySelector('.grid-input')) throw Error(pasteInsertZh.changed);
   }
-  function openPasteInsert() {
+  /** 空网格和工具栏沿用同一个新增窗口，只有本次空网格粘贴附带数据。 */
+  function openPasteInsert(data?: DataTransfer) {
     try {
       assertPasteInsertTarget(); if (document.querySelector('[role="dialog"]')) return;
+      if (data && (!tableTabCurrent() || pasteInsertIntent.current || rowsRef.current !== rows || rows.length || sortScopeRef.current !== sortScope)) return;
+      const initial = data && readPasteInsert(data);
       const intent = new PasteInsertIntent(rowsRef.current, getRecordContext(), visibleKeys);
-      pasteInsertIntent.current?.invalidate(); pasteInsertIntent.current = intent; setPasteInsertDialog(intent); setError('');
+      pasteInsertIntent.current?.invalidate(); pasteInsertIntent.current = intent; setPasteInsertInput({ intent, initial }); setError('');
     } catch (reason) { setError(errorMessage(reason)); }
   }
   function closePasteInsert(intent: PasteInsertIntent) {
     intent.invalidate(); if (pasteInsertIntent.current !== intent) return;
-    pasteInsertIntent.current = null; setPasteInsertDialog(null);
+    pasteInsertIntent.current = null; setPasteInsertInput(undefined);
   }
   /** 只一次发布整批本地草稿；键冲突及最终权限仍复用原集中preview/apply。 */
   function stagePasteInsert(intent: PasteInsertIntent, plan: PasteInsertPlan) {
@@ -2592,7 +2598,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   more={<>
     <ActionMenuSection label={tableToolbarZh.editing}><button aria-label={recordDuplicateZh.action} title={copyMetadataReason || (copySourceReady ? recordCopySourceZh.hint : recordDuplicateReadonlyReason(getRecordContext(), referenceRow) || recordDuplicateZh.hint)} disabled={blocked || record.dirty || !!copyMetadataReason || (!!recordDuplicateReadonlyReason(getRecordContext(), referenceRow) && !copySourceReady)} onClick={duplicateCurrentRow}><CopyPlus size={14}/>{recordDuplicateZh.action}</button>
 <button aria-label={recordDuplicateZh.batchAction} title={recordDuplicateZh.batchHint} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={duplicateSelectedRows}><CopyPlus size={14}/>{recordDuplicateZh.batchAction}</button>
-<button aria-label={pasteInsertZh.action} disabled={!editable || blocked || record.dirty || !!pasteInsertDialog} onClick={openPasteInsert}>{pasteInsertZh.action}</button>
+<button aria-label={pasteInsertZh.action} disabled={!editable || blocked || record.dirty || !!pasteInsertDialog} onClick={() => openPasteInsert()}>{pasteInsertZh.action}</button>
 <button aria-label={recordTemplatesZh.open} disabled={!editable || blocked || record.dirty || gridEditing || !!templateDialog} onClick={openRecordTemplates}>{recordTemplatesZh.open}</button>
 <button aria-label={recordBatchEditZh.action} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={() => openRecordBatch()}>{recordBatchEditZh.action}</button>
 <button aria-label={recordBatchFillZh.action} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={() => openBatchFill('page')}>{recordBatchFillZh.action}</button>
@@ -2702,7 +2708,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       event.preventGridDefault(); event.preventDefault(); event.stopPropagation(); return;
     }
     recordPages.cancel(); handleGridKeyDown(args, event);
-  }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/></div>{record.formOpen && <RecordFormPanel editor={record} context={getRecordContext()} rows={rows} visibleKeys={visibleKeys} pageNavigation={{ ...(tableEdits.selected ? { previousLabel: workspaceText.stagePrevious, nextLabel: workspaceText.stageNext } : {}), previous: !restoredDraftView && pageIndex > 1 && (rows.length === 0 || !!record.draft), next: !restoredDraftView && !!page?.hasMore && pageIndex < maxTablePage && !!record.draft, message: recordPageMessage.revision === recordPages.revision ? recordPageMessage.text : '', onNavigate: navigateRecordPage }} onSelect={rowId => { const key = selection?.key && visibleKeys.includes(selection.key) ? selection.key : visibleKeys[0]; if (key) jumpToMatch(rowId, key); }}/>}</div>{(page || checkedExport.value) && <TableCheckedExportActions collection={checkedExport.value}
+  }} renderers={{ noRowsFallback: <GridEmptyState onPaste={editable && !blocked && !externalStale && !restoredDraftView ? openPasteInsert : undefined}/> }}/></div>{record.formOpen && <RecordFormPanel editor={record} context={getRecordContext()} rows={rows} visibleKeys={visibleKeys} pageNavigation={{ ...(tableEdits.selected ? { previousLabel: workspaceText.stagePrevious, nextLabel: workspaceText.stageNext } : {}), previous: !restoredDraftView && pageIndex > 1 && (rows.length === 0 || !!record.draft), next: !restoredDraftView && !!page?.hasMore && pageIndex < maxTablePage && !!record.draft, message: recordPageMessage.revision === recordPages.revision ? recordPageMessage.text : '', onNavigate: navigateRecordPage }} onSelect={rowId => { const key = selection?.key && visibleKeys.includes(selection.key) ? selection.key : visibleKeys[0]; if (key) jumpToMatch(rowId, key); }}/>}</div>{(page || checkedExport.value) && <TableCheckedExportActions collection={checkedExport.value}
       position={page?.page ?? -1} selected={selectedRows.size}
       ready={pageExportAvailable && settings.activeTabId === tab.id} hasDrafts={!!changes.length}
       onCollect={collectCheckedPage} onExport={exportCollectedPages}
@@ -2733,7 +2739,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     {pageExport && <ResultExportDialog result={pageExport.data} tabId={tab.id} scope={pageExport.scope ?? 'table'} selected={pageExport.selected} allowSql={pageExport.scope !== 'collected'} onClose={() => { if (pageExportRef.current === pageExport) { pageExportRef.current = null; setPageExport(null); } }}/>}
     {queryTemplate && <TableQueryTemplateDialog info={queryTemplate.info} limit={queryTemplate.limit} isCurrent={() => queryTemplateCurrent(queryTemplate)} onOpen={(sql, kind, options) => openGeneratedQuery(queryTemplate, sql, kind, options)} onClose={() => closeQueryTemplate(queryTemplate)}/>}
     {filteredSelectDialog && <TableQueryTemplateDialog info={filteredSelectDialog.info} limit={filteredSelectDialog.limit} readScope={filteredSelectDialog.readScope} isCurrent={() => filteredSelectDialog.current()} onOpen={(sql, kind, options) => openFilteredSelectQuery(filteredSelectDialog, sql, kind, options)} onClose={() => closeFilteredSelect(filteredSelectDialog)}/>}
-    {pasteInsertDialog && <PasteInsertDialog info={pasteInsertDialog.context.info!} visibleKeys={pasteInsertDialog.visible} invalidReason={pasteInsertDialog.reason(rowsRef.current, getRecordContext())} onStage={plan => stagePasteInsert(pasteInsertDialog, plan)} onClose={() => closePasteInsert(pasteInsertDialog)}/>}
+    {pasteInsertInput && pasteInsertDialog && <PasteInsertDialog info={pasteInsertDialog.context.info!} visibleKeys={pasteInsertDialog.visible} initial={pasteInsertInput.initial} invalidReason={pasteInsertDialog.reason(rowsRef.current, getRecordContext())} onStage={plan => stagePasteInsert(pasteInsertDialog, plan)} onClose={() => closePasteInsert(pasteInsertDialog)}/>}
     {templateDialog && <RecordTemplatesDialog key={templateDialog.lease.id} lease={templateDialog.lease} target={base} dialect="mysql" columns={templateDialog.columns} candidate={templateDialog.candidate} onStage={(content, count) => stageRecordTemplate(templateDialog, content, count)} onClose={() => closeRecordTemplates(templateDialog)}/>}
     {recordBatchDialog && <TableRecordBatchDialog key={recordBatchDialog.id} intent={recordBatchDialog} current={() => recordBatchCurrent(recordBatchDialog)} onStage={candidates => stageRecordBatch(recordBatchDialog, candidates)} onDirty={dirty => recordBatchDirty(recordBatchDialog, dirty)} onClose={() => closeRecordBatch(recordBatchDialog)}/>}
     {batchFillDialog && <TableBatchFillDialog intent={batchFillDialog} initialColumn={selection?.key} invalidReason={batchFillDialog.reason(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page)} onStage={assignments => stageBatchFill(batchFillDialog, assignments)} onClose={() => closeBatchFill(batchFillDialog)}/>}

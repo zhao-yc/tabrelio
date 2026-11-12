@@ -1,0 +1,13 @@
+.grid-empty-paste {
+  display: inline-grid;
+  gap: 5px;
+  margin: 0 12px;
+  padding: 8px 12px;
+  border-radius: 5px;
+  pointer-events: auto;
+}
+
+.grid-empty-paste:focus {
+  outline: 1px solid var(--accent);
+  background: var(--accent-bg);
+}

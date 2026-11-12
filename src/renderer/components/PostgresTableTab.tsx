@@ -123,6 +123,7 @@ import './PostgresTableTab.css';
 
 type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 'sort'>;
 type GridReferenceChoice = PostgresReferenceSource & { stage(fields: PostgresTableField[]): void };
+type PasteAppendInput = { scope: object; initial?: ReturnType<typeof postgresClipboardInput> };
 type PageMovement = { recordEdge?: 'last'; navigation?: PostgresTablePageInput['navigation'] };
 type PageRead = PageMovement & Pick<PostgresTablePageInput, 'retainPageTokens' | 'retainHistoryPageTokens'> &
   { keepHistory?: boolean; checkFilterColumns?: true; presetLayout?: TablePreferences };
@@ -228,13 +229,13 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const [draftFile, setDraftFile] = useState<'save' | 'restore'>();
   const [queryTemplate, setQueryTemplate] = useState<QueryTemplateIntent>();
   const queryTemplateOwner = useRef<QueryTemplateIntent>(undefined);
-  const [pasteScope, setPasteScope] = useState<object>();
+  const [pasteAppend, setPasteAppend] = useState<PasteAppendInput>();
   const transfer = usePostgresRecordTransfer(state => state.snapshot);
   const [transferIntent, setTransferIntent] = useState<{ snapshot: PostgresRecordTransfer; scope: object }>();
   const connectionCatalog = useWorkspace(state => state.connections);
   const pageCatalog = useRef<typeof connectionCatalog>(undefined);
   const connectionName = connectionCatalog.find(item => item.id === tab.connectionId)?.name;
-  const pasteOwner = useRef<object>(undefined);
+  const pasteOwner = useRef<PasteAppendInput>(undefined);
   const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
   const findAnchor = useRef<{ scope: object; value?: GridFindTarget }>(undefined);
   const [form, setForm] = useState<{ row: number | null; duplicate?: DuplicateSource; insertion?: InsertDraftSource }>();
@@ -557,7 +558,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!checkedDelete || !!checkedUpdate || !!checkedDuplicate || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || !!gridReference || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteAppend || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!checkedDelete || !!checkedUpdate || !!checkedDuplicate || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || !!gridReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const headerDetails = useMemo(() => ({ showType: showFieldType, showComment: showFieldComment,
     onShowTypeChange: blocked ? undefined : setShowFieldType, onShowCommentChange: blocked ? undefined : setShowFieldComment,
@@ -1197,21 +1198,34 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     setError(''); setMessage(transferText.staged(changes.length));
   }
 
-  function closePasteAppend(owner: object) {
+  /** 空网格的原生粘贴只给当前新增窗口附加一次输入，暂存仍由窗口明确触发。 */
+  function openPasteAppend(data?: DataTransfer) {
+    if (!canPasteAppend || issued.current !== page?.pageToken || lease.current || inlineOwner.current || pasteOwner.current ||
+        !layoutScope.current.current() || (data && page?.rows.length) ||
+        document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    try {
+      const input: PasteAppendInput = { scope: cellScope, initial: data && postgresClipboardInput(data) };
+      pasteOwner.current = input;
+      setPasteAppend(input);
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  function closePasteAppend(owner: PasteAppendInput) {
     if (pasteOwner.current !== owner) return;
     pasteOwner.current = undefined;
-    setPasteScope(undefined);
+    setPasteAppend(undefined);
   }
 
   /** 只消费当前页剪贴板计划，读取、预览和提交由既有按钮独立触发。 */
-  function stageGridPaste(start: string, source: { plain: string; typed?: string }, cell?: QueryResultCopyCell, owner?: object,
+  function stageGridPaste(start: string, source: { plain: string; typed?: string }, cell?: QueryResultCopyCell, owner?: PasteAppendInput,
     range?: GridRangeTarget<DataRow>) {
     if (!page?.pageToken || issued.current !== page.pageToken || !layoutScope.current.current() || lease.current ||
       inlineOwner.current || requiresRefresh || pasteOwner.current !== owner) throw Error(pasteText.expired);
     if (cell) {
       if (!canEditGrid || !cell.column || page.rows[cell.index] !== cell.row || !gridLayout.columns.some(column => column === cell.column) ||
         document.querySelector('[role="dialog"], [role="alertdialog"]')) throw Error(pasteText.expired);
-    } else if (!owner || owner !== cellScope || !page.capabilities.insert) throw Error(pasteText.expired);
+    } else if (owner?.scope !== cellScope || !page.capabilities.insert) throw Error(pasteText.expired);
     if (range) {
       const first = gridLayout.columns.findIndex(column => column.key === range.keys[0]);
       if (!cell || first < 0 || range.rows.some((row, index) => page.rows[range.startRow + index] !== row) ||
@@ -1773,12 +1787,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       <button disabled={!canUseTemplates} onClick={openRecordTemplates}>{templateText.open}</button>
       <button disabled={!active || !writable || !draft.length} onClick={() => setDraftFile('save')}>{draftFilesText.save}</button>
       <button disabled={!active || !writable || !!draft.length} onClick={() => setDraftFile('restore')}>{draftFilesText.restore}</button>
-      <button disabled={!canPasteAppend} onClick={() => {
-        if (!canPasteAppend || lease.current || inlineOwner.current || !layoutScope.current.current() ||
-          document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
-        pasteOwner.current = cellScope;
-        setPasteScope(cellScope);
-      }}>{pasteText.append}</button>
+      <button disabled={!canPasteAppend} onClick={() => openPasteAppend()}>{pasteText.append}</button>
       <button disabled={!canReceiveTransfer} onClick={() => {
         if (canReceiveTransfer && transfer && page?.pageToken === issued.current && layoutScope.current.current() && !lease.current && !recordInput.current) {
           // 新增或编辑任意连接会使引擎的旧页修订失效，先刷新，避免消费暂存后才发现草稿无法预览。
@@ -2023,6 +2032,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           try { stageGridPaste(cell.column.key, postgresClipboardInput(data), cell, undefined, range); }
           catch (reason) { setError(errorMessage(reason)); }
         }}
+        onEmptyPaste={canPasteAppend || pasteAppend ? openPasteAppend : undefined}
         frozenKeys={gridLayout.frozenKeys} freezeColumns={headerFreeze} columnVisibility={columnVisibility} onColumnReorder={reorderTableColumns} columnWidths={gridLayout.widths} rowHeight={layoutView.preferences.rowHeight} onRowHeightChange={layoutView.ready && !layoutView.pending ? resizeRowHeight : undefined} onColumnWidthsChange={resizeLayout}
         sort={sorted} onSortChange={frozenPage ? undefined : sort => {
           try {
@@ -2036,8 +2046,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     {inlineEdit && <PostgresInlineCellEditor anchor={inlineEdit.anchor} column={inlineEdit.column}
       initial={inlineEdit.initial} originalText={inlineEdit.originalText} typed={inlineEdit.typed} visible={active}
       onStage={value => stageInlineEdit(inlineEdit, value)} onCancel={() => closeInlineEdit(inlineEdit)}/>}
-    {pasteScope && <PostgresGridPasteDialog columns={gridLayout.columns} onClose={() => closePasteAppend(pasteScope)}
-      onStage={(start, source) => stageGridPaste(start, source, undefined, pasteScope)}/>}
+    {pasteAppend && <PostgresGridPasteDialog columns={gridLayout.columns} initial={pasteAppend.initial}
+      onClose={() => closePasteAppend(pasteAppend)}
+      onStage={(start, source) => stageGridPaste(start, source, undefined, pasteAppend)}/>}
     {transferIntent && page && <PostgresRecordTransferDialog snapshot={transferIntent.snapshot} target={transferTable} columns={page.columns}
       onStage={stageTransfer} onClose={() => setTransferIntent(undefined)}/>}
     {batch?.kind === 'fill' && <PostgresBatchFillDialog columns={fillColumns} count={batch.selected.size}
