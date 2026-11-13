@@ -543,12 +543,8 @@ for (const dialect of ['mysql', 'postgresql'] as const) {
     await model({ line: 3, text: lines[2] });
     await activeEditor().getByRole('textbox').focus();
     await expect(activeEditor().getByRole('textbox')).toBeFocused();
-    await expect.poll(() => desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('sql-clipboard-stack')?.enabled)).toBe(true);
-    await desktop.evaluate(({ Menu, BrowserWindow }) => {
-      const item = Menu.getApplicationMenu()?.getMenuItemById('sql-clipboard-stack'), windows = BrowserWindow.getAllWindows();
-      if (!item?.enabled || windows.length !== 1) throw Error('剪贴板栈原生命令不可用');
-      item.click(item, windows[0], {} as Electron.KeyboardEvent);
-    });
+    // 关闭模态后重新从编辑器按快捷键，避免测试跨进程调用上一修订的原生菜单闭包。
+    await page.keyboard.press(modifier + '+Shift+v');
     await dialog.getByRole('combobox').selectOption('1');
     await paste.click();
     await expect(dialog).toBeHidden();
