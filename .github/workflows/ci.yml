@@ -152,7 +152,6 @@ jobs:
       - run: pnpm test:packaged
         if: steps.mac-keeper-context.outputs.enabled != 'true'
         env:
-          DBARK_GRID_CELL_VALUE_DIALECT: 'sqlite'
           DBARK_NATIVE_EDITOR_CI: '1'
           DBARK_NATIVE_EDITOR_SOURCE_APPROVAL: ${{ steps.native-source.outputs.source_approval }}
           DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256: ${{ steps.native-source.outputs.source_approval_sha256 }}

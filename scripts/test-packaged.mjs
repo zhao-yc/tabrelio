@@ -161,6 +161,8 @@ try {
   }
   // 普通与C02专用夹具统一使用本次安装所得程序，覆盖父进程继承的旧路径。
   const env = { ...process.env, DBARK_EXECUTABLE_PATH: executable, DBARK_C02_EXECUTABLE_PATH: executable, DBARK_INTEGRATION_ENABLED: '0' };
+  // 完整值只在全量回归的子进程启用，前面的原生专项保留原环境白名单。
+  if (process.env.DBARK_NATIVE_EDITOR_CI === '1') env.DBARK_GRID_CELL_VALUE_DIALECT = 'sqlite';
   delete env.DBARK_DEV_URL;
   // 安装完成且环境归一后才做同一固定预检，紧邻真正Playwright启动；关门时不执行网络检查。
   if (env.DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST === '1') command(process.execPath, [join(project, 'scripts', 'check-offline-query-port.mjs')], { env, timeout: 10000 });

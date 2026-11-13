@@ -19,13 +19,14 @@ const cases = [
 ] as const;
 
 /** 运行实际安装函数和测试执行块；文件检查、安装命令与Playwright均为受控端口，不安装或启动程序。 */
-function runProbe(input: typeof cases[number], executableExists = true, helperMode: 'normal' | 'missing' | 'symlink' | 'directory' | 'oversize' | 'changed' = 'normal', nativeGate?: string, preflightFails=false) {
+function runProbe(input: typeof cases[number], executableExists = true, helperMode: 'normal' | 'missing' | 'symlink' | 'directory' | 'oversize' | 'changed' = 'normal', nativeGate?: string, preflightFails=false, ci = false) {
   const path = input.platform === 'win32' ? win32 : posix;
   const inherited = Object.freeze({
     PATH: '保留原路径', LANG: 'zh_CN.UTF-8', KEEP_FIXTURE: '保留自定义环境',
     DBARK_EXECUTABLE_PATH: '继承的错误普通程序', DBARK_C02_EXECUTABLE_PATH: '继承的错误专用程序',
     DBARK_C02_SSH_UI_ENABLED: '1', DBARK_INTEGRATION_ENABLED: '1', DBARK_DEV_URL: 'http://虚构开发地址',
     ...(nativeGate === undefined ? {} : { DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST: nativeGate }),
+    ...(ci ? { DBARK_NATIVE_EDITOR_CI: '1' } : {}),
   });
   const project = path.join(path.dirname(input.directory), '源码项目');
   const node = path.join(path.dirname(input.directory), '运行环境', input.platform === 'win32' ? 'node.exe' : 'node');
@@ -45,9 +46,13 @@ function runProbe(input: typeof cases[number], executableExists = true, helperMo
   });
   const command = vi.fn((_executable: string, args: string[], _options?: { env?: Record<string, string>; timeout?: number; windowsVerbatimArguments?: boolean }) => { if(preflightFails && args[0]===path.join(project,'scripts','check-offline-query-port.mjs'))throw Error('合成固定端口预检失败');return ''; });
   const owned: string[] = [];
+  const fileFirstModel = vi.fn(() => expect(inherited).not.toHaveProperty('DBARK_GRID_CELL_VALUE_DIALECT'));
   // 保留实际安装函数及完整执行块；异步包装仅支持原脚本新增的模式恢复等待。
   const execute = async () => await runInNewContext('(async () => {' + probe + '})()', {
     platform: input.platform, process: { arch: input.arch, env: inherited, execPath: node },
+    preparePackageIdentity: () => ({}), ciContext: () => ({}), approveInstalled: () => ({}),
+    runNativeEditorSpecialties: () => ({}), runNativeFileFirstModel: fileFirstModel,
+    nativeResult: undefined, fileFirstModelResult: undefined, fileFirstModelCleanupAllowed: () => true, macCleanupNonce: undefined,
     productName: 'tabrelio', project, artifact: path.join(project, input.platform === 'win32' ? '安装程序.exe' : '安装映像.dmg'),
     applicationDirectory: input.directory, mountDirectory: path.join(path.dirname(input.directory), '只读挂载'),
     installAttempted: false, join: path.join, basename: path.basename, dirname: path.dirname, command,
@@ -56,10 +61,18 @@ function runProbe(input: typeof cases[number], executableExists = true, helperMo
     existsSync: (target: string) => executableExists && target === input.executable,
     mkdirSync: vi.fn(), console: { log: vi.fn() },
   }, { timeout: 1000 });
-  return { execute, command, inherited, project, node, owned, helper, sourceHelper, read, stat };
+  return { execute, command, inherited, project, node, owned, helper, sourceHelper, read, stat, fileFirstModel };
 }
 
 describe('真实安装执行器统一普通及C02可执行路径', () => {
+  it.each(cases)('$platform/$arch完整值开关只传给安装包全量回归', async input => {
+    const f = runProbe(input, true, 'normal', undefined, false, true);
+    await f.execute();
+    expect(f.fileFirstModel).toHaveBeenCalledOnce();
+    const invocation = f.command.mock.calls.find(([executable]) => executable === f.node);
+    expect(invocation?.[2]?.env?.DBARK_GRID_CELL_VALUE_DIALECT).toBe('sqlite');
+    expect(f.inherited).not.toHaveProperty('DBARK_GRID_CELL_VALUE_DIALECT');
+  });
   it.each(cases)('$platform/$arch门1才紧邻Playwright执行同一固定预检，仍保留环境归一',async input=>{
     const f=runProbe(input,true,'normal','1');await f.execute();const calls=f.command.mock.calls.filter(([executable])=>executable===f.node),path=input.platform==='win32'?win32:posix;
     expect(calls).toHaveLength(2);expect(calls[0][1]).toEqual([path.join(f.project,'scripts','check-offline-query-port.mjs')]);expect(calls[0][2]?.timeout).toBe(10000);
