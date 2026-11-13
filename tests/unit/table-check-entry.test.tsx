@@ -1,3 +1,4 @@
+import { appModalSelector } from '../../src/renderer/modalSelectors';
 import React, { act, useRef, useState, type ComponentProps } from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { readFileSync } from 'node:fs';
@@ -44,7 +45,7 @@ function entry() {
   const otherFlags = Object.fromEntries(['dataSearchEditDirty', 'importNewTable', 'importNewTableEdits', 'databaseDropEdits', 'copyDataEdits', 'tableCreateEdits', 'copyStructureEdits', 'databaseCreateEdits', 'dropEdits', 'truncateEdits', 'counterEdits', 'renameEdits', 'encodingEdits', 'databaseEncodingEdits', 'commentEdits', 'columnEdits', 'indexEdits', 'sqliteObjectsEdits', 'sqliteMaintenanceEdits', 'sqliteRenameEdits', 'sqliteColumnEdits', 'sqliteIndexEdits', 'sqliteRebuildEdits', 'foreignKeyEdits'].map(key => [key, false]));
   let sequence = 0, open!: (value: TableCheckTarget) => void; const invalidate = vi.fn(), mark = vi.fn(), uid = vi.fn(() => `owner-${++sequence}`);
   function DialogPort(props: DialogProps) { views.push(props); return <section role="dialog" aria-label={text.title}/>; }
-  const context = createContext({ exports: {}, ...otherFlags, document, useState, useRef, useWorkspace: store, assertTableChecksTargetAvailable, tableChecksServices, tableCheckMessages, errorMessage, structuredClone, uid, TableCheckConstraintsDialog: DialogPort, workbenchNavigation: { invalidate }, markStructureTarget: mark, captureOpen: (value: typeof open) => { open = value; }, require(name: string) { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
+  const context = createContext({ appModalSelector, exports: {}, ...otherFlags, document, useState, useRef, useWorkspace: store, assertTableChecksTargetAvailable, tableChecksServices, tableCheckMessages, errorMessage, structuredClone, uid, TableCheckConstraintsDialog: DialogPort, workbenchNavigation: { invalidate }, markStructureTarget: mark, captureOpen: (value: typeof open) => { open = value; }, require(name: string) { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
   runInContext(ts.transpileModule(`function Entry(){${declarations.join('\n')}\n${methods.join('\n')}\n${dirty}\ncaptureOpen(openTableChecks);return <><output data-check-has-dirty={hasDirty?'true':'false'}/>{${modal}}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
   return { Entry: (context as any).Entry as React.ComponentType, open: (value = target) => open(value), invalidate, mark, uid };
 }

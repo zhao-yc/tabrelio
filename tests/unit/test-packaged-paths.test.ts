@@ -63,7 +63,7 @@ describe('真实安装执行器统一普通及C02可执行路径', () => {
   it.each(cases)('$platform/$arch门1才紧邻Playwright执行同一固定预检，仍保留环境归一',async input=>{
     const f=runProbe(input,true,'normal','1');await f.execute();const calls=f.command.mock.calls.filter(([executable])=>executable===f.node),path=input.platform==='win32'?win32:posix;
     expect(calls).toHaveLength(2);expect(calls[0][1]).toEqual([path.join(f.project,'scripts','check-offline-query-port.mjs')]);expect(calls[0][2]?.timeout).toBe(10000);
-    expect(calls[1][1]).toEqual([path.join(f.project,'node_modules','@playwright','test','cli.js'),'test']);expect(calls[1][2]?.timeout).toBe(900000);
+    expect(calls[1][1]).toEqual([path.join(f.project,'node_modules','@playwright','test','cli.js'),'test']);expect(calls[1][2]?.timeout).toBe(5400000);
     for(const call of calls){expect(call[2]?.env).toMatchObject({DBARK_EXECUTABLE_PATH:input.executable,DBARK_C02_EXECUTABLE_PATH:input.executable,DBARK_INTEGRATION_ENABLED:'0',DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST:'1'});expect(Object.hasOwn(call[2]!.env!,'DBARK_DEV_URL')).toBe(false)}
     expect(f.command.mock.calls.indexOf(calls[1])).toBe(f.command.mock.calls.indexOf(calls[0])+1);
   });
@@ -86,7 +86,7 @@ describe('真实安装执行器统一普通及C02可执行路径', () => {
       DBARK_INTEGRATION_ENABLED: '0', DBARK_DEV_URL: undefined,
     });
     expect(Object.hasOwn(options!.env!, 'DBARK_DEV_URL')).toBe(false);
-    expect(options?.timeout).toBe(900000);
+    expect(options?.timeout).toBe(5400000);
     expect(f.inherited.DBARK_EXECUTABLE_PATH).toBe('继承的错误普通程序');
     expect(f.inherited.DBARK_C02_EXECUTABLE_PATH).toBe('继承的错误专用程序');
     expect(f.inherited.DBARK_DEV_URL).toBe('http://虚构开发地址');

@@ -34,19 +34,21 @@ function inspect(node: ts.Node) {
     const value = node.getText(file); if (value.includes('onClick={() => void execute()}')) buttons.set('execute', value); if (value.includes('onClick={pinResult}')) buttons.set('pin', value); if (value.includes('onClick={exportVisibleResult}')) buttons.set('export', value);
   }
   if (ts.isBinaryExpression(node) && node.left.getText(file) === 'outcome?.failure && !outcome.scriptReport' && ts.isJsxSelfClosingElement(node.right) && node.right.tagName.getText(file) === 'QueryPartialOutcomeNotice') notice = node.getText(file);
-  if (ts.isJsxExpression(node) && node.expression && ts.isCallExpression(node.expression) && node.expression.expression.getText(file) === 'results.map') resultTabs = node.getText(file);
+  if (ts.isJsxExpression(node) && node.expression && ts.isCallExpression(node.expression) && node.expression.expression.getText(file) === 'resultNames.map') resultTabs = node.getText(file);
   if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === 'QueryParametersDialog') { const prop = node.attributes.properties.find(value => ts.isJsxAttribute(value) && value.name.getText(file) === 'onExecute') as ts.JsxAttribute; if (prop.initializer && ts.isJsxExpression(prop.initializer)) parameterExecute = prop.initializer.expression!.getText(file); }
   ts.forEachChild(node, inspect);
 }
 inspect(file);
-const names = ['runQuery', 'handleQueryError', 'querySource', 'failureSourceScope', 'captureFailureSource', 'clearFailureSource', 'execute', 'cancelCurrentQuery', 'invalidateResultSelection', 'pinResult', 'exportVisibleResult', 'resultSelectionAllowed', 'resultViewCurrent', 'submitParameterQuery'];
-const selected = ['results', 'pin', 'sourceResult', 'sourceExportable', 'viewSource', 'resultContext', 'filterBinding', 'filterView', 'sortBinding', 'sortView', 'displayedView', 'result', 'exportable', 'selectionBinding'];
+const names = ['runQuery', 'handleQueryError', 'querySource', 'failureSourceScope', 'captureFailureSource', 'clearFailureSource', 'execute', 'cancelCurrentQuery', 'invalidateResultSelection', 'pinResult', 'exportVisibleResult', 'resultSelectionAllowed', 'resultViewCurrent', 'submitParameterQuery', 'selectCurrentResult'];
+const selected = ['results', 'resultNames', 'pin', 'sourceResult', 'sourceExportable', 'viewSource', 'resultContext', 'filterBinding', 'filterView', 'sortBinding', 'sortView', 'displayedView', 'result', 'exportable', 'selectionBinding'];
 for (const name of names) if (!functions.has(name)) throw Error('缺少真实QueryTab函数：' + name);
 for (const name of selected) if (!declarations.has(name)) throw Error('缺少真实QueryTab结果声明：' + name);
 if (!subscription || !notice || !parameterExecute || !resultTabs || buttons.size !== 3) throw Error('真实QueryTab窄适配入口不完整');
 const harnessCode = `function Harness({port}) {
  const tab=port.tab, settings=port.workspace.settings, connection={}, connectionVersion=0;
+ const collectStatus=false,collectStages=false,setInterruptedStatus=()=>{};
  const continueOnError=false,parameterContinueOnError={current:false},collectWarnings=false,parameterCollectWarnings={current:false};
+ const parameterDialog=undefined;
  const parameterReuse={current:null},parameterReusePort={current:null};
  const busyRef=useRef(false), task=useRef(''), cancelledQuery=useRef(''), explainSource=useRef(''), sessionRef=useRef('session'), parameterSession=useRef('session'), editor={current:port.editor}, alive=useRef(true);
  const failureSource=useRef(undefined),parameterFailureSource=useRef(undefined),closeRequestRef=useRef(undefined);const [,refreshFailureSource]=useState(0);
@@ -61,9 +63,9 @@ const harnessCode = `function Harness({port}) {
  ${names.map(name => functions.get(name)).join('\n')}
  ${subscription}
  const executeParameters=${parameterExecute};
- const ${declarations.get('results')};const ${declarations.get('pin')};const ${declarations.get('sourceResult')};const ${declarations.get('sourceExportable')};const ${declarations.get('viewSource')};const ${declarations.get('resultContext')};
+ const ${declarations.get('results')};const ${declarations.get('resultNames')};const ${declarations.get('pin')};const ${declarations.get('sourceResult')};const ${declarations.get('sourceExportable')};const ${declarations.get('viewSource')};const ${declarations.get('resultContext')};
  const visibleColumns=sourceResult?.columns??[],resultModal=false,failureLocator=failureSource.current;
- const ${declarations.get('filterBinding')};const ${declarations.get('filterView')};const ${declarations.get('sortBinding')};const ${declarations.get('sortView')};const ${declarations.get('displayedView')};const ${declarations.get('result')};const ${declarations.get('exportable')};const ${declarations.get('selectionBinding')};
+ const ${declarations.get('filterBinding')};const ${declarations.get('filterView')};const ${declarations.get('sortBinding')};const ${declarations.get('sortView')};const ${declarations.get('displayedView')};const organizedResult=displayedView?.result??sourceResult;const matchView={result:organizedResult};const ${declarations.get('result')};const ${declarations.get('exportable')};const ${declarations.get('selectionBinding')};
  port.read=()=>({busy,queryRunning,error,outcome,stream,results,sourceResult,sourceExportable,selectionBinding,filterBinding,filterView,sortBinding,sortView,exportResult,pins,transaction,transactionKnown});
  port.current=()=>runQuery(port.sql,'execute',undefined,port.intent);port.cancel=cancelCurrentQuery;
  return <>${buttons.get('execute')}${buttons.get('pin')}${buttons.get('export')}${resultTabs}<button onClick={()=>executeParameters(port.parameters)}>正式参数回调</button>{${notice}}<ErrorBox message={error}/><div aria-label="本次结果">{results.map((item,index)=><p key={index}>{JSON.stringify(item.rows)}</p>)}</div></>;

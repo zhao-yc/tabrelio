@@ -33,7 +33,7 @@ jobs:
         run: python3 -I -B tests/python/test_query_result_sort_case_readback.py
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm build
+      - run: node --max-old-space-size=4096 scripts/build.mjs
   desktop:
     name: ${{ matrix.label }}
     # 员工任务分支保留Linux完整检查；集成、PR、主分支、发行标签和明确手动运行仍走全部原生门。
@@ -77,11 +77,12 @@ jobs:
         run: node scripts/check-backup-windows-helper.mjs
       - name: 预检固定离线查询端口（仅127.0.0.1:1）
         run: node scripts/check-offline-query-port.mjs
-      - name: 标记准确main或候选托管arm64显示租约上下文
+      - name: 标记主线、候选或发行标签的托管arm64显示租约上下文
         id: mac-keeper-context
         if: >-
           runner.os == 'macOS' && runner.arch == 'ARM64' &&
-          (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/query-result-range-filter-20261020') &&
+          (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/query-result-range-filter-20261020' ||
+          github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) &&
           (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         shell: bash
         run: echo 'enabled=true' >> "$GITHUB_OUTPUT"
@@ -131,6 +132,7 @@ jobs:
         env:
           # 已验的本地查询导航在三个原生平台执行；私网用例继续关闭。
           DBARK_INTEGRATION_ENABLED: '0'
+          DBARK_GRID_CELL_VALUE_DIALECT: 'sqlite'
           DBARK_W03_SAVED_QUERY_NAVIGATION_TEST: '1'
           # 真实Monaco热更新、SQLite落盘及独立重启；不使用系统剪贴板或私网数据库。
           DBARK_EDITOR_FONT_NATIVE_TEST: '1'
@@ -150,6 +152,7 @@ jobs:
       - run: pnpm test:packaged
         if: steps.mac-keeper-context.outputs.enabled != 'true'
         env:
+          DBARK_GRID_CELL_VALUE_DIALECT: 'sqlite'
           DBARK_NATIVE_EDITOR_CI: '1'
           DBARK_NATIVE_EDITOR_SOURCE_APPROVAL: ${{ steps.native-source.outputs.source_approval }}
           DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256: ${{ steps.native-source.outputs.source_approval_sha256 }}

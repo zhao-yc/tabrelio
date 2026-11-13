@@ -1,3 +1,4 @@
+import { appDialogSelector } from '../../src/renderer/modalSelectors';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -27,7 +28,7 @@ function app(hasDialog = false) {
     ts.forEachChild(node, visit);
   }; visit(tree); if (!open || expressions.size !== 6) throw Error('混合App缺少唯一自增/重命名真实接线');
   const setTarget = vi.fn(), setVersion = vi.fn(), setEdits = vi.fn(), mark = vi.fn(), invalidate = vi.spyOn(navigation, 'invalidate');
-  const context = createContext({ document: { querySelector: () => hasDialog ? {} : null }, structuredClone, useWorkspace: workspace.useWorkspace, workbenchNavigation: navigation, assertTableAutoIncrementTargetAvailable, errorMessage: String, tableAutoIncrementZh, setCounterTarget: setTarget, setCounterVersion: setVersion, setCounterEdits: setEdits, counterTarget: target, counterVersion: 0, renameTarget: target, renameVersion: 0, markStructureTarget: mark, refreshRenameDatabase: vi.fn(), tab: { ...target, id: 'visible', kind: 'table' } });
+  const context = createContext({ appDialogSelector, document: { querySelector: () => hasDialog ? {} : null }, structuredClone, useWorkspace: workspace.useWorkspace, workbenchNavigation: navigation, assertTableAutoIncrementTargetAvailable, errorMessage: String, tableAutoIncrementZh, setCounterTarget: setTarget, setCounterVersion: setVersion, setCounterEdits: setEdits, counterTarget: target, counterVersion: 0, renameTarget: target, renameVersion: 0, markStructureTarget: mark, refreshRenameDatabase: vi.fn(), tab: { ...target, id: 'visible', kind: 'table' } });
   runInContext(ts.transpileModule(open.getText(tree) + '\n' + [...expressions].map(([name, value]) => `globalThis.${name}=${value};`).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, setTarget, setVersion, setEdits, mark, invalidate, invoke(entry: 'Sidebar' | 'TableTab') { if (entry === 'Sidebar') context.Sidebar_onTableAutoIncrement(target.connectionId, target.database, target.table); else context.TableTab_onTableAutoIncrement(); } };
 }

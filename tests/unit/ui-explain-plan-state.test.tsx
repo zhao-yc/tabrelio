@@ -41,7 +41,7 @@ function fixture() {
   const frames: ReactElement[] = [], clearOutcome = vi.fn();
   // 本端口只核计划身份，结果选择回调保持关闭；执行路径仍清除真实选择实例。
   // 未打开结果写入用途的真实初始引用，不替换原执行函数或断言。
-  const context = createContext({ ...queryDialectVm(),  snapshotOperation: { current: null }, resultInsertRef: { current: null }, resultInsertActivity: { current: 0 }, filterBinding: undefined, filterView: undefined, historyBinding: undefined, comparisonLeaseRef: { current: null }, setComparisonLease: vi.fn(), statisticsLeaseRef: { current: null }, setStatisticsLease: vi.fn(), sortLeaseRef: { current: null }, setSortLease: vi.fn(), filterLeaseRef: { current: null }, setFilterLease: vi.fn(), resultSelection: selection.resultSelection, selectionBinding: undefined, selectResultRows: vi.fn(() => false), require, exports: {}, tab, settings: { resultLimit: 10 }, busy: false, pin: null, outcome, result: outcome.results[0], resultIndex: 0,
+  const context = createContext({ ...queryDialectVm(), setInterruptedStatus: vi.fn(), collectStatus: false, collectStages: false,  snapshotOperation: { current: null }, resultInsertRef: { current: null }, resultInsertActivity: { current: 0 }, filterBinding: undefined, filterView: undefined, historyBinding: undefined, comparisonLeaseRef: { current: null }, setComparisonLease: vi.fn(), statisticsLeaseRef: { current: null }, setStatisticsLease: vi.fn(), sortLeaseRef: { current: null }, setSortLease: vi.fn(), filterLeaseRef: { current: null }, setFilterLease: vi.fn(), resultSelection: selection.resultSelection, selectionBinding: undefined, selectResultRows: vi.fn(() => false), require, exports: {}, tab, settings: { resultLimit: 10 }, busy: false, pin: null, outcome, result: outcome.results[0], resultIndex: 0,
     // 真实初始控制器及未打开的派生视图；活动行回调也从组件AST提取，不另写处理器。
     resultSorter: new QueryResultSort(), sortBinding: undefined, sortView: undefined, rowDetails: new QueryRowDetails(), setRowDetail: vi.fn(), setActiveDetailRow: vi.fn(), currentRowDetail: null, detailBinding: undefined, alive: { current: true }, connectionVersion: 0, document: { querySelector: () => null },
     // 此端口不打开列管理，普通结果的可见列随当前结果更新，不能捕获执行前的计划列。
@@ -57,6 +57,11 @@ function fixture() {
     setSave: vi.fn(), flushSettings: vi.fn(async () => {}), rememberDatabase: vi.fn(), errorMessage: String, queryBindingZh, queryContextZh, savedQueryOriginContext, queryDatabaseFromSession, resolveQueryDatabase,
     ensureSession: vi.fn(async () => 'original-session'), prepareExecutionContext: vi.fn(async () => {}), handleQueryError: vi.fn(), uid: () => 'new-query-task',
     setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(),
+    activeReplace: undefined, recordEdit: undefined, mysqlRelation: undefined, replaceRows: [], sqliteReplaceRows: [],
+    replaceWritable: vi.fn(), originsText: {}, mysqlBatchText: {}, openResultReplace: vi.fn(), closeResultReplace: vi.fn(),
+    previewResultReplace: vi.fn(), stageResultReplace: vi.fn(), columnVisibility: undefined, reorderResultColumns: vi.fn(),
+    resizeResultRowHeight: vi.fn(), changeMatchView: vi.fn(), exportGridRange: vi.fn(), recordEditTable: undefined,
+    mysqlRelationAvailable: false, restoreEditedCell: undefined, PostgresTableFindPanel: 'PostgresTableFindPanel',
     ExplainPlanView, ResultsGrid, Empty: () => null, formatText: () => '', zh: { query: {} },
   });
   const code = functions.join('\n') + '\nglobalThis.render=()=>(' + body + ');globalThis.handlers={saveQuery,runQuery};';
@@ -67,8 +72,8 @@ function fixture() {
     if (content.type !== 'div') return content;
     expect(content.props.className).toBe('query-result-with-details');
     const [grid, details] = content.props.children as [ReactElement<any>, unknown];
-    expect(grid.props.className).toBe('query-result-grid'); expect(details).toBeNull();
-    return grid.props.children as ReactElement;
+    expect(grid.props.host.className).toBe('query-result-grid'); expect(details).toBeNull();
+    return grid.props.renderGrid() as ReactElement;
   };
   return { selection, context, invoke, frames, clearOutcome, outcome, child, save: context.handlers.saveQuery as (action: 'create' | 'update', name: string) => Promise<void>, execute: context.handlers.runQuery as (source: string) => Promise<void> };
 }

@@ -1,3 +1,6 @@
+import { TabOrderRegistry } from '../../src/renderer/tabOrder';
+import { rememberWorkspaceTab } from '../../src/renderer/recentWorkspaceTabs';
+import { assertQueryTabPinWrite } from '../../src/shared/queryTabPin';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -12,7 +15,7 @@ import { assertObjectBrowserTabs } from '../../src/shared/objectBrowser';
 /** 提取真实统一提交/持久化/打开lease；Zustand与校验器真实执行，仅IPC和计时器为RAM。 */
 function settingsFixture() {
   const source = readFileSync(new URL('../../src/renderer/store.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('store.ts', source, ts.ScriptTarget.Latest, true);
-  const names = new Set(['commitWorkspaceSettings', 'persist', 'beginQueryFileOpen', 'wasQueryFileOpenTarget']), functions: string[] = []; let update = '';
+  const names = new Set(['commitWorkspaceSettings', 'workspaceTabHistory', 'persist', 'beginQueryFileOpen', 'wasQueryFileOpenTarget']), functions: string[] = []; let update = '';
   function visit(node: ts.Node) {
     if (ts.isFunctionDeclaration(node) && node.name && names.has(node.name.text)) functions.push(node.getText(tree));
     if (ts.isPropertyAssignment(node) && node.name.getText(tree) === 'updateSettings') update = node.initializer.getText(tree);
@@ -23,7 +26,7 @@ function settingsFixture() {
   const store = createStore<any>(() => ({ settings: { tabs: [] }, queryFileDirty: {}, queryFileOpenings: {}, dirtyTabs: {}, connections: [{ id: 'target' }], connectionVersions: { target: 0 }, notify }));
   let sequence = 0;
   const timers = new Map<number, () => void>(), schedule = vi.fn((action: () => void, _delay: number) => { const id = ++sequence; timers.set(id, action); return id; });
-  const port = createContext({ exports: {}, JSON, Error, WeakSet, queryFileOpenTargets: new WeakSet(), useWorkspace: store, assertObjectBrowserTabs, assertQueryFileSourceSettings, assertQueryFileSourceSql, sameQueryFileSource, queryFilesZh, invoke, errorMessage: String, saveTimer: undefined,
+  const port = createContext({ exports: {}, JSON, Error, WeakSet, queryFileOpenTargets: new WeakSet(), assertQueryTabPinWrite, tabOrder: new TabOrderRegistry(), rememberWorkspaceTab, useWorkspace: store, assertObjectBrowserTabs, assertQueryFileSourceSettings, assertQueryFileSourceSql, sameQueryFileSource, queryFilesZh, invoke, errorMessage: String, saveTimer: undefined,
     setTimeout: schedule, clearTimeout: (id: number | undefined) => { if (id !== undefined) timers.delete(id); },
   });
   runInContext(ts.transpileModule(functions.join('\n') + '\nglobalThis.update=(' + update + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, port);

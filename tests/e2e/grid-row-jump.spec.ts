@@ -748,7 +748,7 @@ test('SQLite 查询替换快捷键按当前焦点路由并保留原预览', asyn
   await info.attach('SQLite结果替换快捷键', { body: await page.screenshot(), contentType: 'image/png' });
   await panel.getByRole('button', { name: replaceText.close, exact: true }).click();
 
-  await editor.locator('.view-lines').click();
+  await editor.getByRole('textbox').focus();
   await menuReplace();
   await expect(editorReplace).toBeVisible();
   await expect(panel).toBeHidden();
@@ -837,7 +837,10 @@ test('SQLite JOIN 查询替换原生文本，去重投影并回滚并发冲突',
     await selectedOnly.check();
     await expect(panel.getByRole('status')).toHaveText(replaceText.checkedEmpty);
     await expect(all).toBeDisabled();
-    const second = query.getByRole('gridcell', { name: '2', exact: true }).locator('..').getByRole('checkbox');
+    const grid = query.locator('.query-result-grid').getByRole('grid');
+    // 紧凑窗口中的替换控件会压缩结果区，先滚动以挂载实际第二行。
+    await grid.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    const second = grid.getByRole('gridcell', { name: '2', exact: true }).locator('..').getByRole('checkbox');
     await second.check();
     await expect(panel.getByText(replaceText.checkedScope(1), { exact: true })).toBeVisible();
     await all.click();
@@ -2125,7 +2128,18 @@ test('SQLite 查询文本快捷筛选按字面匹配且不扫描其它存储类�
   await page.getByRole('menuitem', { name: queryLayoutZh.results, exact: true }).click();
   const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
   const original = ['1', '2', '3', '4', '5', '6', '7'];
-  await expect(ids).toHaveText(original);
+  async function expectOriginalRows() {
+    await expect(grid).toHaveAttribute('aria-rowcount', String(original.length + 1));
+    await grid.evaluate(element => { element.scrollTop = 0; });
+    await expect(ids.first()).toHaveText(original[0]);
+    const firstRows = await ids.allTextContents();
+    await grid.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await expect(ids.last()).toHaveText(original.at(-1)!);
+    expect([...new Set([...firstRows, ...await ids.allTextContents()])]).toEqual(original);
+    await grid.evaluate(element => { element.scrollTop = 0; });
+    await expect(ids.first()).toHaveText(original[0]);
+  }
+  await expectOriginalRows();
   const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'query.execute').map(task => task.id));
   const before = await tasks();
   const menu = page.getByRole('menu');
@@ -2155,7 +2169,7 @@ test('SQLite 查询文本快捷筛选按字面匹配且不扫描其它存储类�
     await panel.getByRole('button', { name: filterText.apply, exact: true }).click();
     await expect(ids).toHaveText(expected);
     await (await navigationMenuItem(query, { name: resultHistoryText.undo, exact: true })).click();
-    await expect(ids).toHaveText(original);
+    await expectOriginalRows();
   }
   expect(await tasks()).toEqual(before);
   expect(pageErrors).toEqual([]);
@@ -2366,7 +2380,7 @@ test('SQLite 只读查询结果按焦点接收查找菜单并保留查找条件'
   await query.getByRole('button', { name: resultFind.close, exact: true }).click();
   await query.getByRole('button', { name: queryLayoutZh.placement, exact: true }).click();
   await page.getByRole('menuitem', { name: queryLayoutZh.below, exact: true }).click();
-  await editor.locator('.view-lines').click();
+  await editor.getByRole('textbox').focus();
   await clickNativeFind();
   await expect(editorFind).toBeVisible();
   await expect(input).toHaveCount(0);
@@ -3468,6 +3482,9 @@ test('拖选靠近底边会继续滚动，松开后可复制滚过的完整矩�
   try {
     await page.mouse.move(x, y, { steps: 10 });
     await expect.poll(() => grid.evaluate(element => element.scrollTop)).toBeGreaterThan(650);
+    // 滚动偏移先变化，等待虚拟网格实际绘制新端点再松开鼠标。
+    await expect.poll(() => grid.locator('[aria-rowindex]').filter({ has: page.locator('.grid-cell-in-range') })
+      .evaluateAll(rows => Math.max(0, ...rows.map(row => Number(row.getAttribute('aria-rowindex')))))).toBeGreaterThan(21);
   } finally { await page.mouse.up(); }
   const payload = await readGridRangeClipboard(page);
   const rows = JSON.parse(payload.typed).rows;

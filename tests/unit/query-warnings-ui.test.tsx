@@ -29,9 +29,9 @@ if (!option || !notice || !parameterExecute || !functions.has('runQuery')) throw
 
 function execution(outcome: QueryOutcome = { results: [], elapsedMs: 1 }) {
   const invoke = vi.fn(async () => outcome), ensureSession = vi.fn(async () => '原会话'), setOutcome = vi.fn(), clearFailureSource = vi.fn();
-  const context: any = createContext({ ...queryDialectVm(),  Error, Set, invoke, ensureSession, setOutcome, clearFailureSource, collectWarnings: false, continueOnError: false, warningsResultSource: { current: null },
+  const context: any = createContext({ ...queryDialectVm(), setInterruptedStatus: vi.fn(), collectStatus: false, collectStages: false,  Error, Set, invoke, ensureSession, setOutcome, clearFailureSource, collectWarnings: false, continueOnError: false, warningsResultSource: { current: null },
     parameterReuse: { current: null }, parameterReusePort: { current: null }, parameterReuseOwner: () => ({ begin: () => null }),
-    busyRef: { current: false }, task: { current: '' }, cancelledQuery: { current: '' }, explainSource: { current: '' }, parameterSession: { current: '原会话' }, parameterFailureSource: { current: undefined }, parameterContinueOnError: { current: false }, parameterCollectWarnings: { current: false }, parameterSource: null,
+    busyRef: { current: false }, task: { current: '' }, cancelledQuery: { current: '' }, explainSource: { current: '' }, parameterSession: { current: '原会话' }, parameterFailureSource: { current: undefined }, parameterContinueOnError: { current: false }, parameterCollectWarnings: { current: false }, parameterSource: null, parameterDialog: undefined,
     settings: { resultLimit: 20 }, tab: { id: '原标签' }, useWorkspace: { getState: () => ({ setBusy: vi.fn(), setDirty: vi.fn() }) },
     handleQueryError: vi.fn(async () => {}), invalidateResultSelection: vi.fn(), prepareExecutionContext: vi.fn(async () => {}), uid: () => '原任务',
     setBusy: vi.fn(), setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(),

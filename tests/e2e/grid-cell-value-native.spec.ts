@@ -23,7 +23,7 @@ test('从表页和查询结果查看完整单元格，保留分段边界与原�
   const local = dialect === 'sqlite', pg = dialect === 'postgresql';
   const database = local ? 'main' : process.env.DBARK_GRID_CELL_VALUE_DATABASE ?? '';
   const port = Number(process.env.DBARK_GRID_CELL_VALUE_PORT), password = process.env.DBARK_GRID_CELL_VALUE_PASSWORD ?? '';
-  if (process.env.DBARK_DEV_URL || process.env.DBARK_EXECUTABLE_PATH ||
+  if (process.env.DBARK_DEV_URL || (!local && process.env.DBARK_EXECUTABLE_PATH) ||
       (local ? process.env.DBARK_INTEGRATION_ENABLED !== '0' : process.env.DBARK_INTEGRATION_ENABLED !== '1' ||
         !['postgresql', 'mysql', 'mariadb'].includes(dialect!) || !/^tabrelio_cv_[a-f0-9]{12}$/.test(database) ||
         !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535))

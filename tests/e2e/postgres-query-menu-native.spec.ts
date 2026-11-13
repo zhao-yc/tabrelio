@@ -1266,19 +1266,21 @@ test('PostgreSQL 命名结果按实际执行语句区分并随固定结果保留
   await quitDesktop();
 });
 
-async function resizeQueryWindow(width: number, height: number) {
+async function resizeQueryWindow(width: number, height: number, zoom = 1) {
   await desktop.evaluate(({BrowserWindow}, size) => {
     const window = BrowserWindow.getAllWindows()[0];
-    window.setMinimumSize(720, 320);
-    window.setContentSize(size.width, size.height);
-  }, {width, height});
+    window.setMinimumSize(Math.round(720 * size.zoom), Math.round(320 * size.zoom));
+    window.webContents.setZoomFactor(size.zoom);
+    window.setContentSize(Math.round(size.width * size.zoom), Math.round(size.height * size.zoom));
+  }, {width, height, zoom});
 }
 
 test('PostgreSQL 查询布局支持原生拖动、键盘和窄窗回退并保留草稿', async ({}, info) => {
   const original = "SELECT 1;\nSELECT '原草稿😀';";
   await prepare({id: '', name: '离线 PostgreSQL 布局', dialect: 'postgresql', group: '', color: '#123456',
     host: '127.0.0.1', port: 1, user: 'offline', database: 'postgres'}, original);
-  await resizeQueryWindow(1280, 820);
+  // 在较小的原生屏幕上也给实际分栏留足 CSS 像素，继续验证原高度和宽度。
+  await resizeQueryWindow(1280, 920, 0.75);
   const placement = tab().getByRole('combobox', {name: queryLayoutZh.placement, exact: true});
   const heightBar = tab().getByRole('separator', {name: queryLayoutZh.separator, exact: true});
   const widthBar = tab().getByRole('separator', {name: queryLayoutZh.widthSeparator, exact: true});
@@ -1318,12 +1320,12 @@ test('PostgreSQL 查询布局支持原生拖动、键盘和窄窗回退并保留
   await expect.poll(width).toBe(470);
   await page.screenshot({path: info.outputPath('PostgreSQL查询左右布局.png')});
 
-  await resizeQueryWindow(790, 500);
+  await resizeQueryWindow(790, 500, 0.75);
   await expect(tab()).toHaveAttribute('data-result-layout', 'below');
   await expect(tab().getByText(queryLayoutZh.besideNarrow, {exact: true})).toBeVisible();
   await expect.poll(height).toBeLessThan(savedHeight);
   expect(await saved()).toMatchObject({queryResultPlacement: 'beside', queryEditorWidth: 470, queryEditorHeight: savedHeight});
-  await resizeQueryWindow(1280, 820);
+  await resizeQueryWindow(1280, 920, 0.75);
   await expect(tab()).toHaveAttribute('data-result-layout', 'beside');
   await expect.poll(width).toBe(470);
   await placement.selectOption('results');
@@ -1413,9 +1415,10 @@ async function triggerSuggestions() {
 
 test('PostgreSQL 名称补全插入用户原文和方言模板并保留一次撤销', async ({}, info) => {
   const name = 'pgQuick原文', sql = "-- 原样 $1 ${name}😀\n  SELECT 9007199254740993, 0.12345678901234567890;";
+  // 在编辑器加载其片段缓存之前写入测试数据。
+  await page.evaluate(({name, sql}) => window.dbark.invoke('snippets.save', {id: 'pg-completion', name, group: '离线', description: '', sql, updatedAt: ''}), {name, sql});
   await prepare({id: '', name: '离线 PostgreSQL 片段补全', dialect: 'postgresql', group: '', color: '#123456',
     host: '127.0.0.1', port: 1, user: 'offline', database: 'postgres'}, 'SELECT 0;\n  ');
-  await page.evaluate(({name, sql}) => window.dbark.invoke('snippets.save', {id: 'pg-completion', name, group: '离线', description: '', sql, updatedAt: ''}), {name, sql});
   await modelSelection(2, 3);
   await page.keyboard.type('pgQuick');
   const widget = () => page.locator('.suggest-widget.visible');
@@ -1622,7 +1625,7 @@ test('PostgreSQL 片段插入保留原事务、结果和会话且不自动执行
 
 test('PostgreSQL 复制查询保留当前全文和库，副本与保存来源及原撤销记录独立', async ({}, info) => {
   const name = '已保存 PostgreSQL 来源', savedSql = "SELECT '保存原文';";
-  const draft = "-- 当前完整草稿😀\nSELECT '0.12345678901234567890', '$1';";
+  const draft = ["-- 当前完整草稿😀", "SELECT '0.12345678901234567890', '$1';"].join(process.platform === 'win32' ? '\r\n' : '\n');
   await prepare({id: '', name: '离线 PostgreSQL 复制', dialect: 'postgresql', group: '', color: '#123456',
     host: '127.0.0.1', port: 1, user: 'offline', database: 'configured_database'}, savedSql);
   await page.evaluate(async ({name, sql}) => {
@@ -1815,6 +1818,7 @@ test('PostgreSQL 方言着色跨行匹配 dollar 标签和嵌套注释', async (
   ].join('\n');
   await prepare({id: '', name: '离线 PostgreSQL 着色', dialect: 'postgresql', group: '', color: '#123456',
     host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, sql);
+  await resizeQueryWindow(1280, 920, 0.75);
   const initial = await inspectModel();
   expect(initial.language).toBe('dbark-postgresql');
   const colors = () => editor().locator('.view-lines').evaluate(node => {
@@ -1855,9 +1859,11 @@ test('PostgreSQL 语句折叠离线保留标题和同行的下一条 SQL', async
   const sql = "SELECT 0;\n/* 外层 /* 内层; */ */\nDO $body$\nBEGIN\nPERFORM 42;\nEND;\n$body$; SELECT '相邻语句';";
   await prepare({id: '', name: '离线 PostgreSQL 折叠', dialect: 'postgresql', group: '', color: '#123456',
     host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, sql);
+  await resizeQueryWindow(1280, 920, 0.75);
   const expanded = editor().locator('.codicon-folding-expanded');
   const collapsed = editor().locator('.codicon-folding-collapsed');
   const lines = editor().locator('.view-lines');
+  await modelSelection(3, 1);
   await expect(expanded).toHaveCount(0);
   await command('editor-sql-folding');
   await expect(expanded).toHaveCount(1);
@@ -2325,6 +2331,7 @@ test('PostgreSQL 编辑器右键切换注释、转换大小写及编辑行可一
   const sql = [first, second, last].join('\n');
   await prepare({ id: '', name: '离线右键编辑', dialect: 'postgresql', group: '', color: '#123456',
     host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db' }, sql);
+  await resizeQueryWindow(1280, 920, 0.75);
   const original = await inspectModel();
   async function editFromMenu(id: UiCommandId, lineNumber: number, column: number, expected: string) {
     const point = await editor().evaluate((element, position) => {
@@ -2337,6 +2344,7 @@ test('PostgreSQL 编辑器右键切换注释、转换大小写及编辑行可一
     await page.mouse.click(point.x, point.y, { button: 'right' });
     const menu = page.locator('.monaco-menu-container:visible');
     await menu.getByRole('menuitem', { name: uiCommandLabels[id], exact: true }).click({ delay: 120 });
+    await expect(menu).toBeHidden();
     await expect.poll(async () => (await inspectModel()).sql).toBe(expected);
     await page.keyboard.press('ControlOrMeta+Z');
     await expect.poll(inspectModel).toMatchObject({ sql, identity: original.identity });

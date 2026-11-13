@@ -282,6 +282,6 @@ describe('服务器不同值的完整TableTab→正式Dialog产品集成（RAM�
     f.invoke.mockImplementationOnce(async (command: string): Promise<any> => { if (command !== 'table.valueOptions') throw Error('本例只允许原不同值读取'); return new Promise(yes => { resolve = yes; }); });
     await dialogClick(text.read); f.props.refreshVersion++; await f.render(); expect(element.props.isCurrent()).toBe(false);
     await act(async () => { resolve({ source: element.props.source, sourceDigest: 'a'.repeat(64), column: element.props.column, values: [{ value: '不可发布', count: '1000001' }], truncated: false, warnings: ['合成迟到回执'] }); });
-    expect(memory.body.querySelectorAll('input').filter(node => node.type === 'checkbox')).toHaveLength(0); expect(dialogButton(text.apply).disabled).toBe(true); expect(f.invoke.mock.calls.filter(([command]) => command === 'table.valueOptions')).toHaveLength(1); expect(f.invoke.mock.calls.some(([command]) => command === 'table.apply')).toBe(false);
+    expect(memory.body.querySelectorAll('section input').filter(node => node.type === 'checkbox')).toHaveLength(0); expect(dialogButton(text.apply).disabled).toBe(true); expect(f.invoke.mock.calls.filter(([command]) => command === 'table.valueOptions')).toHaveLength(1); expect(f.invoke.mock.calls.some(([command]) => command === 'table.apply')).toBe(false);
   });
 });

@@ -95,8 +95,8 @@ export function runNativeEditorSpecialties({ approval, output, parentEnv = proce
 export function buildSourceApproval({ project, output, context, executable, resources, currentContext = () => context }, execute = executeOnce) {
   mkdirSync(output, { recursive: true });
   if (['typecheck.stdout.log', 'source-approval.json', 'source-indent-manifest.json', 'source-layout-manifest.json'].some(name => existsSync(join(output, name)))) throw Error('原构建/批准现场已存在，拒绝重复构建或重签');
-  // 仅给批准前的专属tsc子进程显式堆预算，不用NODE_OPTIONS影响后续构建或原生专项。
-  for (const [name, args] of [['typecheck', typecheckArguments(project)], ['build', [join(project, 'scripts/build.mjs')]]]) {
+  // 分别给类型检查和打包子进程足够的堆空间，避免 Intel 构建耗尽默认堆。
+  for (const [name, args] of [['typecheck', typecheckArguments(project)], ['build', ['--max-old-space-size=4096', join(project, 'scripts/build.mjs')]]]) {
     const result = execute(process.execPath, args, { cwd: project }); saveCommand(output, name, result); success(result);
   }
   if (JSON.stringify(currentContext()) !== JSON.stringify(context)) throw Error('build期间源码或job身份漂移');

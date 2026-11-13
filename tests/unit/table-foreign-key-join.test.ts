@@ -227,7 +227,7 @@ describe('结构身份、目标及生成预算', () => {
   });
   it('未知连接种类、空名称或无效Unicode标识符整份拒绝', () => {
     const { child, parent } = fixture();
-    expect(() => buildForeignKeyJoin(child, parent, 'fk_parent', 'CROSS' as 'LEFT', 50)).toThrow(text.invalid);
+    expect(() => buildForeignKeyJoin(child, parent, 'fk_parent', 'CROSS' as 'LEFT', 50)).toThrow(text.crossInvalid);
     for (const name of ['', 'x\0y', '\ud800', 'x'.repeat(65)]) expect(() => buildForeignKeyJoin({ ...child, name }, parent, 'fk_parent', 'LEFT', 50)).toThrow();
   });
 });

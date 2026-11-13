@@ -27,7 +27,9 @@ inspect(tree);
 const required = ['querySource', 'failureSourceScope', 'captureFailureSource', 'clearFailureSource', 'execute', 'currentStatementScope', 'executeCurrentStatement', 'openParameters', 'loadParameterNames', 'runQuery', 'handleQueryError', 'attachQueryEditor', 'submitParameterQuery', 'closeParameters'];
 if (!notice || !parameterExecute || !parameterClose || !lifetime || required.some(name => !functions.has(name))) throw Error('真实定位入口不完整');
 const code = `function Harness({port}) {
+ const collectStatus=false,collectStages=false,setInterruptedStatus=()=>{};
  const continueOnError=false,parameterContinueOnError={current:false},collectWarnings=false,parameterCollectWarnings={current:false};
+ const parameterDialog=undefined,parameterFormRef={current:null};
  const parameterReuse={current:null},parameterReusePort={current:null},parameterReuseOwner=()=>({begin:()=>null});
  const fileSource={busy:false,isBusy:()=>false},sqlite=port.sqlite??false;
  const tab=port.tab,settings=port.workspace.settings,editor=useRef(port.editor),alive=useRef(true),busyRef=useRef(false),sessionRef=useRef('session'),pendingSession=useRef(null),task=useRef(''),cancelledQuery=useRef(''),explainSource=useRef(''),parameterSession=useRef('session'),failureSource=useRef(undefined),parameterFailureSource=useRef(undefined),closeRequestRef=useRef(undefined),activeCurrentIntent=useRef(null),fileModelAttached=useRef(false),formatting=useRef(null),duplicateIntent=useRef(null),closeIntent=useRef(null),closeBusy=useRef(null);

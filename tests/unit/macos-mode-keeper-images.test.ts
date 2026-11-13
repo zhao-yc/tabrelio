@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 const policy: any = await import(new URL('../../scripts/macos-mode-keeper-policy.mjs', import.meta.url).href);
 const bytes = readFileSync(new URL('../fixtures/macos-display-20261021.0445.8.json', import.meta.url));
 const renewedBytes = readFileSync(new URL('../fixtures/macos-display-20261026.0455.2.json', import.meta.url));
+const releaseBytes = readFileSync(new URL('../fixtures/macos-display-20261102.0473.1.json', import.meta.url));
 
 /** 使用实际同job枚举原字节；只调用纯策略，不加载AppKit或执行显示配置。 */
 function inventory(sourceBytes = bytes) { return JSON.parse(sourceBytes.toString('utf8')); }
@@ -33,7 +34,15 @@ describe('已审阅的macOS托管镜像准入', () => {
     expect(plan.estimatedVisible).toEqual({ width: 1600, height: 1106 });
     expect(plan.limits).toMatchObject({ leaseSeconds: 600, minimumVisibleWidth: 1440, minimumVisibleHeight: 1050, contentWidth: 1400, contentHeight: 1000 });
   });
-  it.each(['20261021.0445.9', '20261021.0445.8-extra', '20261026.0455.3', '20261026.0455.2-extra', '', undefined])('未审阅的版本%s拒绝', imageVersion => {
+  it('发行阶段镜像与主线43370182667枚举附件一致，仍按原余量选择mode9', () => {
+    expect(createHash('sha256').update(releaseBytes).digest('hex')).toBe('4a3c79c1d156d884944fa50b0baa336f4176885a8d2307b03a58af03e91db134');
+    const value = inventory(releaseBytes);
+    expect(value.displays).toEqual(inventory(renewedBytes).displays);
+    const plan = policy.selectModeCandidate(value);
+    expect(plan.mode).toMatchObject({ modeID: 9, logicalWidth: 1600, logicalHeight: 1200 });
+    expect(plan.estimatedVisible).toEqual({ width: 1600, height: 1106 });
+  });
+  it.each(['20261021.0445.9', '20261021.0445.8-extra', '20261026.0455.3', '20261026.0455.2-extra', '20261102.0473.2', '', undefined])('未审阅的版本%s拒绝', imageVersion => {
     const value = inventory(); value.context.imageVersion = imageVersion;
     expect(() => policy.selectModeCandidate(value)).toThrow();
   });

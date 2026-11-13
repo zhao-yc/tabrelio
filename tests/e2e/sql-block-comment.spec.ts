@@ -537,7 +537,10 @@ for (const dialect of ['mysql', 'postgresql'] as const) {
     await paste.click();
     await expect(dialog.getByRole('alert')).toHaveText('原查询编辑器或选区已变化，请重新打开剪贴板栈。');
     await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
     await model({ line: 3, text: lines[2] });
+    await activeEditor().getByRole('textbox').focus();
+    await expect(activeEditor().getByRole('textbox')).toBeFocused();
     await expect.poll(() => desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('sql-clipboard-stack')?.enabled)).toBe(true);
     await desktop.evaluate(({ Menu, BrowserWindow }) => {
       const item = Menu.getApplicationMenu()?.getMenuItemById('sql-clipboard-stack'), windows = BrowserWindow.getAllWindows();

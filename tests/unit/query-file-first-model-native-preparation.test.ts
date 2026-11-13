@@ -1,3 +1,4 @@
+import { currentProductVersion } from '../helpers/currentProductVersion';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
@@ -160,6 +161,7 @@ it.each([false, true])('原失败附件拒绝=%s仍保留首因且零SDK/文件/
     if (name === '../helpers/queryFileFirstModelNative') return { fileFirstModelCases, assertFirstFileInitial, assertFirstFileTransition };
     if (name === '../helpers/queryFilesNativeFiles') return { QueryFilesNativeFiles: forbidden }; if (name === '../helpers/queryFilesNative') return { installSqlFilesOpenAnswer: forbidden, finishSqlFilesOpenAnswer: forbidden };
     if (name === '../../src/shared/queryFileSources') return { queryFileSourceHasChanges: forbidden }; if (name.endsWith('/zh-CN')) return { zh }; if (name.endsWith('/sqlFormatting.zh-CN')) return { sqlFormattingZh }; if (name.endsWith('/queryFiles.zh-CN')) return { queryFilesZh };
+    if (name === '../helpers/currentProductVersion') return { currentProductVersion };
     throw Error('未许可模块：' + name);
   } });
   exports.registerFileFirstModelNative(binding); expect(callbacks).toHaveLength(4); expect(fakeTest.describe.configure).toHaveBeenCalledWith({ mode: 'serial', timeout: 120000, retries: 0 });

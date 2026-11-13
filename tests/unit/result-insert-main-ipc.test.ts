@@ -53,7 +53,7 @@ function fixture() {
     if (command === 'result.insertRelease' || command === 'query.cancel') return undefined;
     throw Error('RAM broker拒绝非本用途调用：' + command);
   });
-  const context: any = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), Date, Map, Set, Error, Buffer, Promise, ColumnsMainCapabilities, TableChecksMainCapabilities, tableChecksFailureProgress, ResultInsertOwners, TableFilteredUpdateOwners, mergeTableFilteredUpdateProgress, filteredUpdateProgress: new Map(), persistedTaskMessage, validateCommand,
+  const context: any = createContext({ postgresImportChecks: new Map(), tablePresetReads: new Map(), filteredDeletes: emptyTableFilteredDeleteOwners(), Date, Map, Set, Error, Buffer, Promise, ColumnsMainCapabilities, TableChecksMainCapabilities, tableChecksFailureProgress, ResultInsertOwners, TableFilteredUpdateOwners, mergeTableFilteredUpdateProgress, filteredUpdateProgress: new Map(), persistedTaskMessage, validateCommand,
     window, rendererURL: frame.url, structureTokens: new Map(), tasks, resultInsertProgress: progress, completionTasks: new Set(), pendingQueryHistory: new Map(), preparingTasks: new Map(), sessions: new Map(), exportProgress: new Map(), structureProgress: new Map(), lastPersist: new Map(), lastStorageWarning: 0,
     tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, tableFilteredExports: { has: () => false }, queryInsertExports: { has: () => false },
     localSearchOperations: new Set(), queryFileOperations: new Set(), shuttingDown: false, rendererSettingsCurrent: true,

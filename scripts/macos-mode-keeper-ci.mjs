@@ -142,6 +142,8 @@ async function run() {
       DBARK_NATIVE_EDITOR_REFERENCE_EXECUTABLE:join(project,'release/mac-arm64/tabrelio.app/Contents/MacOS/tabrelio'),
       DBARK_W03_SAVED_QUERY_NAVIGATION_TEST:'1', DBARK_EDITOR_FONT_NATIVE_TEST:'1',
       DBARK_QUERY_DUPLICATE_NATIVE_TEST:'1', DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST:'1',
+      // 显示租约入口继续拒绝外部 DBARK_* 参数，安装子进程只启用本地 SQLite 完整值用例。
+      ...(isDesktopKeeperContext(process.env) ? {DBARK_GRID_CELL_VALUE_DIALECT:'sqlite'} : {}),
     },stdio:phase==='source' ? 'inherit' : ['inherit','inherit','inherit','ipc']});
     if (phase==='installed') native.on('message', async message => {
       try {

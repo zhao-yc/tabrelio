@@ -1,3 +1,4 @@
+import { productName } from '../../src/shared/productName';
 import { assertNetworkProfile } from '../helpers/assertNetworkProfile';
 import { mkdir, readFile, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -11,7 +12,7 @@ import { test, expect, desktop, page, dataDir, closed, pageErrors, dialogCalls, 
 const sqlWasmFile = createRequire(__filename).resolve('sql.js/dist/sql-wasm.wasm');
 
 test('桌面启动、存储、进程隔离与输入校验', async ({}, testInfo) => {
-  await expect(page).toHaveTitle('DBArk');
+  await expect(page).toHaveTitle(productName);
   await page.screenshot({ path: testInfo.outputPath('desktop-welcome.png') });
   const status = await page.evaluate(async () => ({ info: await window.dbark.invoke('app.runtimeInfo', {}), hasNode: 'require' in window, settings: await window.dbark.invoke('settings.get', {}) }));
   expect(status.info.version).toBe(sourceVersion); expect(status.hasNode).toBe(false); expect(status.settings.theme).toBe('dark');
@@ -31,8 +32,8 @@ test('桌面启动、存储、进程隔离与输入校验', async ({}, testInfo)
 
 test('渲染页面只能访问固定的隔离接口', async () => {
   const boundary = await page.evaluate(() => ({ keys: Object.keys(window.dbark).sort(), node: 'process' in window || 'require' in window, exposedIpc: 'ipcRenderer' in window, methodsFrozen: Object.values(window.dbark).every(value => typeof value === 'function' && Object.isFrozen(value)) }));
-  // 原生命令仅新增受限通知订阅；固定白名单逐项精确核对，五个桥接函数均必须冻结。
-  expect(boundary.keys).toEqual(['invoke', 'onCommand', 'onMenu', 'onObjectUri', 'onTask']); expect(boundary.node).toBe(false); expect(boundary.exposedIpc).toBe(false); expect(boundary.methodsFrozen).toBe(true);
+  // 逐项核对固定白名单，所有桥接函数都必须冻结。
+  expect(boundary.keys).toEqual(['invoke', 'onCommand', 'onMenu', 'onObjectUri', 'onOpenedConnections', 'onTask']); expect(boundary.node).toBe(false); expect(boundary.exposedIpc).toBe(false); expect(boundary.methodsFrozen).toBe(true);
   const renderers = await desktop.evaluate(({ app }) => app.getAppMetrics().filter(metric => metric.type === 'Tab'));
   expect(renderers.length).toBeGreaterThan(0);
   if (process.platform === 'win32' || process.platform === 'darwin') expect(renderers.every(metric => metric.sandboxed)).toBe(true);

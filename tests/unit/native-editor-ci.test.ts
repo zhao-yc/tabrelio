@@ -40,11 +40,11 @@ describe('原生专项CI同次构建批准及精确运行', () => {
     expect(() => runner.buildSourceApproval({ ...f, context }, execute)).toThrow('退出码');
     expect(execute).toHaveBeenCalledTimes(1); expect(existsSync(join(f.output, 'source-approval.json'))).toBe(false);
   });
-  it('仅专属tsc显式使用4096MiB堆，原两次构建次序和后续build参数保持', () => {
+  it('类型检查和打包子进程各自使用明确的堆预算', () => {
     const f = fixture(); f.approve();
     expect(f.build.mock.calls).toEqual([
       [process.execPath, ['--max-old-space-size=5120', join(f.project, 'node_modules/typescript/bin/tsc'), '--noEmit'], { cwd: f.project }],
-      [process.execPath, [join(f.project, 'scripts/build.mjs')], { cwd: f.project }],
+      [process.execPath, ['--max-old-space-size=4096', join(f.project, 'scripts/build.mjs')], { cwd: f.project }],
     ]);
     for (const name of ['typecheck', 'build']) expect(JSON.parse(readFileSync(join(f.output, name + '.process.json'), 'utf8'))).toEqual({ status: 0, signal: null, errorCode: null });
   });

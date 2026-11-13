@@ -19,7 +19,7 @@ describe('Mac安装显示租约清理门', () => {
   function desktop(ref='refs/heads/main') {
     return { ...base, GITHUB_REPOSITORY:'zhao-yc/tabrelio', GITHUB_REF:ref, GITHUB_JOB:'desktop', GITHUB_EVENT_NAME:'push', GITHUB_WORKFLOW_REF:`zhao-yc/tabrelio/.github/workflows/ci.yml@${ref}` };
   }
-  it.each(['refs/heads/main','refs/heads/codex/query-result-range-filter-20261020'])('准确desktop上下文%s分别接受源码和安装，仍拒绝阶段串用', ref => {
+  it.each(['refs/heads/main','refs/heads/codex/query-result-range-filter-20261020','refs/tags/v0.29.1'])('准确desktop上下文%s分别接受源码和安装，仍拒绝阶段串用', ref => {
     const env=desktop(ref);
     expect(lease.isDesktopKeeperContext(env)).toBe(true);
     expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',env)).not.toThrow();
@@ -46,10 +46,11 @@ describe('Mac安装显示租约清理门', () => {
     expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',env)).toThrow();
     expect(()=>keeper.requireInstalledKeeperCI(['installed'],'darwin','arm64',env)).toThrow();
   });
-  it('手动候选运行不改写ref；PR合并ref、标签、Windows和Intel仍不开放显示入口',()=>{
+  it('手动候选运行不改写ref；PR合并ref、非版本标签、Windows和Intel仍不开放显示入口',()=>{
     const env={...desktop('refs/heads/codex/query-result-range-filter-20261020'),GITHUB_EVENT_NAME:'workflow_dispatch'};
     expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',env)).not.toThrow();
-    for(const ref of ['refs/pull/1/merge','refs/tags/v0.28.0'])expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',desktop(ref))).toThrow();
+    for(const ref of ['refs/pull/1/merge','refs/tags/vtest'])expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',desktop(ref))).toThrow();
+    expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',{...desktop('refs/tags/v0.29.1'),GITHUB_EVENT_NAME:'workflow_dispatch'})).toThrow();
     for(const [platform,arch] of [['win32','x64'],['darwin','x64'],['linux','arm64']])expect(()=>keeper.requireKeeperCI(['source'],platform,arch,env)).toThrow();
   });
   it('同job源码和安装证据分目录，旧冻结job路径保持且不接受任意阶段作为路径',()=>{

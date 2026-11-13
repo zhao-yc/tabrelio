@@ -230,7 +230,7 @@ describe('连接配置重设保护', () => {
     await expect(engine.handle('sessions.open', { connectionId: profile.id })).rejects.toThrow('先打开');
     await engine.handle('connections.open', { id: profile.id, profile: next });
     await engine.handle('sessions.open', { connectionId: profile.id });
-    expect(mocks.connect).toHaveBeenLastCalledWith(next, undefined);
+    expect(mocks.connect).toHaveBeenLastCalledWith(next, undefined, undefined, undefined, true);
   });
   it.each(['connections.open', 'sessions.open'] as const)('建连尚未完成时拒绝保存，覆盖%s尚未登记会话的窗口', async command => {
     await engine.handle('sessions.close', { sessionId });

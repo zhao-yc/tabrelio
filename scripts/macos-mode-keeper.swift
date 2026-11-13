@@ -21,9 +21,12 @@ let environment = ProcessInfo.processInfo.environment
 let sourceBranch = environment["GITHUB_REF"] == "refs/heads/codex/macos-mode-keeper-20261019"
 let installedJob = environment["GITHUB_REF"] == "refs/heads/codex/v028-serial-closeout-20261019" && environment["GITHUB_JOB"] == "arm64-installed"
 let desktopRef = environment["GITHUB_REF"] ?? ""
+let desktopBranch = ["refs/heads/main", "refs/heads/codex/query-result-range-filter-20261020"].contains(desktopRef)
+let releaseTag = desktopRef.range(of: #"^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$"#, options: .regularExpression) != nil &&
+    environment["GITHUB_EVENT_NAME"] == "push"
 // 常规CI独立核对仓库、工作流、事件和真实ref，不改写环境来穿过旧入口。
 let desktopJob = environment["GITHUB_REPOSITORY"] == "zhao-yc/tabrelio" && environment["GITHUB_JOB"] == "desktop" &&
-    ["refs/heads/main", "refs/heads/codex/query-result-range-filter-20261020"].contains(desktopRef) &&
+    (desktopBranch || releaseTag) &&
     environment["GITHUB_WORKFLOW_REF"] == "zhao-yc/tabrelio/.github/workflows/ci.yml@" + desktopRef &&
     ["push", "workflow_dispatch"].contains(environment["GITHUB_EVENT_NAME"] ?? "")
 // JOIN源码只新增准确main托管job，不借desktop或冻结安装入口放行其它工作流/PR/本机。
@@ -91,7 +94,7 @@ func snapshot(requireCorrespondence: Bool = true) throws -> (data: [String: Any]
     let correspondence = frame.width == CGFloat(currentData["logicalWidth"] as! Int) && frame.height == CGFloat(currentData["logicalHeight"] as! Int)
     guard !requireCorrespondence || correspondence else { throw NSError(domain: "模式与点坐标对应未知", code: 1) }
     // 列出的版本均已由同job完整只读原件审阅；其它镜像仍须重新采集，不作通配准入。
-    guard environment["ImageOS"] == "macos26", ["20261013.0424.1", "20261021.0445.8", "20261026.0455.2"].contains(environment["ImageVersion"] ?? "") else { throw NSError(domain: "原镜像已变化，须先重新枚举审阅", code: 1) }
+    guard environment["ImageOS"] == "macos26", ["20261013.0424.1", "20261021.0445.8", "20261026.0455.2", "20261102.0473.1"].contains(environment["ImageVersion"] ?? "") else { throw NSError(domain: "原镜像已变化，须先重新枚举审阅", code: 1) }
     let data: [String: Any] = ["context": ["architecture": "arm64", "imageOS": environment["ImageOS"]!, "imageVersion": environment["ImageVersion"]!], "displays": [["displayID": display, "mainDisplay": true, "mirrored": false, "framePoints": rectangle(frame), "visibleFramePoints": rectangle(visible), "backingScaleFactor": scale, "currentMode": currentData, "availableModeCount": modes.count, "availableModes": modesData]]]
     return (data, display, current, modes)
 }

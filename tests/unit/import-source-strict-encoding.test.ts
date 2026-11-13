@@ -93,7 +93,7 @@ describe('原字节SHA链的内部严格编码选项', () => {
   it('旧调用省略开关仍保原容错行为；正式读取显式启用后相同SHA也必须拒绝非法字节', async () => {
     const bytes = Buffer.concat([Buffer.from('value\n'), Buffer.from([0xff]), Buffer.from('末尾\n')]), { input } = await fixture(bytes), legacy = await inspectImportFile(input, check);
     expect(legacy.rows).toEqual([{ value: '�末尾' }]); expect(legacy.source).toEqual({ bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }); expect(await collect({ ...input, expectedSource: legacy.source })).toEqual(legacy.rows); await expect(collect({ ...input, expectedSource: legacy.source, strictEncoding: true })).rejects.toThrow(invalidEncoding);
-    expect(importFileInspectInputSchema.safeParse({ fileToken: input.fileToken, taskId: input.taskId, format: input.format, encoding: input.encoding, strictEncoding: true }).success).toBe(false);
+    expect(importFileInspectInputSchema.safeParse({ fileToken: input.fileToken, taskId: input.taskId, format: input.format, encoding: input.encoding, strictEncoding: true })).toMatchObject({ success: true, data: { strictEncoding: true } });
   });
 
   it('正式迭代器可能已写入原行，EOF编码拒绝仍触发同一原生事务整批回滚', async () => {

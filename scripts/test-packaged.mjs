@@ -165,9 +165,9 @@ try {
   // 安装完成且环境归一后才做同一固定预检，紧邻真正Playwright启动；关门时不执行网络检查。
   if (env.DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST === '1') command(process.execPath, [join(project, 'scripts', 'check-offline-query-port.mjs')], { env, timeout: 10000 });
   // 执行当前源码的全部离线用例，避免新增偏好或配置功能遗漏随包验收；内网专属由显式开关跳过。
-  // 首批196项源码套件实际耗时298秒；仅全套安装进程预算改为15分钟，单用例期限和断言不变。
+  // 单 worker 完整回归在 Intel 源码 job 已用约 57 分钟，为实际安装回归留出额外余量。
   // 新专项CI的普通回归只清独立子目录，不能删除native-editor-ci的批准和终态；旧独立调用保留默认参数。
-  command(process.execPath, [join(project, 'node_modules', '@playwright', 'test', 'cli.js'), 'test', ...(process.env.DBARK_NATIVE_EDITOR_CI === '1' ? ['--output=' + join(project, 'test-results/legacy-installed')] : [])], { env, timeout: 900000 });
+  command(process.execPath, [join(project, 'node_modules', '@playwright', 'test', 'cli.js'), 'test', ...(process.env.DBARK_NATIVE_EDITOR_CI === '1' ? ['--output=' + join(project, 'test-results/legacy-installed')] : [])], { env, timeout: 5400000 });
 } catch (error) {
   testFailure = error;
 } finally {

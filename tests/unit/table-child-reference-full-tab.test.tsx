@@ -25,6 +25,9 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
   const effects: (() => void)[] = [];
   const equal = (a: any[], b: any[]) => !!a && !!b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
   const hooks = {
+    createContext<T>(defaultValue: T) { return { defaultValue }; },
+    useId() { return 'RAM-' + cursor++; },
+    useContext<T>(context: { defaultValue: T }) { return context.defaultValue; },
     useState(initial: any) { const index = cursor++; if (!Object.hasOwn(slots, index)) slots[index] = typeof initial === 'function' ? initial() : initial; return [slots[index], (value: any) => { const next = typeof value === 'function' ? value(slots[index]) : value; if (!Object.is(next, slots[index])) { slots[index] = next; dirty = true; } }]; },
     useRef(initial: any) { const index = cursor++; if (!Object.hasOwn(slots, index)) slots[index] = { current: initial }; return slots[index]; },
     useMemo(fn: () => any, deps: any[]) { const index = cursor++; if (!slots[index] || !equal(slots[index].deps, deps)) slots[index] = { value: fn(), deps }; return slots[index].value; },
@@ -84,6 +87,8 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
       if (target === path.join(renderer, 'lib')) return { ...lib, invoke, uid: vi.fn(() => 'UUID-' + ++counter) };
       if (target === path.join(renderer, 'components/GridCellActionMenu')) return { useGridCellActionMenu: () => ({ menu: null }) };
       if (target === path.join(renderer, 'components/GridHeaderMenu')) return { useGridHeaderMenu: () => ({}) };
+      if (['GridHeaderMenu', 'TableReadHistory', 'TableColumnChooser', 'TableFieldFind', 'GridRowSelectionActions', 'GridRowJump', 'GridColumnJump', 'useGridCheckedRange'].some(component => target === path.join(renderer, 'components', component)))
+        return load(target + '.tsx');
       if (target.startsWith(path.join(renderer, 'components') + path.sep)) return new Proxy({}, { get: (_, key) => String(key) });
       for (const extension of ['.ts', '.tsx']) if (existsSync(target + extension)) return load(target + extension);
       throw Error('纯组件不允许未知依赖：' + name);

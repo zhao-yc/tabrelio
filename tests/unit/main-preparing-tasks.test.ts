@@ -1,3 +1,4 @@
+import { dataFileText } from '../../src/shared/dataMarkupExport';
 import { networkBrokerRamPort } from './network-broker-ram-port';
 import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { extractMainProductionFunction } from './main-production-function';
@@ -19,7 +20,7 @@ describe('主进程准备任务的进程退出竞态', () => {
   it.each(['files.exportResult', 'query.exportStream'] as const)('%s 准备未完成时进程退出，迟到路径检查不能投递新任务', async command => {
     let permit!: (release: () => void) => void; const released = vi.fn();
     const tasks = new Map<string, TaskRecord>(); const events: TaskEvent[] = []; const request = vi.fn(async () => { throw new Error('不应重新启动引擎'); });
-    const context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(),
+    const context = createContext({ dataFileText, postgresImportChecks: new Map(), tablePresetReads: new Map(), filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(),
     // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false }, resultInsertProgress: new Map(),
      tableApplyReceipts:undefined,savedQueryPages:undefined,historyPages:undefined,Date, Map, Error, randomUUID: () => 'history', tasks, events,pendingQueryHistory:new Map(), completionTasks:new Set(), preparingTasks: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), files: new Map(), sessions: new Map([['old-session', { connectionId: 'connection' }]]),

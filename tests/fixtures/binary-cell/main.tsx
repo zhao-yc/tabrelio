@@ -8,9 +8,14 @@ import 'react-data-grid/lib/styles.css';
 import '../../../src/renderer/styles.css';
 
 const canvas = document.createElement('canvas'); canvas.width = 2; canvas.height = 3; canvas.getContext('2d')!.fillRect(0, 0, 2, 3);
-const format = new URLSearchParams(location.search).get('format') ?? 'png';
 const binary = (value: string) => ({ type: 'binary' as const, base64: btoa(value) });
-const data: DataRow[] = [{ id: '9007199254740993123', payload: binary('\xe4\xb8\xad\xf0\x9f\x98\x80\x00'), picture: { type: 'binary', base64: canvas.toDataURL('image/' + format).split(',')[1] }, nil: null, empty: binary(''), medium: binary('a'.repeat(140000)), large: binary('a'.repeat(2 * 1024 * 1024 + 1)), script: binary('<svg onload="window.__binaryExecuted=true"><image href="https://example.invalid/x"/></svg>') }];
+function picture(format: string) {
+  const url = canvas.toDataURL('image/' + format);
+  const prefix = 'data:image/' + format + ';base64,';
+  if (!url.startsWith(prefix)) throw Error('夹具未生成请求的图片格式：' + format);
+  return { type: 'binary' as const, base64: url.slice(prefix.length) };
+}
+const data: DataRow[] = [{ id: '9007199254740993123', payload: binary('\xe4\xb8\xad\xf0\x9f\x98\x80\x00'), picture: picture('png'), nil: null, empty: binary(''), medium: binary('a'.repeat(140000)), large: binary('a'.repeat(2 * 1024 * 1024 + 1)), script: binary('<svg onload="window.__binaryExecuted=true"><image href="https://example.invalid/x"/></svg>') }];
 const columns = Object.keys(data[0]).map(name => ({ name, type: name === 'id' ? 'BIGINT' : 'LONGBLOB', generated: false, nullable: true, defaultValue: null, extra: '', comment: '' }));
 const info: TableInfo = { database: '离线', name: '二进制表', engine: 'InnoDB', objectKind: 'table', primaryKey: ['id'], editableKey: ['id'], columns, indexes: [], foreignKeys: [], ddl: '' };
 const resultColumns = columns.map(column => ({ key: column.name, name: column.name, type: column.type }));
@@ -31,5 +36,29 @@ const tab: WorkspaceTab = { id: 'binary-table', kind: 'table', title: '二进制
 // 独立组件仍属于真实活动工作区，菜单owner必须对应传入的同一tab对象。
 useWorkspace.setState({ settings: { ...useWorkspace.getState().settings, tabs: [tab], activeTabId: tab.id } });
 /** 结构/连接通知和结果刷新提供真实组件失效场景，不直接操作编辑器内部状态。 */
-function Fixture() { const [mode, setMode] = useState('table'), [refresh, setRefresh] = useState(0), [rows, setRows] = useState(data); return <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}><nav><button onClick={() => setMode('table')}>表数据</button><button onClick={() => setMode('query')}>SQL只读结果</button><button onClick={() => setRefresh(value => value + 1)}>夹具结构变化</button><button onClick={() => useWorkspace.getState().invalidateConnection('offline')}>夹具连接变化</button><button onClick={() => setRows(structuredClone(data))}>夹具结果刷新</button></nav><div style={{ flex: 1, minHeight: 0 }}>{mode === 'table' ? <TableTab tab={tab} refreshVersion={refresh} refreshAutomatically={false} onDesign={() => {}} onTransfer={() => {}} onColumnPatches={() => {}} onIndexPatches={() => {}} onForeignKeyPatches={() => {}} onTableRename={() => {}} onTableAutoIncrement={() => {}} onTableComment={() => {}} onTableDefaultEncoding={() => {}}/> : <ResultsGrid columns={resultColumns} rows={rows}/>}</div></div>; }
+function Fixture() {
+  const [mode, setMode] = useState('table'), [refresh, setRefresh] = useState(0), [rows, setRows] = useState(data);
+  const [format, setFormat] = useState('png');
+  return <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <nav>
+      <button onClick={() => setMode('table')}>表数据</button>
+      <button onClick={() => setMode('query')}>SQL只读结果</button>
+      <button onClick={() => setRefresh(value => value + 1)}>夹具结构变化</button>
+      <button onClick={() => useWorkspace.getState().invalidateConnection('offline')}>夹具连接变化</button>
+      <button onClick={() => setRows(structuredClone(data))}>夹具结果刷新</button>
+      <select aria-label="夹具图片格式" value={format} onChange={event => {
+        // 只替换输入字节，重新挂载原表格组件；无需再次导航或丢失 Blob URL 观察器。
+        const next = event.target.value;
+        data[0] = { ...data[0], picture: picture(next) };
+        setFormat(next);
+      }}>
+        <option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option>
+      </select>
+    </nav>
+    <div style={{ flex: 1, minHeight: 0 }}>{mode === 'table' ? <TableTab key={format} tab={tab} refreshVersion={refresh} refreshAutomatically={false}
+      onDesign={() => {}} onTransfer={() => {}} onColumnPatches={() => {}} onIndexPatches={() => {}} onForeignKeyPatches={() => {}}
+      onTableRename={() => {}} onTableAutoIncrement={() => {}} onTableComment={() => {}} onTableDefaultEncoding={() => {}}/>
+      : <ResultsGrid columns={resultColumns} rows={rows}/>}</div>
+  </div>;
+}
 createRoot(document.getElementById('root')!).render(<Fixture/>);

@@ -50,7 +50,10 @@ function fixture(filterGroup: FilterGroup | undefined = undefined, restoredDraft
   const workspace = { settings: { tabs: [tab], activeTabId: tab.id }, connectionVersions: { [base.connectionId]: 4 }, setBusy: vi.fn() };
   const gate = new RecordPageNavigation(), reset = vi.fn(), select = vi.fn((_: string, activate: () => void) => { activate(); return true; });
   let sequence = 0;
-  const context = createContext({ tableEdits: new TableEditWorkspace(), workspaceText, connection: {}, workspaceSkipLoad: { current: undefined }, selectedRowsRef: { current: new Set() }, applyRecovery: new TableApplyRecovery(), publishApplyRecovery: vi.fn(), tableApplyRecoveryZh,
+  const context = createContext({
+    // 普通表页从非方案入口读取，仍执行原分页及记录来源处理。
+    presetTab: false, namedLayout: { current: undefined }, readHistory: { record: vi.fn(), recordReadFailure: vi.fn() },
+    checkedRange: { toggle: vi.fn() }, isGridContextKey: vi.fn(() => false), tableEdits: new TableEditWorkspace(), workspaceText, connection: {}, workspaceSkipLoad: { current: undefined }, selectedRowsRef: { current: new Set() }, applyRecovery: new TableApplyRecovery(), publishApplyRecovery: vi.fn(), tableApplyRecoveryZh,
     // 勾选转入用途在本组未打开；保留原blocked/load/reloadBlocked的真实可空初值。
     rowTransferDialog: null, rowTransferIntent: { current: null }, rowTransferSource: { current: null },
     // JOIN对话框是新增的真实blocked依赖；旧跨页场景保持未打开的生产初值。
@@ -151,7 +154,7 @@ describe('D04与现有TableTab工具的混合正负向接线', () => {
     expect(c.selectionRef.current).toEqual({ rowId: '新页本地UUID-5', key: 'text' });
     const calls = c.invoke.mock.calls;
     expect(calls.map((call: unknown[]) => call[0])).toEqual(['connections.open', 'metadata.table', 'table.page', 'connections.open', 'metadata.table', 'table.page']);
-    expect(calls.filter((call: unknown[]) => call[0] === 'table.page').map((call: [string, object]) => call[1])).toEqual([2, 1].map(page => ({ ...c.base, page, pageSize: 50, filters: c.filters, filterMode: 'all', sort: c.sort, copySource: true, taskId: page === 2 ? '新页本地UUID-1' : '新页本地UUID-3' })));
+    expect(calls.filter((call: unknown[]) => call[0] === 'table.page').map((call: [string, object]) => call[1])).toEqual([2, 1].map(page => ({ ...c.base, page, pageSize: 50, filters: c.filters, filterMode: 'all', sort: c.sort, copySource: true, includeReadStatements: true, filterGroup: undefined, taskId: page === 2 ? '新页本地UUID-1' : '新页本地UUID-3' })));
     expect(c.window.confirm).not.toHaveBeenCalled(); expect(c.applyPageReplacement).not.toHaveBeenCalled();
   });
   it('嵌套范围通过原load完整交付分组，成功回包才能兑换跨页选择', async () => {
@@ -216,7 +219,7 @@ describe('D04与现有TableTab工具的混合正负向接线', () => {
     expect(result.kind).toBe('ready');
     c.DataGrid_onCellClick({ row: f.rows[0], column: { key: 'text' } }); expect(f.gate.pending).toBe(false);
     expect(c.selectionRef.current).toEqual({ rowId: f.rows[0].id, key: 'text' });
-    const args = { marker: '原键盘参数' }, event = { marker: '原事件' }; c.DataGrid_onCellKeyDown(args, event);
+    const args = { marker: '原键盘参数' }, event = { marker: '原事件', key: 'ArrowDown' }; c.DataGrid_onCellKeyDown(args, event);
     expect(c.handleGridKeyDown).toHaveBeenCalledExactlyOnceWith(args, event);
     expect(f.select).toHaveBeenCalledWith(f.rows[0].id, expect.any(Function));
   });

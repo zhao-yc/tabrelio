@@ -16,7 +16,7 @@ function fixture(){
   const facts=new CompletionServerFacts(),seed=(id:string)=>{facts.complete(facts.begin(id,0),{dialect:'mysql',version:'8.4.11'});};seed('target');seed('other');
   const notify=vi.fn(),setConnected=vi.fn(),setOpened=vi.fn(),setConnections=vi.fn();let resolve!:(value?:unknown)=>void,reject!:(reason:Error)=>void;
   const pending=new Promise((yes,no)=>{resolve=yes;reject=no;}),invoke=vi.fn((_:string,__:unknown)=>pending);
-  const context={completionServerFacts:facts,profile:{id:'target',name:'隔离连接'},requests:new SidebarNodeRequests(()=>0),beginSidebarConnectionEnd,invoke,setConnected,expand:setOpened,setBusy:vi.fn(),setOpened,errorMessage:(error:Error)=>error.message,useWorkspace:{getState:()=>({notify,setConnections})},window:{confirm:()=>true},formatText:()=>'',zh:{sidebar:{text008:''}}};
+  const context={completionServerFacts:facts,profile:{id:'target',name:'隔离连接'},requests:new SidebarNodeRequests(()=>0),beginSidebarConnectionEnd,invoke,setConnected,expand:setOpened, updateCatalog:vi.fn(),emptySidebarCatalog:{},setBusy:vi.fn(),setOpened,errorMessage:(error:Error)=>error.message,useWorkspace:{getState:()=>({notify,setConnections})},window:{confirm:()=>true},formatText:()=>'',zh:{sidebar:{text008:''}}};
   return{facts,notify,invoke,setConnected,setOpened,setConnections,resolve,reject,context};
 }
 describe('连接动作完成及异常都撤销补全事实',()=>{

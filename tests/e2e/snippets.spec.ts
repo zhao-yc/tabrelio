@@ -66,12 +66,15 @@ test('编辑器名称补全只替换片段前缀，保留正文原样并能一�
 });
 
 test('信息窗格浏览和插入片段，内置字段可编辑，管理器保存后同步更新', async ({}, info) => {
+  // 先在停靠布局访问查询工具栏，末尾再恢复原缩放并验收窄窗浮层。
+  await desktop.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(0.75); });
   const name = '窗格原文片段', group = 'JSON 诊断', original = 'SELECT 0;';
   await page.evaluate(({ name, group, source }) => window.dbark.invoke('snippets.save', {
     id: 'information-fixture', name, group, description: '原样美元符号', sql: source, updatedAt: '',
   }), { name, group, source });
   await page.getByRole('button', { name: paneText.title, exact: true }).click();
   const pane = page.getByRole('complementary', { name: paneText.title, exact: true });
+  await expect(pane).toHaveAttribute('data-layout', 'docked');
   const snippets = pane.getByRole('region', { name: paneText.snippets, exact: true });
   const select = (item: string) => snippets.getByRole('button', { name: formatText(zh.snippets.selectName, item), exact: true });
   const insert = (item: string) => snippets.getByRole('button', { name: paneText.insertSnippet(item), exact: true });
@@ -119,7 +122,11 @@ test('信息窗格浏览和插入片段，内置字段可编辑，管理器保�
   await pane.getByRole('button', { name: paneText.expand, exact: true }).click();
   await expect(insert(name)).toBeDisabled();
   await pane.getByRole('button', { name: paneText.restoreSize, exact: true }).click();
-  await desktop.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(1024, 680); });
+  await desktop.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    window.webContents.setZoomFactor(1);
+    window.setSize(1024, 680);
+  });
   await expect(pane).toHaveAttribute('data-layout', 'overlay');
   await expect.poll(() => snippets.evaluate(element => element.scrollWidth - element.clientWidth)).toBe(0);
   await page.screenshot({ path: info.outputPath('信息窗格片段预览.png') });

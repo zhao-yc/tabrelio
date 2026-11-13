@@ -47,6 +47,6 @@ describe('实际QueryTab勾选导出接线的同步门（RAM）',()=>{
   for(const name of ['runQuery','runStreamExport']){const fn=functions.get(name)!;let call=-1,firstAwait=Infinity;function find(n:ts.Node){if(ts.isAwaitExpression(n))firstAwait=Math.min(firstAwait,n.pos);if(ts.isCallExpression(n)&&n.expression.getText(tree)==='invalidateResultSelection')call=n.pos;ts.forEachChild(n,find);}find(fn);expect(call).toBeGreaterThan(0);expect(call).toBeLessThan(firstAwait);}
   expect(source).toContain('selectionScope={selectionBinding} onSelectionChange={selectResultRows}');expect(source).toContain('disabled={!selectedExportCount || busy}');
   expect(functions.get('selectCurrentResult')?.body?.getText(tree)).toMatch(/invalidateResultSelection\(\);\s+setResultIndex\(index\)/);
-  expect(source).toContain('onClick={() => selectCurrentResult(index)}');expect(source).toContain('invalidateResultSelection(); setSelectedPin(item.id)');
+  expect(source).toContain('onClick={() => selectCurrentResult(index)}');expect(source).toMatch(/function selectPinnedResult[\s\S]*?invalidateResultSelection\(\);\s*setSelectedPin\(next\?\.id/);
  });
 });

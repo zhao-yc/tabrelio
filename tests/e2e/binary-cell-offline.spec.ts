@@ -47,10 +47,10 @@ test('Hex严格校验后只暂存原草稿，UTF8查看保真，NULL与空BLOB�
 
 test('PNG JPEG WebP实际图片显示尺寸并释放Blob URL，脚本格式和巨大值不创建URL', async ({}, result) => {
   for (const format of ['png', 'jpeg', 'webp']) {
-    if (format !== 'png') { await page.goto(url + '?format=' + format); }
+    if (format !== 'png') await page.getByRole('combobox', { name: '夹具图片格式' }).selectOption(format);
     await open('picture'); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.image, exact: true })).click(); await expect(viewer().getByRole('img')).toBeVisible(); await expect.poll(() => viewer().getByRole('img').evaluate((node: HTMLImageElement) => [node.naturalWidth, node.naturalHeight])).toEqual([2, 3]); await expect(viewer()).toContainText('2 × 3');
     if (format === 'png') { expect(await urls()).toBe(1); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.hex, exact: true })).click(); await expect.poll(urls).toBe(0); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.image, exact: true })).click(); await expect.poll(urls).toBe(1); await page.screenshot({ path: result.outputPath('PNG有界预览.png') }); }
-    await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '关闭字段编辑', exact: true })).click(); if (format === 'png') await expect.poll(urls).toBe(0);
+    await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '关闭字段编辑', exact: true })).click(); await expect.poll(urls).toBe(0);
   }
   await open('script'); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.image, exact: true })).click(); await expect(viewer().getByRole('alert')).toContainText(text.imageUnsupported); await expect(viewer().getByRole('img')).toHaveCount(0); expect(await page.evaluate(() => (window as unknown as { __binaryExecuted?: boolean }).__binaryExecuted)).toBeUndefined(); await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '关闭字段编辑', exact: true })).click();
   await open('large'); await expect(viewer()).toContainText(text.byteLimit); await expect(viewer().getByRole('textbox')).toHaveCount(0); expect(await writes()).toEqual([]); expect(errors).toEqual([]);

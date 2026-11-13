@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 
-/** 常规CI只开放本仓库main及既有候选分支的desktop托管job；不冒充旧冻结分支。 */
+/** 常规 CI 开放本仓库主线、候选分支及版本标签推送的 desktop 托管任务；不冒充旧冻结分支。 */
 export function isDesktopKeeperContext(env) {
+  const ref = env.GITHUB_REF ?? '';
+  const branch = ['refs/heads/main', 'refs/heads/codex/query-result-range-filter-20261020'].includes(ref);
+  const releaseTag = /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/.test(ref) && env.GITHUB_EVENT_NAME === 'push';
   return env.GITHUB_REPOSITORY === 'zhao-yc/tabrelio' && env.GITHUB_JOB === 'desktop' &&
-    ['refs/heads/main', 'refs/heads/codex/query-result-range-filter-20261020'].includes(env.GITHUB_REF) &&
+    (branch || releaseTag) &&
     env.GITHUB_WORKFLOW_REF === `zhao-yc/tabrelio/.github/workflows/ci.yml@${env.GITHUB_REF}` &&
     ['push', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME);
 }
