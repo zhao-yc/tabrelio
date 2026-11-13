@@ -11,6 +11,7 @@ import { sourceSql, savedSql, utf16NativeBytes, installSqlFilesOpenAnswer, finis
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryFilesZh as text } from '../../src/renderer/locales/queryFiles.zh-CN';
 import type { SystemShortcutDriver, SystemShortcutReceipt } from '../helpers/queryFileSystemShortcutHandshake';
+import { currentProductVersion } from '../helpers/currentProductVersion';
 
 /** Main读取每次只发一个真实RPC，各自经过原parent/run.step。 */
 async function settings(run: EditorIndentNativeRun, owner: IndentNativeOwner) { return run.step(owner, () => owner.page.evaluate(() => window.dbark.invoke('settings.get', {}))); }
@@ -44,7 +45,7 @@ async function offlineQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner
 }
 /** 严格Main来源核验仍在原launch中；reload仅开放官方只读getter。 */
 async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
-  expect(await run.step(owner, () => owner.application.evaluate(({ app }) => app.getVersion()))).toBe('0.28.0');
+  expect(await run.step(owner, () => owner.application.evaluate(({ app }) => app.getVersion()))).toBe(currentProductVersion);
   await run.step(owner, () => owner.page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; }));
   await run.step(owner, () => owner.page.reload()); await run.step(owner, () => expect(owner.page.locator('.app-statusbar')).toBeVisible());
 }

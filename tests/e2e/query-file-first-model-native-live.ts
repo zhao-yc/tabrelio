@@ -6,6 +6,7 @@ import type { EditorIndentNativeRun, IndentNativeOwner } from './editor-indentat
 import { fileFirstModelCases, assertFirstFileInitial, assertFirstFileTransition, type FileFirstModelCase, type FirstModelObservation } from '../helpers/queryFileFirstModelNative';
 import type { bindFileFirstModelEnvironment } from '../helpers/queryFileFirstModelNativeGate';
 import { QueryFilesNativeFiles } from '../helpers/queryFilesNativeFiles';
+import { currentProductVersion } from '../helpers/currentProductVersion';
 import { installSqlFilesOpenAnswer, finishSqlFilesOpenAnswer } from '../helpers/queryFilesNative';
 import { queryFileSourceHasChanges } from '../../src/shared/queryFileSources';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -19,7 +20,7 @@ type FirstModelFile = { files: QueryFilesNativeFiles; path: string; bytes: Buffe
 async function settings(run: EditorIndentNativeRun, owner: IndentNativeOwner) { return run.step(owner, () => owner.page.evaluate(() => window.dbark.invoke('settings.get', {}))); }
 /** 严格Main来源已由原launch确认；只开放官方观察入口，不修改模型或选区。 */
 async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
-  expect(await run.step(owner, () => owner.application.evaluate(({ app }) => app.getVersion()))).toBe('0.28.0');
+  expect(await run.step(owner, () => owner.application.evaluate(({ app }) => app.getVersion()))).toBe(currentProductVersion);
   await run.step(owner, () => owner.page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; }));
   await run.step(owner, () => owner.page.reload());
   await run.step(owner, () => expect(owner.page.locator('.app-statusbar')).toBeVisible());

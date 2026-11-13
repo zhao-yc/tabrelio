@@ -10,6 +10,7 @@ import type { EditorIndentNativeRun, IndentNativeOwner } from './editor-indentat
 import { queryFilesNativeCases, type bindQueryFilesNativeEnvironment } from '../helpers/queryFilesNativeGate';
 import { recentSql, sourceSql, savedSql, draftSql, externalSql, utf16NativeBytes, assertSqlFilesModelText, installSqlFilesOpenAnswer, finishSqlFilesOpenAnswer, installSqlFilesDirtyExitAnswer, consumeSqlFilesDirtyExitAnswer } from '../helpers/queryFilesNative';
 import { QueryFilesNativeFiles } from '../helpers/queryFilesNativeFiles';
+import { currentProductVersion } from '../helpers/currentProductVersion';
 
 type Binding = ReturnType<typeof bindQueryFilesNativeEnvironment>;
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -37,7 +38,7 @@ async function workspace(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
 }
 /** 打开官方只读getter并核实际Main版本；版本只是补充，入口仍先过完整批准manifest。 */
 async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
-  expect(await run.step(owner, () => owner.application.evaluate(({ app }) => app.getVersion()))).toBe('0.28.0');
+  expect(await run.step(owner, () => owner.application.evaluate(({ app }) => app.getVersion()))).toBe(currentProductVersion);
   await run.step(owner, () => owner.page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; }));
   await run.step(owner, () => owner.page.reload()); await run.step(owner, () => expect(owner.page.locator('.app-statusbar')).toBeVisible());
 }
@@ -205,7 +206,7 @@ export function registerQueryFilesNative(binding: Binding) {
         const second = await restart(run, first, files, () => closeDirtyOwner(run, first, scope, info, dirtyExits)); const final = await workspace(run, second); expect(final.tabs[1].sql).toBe(draftSql); expect(final.tabs[2].sql).toBe(externalSql); await bound(run, second, fileTab.id); await run.step(second, () => files!.read(path, incoming)); await noSql(run, second); await closeDirtyOwner(run, second, scope, info, dirtyExits); expect(dirtyExits).toHaveLength(2);
       }
       await files.closeHandles(); await run.stopped(() => files!.assertDirectory()); await run.finish(); expect(run.removed).toBe(true);
-      await info.attach('SQL文件原生准备终态', { body: Buffer.from(JSON.stringify({ scenario, version: '0.28.0', owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, pids: owner.ids.size })), dirtyExits, files: files.records, directoryRemoved: run.removed, sqlExecution: 0, systemClipboard: 0, nativeDialogAnswerOnly: true })), contentType: 'application/json' });
+      await info.attach('SQL文件原生准备终态', { body: Buffer.from(JSON.stringify({ scenario, version: currentProductVersion, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, pids: owner.ids.size })), dirtyExits, files: files.records, directoryRemoved: run.removed, sqlExecution: 0, systemClipboard: 0, nativeDialogAnswerOnly: true })), contentType: 'application/json' });
     } catch (reason) {
       failure = reason; run.retained = true;
       try { await info.attach('SQL文件原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, dirtyExits, files: files?.records, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids] })), automaticReplay: false, automaticForceStop: false, directoryRemoved: run.removed })), contentType: 'application/json' }); }

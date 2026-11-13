@@ -432,13 +432,26 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     return target.rows.flatMap((row, index) => skipRowInInversion?.(row) ? [] : [target.startRow + index]);
   }
 
+  /** 结果列可重名。查看按内部键和原行定位，原始缺列也不能伪装成 DEFAULT。 */
+  function resultCellValueSource(cell: QueryResultCopyCell) {
+    const column = cell.column;
+    if (!column || !rangeTools || skipRowInInversion?.(cell.row)) return;
+    const display = presentCell?.(cell.row, column.key), original = Object.getOwnPropertyDescriptor(cell.row, column.key);
+    if (!display && (!original || !('value' in original) || original.value === undefined)) return;
+    const value = display ? display.value : ownCell(cell.row, column.key);
+    return { title: column.name, inspectValue: () => value,
+      current: () => actionCurrent() && tableCopy?.isCurrent() !== false && rows[cell.index] === cell.row &&
+        Object.is(displayedValue(cell.row, column.key, presentCell), value) };
+  }
+
   function openCellActions(row: DataRow | undefined, rowIdx: number, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
     const located = locateCell(row, rowIdx, key, target);
     if (!located || key === undefined || skipRowInInversion?.(located.cell.row)) return false;
     const { cell } = located, column = cell.column!;
     const rectangle = cellRange.at(cell.row, rowIdx, key);
+    const inspection = rectangle ? undefined : resultCellValueSource(cell);
     const current = () => actionCurrent() && tableCopy?.isCurrent() !== false && rows[cell.index] === cell.row && !skipRowInInversion?.(cell.row) &&
-      (!rectangle || cellRange.rectangleCurrent(rectangle)) && gridDialogCurrent(located.element, ownDialog);
+      (!rectangle || cellRange.rectangleCurrent(rectangle)) && gridDialogCurrent(located.element, ownDialog) && inspection?.current() !== false;
     const filter = cellMenuFilters?.(cell), actions = [...(filter?.actions ?? [])];
     const remove = recordActions?.remove;
     if (!rectangle && remove?.allowed(cell)) actions.push({ label: gridRecordText.remove, run: () => {
@@ -538,6 +551,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     const display = presentCell?.(cell.row, key);
     const webValue = rectangle || display?.copyError ? undefined : display ? display.value : ownCell(cell.row, key);
     return cellActionMenu.open(target, gridRef.current?.element, { title: column.name, label: filter?.label, actions, current, webValue,
+      inspectValue: inspection?.inspectValue,
       focusTarget: rectangle ? cellRange.focusTarget : undefined }, point);
   }
 
@@ -586,12 +600,17 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
       event.stopPropagation();
       return;
     }
-    if (canOpenCellEditor && onCellEdit && args.mode === 'ACTIVE' &&
+    if ((rangeTools || canOpenCellEditor && onCellEdit) && args.mode === 'ACTIVE' &&
       !event.defaultPrevented && !event.isGridDefaultPrevented() && tableCellEditorKey(event)) {
       event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
       const located = !event.repeat && !cellRange.rectangle && locateCell(row, args.rowIdx, column?.key, event.target);
-      if (located && event.target === located.element && gridDialogCurrent(located.element, ownDialog) &&
-        canOpenCellEditor(located.cell)) onCellEdit(located.cell, located.element);
+      if (located && event.target === located.element && gridDialogCurrent(located.element, ownDialog)) {
+        if (canOpenCellEditor?.(located.cell) && onCellEdit) onCellEdit(located.cell, located.element);
+        else {
+          const source = resultCellValueSource(located.cell);
+          if (source) cellActionMenu.inspect(located.element, gridRef.current?.element, source);
+        }
+      }
       return;
     }
     if (cellReference && args.mode === 'ACTIVE' && key === 'enter' && (event.ctrlKey || event.metaKey) &&

@@ -387,6 +387,16 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
   function canChooseReference(row: SqliteDraftRow, index: number): boolean {
     return !!onChooseReference && !disabled && !row.deleted && order.includes(index) && page.referenceColumns?.includes(index) === true;
   }
+  /** 读取草稿的 SQLite 存储类。整数和实数沿用原文，查看不借用粘贴的单格长度上限。 */
+  function sqliteGridValueSource(row: SqliteDraftRow, index: number) {
+    const column = page.columns[index], raw = row.values[index];
+    if (!column || !order.includes(index) || row.deleted) return;
+    return { title: column.name,
+      inspectValue: () => raw?.kind === 'blob' ? sqliteBinaryOriginalCell(raw.value) : raw?.kind === 'null' ? null : raw?.value,
+      current: () => source.current === owner && checkedContext.current?.owner === owner && !checkedContext.current.disabled &&
+        checkedContext.current.isCurrent() && orderRef.current.indices === order && rows.includes(row) && !row.deleted &&
+        row.values[index] === raw && noModal() };
+  }
   function openCellActions(row: SqliteDraftRow | undefined, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
     const index = key?.startsWith('c') ? Number(key.slice(1)) : -1, edit = page.edit;
     if (!row || key === undefined || row.deleted || !order.includes(index) || edit?.kind !== 'editable' || disabled || !baseCurrent(row)) return false;
@@ -394,10 +404,11 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
     const rowIndex = rows.indexOf(row);
     const rectangle = cellRange.at(row, rowIndex, key), selectRow = cellRange.selectRowAction(row, rowIndex, key);
     const selectAll = cellRange.selectAllAction(row, rowIndex, key);
-    const current = () => source.current === owner && checkedContext.current?.owner === owner &&
-      !checkedContext.current.disabled && checkedContext.current.isCurrent() && orderRef.current.indices === order && noModal() &&
-      (!rectangle || cellRange.rectangleCurrent(rectangle));
+    const inspection = sqliteGridValueSource(row, index);
+    if (!inspection) return false;
+    const current = () => inspection.current() && (!rectangle || cellRange.rectangleCurrent(rectangle));
     return cellActionMenu.open(target, grid.current?.element, { title: column.name, current,
+      inspectValue: rectangle ? undefined : inspection.inspectValue,
       webValue: !rectangle && raw?.kind === 'text' ? raw.value : undefined, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
       ...(selectRow ? [selectRow] : []),
       ...(selectAll ? [selectAll] : []),
@@ -593,7 +604,13 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
       }
       if (mode === 'ACTIVE' && row && column && !event.defaultPrevented && !event.isGridDefaultPrevented() && tableCellEditorKey(event)) {
         event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
-        if (!event.repeat && !cellRange.rectangle) edit(row, column.key);
+        if (!event.repeat && !cellRange.rectangle) {
+          if (canEditCell(row, column.key)) edit(row, column.key);
+          else if (rangeKeys.includes(column.key)) {
+            const source = sqliteGridValueSource(row, Number(column.key.slice(1)));
+            if (source) cellActionMenu.inspect(event.target, grid.current?.element, source);
+          }
+        }
         return;
       }
       if (mode === 'ACTIVE' && row && column && event.key === 'Enter' && (event.ctrlKey || event.metaKey) &&

@@ -89,6 +89,6 @@ it('写前目录被替换即拒绝，零文件分配；不重新签目录身份'
 });
 it('live复用原生命周期、无模型setter/写IPC/剪贴板；原两次退出后才限定清理', () => {
   const live = readFileSync(new URL('../e2e/query-files-native-live.ts', import.meta.url), 'utf8');
-  for (const key of ['bindEditorIndentNativeCase(info, binding, () => test.info())', 'timeout: 120000', 'createEditorIndentNativeRun(scope, binding.approval)', 'readIndentNativeSettings', 'await run.close(first)', 'await run.close(second)', 'await run.finish()', "app.getVersion()", "toBe('0.28.0')", 'text.reread', 'text.openRecent']) expect(live).toContain(key);
+  for (const key of ['bindEditorIndentNativeCase(info, binding, () => test.info())', 'timeout: 120000', 'createEditorIndentNativeRun(scope, binding.approval)', 'readIndentNativeSettings', 'await run.close(first)', 'await run.close(second)', 'await run.finish()', "app.getVersion()", 'currentProductVersion', 'text.reread', 'text.openRecent']) expect(live).toContain(key);
   expect(live).not.toMatch(/\.setValue\(|\.setModel\(|useWorkspace|clipboard|writeQuery|files\.choose|queryFileSources\.(?:save|open|forgetRecent)'|\.kill\(|\.close\(\{.*force/);
 });

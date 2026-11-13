@@ -1,17 +1,23 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import type { CellValue } from '../../shared/contracts';
 import { gridDialogCurrent } from '../modalSelectors';
 import { gridQuickValueZh } from '../locales/gridQuickValue.zh-CN';
+import { gridCellValueZh as valueText } from '../locales/gridCellValue.zh-CN';
 import { htmlCellPreviewZh as webText } from '../locales/htmlCellPreview.zh-CN';
 import { htmlCellSource } from '../htmlCellPreview';
+import { errorMessage } from '../lib';
 import { GridHtmlCellPreview } from './HtmlCellPreview';
+import { GridCellValuePanel } from './GridCellValuePanel';
 import { useWorkspace } from '../store';
 import '../sidebarContextMenu.css';
 
 export interface GridCellAction { label: string; disabled?: boolean; run(): void; }
-interface Request { title: string; label?: string; targetRole?: 'columnheader'; actions: readonly GridCellAction[]; webValue?: unknown; current(): boolean; focusTarget?(): HTMLElement | undefined; }
+interface Request { title: string; label?: string; targetRole?: 'columnheader'; actions: readonly GridCellAction[]; webValue?: unknown; inspectValue?(): CellValue | undefined; current(): boolean; focusTarget?(): HTMLElement | undefined; }
 interface Owner extends Request { cell: HTMLElement; grid: HTMLElement; dialog?: Element; anchorLeft: number; anchorTop: number; scrollLeft: number; scrollTop: number; x: number; y: number; }
 interface WebPreview { title: string; value: string; cell: HTMLElement; current(): boolean; }
+interface ValuePreview { id: number; title: string; value: CellValue | undefined; current(): boolean; returnFocus(): void; }
+type ValueSource = Pick<Request, 'title' | 'current' | 'inspectValue' | 'targetRole'>;
 
 export function isGridContextKey(event: { key: string; shiftKey: boolean; repeat: boolean; keyCode: number; nativeEvent: { isComposing: boolean } }): boolean {
   const key = event.key.toLowerCase();
@@ -22,6 +28,8 @@ export function isGridContextKey(event: { key: string; shiftKey: boolean; repeat
 export function useGridCellActionMenu(ownDialog?: () => Element | undefined) {
   const [owner, setOwner] = useState<Owner>();
   const [webPreview, setWebPreview] = useState<WebPreview>();
+  const [valuePreview, setValuePreview] = useState<ValuePreview>();
+  const valueId = useRef(0);
   const active = useRef<Owner | undefined>(undefined);
 
   function close(request = active.current, focus = false): void {
@@ -34,30 +42,31 @@ export function useGridCellActionMenu(ownDialog?: () => Element | undefined) {
   useLayoutEffect(() => {
     if (owner && !owner.current()) close(owner);
     if (webPreview && !webPreview.current()) setWebPreview(undefined);
+    if (valuePreview && !valuePreview.current()) setValuePreview(undefined);
   });
   useLayoutEffect(() => {
-    if (!owner && !webPreview) return;
+    if (!owner && !webPreview && !valuePreview) return;
     const stop = useWorkspace.subscribe(() => {
       if (owner && !owner.current()) close(owner);
       if (webPreview && !webPreview.current()) setWebPreview(previous => previous === webPreview ? undefined : previous);
+      if (valuePreview && !valuePreview.current()) setValuePreview(previous => previous === valuePreview ? undefined : previous);
     });
     return stop;
-  }, [owner, webPreview]);
+  }, [owner, webPreview, valuePreview]);
   useLayoutEffect(() => () => { active.current = undefined; }, []);
 
-  function open(target: EventTarget | null, grid: HTMLElement | null | undefined, request: Request, point?: { x: number; y: number }): boolean {
-    const html = request.targetRole ? undefined : htmlCellSource(request.webValue);
-    if (!grid || !(target instanceof Element) || !request.actions.length && html === undefined ||
-        target.closest('input,textarea,select,button,[contenteditable="true"]')) return false;
+  /** 查看内容与还原焦点分别核对数据来源和物理单元格。 */
+  function capture(target: EventTarget | null, grid: HTMLElement | null | undefined, request: ValueSource) {
+    if (!grid || !(target instanceof Element) || target.closest('input,textarea,select,button,[contenteditable="true"]')) return;
     const cell = target.closest<HTMLElement>(request.targetRole ? '[role="columnheader"]' : '[role="gridcell"]'), row = cell?.closest('[role="row"]');
-    if (!cell || !row || cell.closest('[role="grid"]') !== grid) return false;
+    if (!cell || !row || cell.closest('[role="grid"]') !== grid) return;
     const rowIndex = row.getAttribute('aria-rowindex'), columnIndex = cell.getAttribute('aria-colindex');
     const dialog = ownDialog?.();
-    if (ownDialog && !dialog) return false;
+    if (ownDialog && !dialog) return;
     const state = useWorkspace.getState(), tab = state.settings.tabs.find(item => item.id === state.settings.activeTabId);
-    if (!dialog && !tab) return false;
+    if (!dialog && !tab) return;
     const version = tab && state.connectionVersions[tab.connectionId];
-    const current = () => {
+    const sourceCurrent = () => {
       try {
         if (dialog) {
           if (ownDialog?.() !== dialog) return false;
@@ -66,17 +75,47 @@ export function useGridCellActionMenu(ownDialog?: () => Element | undefined) {
           if (!tab || now.settings.activeTabId !== tab.id || now.settings.tabs.find(item => item.id === tab.id) !== tab ||
               now.connectionVersions[tab.connectionId] !== version || now.activeJobs[tab.id]) return false;
         }
-        return cell.isConnected && cell.closest('[role="grid"]') === grid && cell.closest('[role="row"]') === row &&
-          row.getAttribute('aria-rowindex') === rowIndex && cell.getAttribute('aria-colindex') === columnIndex &&
-          gridDialogCurrent(cell, ownDialog) && request.current();
+        return grid.isConnected && gridDialogCurrent(grid, ownDialog) && request.current();
       } catch { return false; }
     };
-    if (!current()) return false;
+    const current = () => cell.isConnected && cell.closest('[role="grid"]') === grid && cell.closest('[role="row"]') === row &&
+      row.getAttribute('aria-rowindex') === rowIndex && cell.getAttribute('aria-colindex') === columnIndex && sourceCurrent();
+    if (current()) return { cell, grid, dialog, current, sourceCurrent };
+  }
+
+  function showValue(anchor: NonNullable<ReturnType<typeof capture>>, request: ValueSource): boolean {
+    if (!request.inspectValue || request.targetRole || !anchor.current()) return false;
+    try {
+      const value = request.inspectValue();
+      if (!anchor.current()) return false;
+      setWebPreview(undefined);
+      setValuePreview({ id: ++valueId.current, title: request.title, value, current: anchor.sourceCurrent,
+        returnFocus: () => { if (anchor.current()) anchor.cell.focus({ preventScroll: true }); } });
+      return true;
+    } catch (reason) {
+      if (anchor.current()) useWorkspace.getState().notify(errorMessage(reason), true);
+      return false;
+    }
+  }
+
+  function inspect(target: EventTarget | null, grid: HTMLElement | null | undefined, request: ValueSource): boolean {
+    const anchor = capture(target, grid, request);
+    return !!anchor && showValue(anchor, request);
+  }
+
+  function open(target: EventTarget | null, element: HTMLElement | null | undefined, request: Request, point?: { x: number; y: number }): boolean {
+    const html = request.targetRole ? undefined : htmlCellSource(request.webValue);
+    if (!request.actions.length && html === undefined && !request.inspectValue) return false;
+    const anchor = capture(target, element, request);
+    if (!anchor) return false;
+    const { cell, grid, dialog, current } = anchor;
     const rect = cell.getBoundingClientRect();
     // 仅持有菜单命中的原文和单元格来源；预览不通过网格复制或提交路径。
-    const actions = html === undefined ? request.actions : [...request.actions, {
-      label: webText.open, run: () => { if (current()) setWebPreview({title: request.title, value: html, cell, current}); },
-    }];
+    const actions = [...request.actions];
+    if (request.inspectValue && !request.targetRole) actions.push({ label: valueText.open, run: () => { showValue(anchor, request); } });
+    if (html !== undefined) actions.push({ label: webText.open, run: () => {
+      if (current()) { setValuePreview(undefined); setWebPreview({ title: request.title, value: html, cell, current }); }
+    } });
     const next = { ...request, actions, ...(point ?? { x: rect.left, y: rect.bottom }), cell, grid, dialog,
       anchorLeft: rect.left, anchorTop: rect.top, scrollLeft: grid.scrollLeft, scrollTop: grid.scrollTop, current };
     active.current = next;
@@ -95,7 +134,12 @@ export function useGridCellActionMenu(ownDialog?: () => Element | undefined) {
       setWebPreview(undefined);
       if (webPreview.current()) webPreview.cell.focus({preventScroll: true});
     }}/>;
-  return { open, menu: <>{menu}{preview}</> };
+  const value = valuePreview && <GridCellValuePanel key={valuePreview.id} column={valuePreview.title} value={valuePreview.value}
+    current={valuePreview.current} onClose={() => {
+      setValuePreview(previous => previous === valuePreview ? undefined : previous);
+      valuePreview.returnFocus();
+    }}/>;
+  return { open, inspect, menu: <>{menu}{preview}{value}</> };
 }
 
 function GridCellMenu({ owner, close, choose }: { owner: Owner; close(focus: boolean): void; choose(action: GridCellAction): void; }) {

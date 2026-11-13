@@ -2286,7 +2286,10 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     if (composing) { if (binary) event.preventGridDefault(); return; }
     if (!event.defaultPrevented && tableCellEditorKey(event)) {
       event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
-      if (!event.repeat && !cellRange.rectangle && canOpenCellEditor(activeRow, activeColumn.key)) record.openCell(activeRow.id, activeColumn.key);
+      if (!event.repeat && !cellRange.rectangle) {
+        if (canOpenCellEditor(activeRow, activeColumn.key)) record.openCell(activeRow.id, activeColumn.key);
+        else if (visibleKeys.includes(activeColumn.key)) cellActionMenu.inspect(event.target, grid.current?.element, gridCellValueSource(activeRow, activeColumn.key));
+      }
       return;
     }
     const target = event.target;
@@ -2328,6 +2331,12 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     // 数据格菜单以命中的行和列为准，焦点回到命中格时活动格可能变化。
     return tableTabCurrent() && sortScopeRef.current === sortScope && rowsRef.current === rows && rows.includes(row) && !row.deleted &&
       layoutRevision.current === headerCopyLayoutRevision && !blockedRef.current && !activeGridEditor.current && !record.hasInput();
+  }
+  /** 保留当前草稿的完整值及字段身份，格式化后的网格文本不参与查看。 */
+  function gridCellValueSource(row: DraftRow, key: string) {
+    const value = ownCell(row.data, key);
+    return { title: key, inspectValue: () => value,
+      current: () => cellActionCurrent(row) && visibleKeys.includes(key) && Object.is(ownCell(row.data, key), value) };
   }
   /** 右键及快捷键只编辑当前仍可写的格，行号和生成列不提供入口。 */
   function canOpenCellEditor(row: DraftRow, key: string): boolean {
@@ -2373,11 +2382,13 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
         return [{ label, run: () => stageMenuCellFilter.current(mode, { row, key }) }];
       } catch { return []; }
     }) : [];
-    const current = () => cellActionCurrent(row) && (!rectangle || cellRange.rectangleCurrent(rectangle));
+    const inspection = gridCellValueSource(row, key);
+    const current = () => inspection.current() && (!rectangle || cellRange.rectangleCurrent(rectangle));
     const sqlActions = tableRowSqlActions(row, current, rectangle);
     const fieldEditor = rectangle ? undefined : specializedFieldEditor(row, key);
     const chooseReference = !rectangle && cellReferenceKeys(row, key).length > 0;
     return cellActionMenu.open(target, grid.current?.element, { title: key, current, webValue: rectangle ? undefined : ownCell(row.data, key),
+      inspectValue: rectangle ? undefined : inspection.inspectValue,
       focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
       ...(selectRow ? [selectRow] : []),
       ...(selectAll ? [selectAll] : []),

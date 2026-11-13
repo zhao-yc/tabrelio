@@ -7,7 +7,9 @@ import { findSqlPreviewMatch } from '../sqlTextPreviewFind';
 const sqlPartUnits = 65536;
 
 /** 只把当前段放进界面，分段边界保留原 CRLF 和 Unicode 代理对。 */
-export function SqlTextPreview({ title, sql, onClose }: { title: string; sql: string; onClose(): void }) {
+export function SqlTextPreview({ title, sql, onClose, partLabels }: {
+  title: string; sql: string; onClose?(): void; partLabels?: { previous: string; next: string; position: string };
+}) {
   const [part, setPart] = useState(0);
   const [needle, setNeedle] = useState('');
   const [match, setMatch] = useState<number | null>();
@@ -56,9 +58,9 @@ export function SqlTextPreview({ title, sql, onClose }: { title: string; sql: st
       {match !== undefined && <span role="status" aria-label={text.sqlFindStatus}>{match === null ? text.sqlFindMissing : text.sqlFindLocated}</span>}
     </div>
     <pre ref={pre} tabIndex={0}>{markStart < markEnd ? <>{sql.slice(start, markStart)}<mark ref={highlight}>{sql.slice(markStart, markEnd)}</mark>{sql.slice(markEnd, end)}</> : sql.slice(start, end)}</pre>
-    <div className="inline-field"><button disabled={part === 0} onClick={() => setPart(part - 1)}>{text.sqlPrevious}</button>
-      <span role="status" aria-label={text.sqlPartStatus}>{formatText(text.sqlPart, part + 1, count)}</span>
-      <button disabled={part + 1 >= count} onClick={() => setPart(part + 1)}>{text.sqlNext}</button>
-      <button onClick={onClose}>{text.sqlClose}</button>
+    <div className="inline-field"><button disabled={part === 0} onClick={() => setPart(part - 1)}>{partLabels?.previous ?? text.sqlPrevious}</button>
+      <span role="status" aria-label={partLabels?.position ?? text.sqlPartStatus}>{formatText(text.sqlPart, part + 1, count)}</span>
+      <button disabled={part + 1 >= count} onClick={() => setPart(part + 1)}>{partLabels?.next ?? text.sqlNext}</button>
+      {onClose && <button onClick={onClose}>{text.sqlClose}</button>}
     </div></section>;
 }

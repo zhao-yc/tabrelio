@@ -10,6 +10,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqlFormattingZh } from '../../src/renderer/locales/sqlFormatting.zh-CN';
 import { queryFilesZh as text } from '../../src/renderer/locales/queryFiles.zh-CN';
 import { queryFileSourceHasChanges } from '../../src/shared/queryFileSources';
+import { currentProductVersion } from '../helpers/currentProductVersion';
 import { QueryFilesNativeFiles } from '../helpers/queryFilesNativeFiles';
 import { installSqlFilesOpenAnswer, finishSqlFilesOpenAnswer, installSqlFilesDirtyExitAnswer, consumeSqlFilesDirtyExitAnswer } from '../helpers/queryFilesNative';
 
@@ -31,7 +32,7 @@ async function model(run: EditorIndentNativeRun, owner: IndentNativeOwner): Prom
 }
 /** 启动后沿原严格Main来源门才开启官方观察API；不设模型正文或EOL。 */
 async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
-  expect(await run.step(owner, () => owner.application.evaluate(({ app }) => app.getVersion()))).toBe('0.28.0');
+  expect(await run.step(owner, () => owner.application.evaluate(({ app }) => app.getVersion()))).toBe(currentProductVersion);
   await run.step(owner, () => owner.page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; }));
   await run.step(owner, () => owner.page.reload()); await run.step(owner, () => expect(owner.page.locator('.app-statusbar')).toBeVisible());
 }

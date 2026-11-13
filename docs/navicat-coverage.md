@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。表页、查询结果和离线快照可就地查看当前已载入的完整单元格值。长文本支持分段查找和原文复制，二进制值复用只读查看，区分 SQL NULL、未填写和空字符串。D02、Q05 增加完整值查看入口。[Navicat 查询结果手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html#result-tab-toolbar)
+
 2026-11-12 源码增量。表页、查询结果和离线快照支持 Ctrl／⌘ 点击数据格切换行勾选，Shift 点击复选框可勾选或取消连续范围。范围起点只属于原页及原勾选，翻页、重排和批量调整会撤销。D02、Q05 增加网格行勾选操作。[Navicat 网格选取手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#copy-data-from-grid-view)
 
 2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的可写表网格可用快捷键新增和删除当前记录。单格右键可暂存删除命中的记录，草稿仍使用原撤销和集中提交。D02 增加网格记录操作。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#grid-view)

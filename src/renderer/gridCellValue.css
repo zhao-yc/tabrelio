@@ -1,0 +1,5 @@
+.grid-cell-value-panel{margin:0 8px 6px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);flex-shrink:0;max-height:40vh;overflow:auto}
+.grid-cell-value-panel>header{display:flex;align-items:center;gap:8px}
+.grid-cell-value-panel>header>strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grid-cell-value-panel .history-sql-preview pre{max-height:22vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
+.grid-cell-value-panel .history-sql-preview [role="search"]{flex-wrap:wrap}
