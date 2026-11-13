@@ -1,6 +1,6 @@
 {
   "name": "tabrelio",
-  "version": "0.29.1",
+  "version": "0.29.2",
   "private": true,
   "description": "tabrelio 开源数据库客户端",
   "license": "MIT",

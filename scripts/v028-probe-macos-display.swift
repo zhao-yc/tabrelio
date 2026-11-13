@@ -70,11 +70,14 @@ let mainDiagnostic = approvalEnvironment["GITHUB_REPOSITORY"] == "zhao-yc/tabrel
     approvalEnvironment["GITHUB_REF"] == "refs/heads/main" &&
     approvalEnvironment["GITHUB_WORKFLOW_REF"] == "zhao-yc/tabrelio/.github/workflows/v028-macos-display-diagnostic.yml@refs/heads/main" &&
     approvalEnvironment["GITHUB_EVENT_NAME"] == "push" && approvalEnvironment["GITHUB_JOB"] == "inspect"
-// 实际arm64验收job先采自己的只读原件；未知镜像仍由未改动的keeper拒绝。
+// 实际 arm64 验收任务先采当次只读原件；发行标签与后续租约使用相同的上下文约束。
 let desktopRef = approvalEnvironment["GITHUB_REF"] ?? ""
+let desktopBranch = ["refs/heads/main", "refs/heads/codex/query-result-range-filter-20261020"].contains(desktopRef)
+let releaseTag = desktopRef.range(of: #"^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$"#, options: .regularExpression) != nil &&
+    approvalEnvironment["GITHUB_EVENT_NAME"] == "push"
 let desktopDiagnostic = architecture == "arm64" && approvalEnvironment["GITHUB_REPOSITORY"] == "zhao-yc/tabrelio" &&
     approvalEnvironment["GITHUB_JOB"] == "desktop" &&
-    ["refs/heads/main", "refs/heads/codex/query-result-range-filter-20261020"].contains(desktopRef) &&
+    (desktopBranch || releaseTag) &&
     approvalEnvironment["GITHUB_WORKFLOW_REF"] == "zhao-yc/tabrelio/.github/workflows/ci.yml@" + desktopRef &&
     ["push", "workflow_dispatch"].contains(approvalEnvironment["GITHUB_EVENT_NAME"] ?? "")
 guard approvalEnvironment["GITHUB_ACTIONS"] == "true",
