@@ -82,6 +82,17 @@ async function seed(sql = 'SELECT id, name FROM subject ORDER BY id DESC;', fixt
   await launchDesktop();
 }
 
+/** 在托管小屏上留足原表格和操作区的实际客户空间，仍以真实鼠标与虚拟网格验收。 */
+async function useSpaciousQueryWindow() {
+  await desktop.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    window.setMinimumSize(720, 500);
+    window.webContents.setZoomFactor(0.75);
+    window.setContentSize(1000, 700);
+  });
+  await expect.poll(() => page.evaluate(() => innerHeight)).toBeGreaterThanOrEqual(900);
+}
+
 /** 在虚拟行尚未渲染时输入行号，并确认焦点落到真实数据格。 */
 async function jump(pane: Locator, row: string, expected: string, open: () => Promise<void>) {
   await expect(pane.getByRole('gridcell', { name: expected, exact: true })).toHaveCount(0);
@@ -783,6 +794,7 @@ test('SQLite JOIN 查询替换原生文本，去重投影并回滚并发冲突',
      INSERT INTO replace_subject VALUES(1,'旧12',12,'甲隐藏'),(2,'旧12','12','乙隐藏'),(3,'旧12','12','范围外');
      CREATE TABLE replace_side(id INTEGER PRIMARY KEY,note TEXT);
      INSERT INTO replace_side VALUES(1,'旧12');`);
+  await useSpaciousQueryWindow();
   const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'));
   try {
     const query = page.locator('.query-tab:visible'), panel = query.getByRole('region', { name: replaceText.title, exact: true });
@@ -2335,6 +2347,7 @@ test('SQLite 查询按勾选临时显示或隐藏行并保留整理范围', asyn
 
 test('SQLite 只读查询结果按焦点接收查找菜单并保留查找条件', async ({}, info) => {
   await seed('SELECT id,name FROM subject_view WHERE id < 3;', '', undefined, true);
+  await useSpaciousQueryWindow();
   const query = page.locator('.query-tab:visible');
   const editor = query.locator('.monaco-editor');
   const editorFind = editor.locator('.find-widget');
@@ -2371,15 +2384,17 @@ test('SQLite 只读查询结果按焦点接收查找菜单并保留查找条件'
   await expect(input).toBeDisabled();
 
   await query.getByRole('button', { name: resultFind.close, exact: true }).click();
-  await query.getByRole('button', { name: queryLayoutZh.placement, exact: true }).click();
-  await page.getByRole('menuitem', { name: queryLayoutZh.results, exact: true }).click();
+  const placement = query.getByRole('button', { name: queryLayoutZh.placement, exact: true });
+  const placements = page.getByRole('menu', { name: queryLayoutZh.placement, exact: true });
+  await placement.press('ArrowDown');
+  await placements.getByRole('menuitem', { name: queryLayoutZh.results, exact: true }).press('Enter');
   await expect(editor).toBeHidden();
   await cell.click();
   await clickNativeFind();
   await expect(input).toBeFocused();
   await query.getByRole('button', { name: resultFind.close, exact: true }).click();
-  await query.getByRole('button', { name: queryLayoutZh.placement, exact: true }).click();
-  await page.getByRole('menuitem', { name: queryLayoutZh.below, exact: true }).click();
+  await placement.press('ArrowDown');
+  await placements.getByRole('menuitem', { name: queryLayoutZh.below, exact: true }).press('Enter');
   await editor.getByRole('textbox').focus();
   await clickNativeFind();
   await expect(editorFind).toBeVisible();
@@ -3470,6 +3485,7 @@ test('SQLite 粘贴按矩形左上角预览并暂存，单值可铺满且尺寸�
 
 test('拖选靠近底边会继续滚动，松开后可复制滚过的完整矩形', async () => {
   await seed();
+  await useSpaciousQueryWindow();
   const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
   await query.locator('.query-execute-split > button.primary').click();
   const first = query.getByRole('gridcell', { name: '180', exact: true });

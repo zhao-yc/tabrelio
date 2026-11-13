@@ -1419,8 +1419,11 @@ test('PostgreSQL 名称补全插入用户原文和方言模板并保留一次撤
   await page.evaluate(({name, sql}) => window.dbark.invoke('snippets.save', {id: 'pg-completion', name, group: '离线', description: '', sql, updatedAt: ''}), {name, sql});
   await prepare({id: '', name: '离线 PostgreSQL 片段补全', dialect: 'postgresql', group: '', color: '#123456',
     host: '127.0.0.1', port: 1, user: 'offline', database: 'postgres'}, 'SELECT 0;\n  ');
+  await resizeQueryWindow(1280, 920, 0.75);
   await modelSelection(2, 3);
   await page.keyboard.type('pgQuick');
+  await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 2, column: 10});
+  await triggerSuggestions();
   const widget = () => page.locator('.suggest-widget.visible');
   await expect(widget().locator('.monaco-list-row.focused .label-name')).toHaveText(name);
   await page.keyboard.press('Enter');

@@ -37,7 +37,7 @@ describe('缩进偏好的原settings与真实SQLite重启', () => {
       inspect(path, db => { expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(9); expect(JSON.parse(String(db.exec('SELECT data FROM settings')[0].values[0][0]))).toEqual({ ...legacy, ...values }); });
       expect(before.length).toBeGreaterThan(0);
     }
-  });
+  }, 15000); // 本例多次重开真实 SQLite，Linux 全量并行实测达 5.38 秒。
   it('1/8与2、Tab/空格经严格IPC及LocalStore保存重开，原其它偏好/SQL/标签逐字保留', async () => {
     const { store, path } = await open();
     for (const editorTabSize of [1, 8, 2]) for (const editorInsertSpaces of [false, true]) {

@@ -66,7 +66,10 @@ test('从窗口菜单恢复较早的同名草稿，保留另一份供快捷重�
     title, connectionId: connection, databaseContext: { state: 'known', database: drafts[0].database },
     queryResultPlacement: 'beside', queryEditorWidth: 510,
   });
-  await clickMenu('reopen-query');
+  // 等已恢复标签的编辑器挂载，再使用窗口菜单公开的重开快捷键。
+  await expect(page.locator('.query-tab:visible .monaco-editor').getByRole('textbox')).toBeVisible();
+  await expect.poll(() => enabled('reopen-query')).toBe(true);
+  await page.keyboard.press('ControlOrMeta+Shift+T');
   await expect(tabs()).toHaveCount(2);
   await expect.poll(async () => (await persisted()).tabs.map(tab => tab.sql)).toEqual(drafts.map(draft => draft.sql));
   expect((await persisted()).tabs[1].id).not.toBe(drafts[1].id);
