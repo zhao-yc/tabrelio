@@ -1280,7 +1280,7 @@ test('PostgreSQL 查询布局支持原生拖动、键盘和窄窗回退并保留
   await prepare({id: '', name: '离线 PostgreSQL 布局', dialect: 'postgresql', group: '', color: '#123456',
     host: '127.0.0.1', port: 1, user: 'offline', database: 'postgres'}, original);
   // 在较小的原生屏幕上也给实际分栏留足 CSS 像素，继续验证原高度和宽度。
-  await resizeQueryWindow(1280, 920, 0.75);
+  await resizeQueryWindow(1280, 1000, 0.7);
   const placement = tab().getByRole('combobox', {name: queryLayoutZh.placement, exact: true});
   const heightBar = tab().getByRole('separator', {name: queryLayoutZh.separator, exact: true});
   const widthBar = tab().getByRole('separator', {name: queryLayoutZh.widthSeparator, exact: true});
@@ -1320,12 +1320,12 @@ test('PostgreSQL 查询布局支持原生拖动、键盘和窄窗回退并保留
   await expect.poll(width).toBe(470);
   await page.screenshot({path: info.outputPath('PostgreSQL查询左右布局.png')});
 
-  await resizeQueryWindow(790, 500, 0.75);
+  await resizeQueryWindow(790, 500, 0.7);
   await expect(tab()).toHaveAttribute('data-result-layout', 'below');
   await expect(tab().getByText(queryLayoutZh.besideNarrow, {exact: true})).toBeVisible();
   await expect.poll(height).toBeLessThan(savedHeight);
   expect(await saved()).toMatchObject({queryResultPlacement: 'beside', queryEditorWidth: 470, queryEditorHeight: savedHeight});
-  await resizeQueryWindow(1280, 920, 0.75);
+  await resizeQueryWindow(1280, 1000, 0.7);
   await expect(tab()).toHaveAttribute('data-result-layout', 'beside');
   await expect.poll(width).toBe(470);
   await placement.selectOption('results');

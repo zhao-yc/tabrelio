@@ -87,7 +87,7 @@ async function useSpaciousQueryWindow() {
   await desktop.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
     window.setMinimumSize(720, 500);
-    window.webContents.setZoomFactor(0.75);
+    window.webContents.setZoomFactor(0.7);
     window.setContentSize(1000, 700);
   });
   await expect.poll(() => page.evaluate(() => innerHeight)).toBeGreaterThanOrEqual(900);

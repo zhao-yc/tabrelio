@@ -48,6 +48,12 @@ test('PostgreSQL 保存查询正文命中可跳转，插入只替换原选区且
   }, {connectionId: profile.id, sql: draft});
   await page.addInitScript(() => { self.MonacoEnvironment = {...self.MonacoEnvironment, globalAPI: true}; });
   await page.reload();
+  await desktop.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    window.setMinimumSize(720, 500);
+    window.webContents.setZoomFactor(0.7);
+    window.setContentSize(950, 680);
+  });
   const query = page.locator('.postgres-query:visible');
   const editor = query.locator('.postgres-editor .monaco-editor');
   const current = () => page.evaluate(async () => {

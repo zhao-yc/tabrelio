@@ -449,6 +449,7 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     const unsafe = dialect === 'mysql' ? '/*!50100 SELECT 4 */' : dialect === 'mariadb' ? '/*M! SELECT 4 */' : "SELECT '*/';";
     const sql = [...lines, unsafe].join('\n');
     await seed(dialect, sql);
+    await desktop.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(0.7); });
     function model(edit?: { line: number; end: number }) {
       return activeEditor().evaluate((element, edit) => {
         const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
@@ -476,7 +477,8 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     });
     const wrapped = '/* ' + body + ' */', expected = [lines[0], wrapped, lines[2], unsafe].join('\n');
     await expect.poll(() => model()).toMatchObject({ id: initial.id, sql: expected, selected: wrapped });
-    await page.mouse.click(initial.x, initial.y, { button: 'right' });
+    const point = await model();
+    await page.mouse.click(point.x, point.y, { button: 'right' });
     await page.locator('.monaco-menu-container:visible').getByRole('menuitem', { name: label, exact: true }).click({ delay: 120 });
     await expect.poll(() => model()).toMatchObject({ id: initial.id, sql, selected: body });
     await page.keyboard.press(modifier + '+z');
@@ -570,6 +572,7 @@ for (const dialect of ['mysql', 'postgresql'] as const) {
     const lines = [String.raw`SELECT '船🚢', "字段", '\n';`, 'SELECT 3;'];
     const sql = lines.join('\n');
     await seed(dialect, sql);
+    await desktop.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(0.7); });
     await page.evaluate(() => {
       // 只拦本例明确复制，在内存里模拟浏览器的可写事件，不调用系统剪贴板。
       const copies: string[] = [];
@@ -624,6 +627,8 @@ for (const dialect of ['mysql', 'postgresql'] as const) {
     await expect(dialog.getByRole('alert')).toHaveText('原查询编辑器或选区已变化，请重新选择后复制。');
     expect(await copies()).toEqual([]);
     await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await activeEditor().getByRole('textbox').focus();
     const first = await model('first');
     await page.mouse.click(first.x, first.y, { button: 'right' });
     await page.locator('.monaco-menu-container:visible').getByRole('menuitem', { name: '带引号复制 SQL', exact: true }).click({ delay: 120 });

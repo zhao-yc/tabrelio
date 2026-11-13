@@ -86,8 +86,14 @@ async function run() {
   assert.equal(dirty.status,0);assert.equal(dirty.stdout.trim(),'');
   // installed必须已在本job构建并封存源码批准；不重复已核准的源码六项原生测试。
   const sourcePath=join(project,'test-results/native-editor-ci/source-approval.json');
-  const installedSourceHash=phase==='installed' ? createHash('sha256').update(readFileSync(sourcePath)).digest('hex') : undefined;
-  if (phase==='installed') assert.equal(readApproval(sourcePath,installedSourceHash,ciContext(project)).value.phase,'source');
+  const preparedSource = phase === 'source' && isDesktopKeeperContext(process.env);
+  if (preparedSource) {
+    // 构建及批准不需要大客户区，在申请不可续期的显示租约前完成。
+    const build = spawnSync(process.execPath, ['scripts/native-editor-ci.mjs', 'source-prepare'], {cwd:project, stdio:'inherit'});
+    assert.equal(build.status, 0); assert.equal(build.signal, null);
+  }
+  const preparedSourceHash = phase === 'installed' || preparedSource ? createHash('sha256').update(readFileSync(sourcePath)).digest('hex') : undefined;
+  if (preparedSourceHash) assert.equal(readApproval(sourcePath,preparedSourceHash,ciContext(project)).value.phase,'source');
   mkdirSync(output,{recursive:true});
   const nonce = randomBytes(32).toString('hex'), start = performance.now();
   let state = {nonce,seq:0,last:start,deadline:start+keeperLimits.leaseSeconds*1000,phase:'starting',failed:false};
@@ -136,9 +142,11 @@ async function run() {
     assert.ok(!fault && !keeperEnded && performance.now()<state.deadline);
     nativeRunning=true;
     // 原脚本完整保留：同次构建/批准、缩进后分栏、原TestInfo期限、断言及退出证明均不改。
-    const native=spawn(process.execPath,phase==='source' ? ['scripts/native-editor-ci.mjs','source'] : ['scripts/test-packaged.mjs','--mac-installed-keeper',nonce],{cwd:project,env:phase==='source' ? process.env : {
+    const native=spawn(process.execPath,phase==='source' ? ['scripts/native-editor-ci.mjs',preparedSource ? 'source-verify' : 'source'] : ['scripts/test-packaged.mjs','--mac-installed-keeper',nonce],{cwd:project,env:phase==='source' ? {
+      ...process.env, ...(preparedSource ? {DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256:preparedSourceHash} : {}),
+    } : {
       ...process.env, DBARK_NATIVE_EDITOR_CI:'1', DBARK_NATIVE_EDITOR_SOURCE_APPROVAL:sourcePath,
-      DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256:installedSourceHash,
+      DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256:preparedSourceHash,
       DBARK_NATIVE_EDITOR_REFERENCE_EXECUTABLE:join(project,'release/mac-arm64/tabrelio.app/Contents/MacOS/tabrelio'),
       DBARK_W03_SAVED_QUERY_NAVIGATION_TEST:'1', DBARK_EDITOR_FONT_NATIVE_TEST:'1',
       DBARK_QUERY_DUPLICATE_NATIVE_TEST:'1', DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST:'1',
@@ -156,7 +164,7 @@ async function run() {
         const installedPath=join(project,'test-results/native-editor-ci/installed-approval.json');
         const installedHash=createHash('sha256').update(readFileSync(installedPath)).digest('hex');
         const installed=readApproval(installedPath,installedHash,ciContext(project));
-        assert.equal(installed.value.phase,'installed'); assert.equal(installed.value.provenance.sourceApproval,installedSourceHash);
+        assert.equal(installed.value.phase,'installed'); assert.equal(installed.value.provenance.sourceApproval,preparedSourceHash);
         const directory=join(project,'test-results/native-file-first-model-ci/installed');
         const raw=readFileSync(join(directory,'report.json'));
         const accepted=JSON.parse(readFileSync(join(directory,'accepted.json'),'utf8'));

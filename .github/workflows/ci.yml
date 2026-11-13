@@ -116,7 +116,7 @@ jobs:
         id: native-source
         if: steps.mac-keeper-context.outputs.enabled != 'true'
         run: node scripts/native-editor-ci.mjs source
-      - name: 原源码六专项在独立600秒显示租约内执行并恢复
+      - name: 先封存源码构建，再在600秒显示租约内执行六项并恢复
         id: native-source-keeper
         if: steps.mac-keeper-context.outputs.enabled == 'true'
         run: node scripts/macos-mode-keeper-ci.mjs source

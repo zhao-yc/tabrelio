@@ -109,14 +109,21 @@ export function packageCleanupAllowed(enabled, nativeResult, failure) { return !
 // 模块导入不运行资源；CLI的默认/list参数在读取批准或调用任何执行端口之前拒绝。
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv.length !== 3 || process.argv[2] !== 'source') throw Error('仅接受source模式，安装模式由真实安装脚本调用');
+    const phase = process.argv[2];
+    if (process.argv.length !== 3 || !['source', 'source-prepare', 'source-verify'].includes(phase)) throw Error('仅接受源码模式，安装模式由真实安装脚本调用');
     if (!process.env.GITHUB_OUTPUT) throw Error('同job批准输出路径缺失');
     const project = realpathSync.native(fileURLToPath(new URL('../', import.meta.url))), context = ciContext(project);
-    const require = createRequire(join(project, 'package.json')), executable = realpathSync.native(require('electron'));
-    const resources = realpathSync.native(process.platform === 'win32' ? join(dirname(executable), 'resources') : resolve(dirname(executable), '../Resources'));
     const output = join(project, 'test-results/native-editor-ci');
-    const approval = buildSourceApproval({ project, output, context, executable, resources, currentContext: () => ciContext(project) });
-    runNativeEditorSpecialties({ approval, output });
-    appendFileSync(process.env.GITHUB_OUTPUT, 'source_approval=' + approval.path + '\nsource_approval_sha256=' + approval.sha256 + '\n');
+    const prepare = () => {
+      const require = createRequire(join(project, 'package.json')), executable = realpathSync.native(require('electron'));
+      const resources = realpathSync.native(process.platform === 'win32' ? join(dirname(executable), 'resources') : resolve(dirname(executable), '../Resources'));
+      return buildSourceApproval({ project, output, context, executable, resources, currentContext: () => ciContext(project) });
+    };
+    const approval = phase === 'source-verify'
+      ? readApproval(join(output, 'source-approval.json'), process.env.DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256, context)
+      : prepare();
+    if (approval.value.phase !== 'source') throw Error('源码入口只接受当前任务的源码批准');
+    if (phase !== 'source-prepare') runNativeEditorSpecialties({ approval, output });
+    if (phase !== 'source-verify') appendFileSync(process.env.GITHUB_OUTPUT, 'source_approval=' + approval.path + '\nsource_approval_sha256=' + approval.sha256 + '\n');
   } catch (error) { console.error(error); process.exitCode = 1; }
 }
