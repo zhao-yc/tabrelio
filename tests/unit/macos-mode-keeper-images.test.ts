@@ -6,6 +6,7 @@ const policy: any = await import(new URL('../../scripts/macos-mode-keeper-policy
 const bytes = readFileSync(new URL('../fixtures/macos-display-20261021.0445.8.json', import.meta.url));
 const renewedBytes = readFileSync(new URL('../fixtures/macos-display-20261026.0455.2.json', import.meta.url));
 const releaseBytes = readFileSync(new URL('../fixtures/macos-display-20261102.0473.1.json', import.meta.url));
+const currentBytes = readFileSync(new URL('../fixtures/macos-display-20261117.0516.1.json', import.meta.url));
 
 /** 使用实际同job枚举原字节；只调用纯策略，不加载AppKit或执行显示配置。 */
 function inventory(sourceBytes = bytes) { return JSON.parse(sourceBytes.toString('utf8')); }
@@ -42,12 +43,18 @@ describe('已审阅的macOS托管镜像准入', () => {
     expect(plan.mode).toMatchObject({ modeID: 9, logicalWidth: 1600, logicalHeight: 1200 });
     expect(plan.estimatedVisible).toEqual({ width: 1600, height: 1106 });
   });
-  it.each(['20261021.0445.9', '20261021.0445.8-extra', '20261026.0455.3', '20261026.0455.2-extra', '20261102.0473.2', '', undefined])('未审阅的版本%s拒绝', imageVersion => {
+  it('当前镜像与43415905717第三次运行枚举原件一致，显示模式保持相同', () => {
+    expect(createHash('sha256').update(currentBytes).digest('hex')).toBe('94c0142afb9d212741c949022ff461f4f21f2bb19776aaadd98ffd74c5cfe26f');
+    const value = inventory(currentBytes);
+    expect(value.displays).toEqual(inventory(releaseBytes).displays);
+    expect(policy.selectModeCandidate(value).mode).toMatchObject({ modeID: 9, logicalWidth: 1600, logicalHeight: 1200 });
+  });
+  it.each(['20261021.0445.9', '20261021.0445.8-extra', '20261026.0455.3', '20261026.0455.2-extra', '20261102.0473.2', '20261117.0516.2', '', undefined])('未审阅的版本%s拒绝', imageVersion => {
     const value = inventory(); value.context.imageVersion = imageVersion;
     expect(() => policy.selectModeCandidate(value)).toThrow();
   });
   it('版本相同也不能放过未知缩放或不足的真实模式', () => {
-    for (const sourceBytes of [bytes, renewedBytes]) {
+    for (const sourceBytes of [bytes, renewedBytes, currentBytes]) {
       const scaled = inventory(sourceBytes); scaled.displays[0].backingScaleFactor = 2;
       expect(() => policy.selectModeCandidate(scaled)).toThrow();
       const small = inventory(sourceBytes), display = small.displays[0];
