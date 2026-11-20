@@ -188,7 +188,9 @@ jobs:
         if: failure()
         with:
           name: 原生编译记录-${{ matrix.artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .cache/sqlite-native-build/**/compile.json
+          path: |
+            .cache/sqlite-native-build/**/compile.json
+            .cache/sqlite-native-build/compiler-extract.json
           include-hidden-files: true
           if-no-files-found: ignore
       - name: 单独保留两阶段显示租约原件

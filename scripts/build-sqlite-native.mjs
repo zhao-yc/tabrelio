@@ -40,10 +40,18 @@ async function compiler() {
       if (!response.ok) throw Error('SQLite原生编译器下载失败'); writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
     }
     if (digest(readFileSync(archive)) !== '3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c') throw Error('SQLite原生编译器官方摘要不符');
-    const script = join(mkdtempSync(join(directory, 'extract-')), 'extract.ps1');
-    writeFileSync(script, 'param([string]$Archive,[string]$Destination)\nExpand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force\n');
-    const install = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', script, '-Archive', archive, '-Destination', directory], { shell: false, windowsHide: true, encoding: 'utf8' });
-    if (install.error || install.status !== 0) throw Error('SQLite原生编译器解包未完成');
+    const systemRoot = process.env.SystemRoot;
+    if (!systemRoot || !/^[A-Za-z]:\\Windows$/i.test(systemRoot)) throw Error('Windows系统工具目录未经确认');
+    // 固定系统tar直接解包已验摘要的官方ZIP，避免PowerShell非终止解包错误被退出码0掩盖。
+    const install = spawnSync(join(systemRoot, 'System32/tar.exe'), ['-xf', archive, '-C', directory], { shell: false, windowsHide: true, encoding: 'utf8' });
+    const executablePresent = existsSync(executable), records = join(root, '.cache/sqlite-native-build');
+    mkdirSync(records, { recursive: true });
+    writeFileSync(join(records, 'compiler-extract.json'), JSON.stringify({ status: install.status, signal: install.signal, error: install.error?.message, stdout: install.stdout, stderr: install.stderr, executablePresent }, null, 2));
+    if (install.error || install.status !== 0 || install.signal || !executablePresent) {
+      if (install.stdout) process.stderr.write(install.stdout);
+      if (install.stderr) process.stderr.write(install.stderr);
+      throw Error('SQLite原生编译器解包未完成或缺少zig.exe，原解包记录保留', { cause: install.error });
+    }
   }
   return { executable, prefix: ['cc'] };
 }
