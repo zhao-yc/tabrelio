@@ -13,6 +13,9 @@ test.beforeAll(async () => {
   // 沿用员工224a2fe的固定夹具策略，不依赖热更新，避免Windows目录监听阻塞启动。
   server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0, watch: null }, logLevel: 'error' });
   await server.listen(); const address = server.httpServer!.address(); if (!address || typeof address === 'string') throw new Error('未取得离线端口'); url = `http://127.0.0.1:${address.port}/tests/fixtures/binary-cell/index.html`;
+  // 编译固定夹具及静态依赖属于服务器准备；每例仍真实启动Electron并保持原45秒和全部界面断言。
+  if (!await server.environments.client.transformRequest('/tests/fixtures/binary-cell/main.tsx')) throw Error('二进制夹具入口未完成编译');
+  await server.environments.client.waitForRequestsIdle();
 });
 test.afterAll(async () => { await server?.close(); });
 test.beforeEach(async () => {

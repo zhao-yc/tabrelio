@@ -2136,8 +2136,11 @@ test('SQLite 查询文本快捷筛选按字面匹配且不扫描其它存储类�
     WHEN 5 THEN NULL WHEN 6 THEN 42 ELSE '%_' END AS v FROM subject WHERE id <= 7 ORDER BY id;`);
   const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
   await query.locator('.query-execute-split > button.primary').click();
-  await query.getByRole('button', { name: queryLayoutZh.placement, exact: true }).click();
-  await page.getByRole('menuitem', { name: queryLayoutZh.results, exact: true }).click();
+  // 先确认本次查询结果已发布，避免执行完成时重建布局菜单而接管尚未结束的点击。
+  await expect(grid).toHaveAttribute('aria-rowcount', '8');
+  await query.getByRole('button', { name: queryLayoutZh.placement, exact: true }).press('ArrowDown');
+  await page.getByRole('menu', { name: queryLayoutZh.placement, exact: true })
+    .getByRole('menuitem', { name: queryLayoutZh.results, exact: true }).press('Enter');
   const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
   const original = ['1', '2', '3', '4', '5', '6', '7'];
   async function expectOriginalRows() {
