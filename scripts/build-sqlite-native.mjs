@@ -56,7 +56,12 @@ export async function compileSqliteNative(output) {
   const result = spawnSync(cc.executable, args, { cwd: dirname(output), shell: false, windowsHide: true, encoding: 'utf8', env: { ...process.env, ZIG_GLOBAL_CACHE_DIR: join(cache, 'zig-global'), ZIG_LOCAL_CACHE_DIR: join(cache, 'zig-local') } });
   const record = { status: result.status, signal: result.signal, error: result.error?.message, stdout: result.stdout, stderr: result.stderr };
   writeFileSync(join(dirname(output), 'compile.json'), JSON.stringify(record, null, 2));
-  if (result.error || result.status !== 0 || result.signal) throw Error('SQLite自研原生模块编译失败，原记录保留');
+  if (result.error || result.status !== 0 || result.signal) {
+    // CI须保留编译器原始诊断；只输出本次子进程结果，不转储可能含凭据的环境变量。
+    if (result.stdout) process.stderr.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+    throw Error('SQLite自研原生模块编译失败，原记录保留于 ' + join(dirname(output), 'compile.json'), { cause: result.error });
+  }
   if (process.platform === 'darwin') {
     const signed = spawnSync('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', output], { shell: false, windowsHide: true, encoding: 'utf8' });
     if (signed.error || signed.status !== 0 || signed.signal) throw Error('SQLite开发原生模块签名失败');
