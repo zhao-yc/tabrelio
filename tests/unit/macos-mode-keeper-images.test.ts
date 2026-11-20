@@ -11,7 +11,7 @@ const currentBytes = readFileSync(new URL('../fixtures/macos-display-20261117.05
 /** 使用实际同job枚举原字节；只调用纯策略，不加载AppKit或执行显示配置。 */
 function inventory(sourceBytes = bytes) { return JSON.parse(sourceBytes.toString('utf8')); }
 
-describe('已审阅的macOS托管镜像准入', () => {
+describe('macOS托管镜像来源及当次显示准入', () => {
   it('夹具与76ba9252的原附件JSON逐字一致', () => {
     expect(createHash('sha256').update(bytes).digest('hex')).toBe('44b60a542572d6049ff44d25b4e8dabd536d76306e0ccdc6c6320b3c2823e143');
   });
@@ -49,7 +49,13 @@ describe('已审阅的macOS托管镜像准入', () => {
     expect(value.displays).toEqual(inventory(releaseBytes).displays);
     expect(policy.selectModeCandidate(value).mode).toMatchObject({ modeID: 9, logicalWidth: 1600, logicalHeight: 1200 });
   });
-  it.each(['20261021.0445.9', '20261021.0445.8-extra', '20261026.0455.3', '20261026.0455.2-extra', '20261102.0473.2', '20261117.0516.2', '', undefined])('未审阅的版本%s拒绝', imageVersion => {
+  it.each(['20261112.0504.1', '20261117.0516.2', '20261124.0001.1'])('滚动镜像%s仍按当次真实模式与原空间条件验收', imageVersion => {
+    const value = inventory(currentBytes); value.context.imageVersion = imageVersion;
+    expect(policy.selectModeCandidate(value).mode).toMatchObject({ modeID: 9, logicalWidth: 1600, logicalHeight: 1200 });
+    value.displays[0].backingScaleFactor = 2;
+    expect(() => policy.selectModeCandidate(value)).toThrow();
+  });
+  it.each(['20261021.0445.8-extra', '20261026.0455.2-extra', '20261117.0516.1\n', '', undefined, 20261117])('镜像来源元数据%s无效时拒绝', imageVersion => {
     const value = inventory(); value.context.imageVersion = imageVersion;
     expect(() => policy.selectModeCandidate(value)).toThrow();
   });

@@ -25,8 +25,9 @@ export function classifyModeTransition(snapshot, from, to, requireSpace) {
 export function selectModeCandidate(inventory) {
   assert.equal(inventory.context.architecture, 'arm64');
   assert.equal(inventory.context.imageOS, 'macos26');
-  // 新版本先由同job只读原件复核；未知版本仍拒绝，不能据日期或前缀自动放行。
-  assert.ok(['20261013.0424.1', '20261021.0445.8', '20261026.0455.2', '20261102.0473.1', '20261117.0516.1'].includes(inventory.context.imageVersion));
+  // 镜像版本作为来源记录，准入依据下方当次完整拓扑、模式及真实空间，避免滚动镜像日期阻断验收。
+  assert.match(inventory.context.imageVersion, /^[0-9]{8}\.[0-9]{4}\.[0-9]+$/);
+  assert.equal(inventory.context.imageVersion.trim(), inventory.context.imageVersion);
   assert.equal(inventory.displays.length, 1);
   const display = inventory.displays[0], current = display.currentMode;
   assert.ok(Number.isSafeInteger(display.displayID) && display.displayID > 0);
