@@ -10,6 +10,8 @@ let injectedClipboard = '';
 const errors: string[] = [];
 const viewer = () => page.getByRole('region', { name: text.title, exact: true });
 test.beforeAll(async () => {
+  // macOS Intel 首次构建 React 夹具可能受冷缓存影响，准备阶段不应占用单例测试的45秒交互时限。
+  test.setTimeout(120000);
   // 启动 Electron 前构建固定夹具，避免冷启动时还在优化或逐个请求静态模块。
   buildDirectory = await mkdtemp(join(tmpdir(), 'dbark-binary-build-'));
   const config = { configFile: false as const, root: resolve('tests/fixtures/binary-cell'),
