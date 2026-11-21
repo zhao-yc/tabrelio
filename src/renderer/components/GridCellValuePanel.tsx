@@ -7,10 +7,11 @@ import { maxClipboardCharacters, writeTableClipboardEvent } from '../gridClipboa
 import { cellText, errorMessage } from '../lib';
 import { useWorkspace } from '../store';
 import { BinaryCellViewer } from './BinaryCellViewer';
+import { HtmlCellPreviewToggle } from './HtmlCellPreview';
 import { SqlTextPreview } from './SqlTextPreview';
 import '../gridCellValue.css';
 
-/** 只查看已载入的值。长文本只渲染当前段，复制原文不经过网格的 TSV 编码。 */
+/** 只查看已载入的值。长文本只渲染当前段，HTML 预览复用静态隔离框，复制原文不经过网格的 TSV 编码。 */
 export function GridCellValuePanel({ column, value, current, onClose }: {
   column: string; value: CellValue | undefined; current(): boolean; onClose(): void;
 }) {
@@ -39,7 +40,7 @@ export function GridCellValuePanel({ column, value, current, onClose }: {
       <button ref={close} type="button" onClick={onClose}>{text.close}</button>
     </header>
     {status ? <p role="status">{status}</p> : raw !== undefined
-      ? <SqlTextPreview title={text.content} sql={raw} partLabels={text}/>
+      ? <><SqlTextPreview title={text.content} sql={raw} partLabels={text}/><HtmlCellPreviewToggle value={raw}/></>
       : <BinaryCellViewer value={value} reason={binaryCellZh.readonly}/>}
   </section>;
 }
