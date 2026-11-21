@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { test, expect, desktop, page, dataDir, pageErrors, confirmOwnedDesktopExit, retainOwnedDesktopResources } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import { htmlCellPreviewZh as web } from '../../src/renderer/locales/htmlCellPreview.zh-CN';
+import { gridCellValueZh as valueText } from '../../src/renderer/locales/gridCellValue.zh-CN';
 import { sqliteTableEditZh as edit } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { binaryCellZh as binary } from '../../src/renderer/locales/binaryCell.zh-CN';
 
@@ -74,6 +75,7 @@ test('SQLite 数据格和字段编辑预览 HTML，外部资源零请求且提�
     };
     const menu = () => page.locator('[data-grid-cell-menu]');
     const panel = (name: string) => page.getByRole('region', {name: web.field(name), exact: true});
+    const valuePanel = (name: string) => page.getByRole('region', {name: valueText.title(name), exact: true});
     const frame = () => page.frameLocator('iframe.html-cell-frame');
     const assertFrame = async (title: string) => {
       await expect(frame().getByRole('heading', {name: title, exact: true})).toHaveCSS('color', 'rgb(9, 52, 129)');
@@ -100,6 +102,15 @@ test('SQLite 数据格和字段编辑预览 HTML，外部资源零请求且提�
     await panel('memo').screenshot({path: info.outputPath('HTML 数据格网页预览.png')});
     expect(stored()).toBe(source);
     await close('memo');
+
+    // 完整值面板沿用同一静态隔离预览，确保长文本查看路径也能打开 HTML。
+    await (await memo()).click({button: 'right'});
+    await menu().getByRole('menuitem', {name: valueText.open, exact: true}).click();
+    await expect(valuePanel('memo')).toBeVisible();
+    await valuePanel('memo').getByRole('button', {name: web.open, exact: true}).click();
+    await assertFrame('账单摘要');
+    await valuePanel('memo').getByRole('button', {name: valueText.close, exact: true}).click();
+    await expect(valuePanel('memo')).toHaveCount(0);
 
     await (await memo()).dblclick();
     const form = page.getByRole('dialog', {name: edit.editCell, exact: true});
