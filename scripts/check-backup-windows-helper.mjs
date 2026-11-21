@@ -22,6 +22,13 @@ if (!systemRoot || !/^[A-Za-z]:\\Windows$/i.test(systemRoot)) throw Error('系�
 const script = `$ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 if(-not [Environment]::Is64BitProcess){throw 'x64-required'}
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+$encoding=[Text.UTF8Encoding]::new($false,$true)
+[Console]::Out.WriteLine('DBARK_COMPILE_ENCODING_READY')
+[Console]::Out.WriteLine('DBARK_COMPILE_SOURCE_READ_BEGIN')
+$reader=[IO.StreamReader]::new([Console]::OpenStandardInput(),$encoding,$false,4096,$true)
+$source=$reader.ReadToEnd()
+[Console]::Out.WriteLine('DBARK_COMPILE_SOURCE_READ_COMPLETE')
 [Console]::Out.WriteLine('DBARK_COMPILE_SIGNATURE_BEGIN')
 $signaturePath=Join-Path $PSHOME 'powershell.exe'
 [Console]::Out.WriteLine('DBARK_COMPILE_SIGNATURE_PATH_READY')
@@ -30,12 +37,6 @@ $signature=Get-AuthenticodeSignature -LiteralPath $signaturePath
 [Console]::Out.WriteLine('DBARK_COMPILE_SIGNATURE_CALL_RETURN')
 if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*Microsoft*'){throw 'system-powershell-signature'}
 [Console]::Out.WriteLine('DBARK_COMPILE_SIGNATURE_ACCEPTED')
-[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
-$encoding=New-Object Text.UTF8Encoding($false,$true)
-[Console]::Out.WriteLine('DBARK_COMPILE_ENCODING_READY')
-[Console]::Out.WriteLine('DBARK_COMPILE_SOURCE_READ_BEGIN')
-$reader=New-Object IO.StreamReader([Console]::OpenStandardInput(),$encoding,$false,4096,$true)
-$source=$reader.ReadToEnd()
 [Console]::Out.WriteLine('DBARK_COMPILE_ADD_TYPE_BEGIN')
 Add-Type -TypeDefinition $source -ReferencedAssemblies 'System.dll','System.Core.dll','System.Web.Extensions.dll' -ErrorAction Stop | Out-Null
 [Console]::Out.WriteLine('DBARK_BACKUP_HELPER_COMPILED_WITHOUT_RUN')
@@ -64,8 +65,9 @@ for (const [stream, name] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']
 }
 child.stdin.end(bytes);
 const terminal = await new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })));
-// 固定阶段只定位编译停在哪里；不改变原60秒、签名验证、成功标记和真实三流关闭门。
-const expectedLines = ['DBARK_COMPILE_SIGNATURE_BEGIN', 'DBARK_COMPILE_SIGNATURE_PATH_READY', 'DBARK_COMPILE_SIGNATURE_CALL_BEGIN', 'DBARK_COMPILE_SIGNATURE_CALL_RETURN', 'DBARK_COMPILE_SIGNATURE_ACCEPTED', 'DBARK_COMPILE_ENCODING_READY', 'DBARK_COMPILE_SOURCE_READ_BEGIN', 'DBARK_COMPILE_ADD_TYPE_BEGIN', 'DBARK_BACKUP_HELPER_COMPILED_WITHOUT_RUN'];
+// 先排空已验摘要的公开源码，避免cmdlet初始化与stdin背压相互等待；签名通过后才编译。
+// 完整读取标记不冒充编译成功，原60秒、签名验证、成功标记和真实三流关闭门均保持。
+const expectedLines = ['DBARK_COMPILE_ENCODING_READY', 'DBARK_COMPILE_SOURCE_READ_BEGIN', 'DBARK_COMPILE_SOURCE_READ_COMPLETE', 'DBARK_COMPILE_SIGNATURE_BEGIN', 'DBARK_COMPILE_SIGNATURE_PATH_READY', 'DBARK_COMPILE_SIGNATURE_CALL_BEGIN', 'DBARK_COMPILE_SIGNATURE_CALL_RETURN', 'DBARK_COMPILE_SIGNATURE_ACCEPTED', 'DBARK_COMPILE_ADD_TYPE_BEGIN', 'DBARK_BACKUP_HELPER_COMPILED_WITHOUT_RUN'];
 const actualLines = stdout.trim().split(/\r?\n/);
 if (terminal.code !== 0 || terminal.signal !== null || failed || !stdinClosed || !stdoutClosed || !stderrClosed || actualLines.join('\n') !== expectedLines.join('\n') || stderr) {
   let reached = 'not-started';

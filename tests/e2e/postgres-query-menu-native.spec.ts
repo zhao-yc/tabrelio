@@ -2346,7 +2346,11 @@ test('PostgreSQL 编辑器右键切换注释、转换大小写及编辑行可一
     }, { lineNumber, column });
     await page.mouse.click(point.x, point.y, { button: 'right' });
     const menu = page.locator('.monaco-menu-container:visible');
-    await menu.getByRole('menuitem', { name: uiCommandLabels[id], exact: true }).click({ delay: 120 });
+    // 菜单较长时定位器滚动会改变指针下的项，先确认焦点再走 Monaco 的键盘入口。
+    const item = menu.getByRole('menuitem', { name: uiCommandLabels[id], exact: true });
+    await item.hover();
+    await expect(item).toBeFocused();
+    await page.keyboard.press('Enter');
     await expect(menu).toBeHidden();
     await expect.poll(async () => (await inspectModel()).sql).toBe(expected);
     await page.keyboard.press('ControlOrMeta+Z');

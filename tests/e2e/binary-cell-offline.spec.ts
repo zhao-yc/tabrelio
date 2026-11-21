@@ -1,23 +1,32 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
-import { createServer, type ViteDevServer } from 'vite';
+import { build, preview, type PreviewServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { binaryCellZh as text } from '../../src/renderer/locales/binaryCell.zh-CN';
-let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
+let server: PreviewServer, app: ElectronApplication, page: Page, directory: string, url: string, buildDirectory: string;
 let injectedClipboard = '';
 const errors: string[] = [];
 const viewer = () => page.getByRole('region', { name: text.title, exact: true });
 test.beforeAll(async () => {
-  // 沿用员工224a2fe的固定夹具策略，不依赖热更新，避免Windows目录监听阻塞启动。
-  server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0, watch: null }, logLevel: 'error' });
-  await server.listen(); const address = server.httpServer!.address(); if (!address || typeof address === 'string') throw new Error('未取得离线端口'); url = `http://127.0.0.1:${address.port}/tests/fixtures/binary-cell/index.html`;
-  // 编译固定夹具及静态依赖属于服务器准备；每例仍真实启动Electron并保持原45秒和全部界面断言。
-  if (!await server.environments.client.transformRequest('/tests/fixtures/binary-cell/main.tsx')) throw Error('二进制夹具入口未完成编译');
-  await server.environments.client.waitForRequestsIdle();
+  // 启动 Electron 前构建固定夹具，避免冷启动时还在优化或逐个请求静态模块。
+  buildDirectory = await mkdtemp(join(tmpdir(), 'dbark-binary-build-'));
+  const config = { configFile: false as const, root: resolve('tests/fixtures/binary-cell'),
+    build: { outDir: buildDirectory, emptyOutDir: false }, logLevel: 'error' as const };
+  await build({ ...config, plugins: [react()] });
+  server = await preview({ ...config, preview: { host: '127.0.0.1', port: 0 } });
+  const address = server.httpServer.address();
+  if (!address || typeof address === 'string') throw new Error('未取得离线端口');
+  url = `http://127.0.0.1:${address.port}/`;
 });
-test.afterAll(async () => { await server?.close(); });
+test.afterAll(async () => {
+  await server?.close();
+  if (!buildDirectory) return;
+  if (dirname(resolve(buildDirectory)) !== resolve(tmpdir()) || !basename(buildDirectory).startsWith('dbark-binary-build-'))
+    throw Error('拒绝清理测试构建目录之外的路径');
+  await rm(buildDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+});
 test.beforeEach(async () => {
   errors.length = 0; directory = await mkdtemp(join(tmpdir(), 'dbark-binary-e2e-'));
   const env: Record<string, string> = Object.fromEntries(Object.entries({ ...process.env, DBARK_BINARY_FIXTURE_DATA: directory, DBARK_BINARY_FIXTURE_URL: url }).filter((entry): entry is [string, string] => entry[1] !== undefined)); delete env.ELECTRON_RUN_AS_NODE;

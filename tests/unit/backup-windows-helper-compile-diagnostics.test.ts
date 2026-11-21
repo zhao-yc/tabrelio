@@ -9,7 +9,7 @@ const scriptSource = readFileSync('scripts/check-backup-windows-helper.mjs', 'ut
 const helperBytes = readFileSync('src/engine/databaseBackupWindowsFiles.helper.cs');
 const helperDeclaration = readFileSync('src/engine/databaseBackupWindowsFiles.ts', 'utf8');
 // 独立列出正式协议顺序，不从产品expectedLines反推成功回包。
-const labels = ['DBARK_COMPILE_SIGNATURE_BEGIN', 'DBARK_COMPILE_SIGNATURE_PATH_READY', 'DBARK_COMPILE_SIGNATURE_CALL_BEGIN', 'DBARK_COMPILE_SIGNATURE_CALL_RETURN', 'DBARK_COMPILE_SIGNATURE_ACCEPTED', 'DBARK_COMPILE_ENCODING_READY', 'DBARK_COMPILE_SOURCE_READ_BEGIN', 'DBARK_COMPILE_ADD_TYPE_BEGIN', 'DBARK_BACKUP_HELPER_COMPILED_WITHOUT_RUN'];
+const labels = ['DBARK_COMPILE_ENCODING_READY', 'DBARK_COMPILE_SOURCE_READ_BEGIN', 'DBARK_COMPILE_SOURCE_READ_COMPLETE', 'DBARK_COMPILE_SIGNATURE_BEGIN', 'DBARK_COMPILE_SIGNATURE_PATH_READY', 'DBARK_COMPILE_SIGNATURE_CALL_BEGIN', 'DBARK_COMPILE_SIGNATURE_CALL_RETURN', 'DBARK_COMPILE_SIGNATURE_ACCEPTED', 'DBARK_COMPILE_ADD_TYPE_BEGIN', 'DBARK_BACKUP_HELPER_COMPILED_WITHOUT_RUN'];
 interface Outcome { lines?: string[]; code?: number | null; signal?: string | null; stderr?: string; unclosed?: 'stdin' | 'stdout' | 'stderr'; finish?: boolean; overflow?: boolean; }
 
 /** 运行真实脚本及摘要声明；文件/进程/三流全由RAM端口承接，绝不启动PowerShell。 */
@@ -59,6 +59,9 @@ describe('Windows固定helper编译诊断（仅RAM，不执行PowerShell）', ()
     expect(powershell).toContain('$signature=Get-AuthenticodeSignature -LiteralPath $signaturePath');
     expect(powershell).toContain("if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*Microsoft*'){throw 'system-powershell-signature'}");
     expect(powershell).toContain('$source=$reader.ReadToEnd()');
+    expect(powershell.indexOf('$source=$reader.ReadToEnd()')).toBeLessThan(powershell.indexOf('$signaturePath=Join-Path'));
+    expect(powershell.indexOf("throw 'system-powershell-signature'")).toBeLessThan(powershell.indexOf('Add-Type -TypeDefinition'));
+    expect(powershell.slice(0, powershell.indexOf('$source=$reader.ReadToEnd()'))).not.toContain('New-Object');
     expect(powershell).toContain("Add-Type -TypeDefinition $source -ReferencedAssemblies 'System.dll','System.Core.dll','System.Web.Extensions.dll' -ErrorAction Stop | Out-Null");
     expect(powershell).not.toContain('Program]::Run');
     expect([...powershell.matchAll(/\[Console\]::Out\.WriteLine\('([^']+)'\)/g)].map(match => match[1])).toEqual(labels);
@@ -80,7 +83,7 @@ describe('Windows固定helper编译诊断（仅RAM，不执行PowerShell）', ()
   });
 
   it('签名调用期间超时保留原SIGTERM、源长度和stdin相对事件，不清理', async () => {
-    const f = fixture({ lines: labels.slice(0, 3), code: null, signal: 'SIGTERM' });
+    const f = fixture({ lines: labels.slice(0, 6), code: null, signal: 'SIGTERM' });
     await expect(f.run()).rejects.toThrow('保留本例临时目录'); expect(f.removed).not.toHaveBeenCalled();
     const diagnostic = JSON.parse(f.errors[0].slice(f.errors[0].indexOf('{')));
     expect(diagnostic).toMatchObject({ reached: 'DBARK_COMPILE_SIGNATURE_CALL_BEGIN', code: null, signal: 'SIGTERM', failed: false, stdinClosed: true, stdoutClosed: true, stderrClosed: true, sourceBytes: helperBytes.length, stdinFinishedAtMs: 1, stdinClosedAtMs: 2 });
