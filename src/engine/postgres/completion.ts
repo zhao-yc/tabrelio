@@ -1,4 +1,4 @@
-import { postgresCompletionLimits, postgresRoutineParameterSchema, type PostgresCompletionInput, type PostgresCompletionItem,
+import { postgresCompletionLimits, postgresJoinColumnLimit, postgresRoutineParameterSchema, type PostgresCompletionInput, type PostgresCompletionItem,
   type PostgresCompletionResult } from '../../shared/postgresCompletion';
 import type { PostgresConnection } from './connection';
 import { postgresIdentifier } from '../../shared/postgresSql';
@@ -229,8 +229,52 @@ async function columnDetails(connection: PostgresConnection, input: Extract<Post
   return { items, incomplete: false };
 }
 
+/** USING 需要完整列顺序。缺表、权限或超限时整组停止，避免把不可见列当作不存在。 */
+async function joinColumns(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'joinColumns' }>,
+  session: boolean): Promise<PostgresCompletionResult> {
+  const names = input.relations.map(({ schema, name }) => ({
+    reference: (schema ? postgresIdentifier(schema) + '.' : '') + postgresIdentifier(name), unqualified: !schema,
+  }));
+  const result = await connection.query(`
+    WITH ${namespaces(session)}, refs AS (
+      SELECT r.position, r.unqualified, pg_catalog.to_regclass(r.reference)::pg_catalog.oid AS oid
+      FROM ROWS FROM (pg_catalog.jsonb_to_recordset($1::pg_catalog.jsonb)
+        AS (reference pg_catalog.text, unqualified pg_catalog.bool)) WITH ORDINALITY AS r(reference, unqualified, position)
+    )
+    SELECT r.position, CASE WHEN pg_catalog.count(a.attnum) OPERATOR(pg_catalog.<=) $2::pg_catalog.int4
+      AND COALESCE(pg_catalog.bool_and(pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT'))
+        FILTER (WHERE a.attnum IS NOT NULL), true)
+      THEN COALESCE(pg_catalog.json_agg(a.attname::pg_catalog.text ORDER BY a.attnum)
+        FILTER (WHERE a.attnum IS NOT NULL), '[]'::pg_catalog.json)
+      END
+    FROM refs r JOIN pg_catalog.pg_class c ON c.oid ${eq} r.oid
+    JOIN namespaces n ON n.oid ${eq} c.relnamespace
+    LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid ${eq} c.oid AND a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped
+    WHERE c.relkind::pg_catalog.text ${eq} ANY ${relationKinds}
+      AND (pg_catalog.has_table_privilege(c.oid, 'SELECT') OR pg_catalog.has_any_column_privilege(c.oid, 'SELECT'))
+      ${session ? '' : `AND (r.unqualified IS NOT TRUE OR NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_class other JOIN namespaces ns ON ns.oid ${eq} other.relnamespace
+        WHERE other.oid ${ne} c.oid AND other.relname ${eq} c.relname
+          AND other.relkind::pg_catalog.text ${eq} ANY ${relationKinds}
+      ))`}
+    GROUP BY r.position, c.oid ORDER BY r.position
+  `, [JSON.stringify(names), postgresJoinColumnLimit], { rows: names.length, bytes: 256 * 1024 });
+  if (result.truncated || result.rows.length !== names.length) return { items: [], incomplete: true };
+  const items: PostgresCompletionItem[] = [];
+  for (const [reference, row] of result.rows.entries()) {
+    if (Number(row.c0) !== reference + 1 || typeof row.c1 !== 'string') return { items: [], incomplete: true };
+    let names: unknown;
+    try { names = JSON.parse(row.c1); } catch { return { items: [], incomplete: true }; }
+    if (!Array.isArray(names) || names.length > postgresJoinColumnLimit || new Set(names).size !== names.length ||
+      !names.every(name => typeof name === 'string' && !!name && !name.includes('\0') && new TextEncoder().encode(name).length <= 63))
+      return { items: [], incomplete: true };
+    items.push({kind: 'joinColumns', reference, names});
+  }
+  return { items, incomplete: false };
+}
+
 /** 查实际可执行的重载。原会话由 PostgreSQL 解析 search_path，同名不同签名仍保留。 */
-async function routines(connection: PostgresConnection, input: Exclude<PostgresCompletionInput, { kind: 'columnDetails' }>, session: boolean): Promise<PostgresCompletionResult> {
+async function routines(connection: PostgresConnection, input: Exclude<PostgresCompletionInput, { kind: 'columnDetails' | 'joinColumns' }>, session: boolean): Promise<PostgresCompletionResult> {
   const target = input.routine!;
   const exact = input.kind === 'signatures';
   const limit = input.kind === 'routines' || exact ? postgresCompletionLimits.items : 40;
@@ -287,6 +331,7 @@ export async function readPostgresCompletion(connection: PostgresConnection, inp
   const query = async () => {
     if (input.kind === 'routines' || input.kind === 'signatures') return routines(connection, input, session);
     if (input.kind === 'columnDetails') return columnDetails(connection, input, session);
+    if (input.kind === 'joinColumns') return joinColumns(connection, input, session);
     const base = await (input.kind === 'relations' ? relations(connection, input, session) : columns(connection, input, session));
     if (!input.routine) return base;
     const supplemental = await routines(connection, input, session);

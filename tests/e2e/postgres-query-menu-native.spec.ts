@@ -2261,6 +2261,63 @@ test('PostgreSQL 语句折叠使用真实会话缓存更新范围', async () => 
   await quitDesktop();
 });
 
+test('PostgreSQL JOIN USING 补全按原目录只建议两侧共有列', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query('CREATE SCHEMA using_scope; ' +
+      'CREATE TABLE public.using_left (raw_id int, region text, left_only text); ' +
+      'CREATE TABLE public.using_right (id int, region text, right_only text); ' +
+      'CREATE TABLE using_scope.using_left (scoped_key int, region text); ' +
+      'CREATE TABLE using_scope.using_right (scoped_key int, region text); ' +
+      "INSERT INTO public.using_left VALUES (4,'东','左'); INSERT INTO public.using_right VALUES (4,'东','右');");
+    const sql = 'SELECT * FROM public.using_left l(id) JOIN public.using_right r USING (region, i_tail);';
+    await prepare({id: '', name: '隔离 PostgreSQL 共有列', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, sql);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const identity = (await inspectModel()).identity;
+    const accept = async (source: string, placeholder: string, name: string) => {
+      await replaceDraft(source);
+      const baseline = await history();
+      await modelSelection(1, source.indexOf(placeholder) + 2);
+      await triggerSuggestions();
+      const names = tab().locator('.suggest-widget.visible .monaco-list-row .label-name');
+      await expect(names).toHaveText([name]);
+      await page.keyboard.press('Enter');
+      const expected = source.replace(placeholder, postgresIdentifier(name));
+      await expect.poll(async () => (await inspectModel()).sql).toBe(expected);
+      expect((await inspectModel()).identity).toEqual(identity);
+      expect(await history()).toEqual(baseline);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(source);
+      return expected;
+    };
+    const filled = await accept(sql, 'i_tail', 'id');
+    expect((await observer.query({text: filled, rowMode: 'array'})).rows).toEqual([['东', 4, '左', '右']]);
+    await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+    const changeSession = async (statement: string) => {
+      await replaceDraft(statement);
+      await command('execute-all');
+      await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === statement)).toBe(true);
+      await expect.poll(() => enabled('execute-all')).toBe(true);
+    };
+    await changeSession('SET search_path TO using_scope, public');
+    await accept('SELECT * FROM using_left JOIN using_right USING (region, s_tail)', 's_tail', 'scoped_key');
+    await changeSession('CREATE TEMP TABLE using_left (temp_key int); CREATE TEMP TABLE using_right (temp_key int)');
+    const final = await accept('SELECT * FROM using_left JOIN using_right USING (t_tail)', 't_tail', 'temp_key');
+    expect(final).toContain('"temp_key"');
+    await page.screenshot({path: info.outputPath('PostgreSQL共有列真实目录.png'), animations: 'disabled'});
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL 字段悬停读取真实目录并区分同名、临时和歧义来源', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

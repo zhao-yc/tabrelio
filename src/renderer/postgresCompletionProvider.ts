@@ -3,6 +3,7 @@ import type { PostgresCompletionInput, PostgresCompletionReference, PostgresComp
 import { postgresCompletionLimits } from '../shared/postgresCompletion';
 import { postgresIdentifier } from '../shared/postgresSql';
 import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresSignature, type PostgresFieldTarget } from './postgresCompletionAnalysis';
+import { joinCatalogRelations, sharedJoinColumns } from './postgresJoinColumns';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from './postgresNamedParameterReferences';
 import { postgresSignatureHelp } from './postgresSignatureHelp';
 import { postgresZh } from './locales/postgres.zh-CN';
@@ -188,6 +189,37 @@ export function createPostgresCompletionProvider(options: {
           }
           return { suggestions: suggestions.slice(0, postgresCompletionLimits.items), incomplete: true };
         }
+        if (query?.kind === 'using') {
+          const relations = joinCatalogRelations(query);
+          if (!relations) return empty;
+          let result: PostgresCompletionResult = { items: [], incomplete: false };
+          if (relations.length) {
+            await debounce(controller.signal, 100);
+            try {
+              const inventory = await request({ ...target, kind: 'joinColumns', prefix: '', relations }, current);
+              if (!inventory || !current()) return empty;
+              result = inventory;
+            } catch {
+              if (current()) options.status('unavailable');
+              return empty;
+            }
+          }
+          if (result.deferred) {
+            options.status(result.deferred === 'transaction' ? 'sessionUnknown' : 'unavailable');
+            return empty;
+          }
+          const names = sharedJoinColumns(query, relations, result);
+          if (result.incomplete) options.status('partial');
+          if (!names) return empty;
+          const normalize = (name: string) => quoted ? name : name.replace(/[A-Z]/g, letter => letter.toLowerCase());
+          const suggestions = names.filter(name => normalize(name).startsWith(normalize(prefix)));
+          if (suggestions.length > postgresCompletionLimits.items) options.status('partial');
+          return { incomplete: true, suggestions: suggestions.slice(0, postgresCompletionLimits.items).map((name, index) => ({
+            range, kind: options.kinds.column, label: { label: name, description: postgresZh.joinSharedColumn },
+            insertText: postgresIdentifier(name), filterText: quoted ? postgresIdentifier(name) : name,
+            sortText: String(index).padStart(3, '0'),
+          })) };
+        }
         const references: PostgresCompletionReference[] = [];
         const origins: number[] = [];
         const localColumns: { reference: number; name: string; type?: string }[] = [];
@@ -227,7 +259,7 @@ export function createPostgresCompletionProvider(options: {
             sortText: '0' + String(suggestions.length).padStart(3, '0') });
         }
         for (const item of result.items) {
-          if (item.kind === 'columnDetail') continue;
+          if (item.kind === 'columnDetail' || item.kind === 'joinColumns') continue;
           const filterText = quoted ? '"' + item.name.replaceAll('"', '""') : item.name;
           const common = { range, kind: options.kinds[item.kind], filterText, sortText: '0' + String(suggestions.length).padStart(3, '0') };
           if (item.kind === 'schema' && query?.kind === 'relations' && !query.schema) {

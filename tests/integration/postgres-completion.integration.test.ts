@@ -490,7 +490,7 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       const run = (sql: string, taskId = randomUUID()): Promise<QueryOutcome> =>
         engine.handle('query.execute', { sessionId, taskId, sql, maxRows: 100 });
       const fields = async (schema?: string, id = sessionId) =>
-        (await columns('', [{ name: 'duplicate_scope', schema }], id)).items.map(item => item.name);
+        (await columns('', [{ name: 'duplicate_scope', schema }], id)).items.map(item => item.kind === 'joinColumns' ? null : item.name);
       expect((await run(`SET search_path TO "补全.乙", public, pg_catalog;
         SET statement_timeout TO '800ms'; SET lock_timeout TO '250ms'`)).failure).toBeUndefined();
       expect(await fields()).toEqual(['other_field']);

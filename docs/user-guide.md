@@ -980,6 +980,8 @@ PostgreSQL 查询编辑器可离线追踪 CTE 和派生表的已确认输出列�
 
 在 PostgreSQL 的 `OVER` 或窗口规范的开头按 Ctrl+空格，可补全当前查询块的命名窗口。裸 `OVER` 可直接使用带窗口帧的定义，括号内复制窗口时会按分区、排序和帧规则筛选候选。`WINDOW` 列表中的继承只显示此前声明。可用 F12 跳转、Shift+F12 查看引用，或用 F2 整组改名。 [PostgreSQL WINDOW 子句](https://www.postgresql.org/docs/18/sql-select.html#SQL-WINDOW)
 
+在 PostgreSQL 的 `JOIN … USING (...)` 中按 Ctrl+空格，可补全两侧各自唯一、尚未列出的同名列。候选会考虑前一个 JOIN 的合并列、嵌套连接和位置列别名。已知的 CTE 与派生表可离线计算。物理表使用只读目录，连接后按原会话的搜索路径和临时表解析。来源、列清单或权限无法完整确认时停止建议。 [PostgreSQL 连接表](https://www.postgresql.org/docs/18/queries-table-expressions.html)
+
 在 PostgreSQL 的显式投影别名、列清单或已确认引用上按 F2，可整组更新当前语句，按 Ctrl／Cmd+Z 一次撤销。名称冲突、未确认的同名依赖及 `NATURAL JOIN` 会阻止整组修改，保留草稿。[PostgreSQL SELECT 名称规则](https://www.postgresql.org/docs/18/sql-select.html)
 
 `GROUP BY` 中的裸列名优先指向当前查询的输入列，确定没有同名输入列时才使用输出别名。`ORDER BY` 和 `DISTINCT ON` 的裸列名优先指向输出。以上绑定可用于 F12、Shift+F12 和 F2，分组展开也适用于 `GROUPING SETS`、`ROLLUP` 与 `CUBE`。目录信息未知或输入列有歧义时，编辑器会停在可确认的范围。[PostgreSQL SELECT 名称规则](https://www.postgresql.org/docs/18/sql-select.html)

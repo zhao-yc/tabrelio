@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 的 `JOIN USING` 补全按实际左右操作数推荐共有列，跳过已写入的键和单侧歧义。支持嵌套连接、已知 CTE／派生表、位置列别名与原会话的真实目录。Q01、R01 继续为部分覆盖。 [PostgreSQL 连接表](https://www.postgresql.org/docs/18/queries-table-expressions.html)
+
 2026-11-24 源码增量。PostgreSQL 查询编辑器支持离线补全命名窗口、定位声明、查看引用和整组改名。按查询块处理裸 `OVER`、括号复制及 `WINDOW` 列表继承，区分内外层、集合查询分支与同名字段。Q01、O05 继续为部分覆盖。 [PostgreSQL WINDOW 子句](https://www.postgresql.org/docs/18/sql-select.html#SQL-WINDOW)
 
 2026-11-24 源码增量。PostgreSQL 查询编辑器内置 PostgreSQL 18 语法解析器，无需连接即可检查整份草稿，点击首处诊断可定位原文。支持命名参数模板、嵌套注释和 SQL 例程体，编辑后清除过期诊断。Q01、O05 继续为部分覆盖。 [PostgreSQL 解析阶段](https://www.postgresql.org/docs/18/parser-stage.html)

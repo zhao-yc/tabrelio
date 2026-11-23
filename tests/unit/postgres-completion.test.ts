@@ -122,6 +122,82 @@ it('窗口补全只替换名称，引用转义和大小写遵循 PostgreSQL，�
   } finally { provider.dispose(); }
 });
 
+it('JOIN USING 离线找两侧唯一共有列，并排除其它操作数、已使用键和单侧同名歧义', async () => {
+  const sql = 'WITH a(id, shared, dup) AS (VALUES (1,2,3)), b(id, dup) AS (VALUES (1,3)), ' +
+    'c(id, shared, dup, unrelated) AS (VALUES (1,2,3,4)), noise(unrelated) AS (VALUES (4)) ' +
+    'SELECT * FROM noise, (a LEFT JOIN b USING (id)) merged JOIN c USING (id, sh|Suffix)';
+  const catalog = vi.fn(async () => ({items: [], incomplete: true}));
+  const {provider, suggest} = editor(sql, catalog);
+  try {
+    const items = (await suggest())?.suggestions;
+    expect(items?.map(item => item.insertText)).toEqual(['"shared"']);
+    expect(items?.[0]).toMatchObject({label: {label: 'shared', description: '两侧共有列'}});
+    const range = items?.[0]?.range;
+    if (!range || !('startColumn' in range)) throw Error('共有列必须有完整替换范围');
+    const source = sql.replace('|', '');
+    expect(source.slice(0, range.startColumn - 1) + items![0].insertText + source.slice(range.endColumn - 1))
+      .toBe(source.replace('shSuffix', '"shared"'));
+    expect(catalog).not.toHaveBeenCalled();
+  } finally { provider.dispose(); }
+  const empty = editor(sql.replace('id, sh|Suffix', '|'), catalog);
+  try { expect((await empty.suggest())?.suggestions.map(item => item.insertText)).toEqual(['"id"', '"shared"']); }
+  finally { empty.provider.dispose(); }
+});
+
+it('共有列目录只读取真实来源，以目录顺序还原 CTE 星号、列清单和嵌套 NATURAL JOIN', async () => {
+  const marked = 'WITH x AS (SELECT l.* FROM app.left_table l("键")) ' +
+    'SELECT * FROM x JOIN (app.right_table NATURAL JOIN app.stale_table) pair("键") USING ("|tmp")';
+  const inventory: PostgresCompletionResult = {incomplete: false, items: [
+    {kind: 'joinColumns', reference: 0, names: ['raw_id', 'extra']},
+    {kind: 'joinColumns', reference: 1, names: ['raw_id', 'extra', 'only_right']},
+    {kind: 'joinColumns', reference: 2, names: ['raw_id', 'only_stale']},
+  ]};
+  const request = vi.fn(async () => inventory);
+  const session = editor(marked, request, '原会话');
+  try {
+    expect((await session.suggest())?.suggestions.map(item => item.insertText)).toEqual(['"键"', '"extra"']);
+    expect(request).toHaveBeenCalledExactlyOnceWith({kind: 'joinColumns', prefix: '',
+      connectionId: '原连接', database: '原库', sessionId: '原会话',
+      relations: [{schema: 'app', name: 'left_table'}, {schema: 'app', name: 'right_table'}, {schema: 'app', name: 'stale_table'}]});
+  } finally { session.provider.dispose(); }
+  const partial = editor(marked, async () => ({...inventory, incomplete: true}));
+  try { expect((await partial.suggest())?.suggestions).toEqual([]); } finally { partial.provider.dispose(); }
+});
+
+it.each([
+  'UPDATE dst SET x=1 FROM app.left JOIN app.right USING (|)',
+  'DELETE FROM dst USING app.left JOIN app.right USING (|)',
+  'MERGE INTO dst USING (app.left JOIN app.right USING (|)) pair ON true WHEN MATCHED THEN DO NOTHING',
+  'SELECT * FROM a JOIN b ON a.id=b.id, app.left JOIN app.right USING (|)',
+  'SELECT * FROM app.left JOIN app.right USING (|',
+])('USING 识别实际源位置和未闭合列表：%s', async marked => {
+  const request = vi.fn(async (): Promise<PostgresCompletionResult> => ({incomplete: false, items: [
+    {kind: 'joinColumns', reference: 0, names: ['id', 'left_only']}, {kind: 'joinColumns', reference: 1, names: ['id', 'right_only']},
+  ]}));
+  const client = editor(marked, request);
+  try {
+    expect((await client.suggest())?.suggestions.map(item => item.insertText)).toEqual(['"id"']);
+    expect(request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({kind: 'joinColumns',
+      relations: [{schema: 'app', name: 'left'}, {schema: 'app', name: 'right'}]}));
+  } finally { client.provider.dispose(); }
+});
+
+it('USING 列不接受表限定符、重复的其它键或无法确认输出的来源', async () => {
+  for (const sql of [
+    'SELECT * FROM a JOIN b USING (a.|)',
+    'SELECT * FROM a JOIN b USING (same, same, |)',
+    'SELECT * FROM (SELECT 1+2) a JOIN b USING (|)',
+    'SELECT * FROM app.a a("' + '列'.repeat(22) + '") JOIN app.b USING (|)',
+  ]) {
+    const request = vi.fn(async () => ({items: [], incomplete: false}));
+    const {provider, suggest} = editor(sql, request);
+    try {
+      expect((await suggest())?.suggestions, sql).toEqual([]);
+      expect(request, sql).not.toHaveBeenCalled();
+    } finally { provider.dispose(); }
+  }
+});
+
 it.each([
   ['SELECT 1 ORDER BY 1 NU|', 'NULLS LAST', 'SELECT 1 ORDER BY 1 NULLS LAST'],
   ['SELECT 1 ORDER BY 1 NULLS F|suffix', 'FIRST', 'SELECT 1 ORDER BY 1 NULLS FIRST'],
