@@ -59,6 +59,33 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('表值 PRAGMA 目录来自真实隐藏参数，并遵循原会话模块遮蔽', async () => {
+    const p = profile('表值 PRAGMA 目录'), { app, events } = runtime([p]);
+    const read = (prefix: string, sessionId?: string, schema?: 'main' | 'temp') =>
+      completion(app, p.id, { kind: 'pragma-functions', prefix, ...(schema ? { schema } : {}) }, sessionId);
+    const item = (name: string, objectArgument = false, schemaArgument = false) => ({ kind: 'pragma-function', name, objectArgument, schemaArgument });
+    expect((await read('PRAGMA_TABLE_')).entries).toEqual([
+      item('pragma_table_info', true, true), item('pragma_table_list', true), item('pragma_table_xinfo', true, true),
+    ]);
+    expect(await processes[0].exited).toEqual({ code: 0, signal: null });
+    expect((await read('pragma_page_count')).entries).toEqual([item('pragma_page_count', false, true)]);
+    expect((await read('pragma_collation_list')).entries).toEqual([item('pragma_collation_list')]);
+    expect((await read('pragma_writable_schema')).entries).toEqual([]);
+    expect(events).toEqual([]);
+    const session = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, session.sessionId, 'BEGIN; CREATE TEMP TABLE pragma_table_info(other TEXT);');
+    const state = await app.request('query.completionState', session), count = events.length;
+    expect((await read('pragma_table_info', session.sessionId)).entries).toEqual([]);
+    expect((await read('pragma_table_info', session.sessionId, 'temp')).entries).toEqual([]);
+    expect((await read('pragma_table_info', session.sessionId, 'main')).entries).toEqual([item('pragma_table_info', true, true)]);
+    expect((await read('pragma_table_xinfo', session.sessionId, 'temp')).entries).toEqual([item('pragma_table_xinfo', true, true)]);
+    expect(await app.request('query.completionState', session)).toEqual(state);
+    expect(await app.request('query.sessionState', session)).toMatchObject({ transactionOpen: true });
+    expect(events).toHaveLength(count);
+    expect(statements(processes.at(-1)!).some(sql => /FROM\s+pragma_table_info\s*\(/i.test(sql))).toBe(false);
+    await execute(app, session.sessionId, 'ROLLBACK');
+  });
+
   it('PRAGMA 名称来自原生只读目录，对象参数按各命令的同名规则解析', async () => {
     const p = profile('PRAGMA目录', `
       CREATE TABLE subject(id INTEGER UNIQUE,value TEXT);

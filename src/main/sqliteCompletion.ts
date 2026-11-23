@@ -221,6 +221,36 @@ function pragmaObjects(driver: SqliteDriverSession, input: Extract<SqliteComplet
     ORDER BY name COLLATE NOCASE,schema DESC LIMIT 257`, [schema ?? null, schema ?? null, ...(exact === undefined ? [prefix, prefix] : [exact])], control, 257);
 }
 
+/** 目录名来自运行时及只读授权。xinfo 只读模块列声明，绝不执行候选表值函数。 */
+async function pragmaFunctions(driver: SqliteDriverSession, input: Extract<SqliteCompletionLookup, { kind: 'pragma-functions' }>, control: CompletionControl) {
+  const listed = await read(driver, 'PRAGMA pragma_list', [], control, 257), prefix = fold(input.prefix);
+  const names: string[] = [];
+  for (const [name] of listed.rows.slice(0, sqliteCompletionLimits.entries)) {
+    if (typeof name !== 'string') throw Error('SQLite PRAGMA 目录无效');
+    if (readableSqlitePragma(name, null) && ('pragma_' + name).startsWith(prefix)) names.push('pragma_' + name);
+  }
+  let incomplete = listed.truncated || listed.rows.length > sqliteCompletionLimits.entries;
+  const functions = new Map<string, Extract<SqliteCompletionEntry, { kind: 'pragma-function' }>>();
+  if (!names.length) return { entries: [], incomplete };
+  // 实际表或视图遮蔽同名内置模块。显式限定函数名只在该命名空间判断遮蔽。
+  const result = await read(driver, `WITH proposed(name) AS (VALUES ${names.map(() => '(?)').join(',')}),
+    shadow AS MATERIALIZED (SELECT name FROM pragma_table_list() WHERE schema IN ('main','temp') AND (? IS NULL OR schema = ?)),
+    modules AS MATERIALIZED (SELECT name FROM proposed p WHERE NOT EXISTS (SELECT 1 FROM shadow WHERE shadow.name = p.name COLLATE NOCASE))
+    SELECT m.name,x.name,x.hidden FROM modules m CROSS JOIN pragma_table_xinfo(m.name,?) x
+    WHERE x.cid = 0 OR x.hidden = 1
+    ORDER BY m.name,x.cid LIMIT 257`, [...names, input.schema ?? null, input.schema ?? null, input.schema ?? 'main'], control, 257);
+  incomplete ||= result.truncated || result.rows.length > sqliteCompletionLimits.entries;
+  for (const [name, column, rawHidden] of result.rows.slice(0, sqliteCompletionLimits.entries)) {
+    const hidden = flag(rawHidden);
+    if (typeof name !== 'string' || typeof column !== 'string' || hidden === undefined) throw Error('SQLite 表值 PRAGMA 目录无效');
+    let entry = functions.get(name);
+    if (!entry) { entry = { kind: 'pragma-function', name, objectArgument: false, schemaArgument: false }; functions.set(name, entry); }
+    if (hidden && column === 'arg') entry.objectArgument = true;
+    if (hidden && column === 'schema') entry.schemaArgument = true;
+  }
+  return { entries: [...functions.values()], incomplete };
+}
+
 /** 仅暴露main/temp用户关系；table_list的shadow标记不能靠名称猜测，temp命名空间优先遮蔽main。 */
 export async function readSqliteCompletion(driver: SqliteDriverSession, input: SqliteCompletionLookup, control: CompletionControl): Promise<SqliteCompletionOutput> {
   const before = await stamp(driver, control), entries: SqliteCompletionEntry[] = []; let incomplete = false;
@@ -332,6 +362,10 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
       if (typeof name !== 'string') throw Error('SQLite PRAGMA 目录无效');
       if (name.startsWith(prefix) && readableSqlitePragma(name, input.withArgument ? '' : null) && !append({ kind: 'pragma', name })) break;
     }
+  } else if (input.kind === 'pragma-functions') {
+    const result = await pragmaFunctions(driver, input, control);
+    incomplete = result.incomplete;
+    for (const entry of result.entries) if (!append(entry)) break;
   } else if (input.kind === 'pragma-objects') {
     const result = await pragmaObjects(driver, input, control);
     incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;

@@ -1,6 +1,6 @@
 import { sqliteCompletionRelationMatches, type SqliteCompletionAnalysis, type SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry } from '../shared/sqliteCompletion';
-import { resolveSqliteTriggerBody, sqliteCollationDetails, sqliteColumnTypeDetails, sqliteColumnTypeMode, sqliteForeignKeyCatalog, sqliteFunctionDetails, sqliteIndexDetails, sqliteTriggerCatalog, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
+import { resolveSqliteTriggerBody, sqliteCollationDetails, sqliteColumnTypeDetails, sqliteColumnTypeMode, sqliteForeignKeyCatalog, sqliteFunctionDetails, sqliteIndexDetails, sqlitePragmaFunctionArgument, sqliteTriggerCatalog, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 import { sqliteFieldHoverZh as text } from './locales/sqliteFieldHover.zh-CN';
 import { sqliteCompletionZh } from './locales/sqliteCompletion.zh-CN';
 import { sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
@@ -8,6 +8,15 @@ import { sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } f
 /** 仅显示代码块纯文本；名称及声明类型不能变成HTML、外链或可执行Monaco命令。 */
 function markdown(lines: string[]): string { return lines.join('\n').split(/\r\n|\r|\n/).map(line => '    ' + line).join('\n'); }
 const display = (value: string) => JSON.stringify(value);
+
+function pragmaObjectHover(name: string, title: string, entries: SqliteCompletionEntry[]) {
+  const lines: string[] = [];
+  for (const entry of entries) if (entry.kind === 'pragma-object' && fold(entry.name) === fold(name)) {
+    lines.push(sqliteCompletionZh[entry.object] + ' · ' + display(entry.schema) + '.' + display(entry.name));
+    if (entry.owner) lines.push(sqliteCompletionZh.maintenance.owner + '：' + display(entry.owner));
+  }
+  if (lines.length) return markdown([title, ...lines]);
+}
 
 function fieldHover(binding: string, column: string, entry: Extract<SqliteCompletionEntry, { kind: 'column' }> | undefined, tableFunction: boolean, localSource?: string, excluded = false) {
   const lines = [text.title, text.column + '：' + display(column), text.binding + '：' + display(binding)];
@@ -31,17 +40,30 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   if (body) directory = body.directory;
   const fallbackRow = () => analysis.triggerBody?.fallback && !sqliteRowidName.test(name) ?
     sqliteFieldHover({ ...analysis, triggerBody: undefined, trigger: analysis.triggerBody.fallback }, directory) : undefined;
+  if (analysis.pragmaFunction) {
+    const context = analysis.pragmaFunction, labels = sqliteCompletionZh.pragma;
+    if (context.kind === 'source') {
+      if (name.length > sqliteCompletionLimits.prefixUnits) return;
+      const result = await directory.load({ kind: 'pragma-functions', prefix: fold(name), ...(context.schema ? { schema: context.schema } : {}) });
+      const entry = result.entries.find(entry => entry.kind === 'pragma-function' && entry.name === fold(name));
+      if (result.incomplete || entry?.kind !== 'pragma-function') return;
+      const detail = labels.description[entry.name.slice(7)];
+      return markdown([sqliteCompletionZh.tableFunction + ' ' + entry.name,
+        ...(entry.objectArgument ? [labels.objectArgument] : []), ...(entry.schemaArgument ? [labels.schemaArgument] : []), ...(detail ? [detail] : [])]);
+    }
+    const slot = await sqlitePragmaFunctionArgument(context, directory);
+    if (slot.kind === 'schema' && ['main', 'temp'].includes(fold(name))) return markdown([labels.schemaArgument, display(fold(name))]);
+    if (slot.kind === 'object') {
+      const result = await directory.load({ kind: 'pragma-objects', pragma: slot.pragma, prefix: '', exact: name, ...(slot.schema ? { schema: slot.schema } : {}) });
+      if (!result.incomplete) return pragmaObjectHover(name, sqliteCompletionZh.tableFunction + ' ' + context.name, result.entries);
+    }
+    return;
+  }
   if (analysis.pragma) {
     const context = analysis.pragma, labels = sqliteCompletionZh.pragma, normalized = fold(name);
     if (context.kind === 'object') {
       const result = await directory.load({ kind: 'pragma-objects', pragma: context.pragma, prefix: '', exact: name, ...(context.schema ? { schema: context.schema } : {}) });
-      if (result.incomplete) return;
-      const lines: string[] = [];
-      for (const entry of result.entries) if (entry.kind === 'pragma-object' && fold(entry.name) === normalized) {
-        lines.push(sqliteCompletionZh[entry.object] + ' · ' + display(entry.schema) + '.' + display(entry.name));
-        if (entry.owner) lines.push(sqliteCompletionZh.maintenance.owner + '：' + display(entry.owner));
-      }
-      if (lines.length) return markdown([labels.title + ' ' + context.pragma, ...lines]);
+      if (!result.incomplete) return pragmaObjectHover(name, labels.title + ' ' + context.pragma, result.entries);
       return;
     }
     if (normalized.length > sqliteCompletionLimits.prefixUnits) return;

@@ -1,11 +1,42 @@
 import { sqliteCompletionRelationMatches, sqliteQueryBodyKeywords, type SqliteCompletionAnalysis, type SqliteForeignKeyContext, type SqliteTriggerBodyContext, type SqliteTriggerContext } from '../shared/sqliteCompletionAnalysis';
-import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
+import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionIndexes, sqliteCompletionLimits, sqlitePragmaObject, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 import { sqliteTableImportAffinity } from '../shared/sqliteTableImport';
 import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
 
 export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'index' | 'trigger' | 'collation' | 'function' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; snippet?: true; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
+type PragmaFunctionArgument = Extract<NonNullable<Extract<SqliteCompletionAnalysis, { status: 'ready' }>['pragmaFunction']>, { kind: 'argument' }>;
+type PragmaObjectEntry = Extract<SqliteCompletionEntry, { kind: 'pragma-object' }>;
+const quotePragmaArgument = (name: string) => "'" + name.replaceAll("'", "''") + "'";
+
+/** 先确认可调用的原生模块及实际参数，再把对象参数映射到同一会话目录。 */
+export async function sqlitePragmaFunctionArgument(context: PragmaFunctionArgument, directory: SqliteCompletionDirectory) {
+  const { name, schema, position, objectSchema } = context;
+  const result = await directory.load({ kind: 'pragma-functions', prefix: name, ...(schema ? { schema } : {}) });
+  const entry = result.entries.find(entry => entry.kind === 'pragma-function' && entry.name === name);
+  if (result.incomplete || entry?.kind !== 'pragma-function' || objectSchema && !entry.schemaArgument) return { incomplete: result.incomplete };
+  if (entry.schemaArgument && position === Number(entry.objectArgument)) return { kind: 'schema' as const, incomplete: false };
+  const pragma = sqlitePragmaObject.safeParse(name.slice(7));
+  if (position === 0 && entry.objectArgument && pragma.success) {
+    return { kind: 'object' as const, pragma: pragma.data, schema: objectSchema, incomplete: false };
+  }
+  return { incomplete: false };
+}
+
+function pragmaObjectItems(entries: SqliteCompletionEntry[], quoteName: (name: string) => string): SqliteCompletionItem[] {
+  const objects = new Map<string, PragmaObjectEntry[]>();
+  for (const entry of entries) if (entry.kind === 'pragma-object') {
+    const key = fold(entry.name), group = objects.get(key);
+    if (group) group.push(entry);
+    else objects.set(key, [entry]);
+  }
+  // table_list 的同一个参数可返回多库同名对象，插入一次参数，提示全部匹配。
+  return [...objects.values()].map(([entry, ...others]) => {
+    const detail = [entry, ...others].map(object => [object.schema, text[object.object], ...(object.owner ? [text.maintenance.owner + ' ' + object.owner] : [])].join(' · '));
+    return { label: entry.name, kind: entry.object, insertText: quoteName(entry.name), detail: detail.join(' / ') };
+  });
+}
 const strictColumnTypes = ['INTEGER', 'INT', 'REAL', 'TEXT', 'BLOB', 'ANY'];
 const ordinaryColumnTypes = [...strictColumnTypes, 'NUMERIC', 'DECIMAL', 'BOOLEAN', 'DATE', 'DATETIME', 'CHAR', 'VARCHAR', 'DOUBLE PRECISION', 'FLOAT', 'BIGINT'];
 type ColumnType = NonNullable<Extract<SqliteCompletionAnalysis, { status: 'ready' }>['columnType']>;
@@ -117,6 +148,18 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   const body = triggerBody ? await resolveSqliteTriggerBody(triggerBody, directory) : undefined;
   if (body?.status === 'unavailable') return { items, incomplete: body.incomplete };
   if (body) directory = body.directory;
+  if (analysis.pragmaFunction?.kind === 'argument') {
+    const slot = await sqlitePragmaFunctionArgument(analysis.pragmaFunction, directory);
+    if (slot.kind === 'schema') for (const name of ['main', 'temp']) {
+      add({ label: name, kind: 'database', insertText: quotePragmaArgument(name), detail: text.pragma.schemaArgument });
+    }
+    if (slot.kind === 'object') {
+      const result = await directory.load({ kind: 'pragma-objects', pragma: slot.pragma, prefix: analysis.target.prefix, ...(slot.schema ? { schema: slot.schema } : {}) });
+      for (const item of pragmaObjectItems(result.entries, quotePragmaArgument)) add(item);
+      incomplete ||= result.incomplete;
+    }
+    return { items, incomplete: incomplete || slot.incomplete };
+  }
   if (analysis.pragma) {
     const context = analysis.pragma, labels = text.pragma;
     if (context.kind === 'name') {
@@ -131,17 +174,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
       return { items, incomplete: incomplete || result.incomplete };
     }
     const result = await directory.load({ kind: 'pragma-objects', pragma: context.pragma, prefix: analysis.target.prefix, ...(context.schema ? { schema: context.schema } : {}) });
-    const objects = new Map<string, Extract<SqliteCompletionEntry, { kind: 'pragma-object' }>[]>();
-    for (const entry of result.entries) if (entry.kind === 'pragma-object') {
-      const key = fold(entry.name), group = objects.get(key);
-      if (group) group.push(entry);
-      else objects.set(key, [entry]);
-    }
-    // table_list 的同一个参数可返回多库同名对象，插入一次参数，提示全部匹配。
-    for (const [entry, ...others] of objects.values()) {
-      const detail = [entry, ...others].map(object => [object.schema, text[object.object], ...(object.owner ? [text.maintenance.owner + ' ' + object.owner] : [])].join(' · '));
-      add({ label: entry.name, kind: entry.object, insertText: quote(entry.name), detail: detail.join(' / ') });
-    }
+    for (const item of pragmaObjectItems(result.entries, quote)) add(item);
     return { items, incomplete: incomplete || result.incomplete };
   }
   if (analysis.maintenanceTarget) {
@@ -373,6 +406,18 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
       for (const entry of metadata.entries) {
         if (entry.kind !== 'table' && entry.kind !== 'view' || !explicit && shadowed.has(fold(entry.name))) continue;
         add({ label: entry.name, kind: entry.kind, insertText: quote(entry.name), detail: (entry.kind === 'view' ? text.view : text.table) + ' · ' + entry.schema + (entry.schema === 'temp' ? ' · ' + text.temporary : '') });
+      }
+      const context = analysis.pragmaFunction;
+      if (context?.kind === 'source') {
+        const functions = await directory.load({ kind: 'pragma-functions', prefix: analysis.target.prefix, ...(context.schema ? { schema: context.schema } : {}) });
+        incomplete ||= functions.incomplete;
+        for (const entry of functions.entries) if (entry.kind === 'pragma-function' && (explicit || !shadowed.has(fold(entry.name)))) {
+          const acceptsArgument = entry.objectArgument || entry.schemaArgument, snippet = !context.existingCall && acceptsArgument;
+          const name = analysis.target.quoted ? quote(entry.name) : entry.name;
+          const call = context.existingCall ? '' : acceptsArgument ? "('$1')$0" : '()';
+          add({ kind: 'function', label: entry.name, insertText: name + call,
+            detail: [text.tableFunction, text.pragma.description[entry.name.slice(7)]].filter(Boolean).join(' · '), ...(snippet ? { snippet: true } : {}) });
+        }
       }
     }
   }

@@ -40,6 +40,8 @@ export const sqliteCompletionZh = {
   },
   pragma: {
     title: 'SQLite PRAGMA',
+    objectArgument: '对象参数',
+    schemaArgument: '库名参数',
     description: {
       collation_list: '列出当前连接的排序规则。',
       compile_options: '列出 SQLite 运行时的编译选项。',

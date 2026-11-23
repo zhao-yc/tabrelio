@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { sqlitePragmasWithObjectArgument } from './sqlitePragmaAccess';
+import { sqlitePragmaFunctionBase, sqlitePragmasWithObjectArgument } from './sqlitePragmaAccess';
 
 /** 补全仅传有界标识符，不接收SQL正文、文件路径、凭据或执行内容。 */
 export const sqliteCompletionLimits = { entries: 256, sourceUnits: 262144, tokens: 16384, depth: 64, suggestions: 256, relations: 16, nameUnits: 512, prefixUnits: 128, outputBytes: 2 * 1024 * 1024, active: 8 } as const;
@@ -18,6 +18,7 @@ export const sqliteSchemaObjectKind = z.enum(['table', 'view', 'index', 'trigger
 export type SqliteSchemaObjectKind = z.infer<typeof sqliteSchemaObjectKind>;
 export const sqliteMaintenanceOperation = z.enum(['analyze', 'reindex']);
 export const sqlitePragmaObject = z.enum(sqlitePragmasWithObjectArgument);
+export const sqlitePragmaFunctionName = functionName.refine(value => sqlitePragmaFunctionBase(value) !== undefined);
 export const sqliteForeignKeySelectionSchema = z.object({
   arity: z.number().int().min(1).max(sqliteCompletionLimits.entries),
   used: z.array(name).max(sqliteCompletionLimits.entries),
@@ -44,6 +45,7 @@ export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('maintenance-objects'), operation: sqliteMaintenanceOperation, schema: schema.optional(), exact: name.optional() })
     .strict().refine(value => value.exact === undefined || value.prefix === ''),
   z.object({ ...base, kind: z.literal('pragmas'), withArgument: z.literal(true).optional() }).strict(),
+  z.object({ ...base, kind: z.literal('pragma-functions'), schema: schema.optional() }).strict(),
   z.object({ ...base, kind: z.literal('pragma-objects'), pragma: sqlitePragmaObject, schema: schema.optional(), exact: name.optional() })
     .strict().refine(value => value.exact === undefined || value.prefix === ''),
   z.object({ ...base, kind: z.literal('stamp') }).strict(),
@@ -61,6 +63,7 @@ export const sqliteCompletionEntrySchema = z.discriminatedUnion('kind', [
     .refine(value => (value.object === 'index') === (value.owner !== undefined)),
   z.object({ name: z.literal('EXPRESSIONS'), kind: z.literal('maintenance-option') }).strict(),
   z.object({ name: functionName, kind: z.literal('pragma') }).strict(),
+  z.object({ name: sqlitePragmaFunctionName, kind: z.literal('pragma-function'), objectArgument: z.boolean(), schemaArgument: z.boolean() }).strict(),
   z.object({ name, kind: z.literal('pragma-object'), schema, object: z.enum(['table', 'view', 'index']), owner: name.optional() }).strict()
     .refine(value => (value.object === 'index') === (value.owner !== undefined)),
 ]);

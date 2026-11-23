@@ -6,6 +6,8 @@ SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段
 
 编辑 `PRAGMA` 时可补全库限定和名称，候选来自当前 SQLite 的 `pragma_list`，并受查询窗口的只读 PRAGMA 授权约束。表结构、索引、外键和完整性检查语句还可在括号或等号后补入对象名。候选保留原库限定和参数写法。通常同名临时对象优先，`table_list` 展示全部匹配，`index_info` 和 `index_xinfo` 在没有同名索引时可解析无 rowid 表。接受候选和悬停只读目录，设置写入继续由 SQLite 原生授权拦截。 [SQLite PRAGMA](https://www.sqlite.org/pragma.html)
 
+在查询来源处输入 `pragma_` 可补全实际可用的表值 PRAGMA，并悬停查看原生参数签名。空白参数位置或正在编辑的单引号参数可补入对象与库名字符串，相关字段及计算表达式继续按普通 SQL 解析。函数名前的库限定决定模块查找和遮蔽，函数末尾的库名参数决定对象目录。例如 `temp.pragma_table_xinfo('subject','main')` 会读取主库对象。候选及悬停只读取声明与对象目录，结果列继续沿用表值函数字段解析。 [SQLite PRAGMA 函数](https://www.sqlite.org/pragma.html#pragfunc)
+
 `ANALYZE` 支持数据库、表和索引候选与悬停，`REINDEX` 支持表、索引、连接上的排序规则以及 SQLite 3.53 起的 `EXPRESSIONS`。候选对具体表和索引补齐 `main` 或 `temp`，也保留已有库限定。悬停按当前实际写法解析，区分整库统计、单表或单索引维护，以及未限定排序规则的影响范围。两种语句均可选择 SQLite 自动生成的索引，补全和悬停只读取目录。 [SQLite ANALYZE](https://www.sqlite.org/lang_analyze.html) · [SQLite REINDEX](https://www.sqlite.org/lang_reindex.html)
 
 `DROP TABLE`、`DROP VIEW`、`DROP INDEX` 和 `DROP TRIGGER` 支持对象补全、悬停和查看完整只读定义。候选保留 `IF EXISTS`、显式库名和其它语句。未限定名称在原会话中解析。表、视图共享关系命名空间，索引和触发器分别查找各自类型。候选排除系统对象、自动索引和虚拟表影子表，普通及虚拟表本身仍可在 `DROP TABLE` 中选择。补全和定义读取只查目录。 [SQLite 对象查找规则](https://www.sqlite.org/lang_naming.html) · [DROP INDEX](https://www.sqlite.org/lang_dropindex.html)
@@ -69,6 +71,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-24 表值 PRAGMA 增量。WIN11-TEST 不可达，本机 macOS arm64 使用 Node.js 24.17.0，通过原生运行时、严格类型检查、源码构建和 46 份套件的 1,226 项测试。真实 SQLite 核对表值模块的隐藏参数、临时同名表遮蔽、显式库限定和只读授权。Electron 编辑器 23 项通过，两条新增用例分别补入已有调用的函数名，以及为 `temp.pragma_table_xinfo` 补入主库对象字符串。悬停只读目录，明确执行后返回生成列。原会话完整回归 1 项通过，耗时 109.4 秒，两次应用正常退出。报告位于 `.cache/sqlite-pragma-function-completion/final/`。Windows 界面及安装包待验。
 
 2026-11-23 SQLite PRAGMA 增量。WIN11-TEST 不可达，本机 macOS arm64 使用 Node.js 24.17.0，通过原生运行时、严格类型检查、源码构建和 46 份套件的 1,214 项测试。真实 SQLite 核对只读名称目录、跨库同名关系、自动索引及无 rowid 表。原生驱动允许带对象参数的 `table_list`，继续拒绝日志模式修改及外键开关写入。Electron 编辑器 21 项通过，两条新增用例分别接受 `table_xinfo` 名称和限定库中的表名，悬停只有目录读取，明确执行后返回生成列信息。原会话完整回归 1 项通过，耗时 108.2 秒，两次正常退出。报告位于 `.cache/sqlite-pragma-completion/final/`。Windows 界面及安装包待验。
 

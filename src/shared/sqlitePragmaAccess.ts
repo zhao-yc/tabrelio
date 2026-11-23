@@ -17,3 +17,9 @@ export function readableSqlitePragma(name: string | null, argument: string | nul
   const key = name.toLowerCase();
   return objectPragmas.has(key) || argument === null && readWithoutValue.has(key);
 }
+
+export function sqlitePragmaFunctionBase(name: string): string | undefined {
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name)) return;
+  const key = name.toLowerCase(), pragma = key.slice(7);
+  return key.startsWith('pragma_') && readableSqlitePragma(pragma, null) ? pragma : undefined;
+}

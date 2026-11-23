@@ -94,6 +94,7 @@ export function createSqliteCompletionProvider(ports: Ports) {
               }
               if (query.kind === 'pragmas') return entry.kind !== 'pragma' || !fold(entry.name).startsWith(fold(query.prefix)) ||
                 !readableSqlitePragma(entry.name, query.withArgument ? '' : null);
+              if (query.kind === 'pragma-functions') return entry.kind !== 'pragma-function' || !fold(entry.name).startsWith(fold(query.prefix));
               if (query.kind === 'pragma-objects') {
                 if (entry.kind !== 'pragma-object' || query.schema !== undefined && entry.schema !== query.schema) return true;
                 if (entry.object === 'index' && query.pragma !== 'index_info' && query.pragma !== 'index_xinfo' ||
@@ -102,7 +103,7 @@ export function createSqliteCompletionProvider(ports: Ports) {
                 return query.exact === undefined ? !name.startsWith(fold(query.prefix)) : name !== fold(query.exact);
               }
               if (entry.kind === 'function' || entry.kind === 'collation' || entry.kind === 'maintenance-option' || entry.kind === 'maintenance-object' ||
-                entry.kind === 'pragma' || entry.kind === 'pragma-object') return true;
+                entry.kind === 'pragma' || entry.kind === 'pragma-object' || entry.kind === 'pragma-function') return true;
               if (query.kind === 'trigger-owner') return entry.kind !== query.triggerTarget || fold(entry.name) !== fold(query.table);
               if (query.schema !== undefined && entry.schema !== query.schema) return true;
               if (query.kind === 'drop-objects') return entry.kind !== 'drop-object' || entry.object !== query.object ||

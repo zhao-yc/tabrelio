@@ -56,6 +56,10 @@ const scenarios = [
     trail: '(subject)', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'virtual_value' },
   { verb: 'PRAGMA OBJECT', prefix: 'PRAGMA main.table_xinfo(', typed: 'subj', column: 'subject',
     trail: ')', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'virtual_value' },
+  { verb: 'PRAGMA FUNCTION SOURCE', prefix: 'SELECT p.name FROM ', typed: 'pragma_table_xi', column: 'pragma_table_xinfo',
+    trail: "('subject') AS p", incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'virtual_value' },
+  { verb: 'PRAGMA FUNCTION ARGUMENT', prefix: 'SELECT p.name FROM temp.pragma_table_xinfo(', typed: 'subj', column: 'subject',
+    trail: ",'main') AS p", incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'virtual_value' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
@@ -74,15 +78,18 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
   const dropIndex = scenario.verb === 'DROP INDEX';
   const analyzeIndex = scenario.verb === 'ANALYZE INDEX';
   const pragmaName = scenario.verb === 'PRAGMA NAME', pragmaObject = scenario.verb === 'PRAGMA OBJECT';
+  const pragmaFunctionSource = scenario.verb === 'PRAGMA FUNCTION SOURCE';
+  const pragmaFunctionArgument = scenario.verb === 'PRAGMA FUNCTION ARGUMENT';
   const targetTable = strictType ? 'strict_subject' : triggerAction ? 'trigger_log' : 'subject';
   const lookupKind = pragmaName ? 'pragmas' : pragmaObject ? 'pragma-objects' :
     analyzeIndex ? 'maintenance-objects' : dropIndex ? 'drop-objects' : foreignTable || triggerTarget ? 'relations' : strictType ? 'table-options' : scenario.verb === 'INDEXED BY' ? 'indexes' :
     scenario.verb === '函数' ? 'functions' : scenario.verb === 'COLLATE' ? 'collations' : 'columns';
   const alterColumn = scenario.verb === 'RENAME COLUMN' ? 'rename' : scenario.verb === 'DROP COLUMN' ? 'drop' : undefined;
   const { prefix, trail, typed, column } = scenario;
-  const draft = prefix + typed + 'suffix' + trail;
+  const opener = pragmaFunctionArgument ? "'" : '', cursor = prefix + opener + typed;
+  const draft = cursor + 'suffix' + opener + trail;
   const accepted = prefix + (scenario.verb === '函数' ? column + '(' + scenario.args + ')' :
-    strictType || createType || pragmaName ? column : '"' + column + '"') + trail;
+    strictType || createType || pragmaName || pragmaFunctionSource ? column : pragmaFunctionArgument ? "'" + column + "'" : '"' + column + '"') + trail;
   const db = new DatabaseSync(filePath);
   try {
     db.exec(`CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT,virtual_value TEXT GENERATED ALWAYS AS (value||'!'),old_extra TEXT DEFAULT '保留',id_related TEXT);
@@ -163,6 +170,17 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
               (input.exact === undefined ? input.prefix !== setup.typed : input.prefix !== '' || input.exact !== setup.catalogName))) {
               throw Error('PRAGMA 对象目录越出本例');
             }
+            if (setup.pragmaFunctionSource && input.kind !== 'stamp' && (input.schema !== undefined ||
+              (input.kind === 'relations' ? input.prefix !== setup.typed :
+                input.kind !== 'pragma-functions' || input.prefix !== setup.typed && input.prefix !== setup.catalogName))) {
+              throw Error('表值 PRAGMA 名称目录越出本例');
+            }
+            if (setup.pragmaFunctionArgument && input.kind !== 'stamp') {
+              const valid = input.kind === 'pragma-functions' ? input.schema === 'temp' && input.prefix === 'pragma_table_xinfo' :
+                input.kind === 'pragma-objects' && input.pragma === 'table_xinfo' && input.schema === 'main' &&
+                (input.exact === undefined ? input.prefix === setup.typed : input.prefix === '' && input.exact === setup.catalogName);
+              if (!valid) throw Error('表值 PRAGMA 参数目录越出本例');
+            }
             if (setup.isTrigger && input.kind !== 'stamp') {
               if (setup.triggerAction && input.kind === 'trigger-owner') {
                 if (input.triggerTarget !== 'table' || input.table !== 'subject' || input.prefix !== '' || 'schema' in input) throw Error('触发体归属越出实际目标');
@@ -202,7 +220,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         return entry(event, payload);
       });
     }, { filePath, connectionId, accepted, lookupKind, targetTable, typed, catalogName: column, createType, foreignChild, foreignColumn, triggerTarget, isTrigger, triggerAction, dropIndex, analyzeIndex, pragmaName, pragmaObject,
-      createIndex: scenario.verb === 'CREATE INDEX', alterColumn });
+      pragmaFunctionSource, pragmaFunctionArgument, createIndex: scenario.verb === 'CREATE INDEX', alterColumn });
 
     await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
     await page.evaluate(async ({ id, sql }) => {
@@ -228,10 +246,10 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
     await textbox.focus();
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
-    for (const _point of prefix + typed) await page.keyboard.press('ArrowRight');
+    for (const _point of cursor) await page.keyboard.press('ArrowRight');
     const original = await inspect();
     expect(original.sql).toBe(draft);
-    expect(original.offset).toBe((prefix + typed).replaceAll('\n', original.eol).length);
+    expect(original.offset).toBe(cursor.replaceAll('\n', original.eol).length);
     const before = disk(), previous = (await snapshot()).length;
     await page.keyboard.press('Control+Space');
     const widget = query.locator('.suggest-widget:visible');
@@ -247,10 +265,14 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     expect(requests.filter(input => input.kind !== 'stamp')).toEqual(createType ? [] : [
       ...(foreignColumn ? [expect.objectContaining({ kind: 'table-options', table: foreignChild, prefix: '' })] : []),
       ...(triggerAction ? [expect.objectContaining({ kind: 'trigger-owner', triggerTarget: 'table', table: 'subject', prefix: '' })] : []),
+      ...(pragmaFunctionSource ? [expect.objectContaining({ kind: 'relations', prefix: typed })] : []),
+      ...(pragmaFunctionArgument ? [expect.objectContaining({ kind: 'pragma-functions', prefix: 'pragma_table_xinfo', schema: 'temp' })] : []),
       dropIndex ? expect.objectContaining({ kind: 'drop-objects', object: 'index', schema: 'main', prefix: typed }) :
         analyzeIndex ? expect.objectContaining({ kind: 'maintenance-objects', operation: 'analyze', schema: 'main', prefix: typed }) :
         pragmaName ? expect.objectContaining({ kind: 'pragmas', prefix: typed, withArgument: true }) :
         pragmaObject ? expect.objectContaining({ kind: 'pragma-objects', pragma: 'table_xinfo', schema: 'main', prefix: typed }) :
+        pragmaFunctionSource ? expect.objectContaining({ kind: 'pragma-functions', prefix: typed }) :
+        pragmaFunctionArgument ? expect.objectContaining({ kind: 'pragma-objects', pragma: 'table_xinfo', schema: 'main', prefix: typed }) :
         triggerTarget ? expect.objectContaining({ kind: 'relations', schema: 'main', triggerTarget: 'table', prefix: typed }) :
         foreignTable ? expect.objectContaining({ kind: 'relations', schema: 'main', foreignKey: true, prefix: typed }) :
         lookupKind === 'functions' || lookupKind === 'collations' ? expect.objectContaining({ kind: lookupKind, prefix: typed }) :
@@ -285,6 +307,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     else if (dropIndex) await expect(hover).toContainText('"main"."subject_by_value"');
     else if (pragmaName) await expect(hover).toContainText('包括生成列和隐藏列');
     else if (pragmaObject) await expect(hover).toContainText('"main"."subject"');
+    else if (pragmaFunctionSource) await expect(hover).toContainText('SQLite 表值函数 pragma_table_xinfo');
+    else if (pragmaFunctionArgument) await expect(hover).toContainText('"main"."subject"');
     else if (analyzeIndex) {
       await expect(hover).toContainText('"main"."subject_by_value"');
       await expect(hover).toContainText('收集单个索引的查询规划统计');
@@ -351,6 +375,7 @@ for (const scenario of scenarios) {
   test.describe(scenario.verb, () => {
     const enabled = scenario.verb === 'DROP INDEX' ? process.env.DBARK_SQLITE_DROP_COMPLETION_NATIVE === '1' :
       scenario.verb === 'ANALYZE INDEX' ? process.env.DBARK_SQLITE_MAINTENANCE_COMPLETION_NATIVE === '1' :
+      scenario.verb.startsWith('PRAGMA FUNCTION ') ? process.env.DBARK_SQLITE_PRAGMA_FUNCTION_COMPLETION_NATIVE === '1' :
       scenario.verb.startsWith('PRAGMA ') ? process.env.DBARK_SQLITE_PRAGMA_COMPLETION_NATIVE === '1' :
       scenario.verb.startsWith('TRIGGER ') ? process.env.DBARK_SQLITE_TRIGGER_COMPLETION_NATIVE === '1' :
       scenario.verb === 'FOREIGN KEY TABLE' || scenario.verb === 'FOREIGN KEY COLUMN' ? process.env.DBARK_SQLITE_FOREIGN_KEY_COMPLETION_NATIVE === '1' :
