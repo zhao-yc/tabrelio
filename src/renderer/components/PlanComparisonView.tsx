@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import type { PostgresPlanComparison } from '../../shared/postgresPlanComparison';
+import type { PlanComparison } from '../../shared/planComparison';
 import { explainSnapshotZh as text } from '../../shared/explainSnapshot.zh-CN';
 
 /** 两列都读取已经打开的文件。变化节点与字段在本地选择，不再访问数据库。 */
-export function PostgresPlanComparisonView({ comparison, left, right }: {
-  comparison: PostgresPlanComparison;
+export function PlanComparisonView({ comparison, dialect, left, right }: {
+  comparison: PlanComparison;
+  dialect: 'postgresql' | 'sqlite';
   left: string;
   right: string;
 }) {
@@ -12,11 +13,12 @@ export function PostgresPlanComparisonView({ comparison, left, right }: {
   const [selected, setSelected] = useState<string>();
   const visible = showAll ? comparison.nodes : comparison.nodes.filter(node => node.status !== 'same');
   const current = visible.find(node => node.path === selected) ?? visible[0];
-  return <section className="explain-comparison" aria-label={text.compareTitle}>
+  const sqlite = dialect === 'sqlite';
+  return <section className="explain-comparison" aria-label={sqlite ? text.sqliteCompareTitle : text.compareTitle}>
     <div className="explain-comparison-sources">
       <span>{text.compareLeft}　{left}</span><span>{text.compareRight}　{right}</span>
     </div>
-    <p className="muted small">{text.compareHint}</p>
+    <p className="muted small">{sqlite ? text.sqliteCompareHint : text.compareHint}</p>
     <div className="explain-comparison-summary">
       <strong role="status">{text.compareCount(comparison.different, comparison.nodes.length)}</strong>
       <label><input type="checkbox" checked={showAll} onChange={event => setShowAll(event.currentTarget.checked)} /> {text.compareShowAll}</label>

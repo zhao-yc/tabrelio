@@ -2,19 +2,21 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { QueryOutcome } from '../../shared/contracts';
 import { planSnapshotOutcome, parsePlanSnapshot, type PlanSnapshotDocument } from '../../shared/explainSnapshot';
 import { explainSnapshotZh as text } from '../../shared/explainSnapshot.zh-CN';
+import type { PlanComparison } from '../../shared/planComparison';
+import { comparePostgresPlanSnapshots } from '../../shared/postgresPlanComparison';
+import { compareSqlitePlanSnapshots } from '../../shared/sqlitePlanComparison';
 import { errorMessage, invoke } from '../lib';
 import { ExplainPlanView } from './ExplainPlanView';
 import { QueryAnalyzeView } from './QueryAnalyzeView';
 import { SqliteExplainPlanView } from './SqliteExplainPlanView';
-import { PostgresPlanComparisonView } from './PostgresPlanComparisonView';
-import { comparePostgresPlanSnapshots, type PostgresPlanComparison } from '../../shared/postgresPlanComparison';
+import { PlanComparisonView } from './PlanComparisonView';
 import { ErrorBox, Modal } from './ui';
 import '../explainSnapshot.css';
 
 /** 文件选择由明确动作触发；导入仅恢复展示结果，始终不创建数据库会话。 */
 export function ExplainSnapshotDialog({ onClose }: { onClose(): void }) {
   const [loaded, setLoaded] = useState<{ name: string; snapshot: PlanSnapshotDocument; outcome: QueryOutcome }>(), [busy, setBusy] = useState<'open' | 'save'>(), [error, setError] = useState('');
-  const [comparison, setComparison] = useState<{ name: string; version: string; value: PostgresPlanComparison }>();
+  const [comparison, setComparison] = useState<{ name: string; version: string; dialect: 'postgresql' | 'sqlite'; value: PlanComparison }>();
   const operation = useRef<'open' | 'save' | null>(null), alive = useRef(false), lifetime = useRef(0);
   useLayoutEffect(() => { alive.current = true; lifetime.current++; return () => { alive.current = false; lifetime.current++; }; }, []);
   /** 关闭按钮与捕获阶段 Escape 共用同步锁，等待原始 I/O 真正结束。 */
@@ -36,8 +38,9 @@ export function ExplainSnapshotDialog({ onClose }: { onClose(): void }) {
       if (selected && current()) {
         const snapshot = parsePlanSnapshot(selected.snapshot);
         if (compare && loaded) {
-          const value = comparePostgresPlanSnapshots(loaded.snapshot, snapshot);
-          if (current()) setComparison({ name: selected.name, version: snapshot.serverVersion, value });
+          const dialect = loaded.snapshot.dialect === 'sqlite' ? 'sqlite' : 'postgresql';
+          const value = dialect === 'sqlite' ? compareSqlitePlanSnapshots(loaded.snapshot, snapshot) : comparePostgresPlanSnapshots(loaded.snapshot, snapshot);
+          if (current()) setComparison({ name: selected.name, version: snapshot.serverVersion, dialect, value });
           return;
         }
         const outcome = planSnapshotOutcome(snapshot);
@@ -52,11 +55,11 @@ export function ExplainSnapshotDialog({ onClose }: { onClose(): void }) {
   }
   return <Modal title={text.title} wide onClose={close}><div className="explain-snapshot-dialog">
     <p>{text.notice}</p><div className="explain-snapshot-actions"><button disabled={!!busy} onClick={() => void open()}>{busy === 'open' ? text.opening : text.choose}</button>
-      {loaded?.snapshot.dialect === 'postgresql' && loaded.snapshot.format === 'json' && <button disabled={!!busy} onClick={() => void open(true)}>{text.compareChoose}</button>}
+      {(loaded?.snapshot.dialect === 'sqlite' || loaded?.snapshot.dialect === 'postgresql' && loaded.snapshot.format === 'json') && <button disabled={!!busy} onClick={() => void open(true)}>{text.compareChoose}</button>}
       {comparison && <button disabled={!!busy} onClick={() => { setComparison(undefined); setError(''); }}>{text.compareClose}</button>}
       <button disabled={!!busy} onClick={close}>{text.close}</button></div>
     <ErrorBox message={error}/>{loaded && <><p role="status">{text.opened(loaded.name)}</p><p className="muted small">{loaded.snapshot.kind === 'dbark.sqlite-explain-snapshot' ? text.sqlite : loaded.snapshot.kind === 'dbark.analyze-snapshot' ? text.actual : text.estimated}</p>
-      {comparison ? <PostgresPlanComparisonView comparison={comparison.value}
+      {comparison ? <PlanComparisonView comparison={comparison.value} dialect={comparison.dialect}
         left={loaded.name + ' · ' + loaded.snapshot.serverVersion} right={comparison.name + ' · ' + comparison.version}/> :
         <div className="explain-snapshot-plan">
           {loaded.snapshot.kind === 'dbark.sqlite-explain-snapshot' ? <SqliteExplainPlanView outcome={loaded.outcome} fileSnapshot={loaded.snapshot} busy={!!busy} fileActions onFileBusyChange={fileBusy}/> :

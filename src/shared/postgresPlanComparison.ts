@@ -1,20 +1,7 @@
 import type { PlanSnapshotDocument } from './explainSnapshot';
 import { explainSnapshotZh as text } from './explainSnapshot.zh-CN';
+import { comparePlanNodes, type PlanComparison, type PlanComparisonSourceNode } from './planComparison';
 import { visitPostgresPlans } from './postgresExplain';
-
-interface ComparedField { name: string; left?: string; right?: string; }
-interface ComparedNode {
-  path: string;
-  depth: number;
-  left?: string;
-  right?: string;
-  status: 'added' | 'removed' | 'changed' | 'same';
-  fields: ComparedField[];
-  changedFields: number;
-}
-export interface PostgresPlanComparison { nodes: ComparedNode[]; different: number; }
-
-type SourceNode = { depth: number; label: string; fields: Map<string, string> };
 
 /** 对象字段顺序不参与比较，数组顺序和原数值文本保留。 */
 function ordered(value: unknown): unknown {
@@ -25,8 +12,8 @@ function ordered(value: unknown): unknown {
 }
 
 /** 按原树路径收集节点自己的字段，子节点另成记录。 */
-function sourceNodes(raw: string): Map<string, SourceNode> {
-  const nodes = new Map<string, SourceNode>();
+function sourceNodes(raw: string): Map<string, PlanComparisonSourceNode> {
+  const nodes = new Map<string, PlanComparisonSourceNode>();
   const warnings = visitPostgresPlans(raw, (node, position, entry) => {
     const fields = new Map<string, string>();
     for (const [key, value] of Object.entries(node)) {
@@ -52,26 +39,9 @@ function display(value?: string): string | undefined {
 }
 
 /** 只有同类、完整的 PostgreSQL JSON 快照才能按结构位置比较。 */
-export function comparePostgresPlanSnapshots(left: PlanSnapshotDocument, right: PlanSnapshotDocument): PostgresPlanComparison {
+export function comparePostgresPlanSnapshots(left: PlanSnapshotDocument, right: PlanSnapshotDocument): PlanComparison {
   if (left.kind !== right.kind || left.dialect !== 'postgresql' || right.dialect !== 'postgresql' ||
       left.format !== 'json' || right.format !== 'json') throw Error(text.compareUnsupported);
   if (left.rawTruncated || right.rawTruncated || left.result.truncated || right.result.truncated) throw Error(text.compareIncomplete);
-  const before = sourceNodes(left.raw), after = sourceNodes(right.raw);
-  const nodes: ComparedNode[] = [];
-  let different = 0;
-  for (const path of new Set([...before.keys(), ...after.keys()])) {
-    const a = before.get(path), b = after.get(path);
-    const fields: ComparedField[] = [];
-    let changedFields = 0;
-    for (const name of new Set([...(a?.fields.keys() ?? []), ...(b?.fields.keys() ?? [])])) {
-      const original = a?.fields.get(name), target = b?.fields.get(name);
-      if (original === target) continue;
-      changedFields++;
-      if (fields.length < 80) fields.push({ name, left: display(original), right: display(target) });
-    }
-    const status = !a ? 'added' : !b ? 'removed' : changedFields ? 'changed' : 'same';
-    if (status !== 'same') different++;
-    nodes.push({ path, depth: (a ?? b)!.depth, left: a?.label, right: b?.label, status, fields, changedFields });
-  }
-  return { nodes, different };
+  return comparePlanNodes(sourceNodes(left.raw), sourceNodes(right.raw), display);
 }

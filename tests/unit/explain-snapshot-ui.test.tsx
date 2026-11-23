@@ -103,6 +103,35 @@ it('无连接离线打开 SQLite 四列计划并按原文件另存', async () =>
   expect(bridge.mock.calls).toEqual([['explainFiles.open', {}], ['explainFiles.save', { snapshot }]]);
 });
 
+it('离线对比 SQLite 快照，异类文件与取消保留比较，返回后可另存基准', async () => {
+  const file = (name: string, detail: string, version: string) => {
+    const original = { columns: ['id', 'parent', 'notused', 'detail'].map(key => ({ key, name: key, type: 'SQLITE' })),
+      rows: [{ id: '7', parent: '0', notused: '0', detail }], truncated: false, statement: '', elapsedMs: 4 };
+    return { name, snapshot: capturePlanSnapshot({ elapsedMs: 4, results: [original], sqliteExplain: buildSqliteExplainPlan(original, version) }) };
+  };
+  const before = file('基准.json', 'SCAN subject', '3.50.0');
+  const after = file('对比.json', 'SEARCH subject USING INDEX subject_index', '3.53.0');
+  await mount(<Dialog onClose={vi.fn()}/>);
+  bridge.mockResolvedValueOnce(before); await click(text.choose);
+  bridge.mockResolvedValueOnce(after); await click(text.compareChoose);
+  const region = () => document.querySelector(`[aria-label="${text.sqliteCompareTitle}"]`);
+  const comparison = region();
+  expect(comparison?.textContent).toContain(text.compareCount(1, 1));
+  expect(comparison?.textContent).toContain('基准.json · 3.50.0');
+  expect(comparison?.textContent).toContain('对比.json · 3.53.0');
+  expect(comparison?.textContent).toContain('SEARCH subject USING INDEX subject_index');
+  bridge.mockResolvedValueOnce(opened()); await click(text.compareChoose);
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain(text.sqliteCompareUnsupported);
+  expect(region()).toBe(comparison);
+  bridge.mockResolvedValueOnce(null); await click(text.compareChoose);
+  expect(region()).toBe(comparison);
+  await click(text.compareClose);
+  expect(region()).toBeNull();
+  expect(document.querySelector('[role="tree"]')?.textContent).toContain('SCAN subject');
+  bridge.mockResolvedValueOnce(null); await click(text.saveAs);
+  expect(bridge.mock.calls).toEqual([...Array.from({ length: 4 }, () => ['explainFiles.open', {}]), ['explainFiles.save', { snapshot: before.snapshot }]]);
+});
+
 it('取消和不合法新文件保留原计划、查找、节点选择和文件名', async () => {
   await mount(<Dialog onClose={vi.fn()}/>); bridge.mockResolvedValueOnce(opened()); await click(text.choose); await search('orders'); await click(planText.next);
   const selected = document.querySelectorAll('[role="treeitem"]').find(node => node.getAttribute('aria-selected') === 'true');
