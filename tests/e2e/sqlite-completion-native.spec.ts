@@ -25,7 +25,7 @@ const modifier = process.platform === 'darwin' ? 'Meta' : 'Control', connectionN
 const bootstrapSql = "CREATE TEMP TABLE subject(temp_marker TEXT,id INTEGER); INSERT INTO temp.subject VALUES('SQLITE_COMPLETION_TEMP_A',1);";
 const transactionalSql = 'CREATE TABLE main.uncommitted_completion_only(uncommitted_marker TEXT);';
 const secondSessionSql = 'SELECT main_marker,id FROM main.subject ORDER BY id;';
-const functionSql = `SELECT j."value" FROM (SELECT 1 AS marker) a JOIN (main.subject s JOIN json_each('["TVF_FIRST","TVF_SECOND"]') j ON s.id=1) ON 1 ORDER BY j.key`;
+const functionSql = `SELECT j."value" FROM (SELECT id AS "id:1" FROM json_each('["TVF_FIRST","TVF_SECOND"]')) a JOIN (main.subject s JOIN json_each('["TVF_FIRST","TVF_SECOND"]') j ON s.id=1) USING ("id:1") ORDER BY j.key`;
 const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql, functionSql];
 let completed: { directory: string; database: string; firstPid?: number; secondPid?: number; platform: string } | undefined;
 let observeFailure: (() => Record<string, unknown>) | undefined;
@@ -277,6 +277,19 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     const functionRead = completionFacts(await step(audit)).filter(fact => succeeded(fact) && fact.request.tableFunction === true).at(-1)!;
     expect(functionRead.request).toMatchObject({ kind: 'columns', table: 'json_each', prefix: 'va', sessionId: sessionA });
     expect(sqliteCompletionOutputSchema.parse(result(functionRead.reply)).entries.map(entry => entry.name)).toEqual(['value']);
+    stage = '外层 USING 接受来自嵌套连接的稳定重复列名，补全只使用原会话目录';
+    const beforeUsingReads = completionFacts(await step(audit)).length;
+    await choose(functionSql.replace('USING ("id:1")', 'USING (i|suffix)'), 'id:1', functionSql, 'id');
+    await settleMetadata(); await metadataReadOnly(baseline, beforeFunction);
+    const usingReads = completionFacts(await step(audit)).slice(beforeUsingReads).filter(fact => succeeded(fact) && fact.request.kind === 'columns');
+    // 粘贴完整语句也可能触发末尾 j.key 的建议。它与 USING 的两次全列目录读取分别核验。
+    expect(usingReads.filter(fact => fact.request.prefix === '').map(fact => fact.request)).toEqual([
+      expect.objectContaining({ table: 'subject', schema: 'main', prefix: '', sessionId: sessionA }),
+      expect.objectContaining({ table: 'json_each', tableFunction: true, prefix: '', sessionId: sessionA }),
+    ]);
+    for (const fact of usingReads.filter(fact => fact.request.prefix !== '')) {
+      expect(fact.request).toMatchObject({ table: 'json_each', tableFunction: true, prefix: 'key', sessionId: sessionA });
+    }
     await execute(functionSql, 4, true);
     expect(result(operations(await step(audit), 'query.execute').at(-1)!.reply)).toMatchObject({ results: [{ rows: [{ c0: 'TVF_FIRST' }, { c0: 'TVF_SECOND' }] }] });
     const transactions = operations(await step(audit), 'query.transaction'); expect(transactions.map(fact => fact.request.action)).toEqual(['begin', 'rollback']); const firstTasks = await tasks(), firstHistory = await history(); expect(firstTasks.filter(task => task.kind === 'query.execute')).toHaveLength(explicitSql.length); expect(firstHistory.map(record => record.sql).sort()).toEqual([...explicitSql].sort()); expect(disk()).toEqual(baseline);

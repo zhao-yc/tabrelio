@@ -152,6 +152,34 @@ it('USING 的 Worker 回包不能同时携带外层绑定、解析模式或未�
   }
   expect(() => validateSqliteCompletionAnalysis(value, source, offset, 'hover')).toThrow();
 });
+
+it('外层 USING 的两侧保留投影分组、约束和准确的递归来源', () => {
+  const value = ready('SELECT * FROM (main.a NATURAL JOIN temp.b) AS lhs RIGHT JOIN ((main.c JOIN d USING(id)) AS inner_set JOIN e ON 1) AS rhs USING (i|d, ready)');
+  expect(value.using).toEqual({
+    left: [{ operand: { group: 0 } }], right: { group: 2 }, used: ['ready'], uniqueLeft: true, starGroupSides: 'right',
+    groups: [
+      { inputs: [{ operand: { source: { name: 'a', schema: 'main' } } }, { operand: { source: { name: 'b', schema: 'temp' } }, merged: true }] },
+      { inputs: [{ operand: { source: { name: 'c', schema: 'main' } } }, { operand: { source: { name: 'd' } }, merged: ['id'] }] },
+      { inputs: [{ operand: { group: 1 } }, { operand: { source: { name: 'e' } } }] },
+    ],
+  });
+  const previous = ready('SELECT * FROM x JOIN (a JOIN b) USING(id) JOIN y USING(i|d)');
+  expect(previous.using?.left).toEqual([{ operand: { source: { name: 'x' } } }, { operand: { group: 0 }, merged: ['id'] }]);
+});
+
+it('USING 回包拒绝前向、重复引用、孤立分组和超额叶子', () => {
+  const { source, offset } = query('SELECT * FROM a JOIN (b JOIN c) USING(|)');
+  const valid = ready('SELECT * FROM a JOIN (b JOIN c) USING(|)');
+  const using = valid.using!, original = using.groups![0];
+  for (const invalid of [
+    { ...using, right: { group: 1 } },
+    { ...using, left: [{ operand: { group: 0 } }] },
+    { ...using, groups: [{ inputs: [{ operand: { group: 0 } }, original.inputs[1]] }] },
+    { ...using, groups: [original, original] },
+    { ...using, groups: [{ inputs: Array.from({ length: limits.relations }, () => original.inputs[0]) }] },
+    { ...using, uniqueLeft: true, starGroupSides: 'left' },
+  ]) expect(() => validateSqliteCompletionAnalysis({ ...valid, using: invalid }, source, offset)).toThrow();
+});
 it.each(['UNION', 'UNION ALL', 'INTERSECT', 'EXCEPT'])('集合运算%s的两侧以光标所在分支为准', operator => {
   expect(ready(`SELECT s.| FROM main.first AS s ${operator} SELECT s.id FROM temp.second AS s`).relations)
     .toEqual([{ kind: 'physical', schema: 'main', name: 'first', alias: 's' }]);

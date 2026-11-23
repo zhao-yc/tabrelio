@@ -160,6 +160,69 @@ it('USING 排除其它槽位的列，重复物理关系只读取一次，未知�
   expect(result.incomplete).toBe(true);
 });
 
+it.each([
+  ['SELECT * FROM outer_table JOIN (a JOIN b USING(id)) USING (|)', ['id', 'id:1', 'id:2', 'k', 'k:1', 'k:2', 'ax', 'bx']],
+  ['SELECT * FROM (a JOIN b USING(id)) g FULL JOIN outer_table USING (|)', ['id', 'id:1', 'id:2', 'k:1', 'k:2', 'ax', 'bx']],
+  ['SELECT 1 FROM (a JOIN b USING(id)) g FULL JOIN outer_table USING (|)', ['id', 'id:1', 'id:2', 'k', 'k:1', 'k:2', 'ax', 'bx']],
+  ['SELECT * FROM outer_table RIGHT JOIN (a JOIN b USING(id)) USING (|)', ['id', 'id:1', 'id:2', 'k:1', 'k:2', 'ax', 'bx']],
+  ['SELECT * FROM outer_table JOIN (a NATURAL JOIN b) USING (|)', ['id', 'id:1', 'id:2', 'k', 'k:1', 'k:2', 'k:3', 'ax', 'bx']],
+  ['SELECT * FROM outer_table JOIN ((a JOIN b USING(id)) g JOIN c ON 1) USING (|)', ['id', 'id:1', 'id:2', 'id:3', 'k', 'k:1', 'k:2', 'ax', 'bx', 'cx']],
+  ['SELECT * FROM outer_table JOIN (a RIGHT JOIN b USING(id)) USING (|)', ['id', 'id:1', 'id:2', 'k', 'k:1', 'k:2', 'ax', 'bx']],
+] as const)('原生 SQLite 裁决嵌套组 USING 的可引用字段：%s', async (marked, expected) => {
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE a(id,k,"k:1",ax); CREATE TABLE b(id,k,bx); CREATE TABLE c(id,cx);
+      CREATE TABLE outer_table(id,"id:1","id:2","id:3",k,"k:1","k:2","k:3",ax,bx,cx,unused);`);
+    const directory = { load: vi.fn(async (lookup: SqliteCompletionLookup) => {
+      if (lookup.kind !== 'columns') throw Error('预期连接输入列');
+      const entries = db.prepare('SELECT name, hidden FROM pragma_table_xinfo(?,?) ORDER BY cid').all(lookup.table, lookup.schema ?? 'main')
+        .filter(row => String(row.name).startsWith(lookup.prefix)).map(row => ({ ...column(String(row.name), lookup.table), hidden: row.hidden === 1 }));
+      return { entries, incomplete: false, stamp: '1:0' };
+    }) };
+    const { items, incomplete } = await sqliteCompletionSuggestions(analysis, directory);
+    const labels = items.map(item => item.label).sort();
+    const native = ['id', 'id:1', 'id:2', 'id:3', 'k', 'k:1', 'k:2', 'k:3', 'ax', 'bx', 'cx', 'unused'].filter(name => {
+      try { db.prepare(marked.replace('|', '"' + name + '"')); return true; } catch { return false; }
+    });
+    expect(incomplete).toBe(false);
+    expect(native.sort()).toEqual([...expected].sort());
+    expect(labels).toEqual(native.sort());
+  } finally { db.close(); }
+});
+
+it('分组后缀在过滤前推导，已选项去重，同一目录仅完整读取一次', async () => {
+  const marked = 'SELECT * FROM keys JOIN (source a JOIN source b ON 1 JOIN source c ON 1) USING ("id:1", "id:|suffix")';
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const d = directory([]);
+  d.load.mockImplementation(async query => ({ entries: query.kind === 'columns' && query.table === 'source'
+    ? [column('id', 'source')] : [column('id:1', 'keys'), column('id:2', 'keys')], incomplete: false, stamp: '1:0' }));
+  const result = await sqliteCompletionSuggestions(analysis, d);
+  expect(d.load.mock.calls).toEqual([[{ kind: 'columns', table: 'source', prefix: '' }], [{ kind: 'columns', table: 'keys', prefix: 'id:' }]]);
+  expect(result.incomplete).toBe(false);
+  expect(result.items.map(item => item.insertText)).toEqual(['"id:2"']);
+});
+
+it('随机重名后缀、行号别名和不完整的成员目录不会伪造候选', async () => {
+  const marked = 'SELECT * FROM keys JOIN (a JOIN b JOIN c JOIN d JOIN e JOIN f) USING (|)';
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const d = directory([]);
+  d.load.mockImplementation(async lookup => {
+    if (lookup.kind !== 'columns') throw Error('预期连接输入列');
+    const names = lookup.table === 'keys' ? ['id:4', 'id:5', '_rowid_', 'stable'] : lookup.table === 'a' ? ['id', 'stable'] : ['id'];
+    return { entries: names.map(name => column(name, lookup.table)), incomplete: false, stamp: '1:0' };
+  });
+  const result = await sqliteCompletionSuggestions(analysis, d);
+  expect(result.incomplete).toBe(true);
+  expect(result.items.map(item => item.label)).toEqual(['stable', 'id:4']);
+  const load = d.load.getMockImplementation()!;
+  d.load.mockImplementation(async lookup => ({ ...await load(lookup), incomplete: lookup.kind === 'columns' && lookup.table === 'b' }));
+  expect(await sqliteCompletionSuggestions(analysis, d)).toEqual({ items: [], incomplete: true });
+});
+
 it('表值函数只发送名称和前缀，接受字段后 SQLite 查询可执行', async () => {
   const marked = "SELECT j.va|suffix FROM main.json_each('[3,7]') j ORDER BY j.key";
   const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
