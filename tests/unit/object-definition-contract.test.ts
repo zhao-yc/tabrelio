@@ -46,4 +46,13 @@ describe('对象完整定义跨进程边界', () => {
     expect(() => assertObjectDefinitionOutput(result, triggered, 'mysql')).toThrow();
     expect(() => objectDefinitionInputSchema.parse({ ...request, triggerScope: { kind: 'body', object: 'table', table: 't', sql: 'SELECT 1' } })).toThrow();
   });
+  it('索引及触发器定义只通过准确的 SQLite DROP 类型交付', () => {
+    const drop = { ...request, database: 'main', dropKind: 'index' as const };
+    const result = { ...output, request: drop, database: 'main', temporary: false, kind: 'index', ddl: 'CREATE INDEX "表" ON subject(id)' };
+    expect(() => assertObjectDefinitionOutput(result, drop, 'sqlite')).not.toThrow();
+    expect(() => assertObjectDefinitionOutput(result, drop, 'mysql')).toThrow();
+    expect(() => assertObjectDefinitionOutput({ ...result, kind: 'trigger' }, drop, 'sqlite')).toThrow();
+    expect(() => assertObjectDefinitionOutput({ ...result, request: { ...request, database: 'main' } }, { ...request, database: 'main' }, 'sqlite')).toThrow();
+    expect(() => objectDefinitionInputSchema.parse({ ...drop, triggerScope: { kind: 'target', object: 'table' } })).toThrow();
+  });
 });

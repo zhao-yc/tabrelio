@@ -29,6 +29,8 @@ export const sqliteCompletionZh = {
   triggerView: 'SQLite INSTEAD OF 触发目标视图',
   triggerUpdateColumn: 'SQLite UPDATE OF 触发列',
   triggerRow: { new: 'SQLite 触发器 NEW 行', old: 'SQLite 触发器 OLD 行' },
+  dropObject: { table: 'SQLite 表', view: 'SQLite 视图', index: 'SQLite 索引', trigger: 'SQLite 触发器' },
+  dropOwner: '关联对象',
   variadicFunction: '可变',
   joinColumn: '连接两侧共有列',
   joinGroup: '连接组输出列',

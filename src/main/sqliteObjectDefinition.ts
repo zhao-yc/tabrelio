@@ -2,6 +2,7 @@ import { TextDecoder } from 'node:util';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
 import { objectDefinitionOutputSchema, type ObjectDefinitionInput, type ObjectDefinitionOutput } from '../shared/objectDefinition';
+import { sqliteDropObjectQuery } from './sqliteDropObjects';
 
 const definitionBytes = 2 * 1024 * 1024;
 const chunkBytes = 256 * 1024;
@@ -106,12 +107,22 @@ export async function readSqliteObjectDefinition(driver: SqliteDriverSession, in
         schemas = ['main'];
       }
     }
-    let target: { schema: 'main' | 'temp'; name: string; kind: 'table' | 'view'; bytes: number } | undefined;
+    const drop = input.dropKind;
+    if (drop) {
+      const lookup = sqliteDropObjectQuery(drop, database ?? (input.sessionId ? undefined : 'main'), { exact: input.table });
+      const matched = (await read(driver, lookup.sql, lookup.parameters, control))[0]?.[1];
+      if (matched !== 'main' && matched !== 'temp') throw Error('SQLite原目录没有该DROP对应的对象');
+      schemas = [matched];
+    }
+    let target: SchemaTextTarget | undefined;
     for (const schema of schemas) {
-      const row = (await read(driver, 'SELECT CAST(name AS BLOB),type,length(CAST(sql AS BLOB)) FROM ' + schema + ".sqlite_schema WHERE name = ? COLLATE NOCASE ORDER BY CASE WHEN type IN ('table','view') THEN 0 ELSE 1 END LIMIT 1", [input.table], control))[0];
+      const filter = drop ? ' AND type = ? LIMIT 1' : " ORDER BY CASE WHEN type IN ('table','view') THEN 0 ELSE 1 END LIMIT 1";
+      const row = (await read(driver, 'SELECT CAST(name AS BLOB),type,length(CAST(sql AS BLOB)) FROM ' + schema + '.sqlite_schema WHERE name = ? COLLATE NOCASE' + filter,
+        drop ? [input.table, drop] : [input.table], control))[0];
       if (!row) continue;
       const name = decode(row[0], encoding), kind = row[1], size = row[2];
-      if (kind !== 'table' && kind !== 'view') throw Error('SQLite对象定义只支持表和视图，索引及触发器不能作为目标');
+      if (kind !== 'table' && kind !== 'view' && kind !== 'index' && kind !== 'trigger' ||
+        (drop ? kind !== drop : kind !== 'table' && kind !== 'view')) throw Error('SQLite对象定义与请求的类型不符，索引及触发器需要相应SQL语境');
       if (!size || typeof size !== 'object' || size.type !== 'integer' || !/^\d+$/.test(size.value) || Number(size.value) === 0) throw Error('SQLite系统对象没有可读取的完整SQL定义');
       // UTF16的ASCII原文可能占用两倍磁盘字节，公共2MiB预算仍按最终UTF8完整DDL检查。
       const bytes = Number(size.value); if (bytes > definitionBytes * (encoding === 'utf-8' ? 1 : 2)) throw Error('SQLite对象定义超过2MiB，未截断返回');

@@ -31,6 +31,14 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   if (body) directory = body.directory;
   const fallbackRow = () => analysis.triggerBody?.fallback && !sqliteRowidName.test(name) ?
     sqliteFieldHover({ ...analysis, triggerBody: undefined, trigger: analysis.triggerBody.fallback }, directory) : undefined;
+  if (analysis.dropTarget) {
+    const { object, schema } = analysis.dropTarget;
+    const result = await directory.load({ kind: 'drop-objects', object, prefix: '', exact: name, ...(schema ? { schema } : {}) });
+    const entry = result.entries.find(entry => entry.kind === 'drop-object' && fold(entry.name) === fold(name));
+    if (result.incomplete || entry?.kind !== 'drop-object') return;
+    return markdown([sqliteCompletionZh.dropObject[entry.object], display(entry.schema) + '.' + display(entry.name),
+      ...(entry.owner ? [sqliteCompletionZh.dropOwner + '：' + display(entry.owner)] : [])]);
+  }
   if (analysis.columnType) {
     const { strict } = await sqliteColumnTypeMode(analysis.columnType, directory);
     if (strict === undefined) return;

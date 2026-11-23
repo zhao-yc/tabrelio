@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite 的表、视图、索引及触发器删除语句支持对象候选、悬停和完整只读定义。目录按原语句类型、显式库及当前会话的同名对象查找规则解析。Q01、O05 继续为部分覆盖。 [SQLite 对象查找规则](https://www.sqlite.org/lang_naming.html)
+
 2026-11-23 源码增量。SQLite 触发器的 `ON` 目标、`WHEN` 子查询和动作表支持查看完整定义，区分永久触发器所属库与临时触发器的原会话查找规则。Q01、O05 继续为部分覆盖。 [SQLite 触发器](https://www.sqlite.org/lang_createtrigger.html)
 
 2026-11-23 源码增量。SQLite 触发体复用普通 SQL 的表和字段补全，按实际触发器归属处理永久与临时库。同名 `NEW` 或 `OLD` 优先匹配真实来源字段，缺列时回退到触发行。Q01 继续为部分覆盖。 [SQLite 触发器](https://www.sqlite.org/lang_createtrigger.html)

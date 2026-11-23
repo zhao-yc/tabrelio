@@ -108,9 +108,11 @@ test('活动A查询在树选B及概要替换后仍由更多和右键读取A完�
         const triggerAction = scope && typeof scope === 'object' && 'kind' in scope && scope.kind === 'body' &&
           'object' in scope && scope.object === 'table' && 'table' in scope && scope.table === 'outside_control' &&
           Object.keys(scope).length === 3 && value.table === 'subject' && value.database === undefined;
-        if (value.connectionId !== state.pickerIds[0] || !['subject', 'subject_view'].includes(String(value.table)) ||
+        const drop = value.dropKind === 'index' && value.table === 'subject_named_index' || value.dropKind === 'trigger' && value.table === 'subject_named_trigger';
+        if (value.connectionId !== state.pickerIds[0] || (!drop && !['subject', 'subject_view'].includes(String(value.table))) ||
           value.database !== undefined && value.database !== 'main' || typeof value.taskId !== 'string' || !value.taskId.startsWith('object-definition:') ||
-          Object.keys(value).some(key => !['connectionId', 'sessionId', 'database', 'table', 'taskId', 'triggerScope'].includes(key)) ||
+          Object.keys(value).some(key => !['connectionId', 'sessionId', 'database', 'table', 'taskId', 'triggerScope', 'dropKind'].includes(key)) ||
+          (value.dropKind !== undefined && (!drop || !value.sessionId || scope !== undefined)) ||
           scope !== undefined && (!value.sessionId || !triggerTarget && !triggerAction)) return deny('对象读取不是准确A关系');
       }
       const observed = command.startsWith('query.') || command.startsWith('sessions.') || command === 'connections.save';
@@ -137,7 +139,7 @@ test('活动A查询在树选B及概要替换后仍由更多和右键读取A完�
   const readProofs: unknown[] = [];
   let tabId = '', connectionA = '';
   /** 两入口都经原UI；实际DDL取只读Monaco模型，并与Main原回包及原查询模型逐项核对。 */
-  const read = async (marked: string, gesture: 'more' | 'context', expected: { name: string; kind: 'table' | 'view'; schema: 'main' | 'temp'; marker: string; session?: string }) => {
+  const read = async (marked: string, gesture: 'more' | 'context', expected: { name: string; kind: ObjectDefinitionOutput['kind']; schema: 'main' | 'temp'; marker: string; session?: string }) => {
     const before = await at(marked), previous = facts(await step(audit), 'query.objectDefinition').length, stateBefore = await settings();
     if (gesture === 'more') await clickMenu(query(), text.entry);
     else {
@@ -160,7 +162,7 @@ test('活动A查询在树选B及概要替换后仍由更多和右键读取A完�
     check(); expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); expect(basename(directory)).toMatch(/^dbark-e2e-/);
     expect(await step(() => page.evaluate(async () => ({ connections: (await window.dbark.invoke('connections.list', {})).length, tabs: (await window.dbark.invoke('settings.get', {})).tabs.length, tasks: (await window.dbark.invoke('tasks.list', {})).length, history: (await window.dbark.invoke('history.list', {})).length })))).toEqual({ connections: 0, tabs: 0, tasks: 0, history: 0 });
     await step(() => page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; })); await step(() => page.reload()); await step(() => expect(page.locator('.app-statusbar')).toBeVisible());
-    for (const [index, path] of databases.entries()) { check(); const db = new DatabaseSync(path); try { db.exec(index ? "CREATE TABLE subject(b_only_marker TEXT DEFAULT 'OBJECT_DEFINITION_B_MAIN',id INTEGER PRIMARY KEY); INSERT INTO subject VALUES('B原始行',1); CREATE VIEW subject_view AS SELECT b_only_marker,id FROM subject WHERE b_only_marker <> 'OBJECT_DEFINITION_B_VIEW'; CREATE TABLE outside_control(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO outside_control VALUES(1,'B控制行');" : "CREATE TABLE subject(main_marker TEXT DEFAULT 'OBJECT_DEFINITION_A_MAIN',id INTEGER PRIMARY KEY); INSERT INTO subject VALUES('A原始行🚢',1); CREATE VIEW subject_view AS SELECT main_marker,id FROM subject WHERE main_marker <> 'OBJECT_DEFINITION_A_VIEW'; CREATE TABLE outside_control(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO outside_control VALUES(1,'A控制行🚢');"); } finally { db.close(); check(); } }
+    for (const [index, path] of databases.entries()) { check(); const db = new DatabaseSync(path); try { db.exec(index ? "CREATE TABLE subject(b_only_marker TEXT DEFAULT 'OBJECT_DEFINITION_B_MAIN',id INTEGER PRIMARY KEY); INSERT INTO subject VALUES('B原始行',1); CREATE VIEW subject_view AS SELECT b_only_marker,id FROM subject WHERE b_only_marker <> 'OBJECT_DEFINITION_B_VIEW'; CREATE TABLE outside_control(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO outside_control VALUES(1,'B控制行');" : "CREATE TABLE subject(main_marker TEXT DEFAULT 'OBJECT_DEFINITION_A_MAIN',id INTEGER PRIMARY KEY); INSERT INTO subject VALUES('A原始行🚢',1); CREATE VIEW subject_view AS SELECT main_marker,id FROM subject WHERE main_marker <> 'OBJECT_DEFINITION_A_VIEW'; CREATE TABLE outside_control(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO outside_control VALUES(1,'A控制行🚢'); CREATE INDEX subject_named_index ON subject(main_marker); CREATE TRIGGER subject_named_trigger AFTER UPDATE ON subject BEGIN SELECT 'OBJECT_DEFINITION_A_TRIGGER'; END;"); } finally { db.close(); check(); } }
     const canonical = databases.map(path => realpathSync(path)), baseline = disk(); await arm(canonical); armed = true;
     stage = '真实ConnectionDialog表单创建A和B，选择器仅授权两个准确文件';
     for (const [index, name] of [nameA, nameB].entries()) { await clickMenu(page.locator('.navigation-toolbar'), zh.common.newConnection); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true }); await step(() => form.getByLabel(zh.connections.text006, { exact: true }).fill(name)); await step(() => form.locator('select').selectOption('sqlite')); await step(() => form.getByRole('checkbox', { name: sqliteZh.readOnly, exact: true }).uncheck()); await step(() => form.getByRole('button', { name: sqliteZh.choose, exact: true }).click()); await step(() => expect(form.locator('input[readonly]')).toHaveValue(basename(databases[index]))); await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toHaveCount(0)); }
@@ -206,6 +208,14 @@ test('活动A查询在树选B及概要替换后仍由更多和右键读取A完�
     expect(triggerAction).not.toHaveProperty('database');
     await read('CREATE TEMP TRIGGER preview_trigger AFTER INSERT ON main.outside_control BEGIN SELECT s|.temp_marker FROM subject s; END;', 'more',
       { name: 'subject', kind: 'table', schema: 'temp', marker: 'OBJECT_DEFINITION_A_TEMP', session });
+    expect(await sessionState()).toEqual(beforeTransaction); expect(disk()).toEqual(baseline);
+    stage = 'DROP INDEX 和 DROP TRIGGER 打开完整只读定义，原对象保持';
+    await read('DROP INDEX IF EXISTS main.subject_named_in|dex;', 'more',
+      { name: 'subject_named_index', kind: 'index', schema: 'main', marker: 'CREATE INDEX subject_named_index', session });
+    expect(facts(await step(audit), 'query.objectDefinition').at(-1)?.request).toMatchObject({ dropKind: 'index', database: 'main' });
+    await read('DROP TRIGGER IF EXISTS subject_named_tri|gger;', 'more',
+      { name: 'subject_named_trigger', kind: 'trigger', schema: 'main', marker: 'OBJECT_DEFINITION_A_TRIGGER', session });
+    expect(facts(await step(audit), 'query.objectDefinition').at(-1)?.request).toMatchObject({ dropKind: 'trigger' });
     expect(await sessionState()).toEqual(beforeTransaction); expect(disk()).toEqual(baseline);
     stage = '实际关闭正在打开的预览，只取消所属读取且磁盘及原事务保持';
     const cancelModel = await at('SELECT s|.temp_marker FROM subject s'), cancelBefore = await step(audit); await clickMenu(query(), text.entry); await step(() => expect(dialog()).toBeVisible()); await step(() => page.keyboard.press('Escape')); await step(() => expect(dialog()).toHaveCount(0)); await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); expect(await model()).toEqual(cancelModel); expect(await sessionState()).toEqual(beforeTransaction); expect(disk()).toEqual(baseline);

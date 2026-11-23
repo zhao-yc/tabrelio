@@ -1,12 +1,13 @@
 import { z } from 'zod';
 import { definitionTextWithinBudget } from './definitionNavigation';
+import { sqliteSchemaObjectKind, type SqliteSchemaObjectKind } from './sqliteCompletion';
 
 export const objectDefinitionLimits = { active: 2, identifierUnits: 512, ddlBytes: 2 * 1024 * 1024, rowBytes: 2 * 1024 * 1024 + 16 * 1024 } as const;
 export const objectDefinitionTaskPrefix = 'object-definition:';
 export type SqliteDefinitionTriggerScope = { kind: 'target'; object: 'table' | 'view' } |
   { kind: 'body'; table: string; object: 'table' | 'view' };
-export interface ObjectDefinitionInput { connectionId: string; sessionId?: string; database?: string; table: string; taskId: string; triggerScope?: SqliteDefinitionTriggerScope; }
-export interface ObjectDefinitionOutput { request: ObjectDefinitionInput; database: string; name: string; kind: 'table' | 'view'; temporary: boolean; ddl: string; revision?: number; }
+export interface ObjectDefinitionInput { connectionId: string; sessionId?: string; database?: string; table: string; taskId: string; triggerScope?: SqliteDefinitionTriggerScope; dropKind?: SqliteSchemaObjectKind; }
+export interface ObjectDefinitionOutput { request: ObjectDefinitionInput; database: string; name: string; kind: SqliteSchemaObjectKind; temporary: boolean; ddl: string; revision?: number; }
 
 /** 仅拒绝无损Unicode无法表达的名称；合法补充平面字符不变成替换字符。 */
 export function objectDefinitionIdentifier(value: unknown): value is string {
@@ -46,10 +47,12 @@ const triggerScope = z.preprocess((value, context) => {
   z.object({ kind: z.literal('body'), table: identifier, object: z.enum(['table', 'view']) }).strict(),
 ]));
 export const objectDefinitionInputSchema = z.preprocess((value, context) => {
-  try { return fields(value, ['connectionId', 'table', 'taskId'], ['sessionId', 'database', 'triggerScope']); }
+  try { return fields(value, ['connectionId', 'table', 'taskId'], ['sessionId', 'database', 'triggerScope', 'dropKind']); }
   catch { context.addIssue({ code: 'custom', message: '对象定义参数无效' }); return z.NEVER; }
 }, z.object({ connectionId: id, sessionId: id.optional(), database: identifier.optional(), table: identifier, triggerScope: triggerScope.optional(),
-  taskId: id.refine(value => value.startsWith(objectDefinitionTaskPrefix) && value.length > objectDefinitionTaskPrefix.length, '对象定义任务编号前缀无效或缺少后缀') }).strict());
+  dropKind: sqliteSchemaObjectKind.optional(),
+  taskId: id.refine(value => value.startsWith(objectDefinitionTaskPrefix) && value.length > objectDefinitionTaskPrefix.length, '对象定义任务编号前缀无效或缺少后缀') })
+  .strict().refine(value => !(value.triggerScope && value.dropKind)));
 
 /** DDL沿用完整定义原文约束：2MiB、合法Unicode；NUL不做替换或截断。 */
 export function objectDefinitionDdl(value: unknown): value is string {
@@ -59,7 +62,7 @@ export function objectDefinitionDdl(value: unknown): value is string {
 export const objectDefinitionOutputSchema = z.preprocess((value, context) => {
   try { return fields(value, ['request', 'database', 'name', 'kind', 'temporary', 'ddl'], ['revision']); }
   catch { context.addIssue({ code: 'custom', message: '对象定义回包无效' }); return z.NEVER; }
-}, z.object({ request: objectDefinitionInputSchema, database: identifier, name: identifier, kind: z.enum(['table', 'view']), temporary: z.boolean(), ddl: z.string().refine(objectDefinitionDdl, '对象定义不完整或超限'), revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional() }).strict());
+}, z.object({ request: objectDefinitionInputSchema, database: identifier, name: identifier, kind: sqliteSchemaObjectKind, temporary: z.boolean(), ddl: z.string().refine(objectDefinitionDdl, '对象定义不完整或超限'), revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional() }).strict());
 
 /** SQLite目录只按ASCII折叠，非ASCII字符不套用JavaScript的Unicode小写规则。 */
 function sqliteFold(value: string): string { return value.replace(/[A-Z]/g, character => character.toLowerCase()); }
@@ -71,9 +74,11 @@ export function assertObjectDefinitionOutput(value: unknown, input: ObjectDefini
     const request = objectDefinitionInputSchema.parse(output.request);
     const expected = objectDefinitionInputSchema.parse(input);
     if (request.connectionId !== expected.connectionId || request.sessionId !== expected.sessionId || request.database !== expected.database ||
-      request.table !== expected.table || request.taskId !== expected.taskId || JSON.stringify(request.triggerScope) !== JSON.stringify(expected.triggerScope)) throw Error();
+      request.table !== expected.table || request.taskId !== expected.taskId || request.dropKind !== expected.dropKind ||
+      JSON.stringify(request.triggerScope) !== JSON.stringify(expected.triggerScope)) throw Error();
     const sqlite = dialect === 'sqlite';
-    if (!objectDefinitionIdentifier(output.database) || !objectDefinitionIdentifier(output.name) || (sqlite ? sqliteFold(output.name) !== sqliteFold(expected.table) : output.name !== expected.table) || expected.database !== undefined && (sqlite ? sqliteFold(output.database) !== sqliteFold(expected.database) : output.database !== expected.database) || sqlite && !['main', 'temp'].includes(output.database) || !['table', 'view'].includes(output.kind as string) || typeof output.temporary !== 'boolean' || output.temporary && !expected.sessionId || !objectDefinitionDdl(output.ddl)) throw Error();
+    if (!objectDefinitionIdentifier(output.database) || !objectDefinitionIdentifier(output.name) || (sqlite ? sqliteFold(output.name) !== sqliteFold(expected.table) : output.name !== expected.table) || expected.database !== undefined && (sqlite ? sqliteFold(output.database) !== sqliteFold(expected.database) : output.database !== expected.database) || sqlite && !['main', 'temp'].includes(output.database) || typeof output.temporary !== 'boolean' || output.temporary && !expected.sessionId || !objectDefinitionDdl(output.ddl)) throw Error();
+    if (expected.dropKind ? !sqlite || output.kind !== expected.dropKind : output.kind !== 'table' && output.kind !== 'view') throw Error();
     if (sqlite && (output.temporary !== (output.database === 'temp') || !expected.sessionId && output.database !== 'main')) throw Error();
     if (expected.triggerScope && (!sqlite || expected.triggerScope.kind === 'target' && output.kind !== expected.triggerScope.object)) throw Error();
     if (!sqlite && output.temporary && output.kind !== 'table') throw Error();

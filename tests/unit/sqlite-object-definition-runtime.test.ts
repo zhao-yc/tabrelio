@@ -44,6 +44,28 @@ function execute(app: SqliteRuntime, sessionId: string, sql: string) { return ap
 function definition(app: SqliteRuntime, connectionId: string, table = 'subject', sessionId?: string, database?: string, taskId = objectDefinitionTaskPrefix + ++serial): Promise<ObjectDefinitionOutput> { return app.request('query.objectDefinition', { connectionId, table, taskId, ...(sessionId ? { sessionId } : {}), ...(database ? { database } : {}) }); }
 
 describe('SQLite对象定义真实只读运行时', () => {
+  it('DROP 定义能准确区分同名索引、触发器和关系，按原会话选择实际对象', async () => {
+    const p = profile(`CREATE TABLE subject(id INTEGER UNIQUE);
+      CREATE INDEX search_key ON subject(id);
+      CREATE TRIGGER audit AFTER INSERT ON subject BEGIN SELECT 1; END;`);
+    const { app, events } = runtime([p]), session = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, session.sessionId, 'BEGIN; CREATE TEMP TABLE search_key(temp_value); CREATE TEMP VIEW subject AS SELECT 1 AS temp_value;');
+    const before = await app.request('query.completionState', session), count = events.length;
+    const read = (table: string, dropKind: 'table' | 'view' | 'index' | 'trigger', database?: 'main' | 'temp') =>
+      app.request('query.objectDefinition', { connectionId: p.id, sessionId: session.sessionId, table, dropKind, ...(database ? { database } : {}),
+        taskId: objectDefinitionTaskPrefix + ++serial });
+    await expect(read('subject', 'table')).rejects.toThrow('DROP对应');
+    expect(await read('subject', 'table', 'main')).toMatchObject({ database: 'main', kind: 'table' });
+    expect(await read('subject', 'view')).toMatchObject({ database: 'temp', kind: 'view' });
+    expect(await read('search_key', 'index')).toMatchObject({ database: 'main', kind: 'index', ddl: 'CREATE INDEX search_key ON subject(id)' });
+    expect(await read('audit', 'trigger')).toMatchObject({ database: 'main', kind: 'trigger', ddl: 'CREATE TRIGGER audit AFTER INSERT ON subject BEGIN SELECT 1; END' });
+    await expect(read('sqlite_autoindex_subject_1', 'index', 'main')).rejects.toThrow('DROP对应');
+    expect(await app.request('query.completionState', session)).toEqual(before);
+    expect(await app.request('query.sessionState', session)).toMatchObject({ transactionOpen: true });
+    expect(events).toHaveLength(count);
+    await app.request('query.transaction', { ...session, action: 'rollback' });
+  });
+
   it('同一会话内先定位实际触发目标，再查动作关联的永久或临时定义', async () => {
     const p = profile('CREATE TABLE owner(main_id INTEGER); CREATE TABLE subject(main_value TEXT); CREATE VIEW subject_view AS SELECT main_value FROM subject;'),
       { app, events } = runtime([p]), session = await app.request('sessions.open', { connectionId: p.id });

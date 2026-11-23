@@ -1,13 +1,13 @@
 import { completionLimits } from './sqlCompletion';
-import { sqliteCompletionLimits } from './sqliteCompletion';
+import { sqliteCompletionLimits, type SqliteSchemaObjectKind } from './sqliteCompletion';
 import type { SqliteDefinitionTriggerScope } from './objectDefinition';
 
-export type PhysicalObjectTokenContext = { status: 'blocked'; reason: string } | { status: 'ready'; tokens: { start: number; end: number; value: string; kind: string; closed?: boolean }[]; target: { start: number; end: number }; defaultDatabase?: 'main' | 'temp'; triggerScope?: SqliteDefinitionTriggerScope };
+export type PhysicalObjectTokenContext = { status: 'blocked'; reason: string } | { status: 'ready'; tokens: { start: number; end: number; value: string; kind: string; closed?: boolean }[]; target: { start: number; end: number }; defaultDatabase?: 'main' | 'temp'; triggerScope?: SqliteDefinitionTriggerScope; dropKind?: SqliteSchemaObjectKind };
 
 export interface PhysicalObjectRange { start: number; end: number; }
 export type PhysicalObjectAnalysis = { status: 'blocked'; reason: string } | {
   status: 'ready'; target: PhysicalObjectRange;
-  object: { table: string; database?: string; tableRange: PhysicalObjectRange; databaseRange?: PhysicalObjectRange; defaultDatabase?: 'main' | 'temp'; triggerScope?: SqliteDefinitionTriggerScope };
+  object: { table: string; database?: string; tableRange: PhysicalObjectRange; databaseRange?: PhysicalObjectRange; defaultDatabase?: 'main' | 'temp'; triggerScope?: SqliteDefinitionTriggerScope; dropKind?: SqliteSchemaObjectKind };
 };
 
 /** 只接受固定字段的普通记录；线程不得夹带URI、SQL、动作或目录结果。 */
@@ -27,12 +27,15 @@ export function validPhysicalObjectTokens(value: unknown, source: string, offset
   const qualified = Object.hasOwn(object, 'database');
   const inferred = Object.hasOwn(object, 'defaultDatabase');
   const hasTrigger = Object.hasOwn(object, 'triggerScope');
-  const keys = qualified ? 'database,databaseRange,table,tableRange' : inferred ? 'defaultDatabase,table,tableRange' : 'table,tableRange';
-  if (!record(object, keys + (hasTrigger ? ',triggerScope' : ''))) return false;
+  const hasDrop = Object.hasOwn(object, 'dropKind');
+  const keys = [...(qualified ? ['database', 'databaseRange'] : inferred ? ['defaultDatabase'] : []), ...(hasDrop ? ['dropKind'] : []),
+    'table', 'tableRange', ...(hasTrigger ? ['triggerScope'] : [])];
+  if (!record(object, keys.join(','))) return false;
   const name = (value: unknown): value is string => typeof value === 'string' && (dialect === 'mysql' ? value.length > 0 && value.length <= 64 && !/[\0\ud800-\udfff]/.test(value) : value.length > 0 && value.length <= sqliteCompletionLimits.nameUnits && !value.includes('\0') && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value));
   if (!name(object.table) || qualified && (!name(object.database) || dialect === 'sqlite' && !['main', 'temp'].includes(object.database.replace(/[A-Z]/g, character => character.toLowerCase())))) return false;
   if (bytes(object.table) + (qualified ? bytes(object.database as string) : 0) > 4096) return false;
   if (context.status !== 'ready') return false;
+  if (hasDrop !== !!context.dropKind || hasDrop && (dialect !== 'sqlite' || object.dropKind !== context.dropKind || qualified !== !!context.defaultDatabase)) return false;
   const expectedScope = context.triggerScope, trigger = object.triggerScope;
   if (hasTrigger !== !!expectedScope || expectedScope && (dialect !== 'sqlite' ||
     !record(trigger, expectedScope.kind === 'body' ? 'kind,object,table' : 'kind,object') ||
@@ -48,6 +51,7 @@ export function validPhysicalObjectTokens(value: unknown, source: string, offset
   const tokenAt = (value: unknown) => record(value, 'end,start') && Number.isSafeInteger(value.start) && Number.isSafeInteger(value.end) ? tokens.find(token => token.closed !== false && ['id', 'word', 'identifier'].includes(token.kind) && token.start === value.start && token.end === value.end) : undefined;
   const target = tokenAt(value.target), table = tokenAt(object.tableRange), database = qualified ? tokenAt(object.databaseRange) : undefined;
   if (!target || target.start !== origin.start || target.end !== origin.end || !table || table.value !== object.table || qualified && (!database || database.value !== object.database)) return false;
+  if (hasDrop && table !== target) return false;
   // 限定名必须保持真实的两段相邻token，中间必须是方言词法确认的唯一点号。
   if (database) {
     const index = tokens.indexOf(database);

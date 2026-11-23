@@ -4,7 +4,7 @@ import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 import { sqliteTableImportAffinity } from '../shared/sqliteTableImport';
 import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
 
-export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'index' | 'collation' | 'function' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; snippet?: true; }
+export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'index' | 'trigger' | 'collation' | 'function' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; snippet?: true; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
 const strictColumnTypes = ['INTEGER', 'INT', 'REAL', 'TEXT', 'BLOB', 'ANY'];
 const ordinaryColumnTypes = [...strictColumnTypes, 'NUMERIC', 'DECIMAL', 'BOOLEAN', 'DATE', 'DATETIME', 'CHAR', 'VARCHAR', 'DOUBLE PRECISION', 'FLOAT', 'BIGINT'];
@@ -117,6 +117,19 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   const body = triggerBody ? await resolveSqliteTriggerBody(triggerBody, directory) : undefined;
   if (body?.status === 'unavailable') return { items, incomplete: body.incomplete };
   if (body) directory = body.directory;
+  if (analysis.dropTarget) {
+    const { object, schema } = analysis.dropTarget;
+    if (!schema) for (const namespace of ['main', 'temp']) add({
+      label: namespace, kind: 'database', insertText: quote(namespace) + '.', detail: text.schema, trigger: true,
+    });
+    const catalog = await directory.load({ kind: 'drop-objects', object, prefix: analysis.target.prefix, ...(schema ? { schema } : {}) });
+    incomplete ||= catalog.incomplete;
+    for (const entry of catalog.entries) if (entry.kind === 'drop-object') add({
+      label: entry.name, kind: entry.object, insertText: quote(entry.name),
+      detail: [text.dropObject[entry.object], entry.schema, ...(entry.owner ? [text.dropOwner + ' ' + entry.owner] : [])].join(' · '),
+    });
+    return { items, incomplete };
+  }
   if (analysis.columnType) {
     const { strict, incomplete } = await sqliteColumnTypeMode(analysis.columnType, directory);
     if (strict !== undefined) for (const name of strict ? strictColumnTypes : ordinaryColumnTypes) {

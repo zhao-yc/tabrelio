@@ -48,6 +48,8 @@ const scenarios = [
   { verb: 'TRIGGER ACTION', prefix: 'CREATE TRIGGER editor_trigger AFTER UPDATE OF value ON subject WHEN OLD.value IS NOT NEW.value BEGIN UPDATE trigger_log SET ',
     typed: 'ol', column: 'old_value', trail: ' = OLD.value, new_value = NEW.value; END', incoming: false,
     row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'editor_trigger' },
+  { verb: 'DROP INDEX', prefix: 'DROP INDEX IF EXISTS main.', typed: 'subject_', column: 'subject_by_value',
+    trail: '', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'subject_by_value' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
@@ -63,8 +65,9 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
   const triggerTarget = scenario.verb === 'TRIGGER TARGET', triggerRow = scenario.verb === 'TRIGGER ROW';
   const triggerAction = scenario.verb === 'TRIGGER ACTION';
   const isTrigger = triggerTarget || triggerRow || triggerAction;
+  const dropIndex = scenario.verb === 'DROP INDEX';
   const targetTable = strictType ? 'strict_subject' : triggerAction ? 'trigger_log' : 'subject';
-  const lookupKind = foreignTable || triggerTarget ? 'relations' : strictType ? 'table-options' : scenario.verb === 'INDEXED BY' ? 'indexes' :
+  const lookupKind = dropIndex ? 'drop-objects' : foreignTable || triggerTarget ? 'relations' : strictType ? 'table-options' : scenario.verb === 'INDEXED BY' ? 'indexes' :
     scenario.verb === '函数' ? 'functions' : scenario.verb === 'COLLATE' ? 'collations' : 'columns';
   const alterColumn = scenario.verb === 'RENAME COLUMN' ? 'rename' : scenario.verb === 'DROP COLUMN' ? 'drop' : undefined;
   const { prefix, trail, typed, column } = scenario;
@@ -96,11 +99,12 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         .get(foreignChild, 'main') : undefined;
       const trigger = isTrigger ? db.prepare("SELECT name,tbl_name AS target FROM sqlite_schema WHERE name='editor_trigger' AND type='trigger'").get() : undefined;
       const triggerLog = isTrigger ? db.prepare('SELECT old_value,new_value FROM trigger_log').all() : undefined;
+      const dropIndexRemaining = dropIndex ? !!db.prepare("SELECT name FROM sqlite_schema WHERE name='subject_by_value' AND type='index'").get() : undefined;
       return { row: db.prepare('SELECT id,value,virtual_value FROM subject').get(), other: db.prepare('SELECT * FROM excluded').get(),
         inbox: db.prepare('SELECT * FROM inbox').get(), ...(view ? { view: { sql: view.sql, rows: db.prepare('SELECT display_value FROM completion_view').all() } } : {}),
         ...(indexed ? { indexed } : {}), ...(altered ? { altered } : {}), ...(addedColumn ? { addedColumn } : {}),
         ...(declaredColumn ? { declaredColumn } : {}), ...(foreignKey ? { foreignKey } : {}), ...(trigger ? { trigger } : {}),
-        ...(triggerLog ? { triggerLog } : {}) };
+        ...(triggerLog ? { triggerLog } : {}), ...(dropIndex ? { dropIndexRemaining } : {}) };
     }
     finally { db.close(); }
   };
@@ -131,6 +135,10 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
           if (command === 'sqlite.completion') {
             if (setup.createType) throw Error('建表声明类型无需访问目录');
             if ('sql' in input) throw Error('目录接收了编辑器原文');
+            if (setup.dropIndex && input.kind !== 'stamp' && (input.kind !== 'drop-objects' || input.object !== 'index' ||
+              input.schema !== 'main' || (input.exact === undefined ? input.prefix !== setup.typed : input.prefix !== '' || input.exact !== setup.catalogName))) {
+              throw Error('DROP 目录越出本例索引');
+            }
             if (setup.isTrigger && input.kind !== 'stamp') {
               if (setup.triggerAction && input.kind === 'trigger-owner') {
                 if (input.triggerTarget !== 'table' || input.table !== 'subject' || input.prefix !== '' || 'schema' in input) throw Error('触发体归属越出实际目标');
@@ -156,7 +164,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
             if (input.kind === 'functions' || input.kind === 'collations') {
               const indexFunction = setup.createIndex && input.kind === 'functions' && input.deterministicOnly === true && input.prefix === setup.typed;
               if (!indexFunction && (input.kind !== setup.lookupKind || input.prefix !== setup.catalogName && input.prefix !== setup.typed) || 'table' in input || 'schema' in input) throw Error('连接目录越出本例');
-            } else if (!setup.foreignChild && !setup.triggerTarget && input.kind === setup.lookupKind && (input.table !== setup.targetTable || input.schema !== 'main' ||
+            } else if (!setup.foreignChild && !setup.triggerTarget && !setup.dropIndex && input.kind === setup.lookupKind && (input.table !== setup.targetTable || input.schema !== 'main' ||
               setup.createIndex && input.indexTable !== true || input.alterColumn !== setup.alterColumn ||
               input.kind === 'table-options' && input.prefix !== '')) throw Error('目录越出真实目标');
           }
@@ -169,7 +177,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         }
         return entry(event, payload);
       });
-    }, { filePath, connectionId, accepted, lookupKind, targetTable, typed, catalogName: column, createType, foreignChild, foreignColumn, triggerTarget, isTrigger, triggerAction,
+    }, { filePath, connectionId, accepted, lookupKind, targetTable, typed, catalogName: column, createType, foreignChild, foreignColumn, triggerTarget, isTrigger, triggerAction, dropIndex,
       createIndex: scenario.verb === 'CREATE INDEX', alterColumn });
 
     await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
@@ -215,7 +223,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     expect(requests.filter(input => input.kind !== 'stamp')).toEqual(createType ? [] : [
       ...(foreignColumn ? [expect.objectContaining({ kind: 'table-options', table: foreignChild, prefix: '' })] : []),
       ...(triggerAction ? [expect.objectContaining({ kind: 'trigger-owner', triggerTarget: 'table', table: 'subject', prefix: '' })] : []),
-      triggerTarget ? expect.objectContaining({ kind: 'relations', schema: 'main', triggerTarget: 'table', prefix: typed }) :
+      dropIndex ? expect.objectContaining({ kind: 'drop-objects', object: 'index', schema: 'main', prefix: typed }) :
+        triggerTarget ? expect.objectContaining({ kind: 'relations', schema: 'main', triggerTarget: 'table', prefix: typed }) :
         foreignTable ? expect.objectContaining({ kind: 'relations', schema: 'main', foreignKey: true, prefix: typed }) :
         lookupKind === 'functions' || lookupKind === 'collations' ? expect.objectContaining({ kind: lookupKind, prefix: typed }) :
         expect.objectContaining({ kind: lookupKind, table: targetTable, schema: 'main', prefix: strictType ? '' : typed,
@@ -246,6 +255,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     else if (triggerTarget) await expect(hover).toContainText('SQLite 触发目标表');
     else if (triggerRow) await expect(hover).toContainText('SQLite 触发器 NEW 行');
     else if (triggerAction) await expect(hover).toContainText('"main"."trigger_log"');
+    else if (dropIndex) await expect(hover).toContainText('"main"."subject_by_value"');
     else await expect(hover).toContainText('"main"."subject"');
     await page.keyboard.press('Escape');
     expect((await snapshot()).filter(fact => fact.command === 'query.execute' || fact.command === 'sessions.open')).toEqual([]);
@@ -260,7 +270,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     const declaredColumn = createType ? { declaredColumn: { name: 'amount', type: scenario.output, notnull: 1 } } : {};
     const foreignKey = foreignChild ? { foreignKey: { parent: 'subject', child: foreignField, target: 'id', onDelete: scenario.output } } : {};
     const trigger = isTrigger ? { trigger: { name: scenario.output, target: 'subject' } } : {};
-    await expect.poll(disk).toEqual({ ...before, row: scenario.row, ...created, ...altered, ...addedColumn, ...declaredColumn, ...foreignKey, ...trigger });
+    await expect.poll(disk).toEqual({ ...before, row: scenario.row, ...created, ...altered, ...addedColumn, ...declaredColumn, ...foreignKey, ...trigger,
+      ...(dropIndex ? { dropIndexRemaining: false } : {}) });
     if (foreignChild) {
       const integrity = new DatabaseSync(filePath, { enableForeignKeyConstraints: true });
       try {
@@ -283,7 +294,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     }
     const grid = query.locator('.result-body').getByRole('grid');
     if (scenario.verb !== 'CREATE VIEW' && scenario.verb !== 'CREATE INDEX' && !alterColumn && !strictType && !createType && !foreignChild &&
-      !isTrigger) await expect(grid).toContainText(scenario.output);
+      !isTrigger && !dropIndex) await expect(grid).toContainText(scenario.output);
     if (lookupKind === 'collations') {
       await expect(grid.getByRole('row').nth(1).getByText('a', { exact: true })).toBeVisible();
       await expect(grid.getByRole('row').nth(2).getByText('Z', { exact: true })).toBeVisible();
@@ -304,7 +315,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
 
 for (const scenario of scenarios) {
   test.describe(scenario.verb, () => {
-    const enabled = scenario.verb.startsWith('TRIGGER ') ? process.env.DBARK_SQLITE_TRIGGER_COMPLETION_NATIVE === '1' :
+    const enabled = scenario.verb === 'DROP INDEX' ? process.env.DBARK_SQLITE_DROP_COMPLETION_NATIVE === '1' :
+      scenario.verb.startsWith('TRIGGER ') ? process.env.DBARK_SQLITE_TRIGGER_COMPLETION_NATIVE === '1' :
       scenario.verb === 'FOREIGN KEY TABLE' || scenario.verb === 'FOREIGN KEY COLUMN' ? process.env.DBARK_SQLITE_FOREIGN_KEY_COMPLETION_NATIVE === '1' :
       scenario.verb === 'STRICT TYPE' || scenario.verb === 'CREATE TYPE' ? process.env.DBARK_SQLITE_COLUMN_TYPE_COMPLETION_NATIVE === '1' :
       scenario.verb === 'RENAME COLUMN' || scenario.verb === 'DROP COLUMN' ? process.env.DBARK_SQLITE_ALTER_TABLE_COMPLETION_NATIVE === '1' :

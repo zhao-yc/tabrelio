@@ -2,6 +2,7 @@ import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
 import { foldSqliteCompletionName as fold, sqliteCompletionLimits, sqliteCompletionOutputSchema, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput, type SqliteForeignKeySelection } from '../shared/sqliteCompletion';
 import { inspectSqliteTableColumnCollations, sqliteTableRebuildPlanLimits } from '../shared/sqliteTableRebuildPlan';
+import { sqliteDropObjectQuery } from './sqliteDropObjects';
 
 interface CompletionControl { check(): void; sessionRevision?: number; }
 /** 元数据读完和取消检查共用原driver，绝不创建查询任务、触碰事务边界或读取用户行值。 */
@@ -213,6 +214,14 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
       const entry = functions.get(name)!;
       entry.signatures.sort((a, b) => a.arity - b.arity);
       if (!append(entry)) break;
+    }
+  } else if (input.kind === 'drop-objects') {
+    const { sql, parameters } = sqliteDropObjectQuery(input.object, input.schema, input.exact === undefined ? { prefix: input.prefix } : { exact: input.exact });
+    const result = await read(driver, sql, parameters, control, 257);
+    incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
+    for (const [name, schema, owner] of result.rows.slice(0, sqliteCompletionLimits.entries)) {
+      if (typeof name !== 'string' || schema !== 'main' && schema !== 'temp' || owner !== null && typeof owner !== 'string') throw Error('SQLite删除对象目录无效');
+      if (!append({ kind: 'drop-object', object: input.object, name, schema, ...(owner === null ? {} : { owner }) })) break;
     }
   } else if (input.kind === 'trigger-owner') {
     // 先按原会话定位，再核对触发目标类型。同名临时对象遮蔽时不回退到主库。

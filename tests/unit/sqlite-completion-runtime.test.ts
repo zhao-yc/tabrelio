@@ -59,6 +59,41 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('DROP 目录按语句类型、原会话遮蔽和显式限定选择实际对象', async () => {
+    const p = profile('DROP目录', `
+      CREATE TABLE main_table(id INTEGER UNIQUE);
+      CREATE TABLE hidden_table(id INTEGER);
+      CREATE VIEW hidden_view AS SELECT 1 AS id;
+      CREATE INDEX namesake_index ON main_table(id);
+      CREATE TRIGGER namesake_trigger AFTER INSERT ON main_table BEGIN SELECT 1; END;
+      CREATE VIRTUAL TABLE virtual_target USING fts5(value);
+    `);
+    const { app, events } = runtime([p]), session = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, session.sessionId, `BEGIN;
+      CREATE TEMP VIEW hidden_table AS SELECT 1 AS temp_id;
+      CREATE TEMP TABLE hidden_view(temp_id INTEGER);
+      CREATE TEMP TABLE namesake_index(temp_id INTEGER);
+      CREATE TEMP TRIGGER namesake_trigger AFTER INSERT ON main.main_table BEGIN SELECT 1; END;
+    `);
+    const before = await app.request('query.completionState', session), count = events.length;
+    const read = async (lookup: OptionalPrefix<SqliteCompletionLookup>) => (await completion(app, p.id, lookup, session.sessionId)).entries;
+    expect(await read({ kind: 'drop-objects', object: 'table', exact: 'hidden_table' })).toEqual([]);
+    expect(await read({ kind: 'drop-objects', object: 'view', exact: 'hidden_view' })).toEqual([]);
+    expect(await read({ kind: 'drop-objects', object: 'table', schema: 'main', exact: 'HIDDEN_TABLE' }))
+      .toEqual([{ kind: 'drop-object', object: 'table', schema: 'main', name: 'hidden_table' }]);
+    expect(await read({ kind: 'drop-objects', object: 'index', prefix: 'namesake' }))
+      .toEqual([{ kind: 'drop-object', object: 'index', schema: 'main', name: 'namesake_index', owner: 'main_table' }]);
+    expect(await read({ kind: 'drop-objects', object: 'trigger', prefix: 'namesake' }))
+      .toEqual([{ kind: 'drop-object', object: 'trigger', schema: 'temp', name: 'namesake_trigger', owner: 'main_table' }]);
+    expect(await read({ kind: 'drop-objects', object: 'index', prefix: 'sqlite_' })).toEqual([]);
+    expect(await read({ kind: 'drop-objects', object: 'table', prefix: 'virtual_target' }))
+      .toEqual([{ kind: 'drop-object', object: 'table', schema: 'main', name: 'virtual_target' }]);
+    expect(await app.request('query.completionState', session)).toEqual(before);
+    expect(await app.request('query.sessionState', session)).toMatchObject({ transactionOpen: true });
+    expect(events).toHaveLength(count);
+    await execute(app, session.sessionId, 'ROLLBACK');
+  });
+
   it('触发目标区分普通表与 INSTEAD OF 视图，未限定名按原会话判断遮蔽', async () => {
     const p = profile('触发器目标', 'CREATE TABLE subject(main_id INTEGER); CREATE VIEW subject_view AS SELECT * FROM subject; ' +
       'CREATE VIRTUAL TABLE subject_search USING fts5(label);');

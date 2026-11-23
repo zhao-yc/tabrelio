@@ -146,7 +146,8 @@ export class ObjectDefinitionReader {
       if (this.dialect !== 'sqlite' && database === undefined) throw new ReaderFailure(text.context);
       const input = objectDefinitionInputSchema.parse({ connectionId: this.scope.connectionId, ...(this.scope.sessionId ? { sessionId: this.scope.sessionId } : {}),
         ...(database === undefined ? {} : { database }), table: analysis.object.table, taskId: objectDefinitionTaskPrefix + this.ports.id(),
-        ...(analysis.object.triggerScope ? { triggerScope: analysis.object.triggerScope } : {}) });
+        ...(analysis.object.triggerScope ? { triggerScope: analysis.object.triggerScope } : {}),
+        ...(analysis.object.dropKind ? { dropKind: analysis.object.dropKind } : {}) });
       this.check(operation);
       const pending: Pending = { id: input.taskId, sent: false, settled: false, work: Promise.resolve(undefined as unknown as ObjectDefinitionOutput) };
       operation.pending = pending;

@@ -88,6 +88,8 @@ export function createSqliteCompletionProvider(ports: Ports) {
               if (entry.kind === 'function' || entry.kind === 'collation') return true;
               if (query.kind === 'trigger-owner') return entry.kind !== query.triggerTarget || fold(entry.name) !== fold(query.table);
               if (query.schema !== undefined && entry.schema !== query.schema) return true;
+              if (query.kind === 'drop-objects') return entry.kind !== 'drop-object' || entry.object !== query.object ||
+                (query.exact !== undefined ? fold(entry.name) !== fold(query.exact) : !fold(entry.name).startsWith(fold(query.prefix)));
               if (query.kind === 'table-options') return entry.kind !== 'table-options' || fold(entry.name) !== fold(query.table);
               if (query.kind === 'relations') return query.triggerTarget ? entry.kind !== query.triggerTarget :
                 entry.kind !== 'table' && (query.indexTable || query.alterTable || query.foreignKey || entry.kind !== 'view');

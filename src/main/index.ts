@@ -2639,7 +2639,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'query.objectDefinition': {
       columnsMain.assertCapturedOwner(columns);
       const original = objectDefinitionInputSchema.parse(input), profile = store.resolveConnection(original.connectionId), revision = store.connectionRevision();
-      if (original.triggerScope && profile.dialect !== 'sqlite') throw Error('触发器目录范围仅支持SQLite连接');
+      if ((original.triggerScope || original.dropKind) && profile.dialect !== 'sqlite') throw Error('此对象目录范围仅支持SQLite连接');
       const session = original.sessionId ? sessions.get(original.sessionId) : undefined;
       if (original.sessionId && (!session || session.connectionId !== original.connectionId)) throw Error('对象结构原会话与连接不符');
       // 从真实文档、已存连接与准确会话捕获身份；等待和IPC最终发布时都重新核对。
