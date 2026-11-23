@@ -34,10 +34,10 @@ function supportsAlterNullability(version: string): boolean {
   return !!match && (Number(match[1]) > 3 || Number(match[1]) === 3 && Number(match[2]) >= 53);
 }
 
-function tableIdentity(driver: SqliteDriverSession, input: { schema?: 'main' | 'temp'; table: string }, control: CompletionControl) {
+function tableIdentity(driver: SqliteDriverSession, input: { schema?: 'main' | 'temp'; table: string }, control: CompletionControl, includeOptions = false) {
   // 先定位实际关系再看类型，避免临时视图或虚拟表遮蔽时误读 main 的目录。
   const scope = input.schema ? 'schema = ?' : "schema IN ('main','temp')";
-  return read(driver, 'SELECT name,schema,type FROM pragma_table_list() WHERE ' + scope + " AND name = ? COLLATE NOCASE ORDER BY schema DESC LIMIT 1", [...(input.schema ? [input.schema] : []), input.table], control, 1);
+  return read(driver, 'SELECT name,schema,type' + (includeOptions ? ',strict' : '') + ' FROM pragma_table_list() WHERE ' + scope + " AND name = ? COLLATE NOCASE ORDER BY schema DESC LIMIT 1", [...(input.schema ? [input.schema] : []), input.table], control, 1);
 }
 
 const flag = (value: SqliteValue): boolean | undefined => value && typeof value === 'object' && value.type === 'integer' &&
@@ -134,6 +134,13 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
       const entry = functions.get(name)!;
       entry.signatures.sort((a, b) => a.arity - b.arity);
       if (!append(entry)) break;
+    }
+  } else if (input.kind === 'table-options') {
+    const { rows: [target] } = await tableIdentity(driver, input, control, true);
+    if (target?.[2] === 'table' && typeof target[0] === 'string' && !/^sqlite_/i.test(target[0])) {
+      const [name, schema, , rawStrict] = target, strict = flag(rawStrict);
+      if (typeof name !== 'string' || schema !== 'main' && schema !== 'temp' || strict === undefined) throw Error('SQLite表类型模式无效');
+      append({ kind: 'table-options', name, schema, strict });
     }
   } else if (input.kind === 'collations') {
     // 直接读原连接的规则目录，绕过同名表遮蔽，不调用规则，也不执行编辑器里的表达式。

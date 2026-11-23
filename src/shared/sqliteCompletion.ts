@@ -23,6 +23,7 @@ export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('indexes'), schema: schema.optional(), table: name }).strict(),
   z.object({ ...base, kind: z.literal('functions'), prefix: base.prefix.regex(/^[a-z][a-z0-9_]*$/i), deterministicOnly: z.literal(true).optional() }).strict(),
   z.object({ ...base, kind: z.literal('collations') }).strict(),
+  z.object({ ...base, kind: z.literal('table-options'), schema: schema.optional(), table: name, prefix: z.literal('') }).strict(),
   z.object({ ...base, kind: z.literal('stamp') }).strict(),
 ]);
 export const sqliteCompletionEntrySchema = z.discriminatedUnion('kind', [
@@ -31,6 +32,7 @@ export const sqliteCompletionEntrySchema = z.discriminatedUnion('kind', [
   z.object({ name, kind: z.literal('index'), schema, table: name, unique: z.boolean(), partial: z.boolean(), origin: z.enum(['c', 'u', 'pk']) }).strict(),
   z.object({ name: functionName, kind: z.literal('function'), signatures: functionSignatures }).strict(),
   z.object({ name, kind: z.literal('collation') }).strict(),
+  z.object({ name, kind: z.literal('table-options'), schema, strict: z.boolean() }).strict(),
 ]);
 export const sqliteCompletionOutputSchema = z.object({ entries: z.array(sqliteCompletionEntrySchema).max(sqliteCompletionLimits.entries), incomplete: z.boolean(), stamp: z.string().regex(/^-?\d{1,10}:-?\d{1,10}$/), sessionRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional() }).strict().refine(value => new TextEncoder().encode(JSON.stringify(value)).byteLength <= sqliteCompletionLimits.outputBytes, 'SQLite补全目录超过传输预算');
 export type SqliteCompletionInput = z.infer<typeof sqliteCompletionInputSchema>;

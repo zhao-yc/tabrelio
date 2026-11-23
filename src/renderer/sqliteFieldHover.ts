@@ -1,6 +1,6 @@
 import { sqliteCompletionRelationMatches, type SqliteCompletionAnalysis, type SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry } from '../shared/sqliteCompletion';
-import { sqliteCollationDetails, sqliteFunctionDetails, sqliteIndexDetails, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
+import { sqliteCollationDetails, sqliteColumnTypeDetails, sqliteColumnTypeMode, sqliteFunctionDetails, sqliteIndexDetails, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 import { sqliteFieldHoverZh as text } from './locales/sqliteFieldHover.zh-CN';
 import { sqliteCompletionZh } from './locales/sqliteCompletion.zh-CN';
 import { sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
@@ -26,6 +26,13 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   const name = analysis.target.prefix, qualifiers = analysis.qualifiers;
   let prefix = name.slice(0, sqliteCompletionLimits.prefixUnits);
   if (/[\uD800-\uDBFF]$/.test(prefix)) prefix = prefix.slice(0, -1);
+  if (analysis.columnType) {
+    const { strict } = await sqliteColumnTypeMode(analysis.columnType, directory);
+    if (strict === undefined) return;
+    const details = sqliteColumnTypeDetails(name.replace(/[\t ]+/g, ' ').toUpperCase(), strict);
+    if (details.length) return markdown([display(name), ...details]);
+    return;
+  }
   if (analysis.syntax.includes('collation')) {
     const result = await directory.load({ kind: 'collations', prefix });
     if (result.incomplete) return;

@@ -4,6 +4,8 @@
 
 SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段、表别名，明确输出列的 CTE／派生表，以及 `main`／`temp` 限定。建议按准确名称使用 SQLite 双引号转义，以普通文本插入；同名字段保留各自别名限定。INSERT 字段清单、UPDATE 赋值左侧及 RETURNING 使用目标表字段。
 
+`CREATE TABLE` 的列定义和 `ALTER TABLE … ADD COLUMN` 支持声明类型补全和悬停。普通表候选显示类型亲和性，`STRICT` 表提供 SQLite 接受的六种类型，并说明 `ANY` 保留传入值的存储类型。建表模式取自声明末尾的 `STRICT` 选项，加列模式读取当前会话中实际目标表的选项，支持同名临时表遮蔽。补全替换同一行的完整类型词组，保留现有精度和列约束。 [SQLite STRICT 表](https://www.sqlite.org/stricttables.html) · [类型亲和性](https://www.sqlite.org/datatype3.html#affname)
+
 `ALTER TABLE` 补全目标表并支持对象定义定位。普通表提供重命名、删列及 SQLite 3.53.0 起 `ALTER COLUMN` 的源列候选和悬停。虚拟表可参与表重命名，字段候选限定普通表。删列候选排除主键、索引直接引用的列及最后一个普通列，完整依赖在显式执行时由 SQLite 验证。`ADD COLUMN` 中的 `COLLATE` 沿用规则目录，新表名和新列名由用户输入。 [SQLite ALTER TABLE](https://www.sqlite.org/lang_altertable.html)
 
 `CREATE INDEX … ON` 补全可索引的普通表。根据索引名上的 `main` 或 `temp` 查找单段表名，未指定时遵循原会话的临时对象遮蔽。索引键和部分索引 `WHERE` 提供该表的列、确定性标量函数和排序规则，生成列也可用。键只接受未限定列名，部分索引谓词可限定同一张表。对象定位采用同一目标库，时间函数的输入仍由 SQLite 判断是否确定。 [SQLite 建索引](https://www.sqlite.org/lang_createindex.html) · [部分索引](https://www.sqlite.org/partialindex.html) · [确定性函数](https://www.sqlite.org/deterministic.html)
@@ -55,6 +57,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-23 列声明类型增量。WIN11-TEST 不可达，未派发任务。本机 macOS arm64 使用 Node.js 24.17.0，通过原生运行时检查、严格类型检查、源码构建及 39 份相关套件的 995 项测试。原生目录用例核对同名临时表与主表的类型模式、视图过滤和原事务保持。Electron 编辑器专项 12 项通过，普通建表补入 `DOUBLE PRECISION` 后保留精度和 `NOT NULL`，严格表加列回读为 `ANY`。显式执行前磁盘、查询会话和历史均保持。全流程回归 1 项在 108.5 秒通过。多词类型首轮被编辑器二次筛选隐藏，修复后原断言通过。原始证据保存在 `.cache/sqlite-column-type-completion/verified/` 和 `.cache/sqlite-column-type-completion/final/`。Windows 界面和安装包待验。
 
 2026-11-23 修改表增量。WIN11-TEST 不可达，未派发任务。本机 macOS arm64 通过严格类型检查、源码构建及 38 份相关套件的 978 项。原生用例验证普通表与虚拟表的不同操作范围、同名临时表、主键与直接索引依赖筛选、最后一个普通列以及 SQLite 3.53 的空值约束字段。Electron 编辑器专项 10 项通过，重命名后原值保持，删列后目标列消失，其它列和值保持。显式执行前补全和悬停均为目录读取。全流程回归 1 项在 109.2 秒通过，对象定义专项 1 项读取未限定目标的实际临时表，原事务与磁盘保持。日志和报告保存在 `.cache/sqlite-alter-table-completion/verified/`。Windows 界面和安装包待验。
 

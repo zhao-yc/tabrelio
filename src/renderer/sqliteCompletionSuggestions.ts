@@ -1,10 +1,27 @@
 import { sqliteCompletionRelationMatches, sqliteQueryBodyKeywords, type SqliteCompletionAnalysis } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
+import { sqliteTableImportAffinity } from '../shared/sqliteTableImport';
 import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
 
 export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'index' | 'collation' | 'function' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; snippet?: true; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
+const strictColumnTypes = ['INTEGER', 'INT', 'REAL', 'TEXT', 'BLOB', 'ANY'];
+const ordinaryColumnTypes = [...strictColumnTypes, 'NUMERIC', 'DECIMAL', 'BOOLEAN', 'DATE', 'DATETIME', 'CHAR', 'VARCHAR', 'DOUBLE PRECISION', 'FLOAT', 'BIGINT'];
+type ColumnType = NonNullable<Extract<SqliteCompletionAnalysis, { status: 'ready' }>['columnType']>;
+
+export async function sqliteColumnTypeMode(context: ColumnType, directory: SqliteCompletionDirectory): Promise<{ strict?: boolean; incomplete: boolean }> {
+  if ('strict' in context) return { strict: context.strict, incomplete: false };
+  const { name: table, schema } = context.source;
+  const result = await directory.load({ kind: 'table-options', table, prefix: '', ...(schema ? { schema } : {}) });
+  const entry = result.entries[0];
+  return { strict: !result.incomplete && entry?.kind === 'table-options' ? entry.strict : undefined, incomplete: result.incomplete };
+}
+
+export function sqliteColumnTypeDetails(name: string, strict: boolean): string[] {
+  if (strict) return strictColumnTypes.includes(name) ? [text.strictType, ...(name === 'ANY' ? [text.anyStorage] : [])] : [];
+  return [text.ordinaryType, text.typeAffinity[sqliteTableImportAffinity(name)]];
+}
 const keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'ON', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'WITH', 'AS', 'DISTINCT', 'UNION ALL', 'IS NULL', 'IS NOT NULL', 'RETURNING', 'WINDOW', 'OVER', 'FILTER', 'PARTITION BY', 'ROWS', 'RANGE', 'BETWEEN', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'CURRENT ROW', 'EXPLAIN QUERY PLAN'];
 const windowSpecKeywords = ['PARTITION BY', 'ORDER BY', 'ROWS', 'RANGE', 'GROUPS'];
 
@@ -38,7 +55,8 @@ export function sqliteFunctionDetails(entry: Extract<SqliteCompletionEntry, { ki
 
 /** 建议只引用准确目录名；同名字段保留不同别名的限定插入，CTE声明不伪装成FROM绑定。 */
 export async function sqliteCompletionSuggestions(analysis: Extract<SqliteCompletionAnalysis, { status: 'ready' }>, directory: SqliteCompletionDirectory): Promise<{ items: SqliteCompletionItem[]; incomplete: boolean }> {
-  const items: SqliteCompletionItem[] = [], seen = new Set<string>(), prefix = fold(analysis.target.prefix), qualifiers = analysis.qualifiers;
+  const items: SqliteCompletionItem[] = [], seen = new Set<string>(), qualifiers = analysis.qualifiers;
+  const prefix = fold(analysis.columnType ? analysis.target.prefix.replace(/[\t ]+/g, ' ') : analysis.target.prefix);
   let incomplete = false;
   const add = (item: SqliteCompletionItem) => {
     if (!fold(item.label).startsWith(prefix)) return;
@@ -47,6 +65,13 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     if (items.length >= sqliteCompletionLimits.suggestions) { incomplete = true; return; }
     seen.add(key); items.push(item);
   };
+  if (analysis.columnType) {
+    const { strict, incomplete } = await sqliteColumnTypeMode(analysis.columnType, directory);
+    if (strict !== undefined) for (const name of strict ? strictColumnTypes : ordinaryColumnTypes) {
+      add({ label: name, kind: 'keyword', insertText: name, detail: sqliteColumnTypeDetails(name, strict).join(' · ') });
+    }
+    return { items, incomplete };
+  }
   if (analysis.syntax.includes('query-start')) {
     for (const keyword of sqliteQueryBodyKeywords) add({ label: keyword, kind: 'keyword', insertText: keyword, detail: text.keyword });
     return { items, incomplete };

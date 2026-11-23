@@ -59,6 +59,29 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('加列的类型模式读取实际目标表并保留临时遮蔽和原事务', async () => {
+    const p = profile('表类型模式', 'CREATE TABLE subject(id INTEGER) STRICT; CREATE VIEW subject_view AS SELECT * FROM subject;');
+    const { app, events } = runtime([p]);
+    const strict = { kind: 'table-options', name: 'subject', schema: 'main', strict: true };
+    expect((await completion(app, p.id, { kind: 'table-options', table: 'subject' })).entries).toEqual([strict]);
+    expect(events).toEqual([]);
+    const { sessionId } = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, sessionId, 'BEGIN; CREATE TEMP TABLE subject(temp_value VARCHAR(10));');
+    const state = await app.request('query.completionState', { sessionId }), count = events.length;
+    const read = async (table: string, schema?: 'main' | 'temp') =>
+      (await completion(app, p.id, { kind: 'table-options', table, schema }, sessionId)).entries;
+    const temporary = { kind: 'table-options', name: 'subject', schema: 'temp', strict: false };
+    expect(await read('subject')).toEqual([temporary]);
+    expect(await read('subject', 'temp')).toEqual([temporary]);
+    expect(await read('subject', 'main')).toEqual([strict]);
+    expect(await read('subject_view')).toEqual([]);
+    expect(await read('missing')).toEqual([]);
+    expect(await app.request('query.completionState', { sessionId })).toEqual(state);
+    expect(await app.request('query.sessionState', { sessionId })).toMatchObject({ transactionOpen: true });
+    expect(events).toHaveLength(count);
+    await execute(app, sessionId, 'ROLLBACK');
+  });
+
   it('ALTER TABLE 目录保留临时遮蔽，对删列只筛已确认的结构限制', async () => {
     const p = profile('修改表目录', `CREATE TABLE subject(id INTEGER PRIMARY KEY,indexed TEXT,extra TEXT,
       generated TEXT GENERATED ALWAYS AS (lower(indexed))); CREATE INDEX idx_direct ON subject(indexed);

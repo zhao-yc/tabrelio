@@ -87,6 +87,7 @@ export function createSqliteCompletionProvider(ports: Ports) {
               }
               if (entry.kind === 'function' || entry.kind === 'collation') return true;
               if (query.schema !== undefined && entry.schema !== query.schema) return true;
+              if (query.kind === 'table-options') return entry.kind !== 'table-options' || fold(entry.name) !== fold(query.table);
               if (query.kind === 'relations') return entry.kind !== 'table' && (query.indexTable || query.alterTable || entry.kind !== 'view');
               return (query.kind === 'columns' ? entry.kind !== 'column' : entry.kind !== 'index') ||
                 !('table' in entry) || fold(entry.table) !== fold(query.table);
@@ -107,7 +108,14 @@ export function createSqliteCompletionProvider(ports: Ports) {
         const start = model.getPositionAt(analysis.target.start), end = model.getPositionAt(analysis.target.end), range = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
         if (intent) return content ? { range, contents: [{ value: content, isTrusted: false, supportHtml: false }] } : empty();
         ports.status(result!.incomplete ? 'partial' : 'idle');
-        return { incomplete: result!.incomplete, suggestions: result!.items.map((item, index) => ({ ...item, range, filterText: analysis.target.quoted ? source[analysis.target.start] + item.label : item.label, sortText: (item.kind === 'keyword' ? '9' : '0') + String(index).padStart(4, '0') })) };
+        const typed = source.slice(analysis.target.start, offset);
+        const typePrefixLength = analysis.target.prefix.replace(/[\t ]+/g, ' ').length;
+        return { incomplete: result!.incomplete, suggestions: result!.items.map((item, index) => {
+          // Monaco 用原编辑器前缀再次筛选。多词类型的筛选文本保留原空白，补入的名称使用标准拼写。
+          const filterText = analysis.columnType ? typed + item.label.slice(typePrefixLength) :
+            analysis.target.quoted ? source[analysis.target.start] + item.label : item.label;
+          return { ...item, range, filterText, sortText: (item.kind === 'keyword' ? '9' : '0') + String(index).padStart(4, '0') };
+        }) };
       } catch { if (current() && !intent) ports.status('unavailable'); return empty(); }
       finally { cancellation?.dispose(); change?.dispose(); if (operation.workerStop) await operation.workerStop; if (active === operation) active = undefined; operation.finish(); }
     }

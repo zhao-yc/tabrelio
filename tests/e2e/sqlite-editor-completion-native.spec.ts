@@ -31,6 +31,10 @@ const scenarios = [
     trail: ' TO renamed_extra', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: '保留' },
   { verb: 'DROP COLUMN', prefix: 'ALTER TABLE main.subject DROP COLUMN ', typed: 'old', column: 'old_extra',
     trail: '', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'old_extra' },
+  { verb: 'STRICT TYPE', prefix: 'ALTER TABLE main.strict_subject ADD COLUMN imported ', typed: 'an', column: 'ANY',
+    trail: '', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'ANY' },
+  { verb: 'CREATE TYPE', prefix: 'CREATE TABLE completion_typed(amount ', typed: 'DOUBLE  PR', column: 'DOUBLE PRECISION',
+    trail: '(10,2) NOT NULL)', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'DOUBLE PRECISION(10,2)' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
@@ -38,15 +42,21 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     !['darwin', 'win32'].includes(process.platform)) throw Error('只允许 Windows 或 macOS 的离线源码验收');
   const filePath = join(realpathSync(dataDir), 'sqlite-editor-completion.sqlite');
   const connectionId = 'sqlite-editor-completion';
-  const lookupKind = scenario.verb === 'INDEXED BY' ? 'indexes' : scenario.verb === '函数' ? 'functions' : scenario.verb === 'COLLATE' ? 'collations' : 'columns';
+  const strictType = scenario.verb === 'STRICT TYPE';
+  const createType = scenario.verb === 'CREATE TYPE';
+  const targetTable = strictType ? 'strict_subject' : 'subject';
+  const lookupKind = strictType ? 'table-options' : scenario.verb === 'INDEXED BY' ? 'indexes' :
+    scenario.verb === '函数' ? 'functions' : scenario.verb === 'COLLATE' ? 'collations' : 'columns';
   const alterColumn = scenario.verb === 'RENAME COLUMN' ? 'rename' : scenario.verb === 'DROP COLUMN' ? 'drop' : undefined;
   const { prefix, trail, typed, column } = scenario;
   const draft = prefix + typed + 'suffix' + trail;
-  const accepted = prefix + (scenario.verb === '函数' ? column + '(' + scenario.args + ')' : '"' + column + '"') + trail;
+  const accepted = prefix + (scenario.verb === '函数' ? column + '(' + scenario.args + ')' :
+    strictType || createType ? column : '"' + column + '"') + trail;
   const db = new DatabaseSync(filePath);
   try {
     db.exec(`CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT,virtual_value TEXT GENERATED ALWAYS AS (value||'!'),old_extra TEXT DEFAULT '保留');
       CREATE UNIQUE INDEX subject_by_value ON subject(value);
+      CREATE TABLE strict_subject(id INTEGER PRIMARY KEY) STRICT; INSERT INTO strict_subject VALUES(1);
       CREATE TABLE excluded(other TEXT); CREATE TABLE inbox(id INTEGER PRIMARY KEY,value TEXT); CREATE INDEX inbox_other ON inbox(value);
       INSERT INTO subject(id,value) VALUES(1,'旧'); INSERT INTO excluded VALUES('不变'); INSERT INTO inbox VALUES(1,'新🚢');`);
   } finally { db.close(); }
@@ -58,9 +68,12 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
       const indexed = index ? { index, keys: db.prepare("SELECT name FROM pragma_index_info('completion_index','main') ORDER BY seqno").all() } : undefined;
       const extra = alterColumn ? db.prepare("SELECT name FROM pragma_table_xinfo('subject','main') WHERE name IN ('old_extra','renamed_extra')").get()?.name : undefined;
       const altered = alterColumn ? { extra, value: extra === 'renamed_extra' ? db.prepare('SELECT renamed_extra FROM subject').get()?.renamed_extra : undefined } : undefined;
+      const addedColumn = strictType ? db.prepare("SELECT name,type FROM pragma_table_xinfo('strict_subject','main') WHERE name='imported'").get() : undefined;
+      const declaredColumn = createType ? db.prepare("SELECT name,upper(type) AS type,\"notnull\" FROM pragma_table_xinfo('completion_typed','main')").get() : undefined;
       return { row: db.prepare('SELECT id,value,virtual_value FROM subject').get(), other: db.prepare('SELECT * FROM excluded').get(),
         inbox: db.prepare('SELECT * FROM inbox').get(), ...(view ? { view: { sql: view.sql, rows: db.prepare('SELECT display_value FROM completion_view').all() } } : {}),
-        ...(indexed ? { indexed } : {}), ...(altered ? { altered } : {}) };
+        ...(indexed ? { indexed } : {}), ...(altered ? { altered } : {}), ...(addedColumn ? { addedColumn } : {}),
+        ...(declaredColumn ? { declaredColumn } : {}) };
     }
     finally { db.close(); }
   };
@@ -89,12 +102,14 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
           if (command === 'query.execute' && (typeof input.sql !== 'string' || input.sql.replaceAll('\r\n', '\n') !== setup.accepted ||
             facts.some(fact => fact.command === 'query.execute'))) throw Error('SQL 不是本例唯一明确操作');
           if (command === 'sqlite.completion') {
+            if (setup.createType) throw Error('建表声明类型无需访问目录');
             if ('sql' in input) throw Error('目录接收了编辑器原文');
             if (input.kind === 'functions' || input.kind === 'collations') {
               const indexFunction = setup.createIndex && input.kind === 'functions' && input.deterministicOnly === true && input.prefix === setup.typed;
               if (!indexFunction && (input.kind !== setup.lookupKind || input.prefix !== setup.catalogName && input.prefix !== setup.typed) || 'table' in input || 'schema' in input) throw Error('连接目录越出本例');
-            } else if (input.kind === setup.lookupKind && (input.table !== 'subject' || input.schema !== 'main' || setup.createIndex && input.indexTable !== true ||
-              input.alterColumn !== setup.alterColumn)) throw Error('目录越出真实目标');
+            } else if (input.kind === setup.lookupKind && (input.table !== setup.targetTable || input.schema !== 'main' ||
+              setup.createIndex && input.indexTable !== true || input.alterColumn !== setup.alterColumn ||
+              input.kind === 'table-options' && input.prefix !== '')) throw Error('目录越出真实目标');
           }
           const fact: Fact = { command, input }; facts.push(fact);
           const reply = await entry(event, payload);
@@ -105,7 +120,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         }
         return entry(event, payload);
       });
-    }, { filePath, connectionId, accepted, lookupKind, typed, catalogName: column, createIndex: scenario.verb === 'CREATE INDEX', alterColumn });
+    }, { filePath, connectionId, accepted, lookupKind, targetTable, typed, catalogName: column, createType,
+      createIndex: scenario.verb === 'CREATE INDEX', alterColumn });
 
     await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
     await page.evaluate(async ({ id, sql }) => {
@@ -145,9 +161,9 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     await expect.poll(async () => (await inspect()).sql).toBe(inserted);
     const completion = (await snapshot()).slice(previous).filter(fact => fact.command === 'sqlite.completion');
     const requests = completion.map(fact => sqliteCompletionInputSchema.parse(fact.input));
-    expect(requests.filter(input => input.kind !== 'stamp')).toEqual([
+    expect(requests.filter(input => input.kind !== 'stamp')).toEqual(createType ? [] : [
       lookupKind === 'functions' || lookupKind === 'collations' ? expect.objectContaining({ kind: lookupKind, prefix: typed }) :
-        expect.objectContaining({ kind: lookupKind, table: 'subject', schema: 'main', prefix: typed,
+        expect.objectContaining({ kind: lookupKind, table: targetTable, schema: 'main', prefix: strictType ? '' : typed,
           ...(scenario.verb === 'CREATE INDEX' ? { indexTable: true } : {}), ...(alterColumn ? { alterColumn } : {}) }),
       ...(scenario.verb === 'CREATE INDEX' ? [expect.objectContaining({ kind: 'functions', prefix: typed, deterministicOnly: true })] : []),
     ]);
@@ -167,6 +183,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     if (lookupKind === 'indexes') await expect(hover).toContainText('SQLite 索引');
     if (lookupKind === 'functions') await expect(hover).toContainText('SQLite 标量函数');
     else if (lookupKind === 'collations') await expect(hover).toContainText('忽略 ASCII 字母的大小写');
+    else if (strictType) await expect(hover).toContainText('SQLite STRICT 类型');
+    else if (createType) await expect(hover).toContainText('REAL 亲和性');
     else await expect(hover).toContainText('"main"."subject"');
     await page.keyboard.press('Escape');
     expect((await snapshot()).filter(fact => fact.command === 'query.execute' || fact.command === 'sessions.open')).toEqual([]);
@@ -177,9 +195,11 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
       scenario.verb === 'CREATE INDEX' ? { indexed: { index: { name: scenario.output, unique: 1, partial: 1 }, keys: [{ name: column }] } } : {};
     const altered = alterColumn === 'rename' ? { altered: { extra: 'renamed_extra', value: scenario.output } } :
       alterColumn === 'drop' ? { altered: { extra: undefined, value: undefined } } : {};
-    await expect.poll(disk).toEqual({ ...before, row: scenario.row, ...created, ...altered });
+    const addedColumn = strictType ? { addedColumn: { name: 'imported', type: scenario.output } } : {};
+    const declaredColumn = createType ? { declaredColumn: { name: 'amount', type: scenario.output, notnull: 1 } } : {};
+    await expect.poll(disk).toEqual({ ...before, row: scenario.row, ...created, ...altered, ...addedColumn, ...declaredColumn });
     const grid = query.locator('.result-body').getByRole('grid');
-    if (scenario.verb !== 'CREATE VIEW' && scenario.verb !== 'CREATE INDEX' && !alterColumn) await expect(grid).toContainText(scenario.output);
+    if (scenario.verb !== 'CREATE VIEW' && scenario.verb !== 'CREATE INDEX' && !alterColumn && !strictType && !createType) await expect(grid).toContainText(scenario.output);
     if (lookupKind === 'collations') {
       await expect(grid.getByRole('row').nth(1).getByText('a', { exact: true })).toBeVisible();
       await expect(grid.getByRole('row').nth(2).getByText('Z', { exact: true })).toBeVisible();
@@ -200,7 +220,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
 
 for (const scenario of scenarios) {
   test.describe(scenario.verb, () => {
-    const enabled = scenario.verb === 'RENAME COLUMN' || scenario.verb === 'DROP COLUMN' ? process.env.DBARK_SQLITE_ALTER_TABLE_COMPLETION_NATIVE === '1' :
+    const enabled = scenario.verb === 'STRICT TYPE' || scenario.verb === 'CREATE TYPE' ? process.env.DBARK_SQLITE_COLUMN_TYPE_COMPLETION_NATIVE === '1' :
+      scenario.verb === 'RENAME COLUMN' || scenario.verb === 'DROP COLUMN' ? process.env.DBARK_SQLITE_ALTER_TABLE_COMPLETION_NATIVE === '1' :
       scenario.verb === 'CREATE INDEX' ? process.env.DBARK_SQLITE_CREATE_INDEX_COMPLETION_NATIVE === '1' :
       scenario.verb === 'CREATE VIEW' ? process.env.DBARK_SQLITE_CREATE_QUERY_COMPLETION_NATIVE === '1' :
       scenario.verb === 'COLLATE' ? process.env.DBARK_SQLITE_COLLATION_COMPLETION_NATIVE === '1' :
