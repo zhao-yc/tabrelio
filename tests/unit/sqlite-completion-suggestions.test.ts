@@ -67,10 +67,10 @@ it('最多256项建议不截断标识符，更多结果明确incomplete；quoted
   const quoted = await sqliteCompletionSuggestions(ready({ syntax: ['keyword'], target: { start: 0, end: 1, prefix: '', quoted: true } }), directory([])); expect(quoted.items).toEqual([]);
 });
 it('窗口函数和聚合筛选位置提供SQLite关键字补全', async () => {
-  const result = await sqliteCompletionSuggestions(ready({ syntax: ['keyword'], target: { start: 0, end: 0, prefix: 'w', quoted: false } }), directory([]));
+  const result = await sqliteCompletionSuggestions(ready({ qualifiers: [], syntax: ['keyword'], target: { start: 0, end: 0, prefix: 'w', quoted: false } }), directory([]));
   expect(result.items.map(item => item.label)).toContain('WINDOW');
-  const frame = await sqliteCompletionSuggestions(ready({ syntax: ['keyword'], target: { start: 0, end: 0, prefix: 'pre', quoted: false } }), directory([]));
+  const frame = await sqliteCompletionSuggestions(ready({ qualifiers: [], syntax: ['keyword'], target: { start: 0, end: 0, prefix: 'pre', quoted: false } }), directory([]));
   expect(frame.items.map(item => item.label)).toContain('PRECEDING');
-  const filter = await sqliteCompletionSuggestions(ready({ syntax: ['keyword'], target: { start: 0, end: 0, prefix: 'fil', quoted: false } }), directory([]));
+  const filter = await sqliteCompletionSuggestions(ready({ qualifiers: [], syntax: ['keyword'], target: { start: 0, end: 0, prefix: 'fil', quoted: false } }), directory([]));
   expect(filter.items.map(item => item.label)).toContain('FILTER');
 });
