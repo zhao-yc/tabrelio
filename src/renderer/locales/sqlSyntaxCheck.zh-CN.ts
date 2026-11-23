@@ -35,3 +35,13 @@ export const sqliteSyntaxCheckZh = {
     'sqlite-incomplete': '此处语句结构不完整，请核对引号、注释、括号或触发器结尾。',
   } as Record<string, string>,
 } as const;
+
+export const postgresSyntaxCheckZh = {
+  ...sqlSyntaxCheckZh,
+  title: 'PostgreSQL 本地语法检查',
+  hint: '使用本地 PostgreSQL 18 语法解析器，无需连接。报告首处语法问题。对象、权限、服务器版本及函数中的字符串正文须在实际环境核对。',
+  reasons: {...sqlSyntaxCheckZh.reasons,
+    mode: '字符串转义取决于当前会话模式。请使用显式 E 字符串，或在确认启用标准字符串的会话中检查。',
+    'dynamic-mode': '脚本会改变标准字符串设置，请按相同设置分段检查。',
+  } as Record<string, string>,
+} as const;

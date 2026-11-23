@@ -33,6 +33,7 @@ import { postgresNoticesZh as noticesText } from '../../src/renderer/locales/pos
 import { postgresNoticeHiddenMessage } from '../../src/shared/postgresNotices';
 import { localRenameZh } from '../../src/renderer/locales/localRename.zh-CN';
 import { objectDefinitionZh } from '../../src/renderer/locales/objectDefinition.zh-CN';
+import { postgresSyntaxCheckZh } from '../../src/renderer/locales/sqlSyntaxCheck.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -1896,6 +1897,46 @@ test('PostgreSQL 离线整组重命名投影列并保留物理字段和内层同
   expect((await inspectModel()).identity).toEqual(initial.identity);
   await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('PostgreSQL 离线语法检查定位原文并随草稿编辑清除标记', async ({}, info) => {
+  const source = "SELECT '中文😀';\nSELECT [$needle], FROM t;";
+  await prepare({id: '', name: '离线 PostgreSQL 语法检查', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, source);
+  await resizeQueryWindow(1280, 920, 0.75);
+  const panel = tab().getByRole('region', {name: postgresSyntaxCheckZh.title, exact: true});
+  const markers = () => editor().evaluate((element, label) => {
+    const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+    const model = api?.editor.getEditors().find(instance => instance.getContainerDomNode().contains(element))?.getModel();
+    if (!api || !model) throw Error('语法检查的原模型不可用');
+    return api.editor.getModelMarkers({resource: model.uri}).filter(marker => marker.source === label)
+      .map(marker => [marker.startLineNumber, marker.startColumn, marker.endColumn]);
+  }, postgresSyntaxCheckZh.title);
+  const before = await inspectModel();
+  await command('syntax-check');
+  await expect(panel.getByRole('status')).toHaveText('1 ' + postgresSyntaxCheckZh.issues, {timeout: 12000});
+  const expectedColumn = source.split('\n')[1].indexOf('FROM') + 1;
+  expect(await markers()).toEqual([[2, expectedColumn, expectedColumn + 4]]);
+  await panel.getByRole('list').getByRole('button').filter({hasText: postgresSyntaxCheckZh.position(2, expectedColumn)}).click();
+  expect(await inspectModel()).toMatchObject({sql: source, identity: before.identity, selected: 'FROM'});
+  await page.screenshot({path: info.outputPath('PostgreSQL本地语法定位.png'), animations: 'disabled'});
+  const valid = source.replace('[$needle], FROM t', '[$needle]::int');
+  await replaceDraft(valid);
+  await expect(panel.getByRole('status')).toHaveText(postgresSyntaxCheckZh.reasons.stale);
+  expect(await markers()).toEqual([]);
+  await panel.getByRole('button', {name: postgresSyntaxCheckZh.recheck, exact: true}).click();
+  await expect(panel.getByRole('status')).toHaveText(postgresSyntaxCheckZh.clean, {timeout: 12000});
+  await panel.getByRole('button', {name: postgresSyntaxCheckZh.close, exact: true}).click();
+  await expect(panel).toHaveCount(0);
+  await tab().locator('.postgres-toolbar').getByRole('button', {name: postgresSyntaxCheckZh.entry, exact: true}).click();
+  await expect(panel.getByRole('status')).toHaveText(postgresSyntaxCheckZh.clean, {timeout: 12000});
+  expect(await inspectModel()).toMatchObject({sql: valid, identity: before.identity});
+  const counts = await page.evaluate(async () => ({
+    tasks: (await window.dbark.invoke('tasks.list', {})).length, history: (await window.dbark.invoke('history.list', {})).length,
+  }));
+  expect(counts).toEqual({tasks: 0, history: 0});
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 

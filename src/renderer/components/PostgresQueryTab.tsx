@@ -135,6 +135,8 @@ import { openFocusedGridRowJump } from './GridRowJump';
 import { openFocusedQueryResultFind } from './QueryResultFind';
 import { StatementNavigationPanel } from './StatementNavigationPanel';
 import { usePostgresStatementNavigation } from '../usePostgresStatementNavigation';
+import { SqlSyntaxCheckPanel } from './SqlSyntaxCheckPanel';
+import { usePostgresSyntaxCheck } from '../usePostgresSyntaxCheck';
 import type { SavedQueryGroupTarget } from '../../shared/savedQueryOrganization';
 import { openStatementDraftBatch, saveStatementQuery, type StatementQueryOutput } from '../statementNavigationExtract';
 import { statementNavigationZh as navigationText } from '../locales/statementNavigation.zh-CN';
@@ -2155,6 +2157,13 @@ export function PostgresQueryTab({
       editor.current === target.instance && !target.instance.getRawOptions().readOnly };
   }, (instance, ranges, output) =>
     duplicateQuery(output?.mode ?? 'statement', instance, ranges, output));
+  const standardStrings = session.current && !busy && same(session.current.scope) ? state.standardConformingStrings : undefined;
+  const syntax = usePostgresSyntaxCheck(() => {
+    const target = commandEditor(), draft = currentTab(), original = session.current;
+    if (!target || !draft || locked) return;
+    return { ...target, current: () => available() && !files.isBusy() && currentTab() === draft && session.current === original &&
+      editor.current === target.instance && !target.instance.getRawOptions().readOnly };
+  }, standardStrings);
   const canNavigate = editable && !navigation.busy;
   const canOpenStatementQuery = canNavigate && canDuplicateQuery && !resultsOnly;
   const commands: Partial<Record<UiCommandId, UiCommandHandler>> = {
@@ -2163,6 +2172,7 @@ export function PostgresQueryTab({
     'execute-current': { enabled: canRun, run: () => run('current') },
     'execute-all': { enabled: canRun, run: () => run('all') },
     'statement-navigation': { enabled: canNavigate, run: () => navigation.open() },
+    'syntax-check': { enabled: editable && !syntax.busy, run: syntax.open },
     'object-definition': { enabled: editable && !objectDefinition, run: openObjectDefinition },
     'select-current-statement': { enabled: canNavigate, run: () => navigation.open('select') },
     'open-current-statement-query': { enabled: canOpenStatementQuery, run: () => navigation.open('duplicate') },
@@ -2246,7 +2256,12 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.8,
       run: () => { if (active && editor.current === editorInstance && editorInstance.getModel() === menuModel) return openObjectDefinition(); },
     });
-    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); definition.dispose(); };
+    const syntaxCheck = editorInstance.addAction({
+      id: 'dbark-postgres-syntax-check:' + uid(), label: uiCommandLabels['syntax-check'],
+      precondition: '!editorReadonly', contextMenuGroupId: 'navigation', contextMenuOrder: 1.9,
+      run: () => { if (active && editor.current === editorInstance && editorInstance.getModel() === menuModel) syntax.open(); },
+    });
+    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); definition.dispose(); syntaxCheck.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery, state.standardConformingStrings]);
   const renderResultGrid = (target?: GridFindTarget, marks?: ReadonlySet<string>) => result && displayResult ? (
     <ResultsGrid zoomable columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding}
@@ -2324,6 +2339,7 @@ export function PostgresQueryTab({
             <button disabled={!canNavigate} onClick={() => navigation.open()}>
               {navigationText.entry}
             </button>
+            <button disabled={!editable || syntax.busy} onClick={syntax.open}>{uiCommandLabels['syntax-check']}</button>
             <button disabled={!editable || !!objectDefinition} onClick={() => void openObjectDefinition()}>{definitionText.entry}</button>
             <button disabled={!canPlan} onClick={() => run('explain')}>
               {text.explain}
@@ -2406,7 +2422,7 @@ export function PostgresQueryTab({
               value={tab.sql ?? ''}
               dialect="postgresql"
               snippetCompletion
-              postgresStandardStrings={session.current && !busy && same(session.current.scope) ? state.standardConformingStrings : undefined}
+              postgresStandardStrings={standardStrings}
               postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database,
                 connectionVersion: scope.version, sessionId: session.current?.id }}
               onCompletionStatus={setCompletionStatus}
@@ -2430,6 +2446,7 @@ export function PostgresQueryTab({
             />
             {navigation.panel && <StatementNavigationPanel {...navigation.panel} />}
           </div>
+          {syntax.panel && <SqlSyntaxCheckPanel dialect="postgresql" {...syntax.panel} />}
         </div>
         {resultLayout === 'below' && <QueryLayoutSplitter value={preferredEditorHeight} min={queryLayoutLimits.minEditorHeight}
           max={layoutMaximum} defaultValue={queryLayoutLimits.defaultEditorHeight} controls={layoutEditorId} scope={layoutScope}

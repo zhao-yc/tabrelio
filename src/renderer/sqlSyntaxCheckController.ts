@@ -7,13 +7,14 @@ export interface SqlSyntaxCheckView { busy: boolean; result?: SqlSyntaxCheckResu
 interface SyntaxWorker { syntax(source: string, mode: CompletionLexicalMode, signal: AbortSignal): Promise<SqlSyntaxCheckResult>; dispose(): void; }
 interface Ports {
   source: string; sessionId?: string; current(): boolean; subscribe(changed: () => void): () => void;
-  state(sessionId: string): Promise<CompletionSessionState>; create(): SyntaxWorker;
+  state?(sessionId: string): Promise<CompletionSessionState>; create(): SyntaxWorker;
+  mode?: CompletionLexicalMode;
   native?(signal: AbortSignal): Promise<SqlSyntaxCheckResult>;
   decorate(result: Extract<SqlSyntaxCheckResult, { status: 'ready' }>): void; clear(): void;
   changed(view: SqlSyntaxCheckView): void;
 }
 
-/** 单次检查绑定原来源。MySQL 路径读取模式缓存，SQLite 路径调用原生准备。来源失效后不发布旧标记。 */
+/** 单次检查绑定原来源和解析模式；只有 SQLite 路径调用原会话准备。来源失效后不发布旧标记。 */
 export class SqlSyntaxCheckController {
   private dead = false; private disposed = false; private started = false;
   private readonly abort = new AbortController();
@@ -67,16 +68,16 @@ export class SqlSyntaxCheckController {
         this.showResult(result);
         return;
       }
-      const cached = this.ports.sessionId ? { ...await this.ports.state(this.ports.sessionId) } : undefined;
+      const cached = this.ports.sessionId && this.ports.state ? { ...await this.ports.state(this.ports.sessionId) } : undefined;
       if (!this.current()) return this.observe();
       if (cached && (cached.busy || cached.broken || !['mysql', 'mariadb'].includes(cached.dialect ?? ''))) { this.publish({ busy: false, result: { status: 'blocked', reason: 'context' } }); return; }
-      const mode = cached ? { ansiQuotes: cached.ansiQuotes, noBackslashEscapes: cached.noBackslashEscapes } : {};
+      const mode = cached ? { ansiQuotes: cached.ansiQuotes, noBackslashEscapes: cached.noBackslashEscapes } : this.ports.mode ?? {};
       this.worker = this.ports.create();
       if (!this.current()) return this.observe();
       const result = await this.worker.syntax(this.source, mode, this.abort.signal);
       this.terminate();
       if (!this.current()) return this.observe();
-      if (this.ports.sessionId) {
+      if (this.ports.sessionId && this.ports.state) {
         const latest = await this.ports.state(this.ports.sessionId);
         if (!this.current()) return this.observe();
         if (!sameCompletionState(cached!, latest)) { this.dead = true; return this.observe(); }

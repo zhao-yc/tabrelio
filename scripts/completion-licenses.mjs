@@ -10,4 +10,20 @@ export async function copyCompletionLicenses(){
   const expected=[['dt-sql-parser','4.5.1','MIT'],['antlr4-c3','3.3.7','MIT'],['antlr4ng','2.0.11','BSD-3-Clause']],records=[];
   for(const[name,version,license]of expected){const{directory,manifest}=name==='dt-sql-parser'?parser:await packageRoot(parserRequire.resolve(name),name);if(manifest.version!==version||manifest.license!==license)throw Error('补全依赖或许可已变化，请重新核对：'+name);const file=(await readdir(directory)).find(value=>/^LICENSE(?:\.txt|\.md)?$/i.test(value));if(!file)throw Error('补全依赖缺少许可原件：'+name);const target=name+'-'+version+'.txt';await copyFile(join(directory,file),join(output,target));records.push({name,version,license,file:target});}
   await writeFile(join(output,'sql-completion.json'),JSON.stringify({说明:'本地SQL补全Worker使用的第三方依赖，许可原文随安装产物提供。',依赖:records},null,2)+'\n');
+  await copyPostgresSyntaxLicenses(output);
+}
+
+/** WASM 内含 libpg_query 和 PostgreSQL 解析器，需同时提供各上游许可。 */
+async function copyPostgresSyntaxLicenses(output) {
+  const parser = await packageRoot(require.resolve('libpg-query'), 'libpg-query');
+  const parserRequire = createRequire(join(parser.directory, 'package.json'));
+  const types = await packageRoot(parserRequire.resolve('@pgsql/types'), '@pgsql/types');
+  for (const { directory, manifest } of [parser, types]) {
+    if (manifest.license !== 'MIT') throw Error('PostgreSQL 解析依赖许可已变化：' + manifest.name);
+    const name = manifest.name.replace(/^@/, '').replace('/', '-');
+    await copyFile(join(directory, 'LICENSE'), join(output, name + '-' + manifest.version + '.txt'));
+  }
+  for (const file of ['PostgreSQL-18.txt', 'libpg_query-18.txt']) {
+    await copyFile(join('build', 'licenses', file), join(output, file));
+  }
 }

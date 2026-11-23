@@ -15,7 +15,8 @@ type WorkerPort = Pick<Worker, 'postMessage' | 'terminate' | 'onmessage' | 'oner
 /** 一次引用请求独占线程；启动8秒与分析2秒分开，正文只在握手后发送，终态准确释放所属线程。 */
 export class LocalReferencesWorkerClient {
   private active?: { stop(reason: string): void }; private disposed = false;
-  constructor(private readonly create: () => WorkerPort, private readonly dialect: 'mysql' | 'sqlite' = 'mysql') {}
+  constructor(private readonly create: () => WorkerPort, private readonly dialect: 'mysql' | 'sqlite' = 'mysql',
+    private readonly syntaxWorkerPrefix = 'dbark-completion') {}
   /** 输入绑定不可变快照；旧线程回包不能结束或污染继任请求。 */
   analyze(source: string, offset: number, mode: CompletionLexicalMode, signal: AbortSignal, capabilities: CompletionScopeCapabilities): Promise<LocalReferences> {
     return this.request<LocalReferences>(source, offset, mode, signal, capabilities, this.dialect === 'sqlite' ? {} : { intent: 'references' }, (value, snapshot): value is LocalReferences => this.dialect === 'sqlite' ? validSqliteLocalReferences(value, source, offset) : validLocalReferences(value, source, offset, snapshot));
@@ -70,7 +71,7 @@ export class LocalReferencesWorkerClient {
         worker.onmessage = event => {
           if (finished) return;
           const message = event.data;
-          const prefix = this.dialect === 'sqlite' ? 'dbark-sqlite-local-references' : 'dbark-completion';
+          const prefix = this.dialect === 'sqlite' ? 'dbark-sqlite-local-references' : intent.intent === 'syntax' ? this.syntaxWorkerPrefix : 'dbark-completion';
           if (['object', 'syntax'].includes(intent.intent ?? '') && (message?.type === prefix + '-ready' || message?.type === prefix + '-unavailable') && (typeof message !== 'object' || Array.isArray(message) || Object.keys(message).sort().join(',') !== 'type,version')) { owner.stop('worker'); return; }
           if (message?.type === prefix + '-unavailable') { owner.stop('worker'); return; }
           if (message?.type === prefix + '-ready') {
