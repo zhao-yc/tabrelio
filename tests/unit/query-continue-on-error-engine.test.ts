@@ -5,12 +5,16 @@ import type { ManagedConnection } from '../../src/engine/connection';
 import type { QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 import type { QueryParameter } from '../../src/shared/queryParameters';
 import { queryScriptReportSchema } from '../../src/shared/queryContinueOnError';
+import { mysqlQueryErrorLine } from '../../src/engine/mysqlQueryErrorLine';
 
 const driver = vi.hoisted(() => ({ execute: vi.fn(), connect: vi.fn() }));
 vi.mock('../../src/engine/connection', () => ({ execute: driver.execute, connect: driver.connect }));
 const diagnostic = 'SELECT @@SESSION.sql_mode AS __dbark_continue_mode,CAST(CONNECTION_ID() AS CHAR) AS __dbark_continue_connection,DATABASE() AS __dbark_continue_database';
 const diagnosticNames = ['__dbark_continue_mode', '__dbark_continue_connection', '__dbark_continue_database'];
 const serverError = (message = '预期语法错误', patch = {}) => Object.assign(Error(message), { code: 'ER_PARSE_ERROR', errno: 1064, sqlState: '42000', ...patch });
+const parseError = (fragment: string, line: number) => serverError('服务器原错误', {
+  sqlMessage: `You have an error in your SQL syntax; check the manual for the right syntax to use near '${fragment}' at line ${line}`,
+});
 
 /** 原始事件只替代网络；真实互斥、任务、调度、绑定、流预算和错误分类都执行产品代码。 */
 function fixture() {
@@ -51,6 +55,36 @@ function fixture() {
   return { engine, managed, controls, session, connection, transport, sent, events, run, fail, ok };
 }
 beforeEach(() => { driver.execute.mockReset(); driver.connect.mockReset(); });
+
+it.each([false, true])('按真实失败命令回包定位原模板行，遇错继续 %s', async continueOnError => {
+  const f = fixture(), wrongLine = '  FROM WHERE 1', sql = "SELECT '前🧭';\r\nSELECT :label\r\n" + wrongLine + ';\r\nSELECT 9;';
+  const secret = '多行\n秘密😀', start = sql.indexOf(wrongLine), errorRange = {start, end: start + wrongLine.length};
+  f.controls.scenario = (wire, query) => wire.includes('FROM WHERE') ? f.fail(query, parseError('WHERE 1', 2)) : f.ok(query);
+  const output = await f.run(sql, {continueOnError, parameters: [{name: 'label', type: 'text', value: secret}]});
+  expect(output.failure?.errorRange).toEqual(errorRange);
+  expect(f.sent).toHaveLength(continueOnError ? 3 : 2);
+  if (continueOnError) expect(queryScriptReportSchema.parse(output.scriptReport).errors[0].errorRange).toEqual(errorRange);
+  expect(JSON.stringify([output, f.events])).not.toContain('秘密');
+});
+
+it('只接受同一条原文中可核实的语法片段，拒绝非原 ERR 与内部命令的报错行', () => {
+  const template = "SELECT '前🧭'\r\n  FROM WHERE 1", mode = {noBackslashEscapes: false, ansiQuotes: false};
+  const locate = (error: unknown, sql = template) => mysqlQueryErrorLine(error, sql, {start: 0, end: sql.length}, sql, sql, mode);
+  expect(locate(parseError('WHERE 1', 2))).toEqual({start: 14, end: template.length});
+  expect(locate(parseError('WHERE 1', 1))).toBeUndefined();
+  expect(locate(parseError('WHERE 1', 3))).toBeUndefined();
+  const mysql57 = {dialect: 'mysql', version: '5.7.44'};
+  const locate57 = (sql: string) => mysqlQueryErrorLine(parseError('WHERE 1', 1), sql, {start: 0, end: sql.length}, sql, sql, mode, mysql57);
+  expect(locate57(template)).toEqual({start: 14, end: template.length});
+  expect(locate57(template + '\nWHERE 1')).toBeUndefined();
+  expect(locate57('SELECT 1\n' + template)).toBeUndefined();
+  expect(locate(parseError('', 2))).toBeUndefined();
+  expect(locate(parseError('WHERE 1', 1), "/* 前注释 */ CALL p('WHERE 1')")).toBeUndefined();
+  expect(locate(Object.assign(parseError('WHERE 1', 2), {errno: 1054}))).toBeUndefined();
+  const getter = vi.fn(() => parseError('WHERE 1', 2));
+  expect(locate(Object.defineProperty(serverError(), 'sqlMessage', {get: getter}))).toBeUndefined();
+  expect(getter).not.toHaveBeenCalled();
+});
 
 describe('显式继续与默认首错停止隔离', () => {
   it.each([undefined, false, 1, 'true'])('仅===true启用；值%j仍按原首错路径停止', async continueOnError => {

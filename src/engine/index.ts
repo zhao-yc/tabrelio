@@ -115,6 +115,7 @@ import { DatabaseCreateTasks } from './databaseCreateTasks';
 import { DatabaseDefaultEncodingTasks } from './databaseDefaultEncodingTasks';
 import { queryFailureMessage, type QueryFailureSourceRange } from '../shared/queryFailure';
 import { canContinueQueryError, formatQueryScriptError, queryContinueOnErrorLimits, queryScriptReportSummary, truncateQueryScriptMessage, type QueryScriptReport } from '../shared/queryContinueOnError';
+import { mysqlQueryErrorLine } from './mysqlQueryErrorLine';
 import { TableDefaultEncodingTasks } from './tableDefaultEncodingTasks';
 import { TableForeignKeyPatchTasks } from './tableForeignKeyPatchTasks';
 import type { StructureTaskContext, StructureTaskOptions } from './structureDefinition';
@@ -2299,7 +2300,7 @@ export class Engine {
     const results: QueryResult[] = [];
     // 限额由整项任务共享，防止很多结果集或大 BLOB 绕过单结果集行数限制。
     const budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
-    let executed = 0, sourceRange: QueryFailureSourceRange | undefined;
+    let executed = 0, sourceRange: QueryFailureSourceRange | undefined, errorRange: QueryFailureSourceRange | undefined;
     let relationTarget: ReturnType<typeof mysqlQueryRelationTarget>;
     let joinedPrimaryKey: string[] | undefined;
     try {
@@ -2317,8 +2318,10 @@ export class Engine {
           } catch { relationTarget = undefined; }
         }
         task.relationTarget = relationTarget;
+        let driverError: Error | undefined;
         try {
-          const completed = await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined);
+          const completed = await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined,
+            undefined, failureMode ? error => { driverError = error; } : undefined);
           appendScriptResults(task, results, completed, sourceRange);
           if (relationTarget?.joined) {
             joinedPrimaryKey = await this.confirmMysqlJoinSource(task, relationTarget);
@@ -2327,6 +2330,8 @@ export class Engine {
           this.checkCancelled(task);
         }
         catch (error) {
+          if (!task.cancelled && error === driverError)
+            errorRange = mysqlQueryErrorLine(error, sql, sourceRange, template, statement, mode, task.managed.status);
           if (relationTarget?.joined) task.managed.sessionObjects?.invalidate();
           if (!values) throw error;
           if (task.cancelled) this.checkCancelled(task);
@@ -2345,7 +2350,8 @@ export class Engine {
       const detail = values && typeof code === 'string' ? `数据库错误 ${/^[A-Z0-9_]+$/.test(code) ? code : '未知'}` : this.errorMessage(error);
       if (!failureMode) throw new Error(`第 ${executed + 1} 条 SQL 未完成；已完成 ${executed} 条，此前已提交语句保留，未自动回滚或重放。${detail}`);
       const message = queryFailureMessage(executed, detail);
-      const outcome: QueryOutcome = { results, elapsedMs: performance.now() - started, failure: { statementOrdinal: executed + 1, statementsCompleted: executed, message, ...(sourceRange ? { sourceRange } : {}) } };
+      const outcome: QueryOutcome = { results, elapsedMs: performance.now() - started, failure: { statementOrdinal: executed + 1, statementsCompleted: executed, message,
+        ...(sourceRange ? { sourceRange } : {}), ...(errorRange ? {errorRange} : {}) } };
       // ERR没有新状态位；旧cached IN_TRANS即便非零也不能冒充失败后的真实事务状态。
       const status = task.managed.serverStatus;
       if (task.managed.transactionStateKnown !== false && !task.managed.broken && status !== undefined && Number.isInteger(status) && status >= 0 && status <= 65535) outcome.transactionOpen = (status & 1) !== 0;
@@ -2373,7 +2379,7 @@ export class Engine {
     const started = performance.now(), results: QueryResult[] = [], parameterized = parameters !== undefined || failureMode === 'parameterized';
     const warnings = new QueryWarningCollector(parameterized), budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
     let completed = 0, ordinal = 1, sourceRange: QueryFailureSourceRange | undefined, currentCompleted = false;
-    let failure: QueryOutcome['failure'];
+    let failure: QueryOutcome['failure'], errorRange: QueryFailureSourceRange | undefined;
     try {
       if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw Error('查询结果上限必须在 1～100000 之间');
       if (failureMode === 'parameterized' && !Array.isArray(parameters)) throw Error('参数查询必须提供参数列表');
@@ -2387,6 +2393,8 @@ export class Engine {
           currentCompleted = true; completed++;
         } catch (error) { originalError = error; }
         if (task.cancelled) this.checkCancelled(task);
+        if (originalError && originalError === driverError)
+          errorRange = mysqlQueryErrorLine(originalError, sql, sourceRange, item.template, item.statement, item.mode, task.managed.status);
         try {
           await this.captureQueryWarnings(task, warnings, ordinal, sourceRange, currentCompleted ? 'completed' : 'failed', commandEnded && (!originalError || originalError === driverError && canContinueQueryError(originalError)));
         } catch (captureError) {
@@ -2403,7 +2411,8 @@ export class Engine {
     } catch (error) {
       if (task.cancelled) throw error;
       const detail = formatQueryScriptError(error, parameterized);
-      failure = { statementOrdinal: ordinal, statementsCompleted: completed, message: currentCompleted ? `第 ${ordinal} 条SQL已执行，但警告采集或原连接状态未完整确认；请核对执行结果，不要直接重试。${detail}` : queryFailureMessage(completed, detail), ...(sourceRange ? { sourceRange } : {}) };
+      failure = { statementOrdinal: ordinal, statementsCompleted: completed, message: currentCompleted ? `第 ${ordinal} 条SQL已执行，但警告采集或原连接状态未完整确认；请核对执行结果，不要直接重试。${detail}` : queryFailureMessage(completed, detail),
+        ...(sourceRange ? { sourceRange } : {}), ...(errorRange ? {errorRange} : {}) };
     }
     const outcome: QueryOutcome = { results, elapsedMs: performance.now() - started, warnings: warnings.report, ...(failure ? { failure } : {}) };
     const status = task.managed.serverStatus;
@@ -2447,14 +2456,15 @@ export class Engine {
     if (warnings) task.collectWarningsMode = true;
     let sourceRange: QueryFailureSourceRange | undefined, activeOrdinal: number | undefined;
     /** 参数任务始终先分类原错误，再隐藏所有可能含展开值的明细。 */
-    const record = (error: unknown, kind: 'server' | 'stopped', ordinal: number) => {
+    const record = (error: unknown, kind: 'server' | 'stopped', ordinal: number, errorRange?: QueryFailureSourceRange) => {
       if (report.errors.length >= queryContinueOnErrorLimits.errors) return;
-      report.errors.push({ kind, statementOrdinal: ordinal, statementsCompleted: report.statementsCompleted, message: formatQueryScriptError(error, parameterized), ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}) });
+      report.errors.push({ kind, statementOrdinal: ordinal, statementsCompleted: report.statementsCompleted, message: formatQueryScriptError(error, parameterized),
+        ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}), ...(errorRange ? {errorRange} : {}) });
     };
     try {
       if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw Error('查询结果上限必须在 1～100000 之间');
       if (failureMode === 'parameterized' && !Array.isArray(parameters)) throw Error('参数查询必须提供参数列表');
-      for await (const { statement, template, ordinal } of this.queryStatements(task, sql, parameters, currentStatement, range => { sourceRange = range ? { ...range } : undefined; })) {
+      for await (const { statement, template, mode, ordinal } of this.queryStatements(task, sql, parameters, currentStatement, range => { sourceRange = range ? { ...range } : undefined; })) {
         this.checkCancelled(task); activeOrdinal = ordinal; report.statementsAttempted = ordinal;
         let driverError: unknown, commandEnded = false, currentCompleted = false;
         const physicalId = task.managed.connection.threadId;
@@ -2470,7 +2480,7 @@ export class Engine {
             if (currentCompleted) { activeOrdinal = undefined; sourceRange = undefined; }
             throw error;
           }
-          record(error, 'server', ordinal);
+          record(error, 'server', ordinal, mysqlQueryErrorLine(error, sql, sourceRange, template, statement, mode, task.managed.status));
           if (warnings) await this.captureQueryWarnings(task, warnings, ordinal, sourceRange, 'failed', commandEnded);
           if (report.errors.length >= queryContinueOnErrorLimits.errors) { report.stopReason = '错误记录已达到100条上限，已停止后续语句'; break; }
           await this.refreshContinuingSession(task);
@@ -2488,7 +2498,8 @@ export class Engine {
     const outcome: QueryOutcome = { results, elapsedMs: performance.now() - started, scriptReport: report, ...(warnings ? { warnings: warnings.report } : {}) };
     if (report.errors.length) {
       const first = report.errors[0];
-      outcome.failure = { statementOrdinal: first.statementOrdinal, statementsCompleted: first.statementsCompleted, message: queryScriptReportSummary(report), ...(first.sourceRange ? { sourceRange: { ...first.sourceRange } } : {}) };
+      outcome.failure = { statementOrdinal: first.statementOrdinal, statementsCompleted: first.statementsCompleted, message: queryScriptReportSummary(report),
+        ...(first.sourceRange ? { sourceRange: { ...first.sourceRange } } : {}), ...(first.errorRange ? {errorRange: first.errorRange} : {}) };
     }
     const status = task.managed.serverStatus;
     if (!task.managed.broken && task.managed.transactionStateKnown === true && Number.isInteger(status) && status! >= 0 && status! <= 65535) outcome.transactionOpen = Boolean(status! & 1);
@@ -2616,7 +2627,8 @@ export class Engine {
   }
 
   /** 多结果集按服务器序号隔离；IPC 每批至多 200 行，返回结果受用户上限约束。 */
-  private async streamQuery(task: RunningTask, sql: string, maxRows: number, offset: number, budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 }, displaySql = sql, reportExecutionSql = false, continuing?: { driverError(error: Error): void; commandEnded?(): void; commandSucceeded?(): void; affectedRows?(value: unknown): void }): Promise<QueryResult[]> {
+  private async streamQuery(task: RunningTask, sql: string, maxRows: number, offset: number, budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 }, displaySql = sql, reportExecutionSql = false, continuing?: { driverError(error: Error): void; commandEnded?(): void; commandSucceeded?(): void; affectedRows?(value: unknown): void },
+    observeDriverError?: (error: Error) => void): Promise<QueryResult[]> {
     this.checkCancelled(task);
     const statusEntries = task.queryStatus?.report.entries;
     const statusIndex = statusEntries?.length ?? mysqlQueryStatusLimit;
@@ -2734,6 +2746,7 @@ export class Engine {
           if (batch.length >= 200 || (batchBytes.get(index) ?? 0) >= 256 * 1024) flush(index);
         }));
         query.once('error', error => {
+          if (!settled) observeDriverError?.(error);
           if (!continuing) { fail(error); return; }
           if (!deferredError) { deferredError = error; continuing.driverError(error); }
           // 服务器ERR不等于命令end；原终态到达前不能发送状态诊断或下一句。

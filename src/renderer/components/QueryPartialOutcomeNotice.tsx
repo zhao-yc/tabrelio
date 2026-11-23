@@ -3,15 +3,15 @@ import { queryPartialOutcomeZh as text } from '../locales/queryPartialOutcome.zh
 import { queryFailureSourceZh as sourceText } from '../locales/queryFailureSource.zh-CN';
 
 /** 仅展示可信执行序号与完整结果数，失败原消息由原ErrorBox显示，不回显源SQL。 */
-export function QueryPartialOutcomeNotice({ failure, completedResults, onLocate, locateAvailable = false, onLocatePosition, positionAvailable = false }: {
+export function QueryPartialOutcomeNotice({ failure, completedResults, onLocate, locateAvailable = false, onLocatePosition, positionAvailable = false, positionLabel = sourceText.locatePosition }: {
   failure: QueryFailure; completedResults: number; onLocate?(): void; locateAvailable?: boolean;
-  onLocatePosition?(failure: QueryFailure): void; positionAvailable?: boolean;
+  onLocatePosition?(failure: QueryFailure): void; positionAvailable?: boolean; positionLabel?: string;
 }) {
   return <section className="query-partial-outcome warning-text" role="status" aria-label={text.title}>
     <strong>{text.title}</strong><p>{text.position(failure.statementOrdinal, failure.statementsCompleted)}</p>
     <p>{completedResults ? text.retained(completedResults) : text.empty}</p><p>{text.warning}</p>
     <button disabled={!locateAvailable || !onLocate} title={locateAvailable ? sourceText.available : sourceText.unavailable} onClick={onLocate}>{sourceText.locate}</button>
-    {failure.errorRange && onLocatePosition && <button disabled={!positionAvailable} onClick={() => onLocatePosition(failure)}>{sourceText.locatePosition}</button>}
+    {failure.errorRange && onLocatePosition && <button disabled={!positionAvailable} onClick={() => onLocatePosition(failure)}>{positionLabel}</button>}
     {!locateAvailable && <p className="muted small">{sourceText.unavailable}</p>}
   </section>;
 }

@@ -1188,6 +1188,8 @@ PostgreSQL 返回原 SQL 的确切错误位置时，可点「定位错误位置�
 
 SQLite 查询也可在「定位错误位置」跳到原生编译器指出的字符或原命名参数模板。「遇错继续」可逐条定位。约束失败、超时及其他没有原生字符偏移的错误仍按可确认的语句范围定位。 [SQLite 原生错误位置](https://sqlite.org/c3ref/errcode.html)
 
+MySQL 和 MariaDB 返回标准英文语法错误，且报错片段能与本次发送的 SQL 对上时，可用「定位报错行」选中原稿中的对应行。支持全文、选区、当前语句和参数模板，「遇错继续」可逐条定位。MySQL 5.7 报告的上一行可以用唯一匹配的相邻片段校正。数据库返回空片段、其他语言的提示、动态 SQL 的内部错误或其他无法核对的位置时，可用整句定位。 [MySQL 错误响应](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_basic_err_packet.html) · [MariaDB 错误码](https://mariadb.com/docs/server/reference/error-codes/mariadb-error-code-reference)
+
 PostgreSQL 查询页也支持[未完成语句定位](development/postgres-failure-source-20261107.md)。首错停止后可查看此前完整结果，点击定位选择原语句；仅结果布局会恢复编辑区。范围按实际执行模板确认，位置参数值不进入定位信息。失败事务仍需明确处理，不自动回滚或重放。
 
 “执行计划”仅接受一条可解释语句，不执行 `EXPLAIN ANALYZE`。事务可以开始、提交或回滚；DDL 通常隐式提交，执行前核对 SQL，不能依赖回滚撤销结构变更。

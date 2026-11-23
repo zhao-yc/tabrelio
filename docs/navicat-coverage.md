@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。MySQL／MariaDB 可从已核对的原生语法报错定位原稿行。普通执行、参数执行、警告采集和遇错继续均使用实际发送的语句核对，定位回包只带原稿范围。Q02 继续为部分覆盖。 [MySQL 错误响应](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_basic_err_packet.html) · [MariaDB 错误响应](https://mariadb.com/docs/server/reference/clientserver-protocol/4-server-response-packets/err_packet)
+
 2026-11-24 源码增量。SQLite 查询和语法检查可按原生编译错误的 UTF-8 偏移跳到原草稿字符，命名模板改写后仍可定位。全文、选区、当前语句及遇错继续沿用原执行和事务边界。Q01、Q02、R02 继续为部分覆盖。 [SQLite 原生错误位置](https://sqlite.org/c3ref/errcode.html)
 
 2026-11-24 源码增量。PostgreSQL 查询页可根据服务器返回的位置跳到原草稿中的出错字符、参数模板或语句末尾。支持全文、选区、当前语句、参数执行和遇错继续，仍可独立选中整个失败语句。Q02、R01 继续为部分覆盖。 [PostgreSQL 错误字段](https://www.postgresql.org/docs/18/protocol-error-fields.html)
