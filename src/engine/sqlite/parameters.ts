@@ -1,5 +1,6 @@
 import { queryParameterLimits, type QueryParameterNames } from '../../shared/queryParameters';
 import { navicatParameterNameAt } from '../../shared/navicatParameter';
+import { sqliteNamedBindAt } from '../../shared/sqliteNamedBind';
 import { sqliteStatementRanges } from './currentStatement';
 
 const identifierStart = (value: string) => /[A-Za-z_\u0080-\uFFFF]/.test(value);
@@ -36,10 +37,10 @@ export function sqliteParameterPlan(sql: string, navicat = false): {sql: string;
     }
     if (character === '?' || character === '@' || character === '$') throw Error('SQLite类型参数查询只接受 :name，不接受问号、@ 或 $ 参数');
     if (character === ':') {
-      const start = ++index;
+      const start = index++;
       while (index < sql.length && identifierPart(sql[index])) index++;
-      const name = sql.slice(start, index);
-      if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name) || sql[index] === ':') throw Error('SQLite值参数名须为1～64位ASCII字母、数字或下划线，不能以数字开头或使用其他参数格式');
+      const name = sqliteNamedBindAt(sql, start, index);
+      if (!name) throw Error('SQLite值参数名须为1～64位ASCII字母、数字或下划线，不能以数字开头或使用其他参数格式');
       add(name);
       continue;
     }

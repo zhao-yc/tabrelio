@@ -4,6 +4,8 @@
 
 SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段、表别名，明确输出列的 CTE／派生表，以及 `main`／`temp` 限定。建议按准确名称使用 SQLite 双引号转义，以普通文本插入；同名字段保留各自别名限定。INSERT 字段清单、UPDATE 赋值左侧及 RETURNING 使用目标表字段。
 
+在可绑定的查询和写入表达式中输入 `:` 或参数名前缀，可复用当前草稿中已有的 `:name`。候选区分大小写，优先当前语句，接受时替换完整占位符。悬停显示本语句和当前草稿的引用次数。名称取自当前编辑器文本，引号和注释中的内容会被忽略。补全和悬停无需读取参数值、数据库目录或执行 SQL。 [SQLite 参数](https://www.sqlite.org/lang_expr.html#parameters)
+
 `WITH … AS (VALUES …)` 和 `FROM (VALUES …)` 支持从完整的值列表推导 `column1`、`column2` 等局部输出列。显式 CTE 列清单优先，复合输出沿用首分支，星号和 `USING` 可使用已知列。匿名来源的裸列只在最近作用域内能唯一匹配时补全或悬停。相关引用可能继承实际列名、行宽不符或行边界未闭合时，推导保留未知状态。 [SQLite VALUES](https://www.sqlite.org/lang_select.html#values)
 
 SQLite UPSERT 的 `ON CONFLICT` 可按当前连接的主键、rowid 和唯一索引补齐完整冲突目标。直接在关键字后补全可带入表达式及部分索引的原有 `WHERE`。在已有括号中可补齐普通唯一键的剩余项，保留已输入的项和后续动作。候选使用索引真实排序规则，复杂手写表达式和谓词仍提供列提示。完整与部分索引可能匹配同组目标时，目录标记部分可用。 [SQLite UPSERT](https://www.sqlite.org/lang_upsert.html)

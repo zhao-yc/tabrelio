@@ -21,7 +21,7 @@ describe('SQLite参数名纯词法与整篇预算', () => {
   it('触发器完整体和引用倍写均不把内部引用拆成参数或独立SQL', () => {
     expect(sqliteNamedParameterNames('CREATE TRIGGER t AFTER INSERT ON a BEGIN INSERT INTO b VALUES(\':fake\'\';\',"双""?:引",`反``:引`); END;SELECT :real;')).toEqual(['real']);
   });
-  it.each(['?', '?12', '@value', '$value', '$value::namespace', ':1bad', ':中文', ':ascii中文', ':' + 'a'.repeat(65), ':a$b', ':a::b'])('不接受的%s格式在前序写入之前整篇拒绝', parameter => {
+  it.each(['?', '?12', '@value', '$value', '$value::namespace', ':1bad', ':中文', ':ascii中文', ':' + 'a'.repeat(65), ':a$b', ':a::b', ':a(suffix)'])('不接受的%s格式在前序写入之前整篇拒绝', parameter => {
     expect(() => sqliteNamedParameterNames('INSERT INTO t VALUES(1); SELECT ' + parameter)).toThrow(/参数/);
   });
   it.each(['', ' ; --只有注释', '/*没有SQL*/;', 'SELECT :a; SELECT \'未闭合', 'SELECT :a; /*未闭合', 'SELECT :a; CREATE TRIGGER t AFTER INSERT ON a BEGIN SELECT 1;', 'DELIMITER $$\nSELECT :a$$', 'SELECT :a;\0'])('空或未完成模板%j不回退执行前句', source => {

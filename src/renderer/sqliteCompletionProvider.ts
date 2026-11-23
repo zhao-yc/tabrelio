@@ -150,7 +150,7 @@ export function createSqliteCompletionProvider(ports: Ports) {
       finally { cancellation?.dispose(); change?.dispose(); if (operation.workerStop) await operation.workerStop; if (active === operation) active = undefined; operation.finish(); }
     }
   return {
-    triggerCharacters: ['.', '"', '`', '['],
+    triggerCharacters: ['.', '"', '`', '[', ':'],
     /** 两种入口复用原串行占门、目录stamp与原会话状态核验；只交付对应的有界结果。 */
     async provideCompletionItems(model: SqliteCompletionModel, position: Position, _context: unknown, token: Token): Promise<CompletionResult> {
       const result = await provide(model, position, token); return result && 'suggestions' in result ? result : { suggestions: [] };

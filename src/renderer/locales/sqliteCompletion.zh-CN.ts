@@ -31,6 +31,12 @@ export const sqliteCompletionZh = {
   triggerRow: { new: 'SQLite 触发器 NEW 行', old: 'SQLite 触发器 OLD 行' },
   dropObject: { table: 'SQLite 表', view: 'SQLite 视图', index: 'SQLite 索引', trigger: 'SQLite 触发器' },
   dropOwner: '关联对象',
+  parameter: {
+    title: 'SQLite 命名值参数',
+    references: (count: number) => '本语句 ' + count + ' 处',
+    draftReferences: (count: number) => '当前草稿 ' + count + ' 处',
+    otherStatement: '当前草稿的其它语句',
+  },
   conflictKey: {
     pk: '主键冲突目标',
     u: '唯一约束冲突目标',

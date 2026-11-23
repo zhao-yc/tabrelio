@@ -33,6 +33,10 @@ function fieldHover(binding: string, column: string, entry: Extract<SqliteComple
 export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysis, { status: 'ready' }>, directory: SqliteCompletionDirectory): Promise<string | undefined> {
   if (!analysis.target.prefix) return;
   const name = analysis.target.prefix, qualifiers = analysis.qualifiers;
+  if (analysis.parameter) {
+    const entry = analysis.parameter.items.find(item => ':' + item.name === name), labels = sqliteCompletionZh.parameter;
+    return entry ? markdown([labels.title, name, labels.references(entry.statementCount), labels.draftReferences(entry.occurrences)]) : undefined;
+  }
   let prefix = name.slice(0, sqliteCompletionLimits.prefixUnits);
   if (/[\uD800-\uDBFF]$/.test(prefix)) prefix = prefix.slice(0, -1);
   const body = analysis.triggerBody ? await resolveSqliteTriggerBody(analysis.triggerBody, directory) : undefined;

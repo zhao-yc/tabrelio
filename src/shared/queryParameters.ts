@@ -1,6 +1,9 @@
 import { isCivilDate } from './civilDate';
 import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { navicatParameterNameAt } from './navicatParameter';
+import { queryParameterLimits } from './queryParameterLimits';
+
+export { queryParameterLimits } from './queryParameterLimits';
 
 /** 参数只代表 SQL 值，不能代替数据库、表、字段等标识符。 */
 export const queryParameterTypes = ['text', 'integer', 'decimal', 'boolean', 'date', 'datetime', 'time', 'binary', 'null'] as const;
@@ -16,7 +19,6 @@ export interface SqlLexicalMode {
 }
 export interface QueryParameterStatementRange { start: number; end: number; }
 export interface QueryParameterNames extends SqlLexicalMode { names: string[]; warnings: string[]; maxDecimalScale: 30 | 38; allowTimeEndpointFraction: boolean; dialect?: 'mysql' | 'mariadb' | 'sqlite'; sqliteNavicatParameters?: true; currentStatementRange?: QueryParameterStatementRange; }
-export const queryParameterLimits = { names: 200, occurrences: 100000, valueBytes: 64 * 1024, totalBytes: 1024 * 1024, sqlBytes: 20 * 1024 * 1024 } as const;
 const encoder = new TextEncoder();
 
 /** 文本以 UTF-8 十六进制编码，值中的引号、NUL 和 SQL 分隔符均无法影响 SQL 结构。 */

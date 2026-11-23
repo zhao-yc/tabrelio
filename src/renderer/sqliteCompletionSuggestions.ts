@@ -4,7 +4,7 @@ import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 import { sqliteTableImportAffinity } from '../shared/sqliteTableImport';
 import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
 
-export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'index' | 'trigger' | 'collation' | 'function' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; snippet?: true; }
+export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'index' | 'trigger' | 'collation' | 'function' | 'alias' | 'keyword' | 'variable'; insertText: string; detail: string; trigger?: boolean; snippet?: true; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
 type PragmaFunctionArgument = Extract<NonNullable<Extract<SqliteCompletionAnalysis, { status: 'ready' }>['pragmaFunction']>, { kind: 'argument' }>;
 type PragmaObjectEntry = Extract<SqliteCompletionEntry, { kind: 'pragma-object' }>;
@@ -134,6 +134,13 @@ export function sqliteFunctionDetails(entry: Extract<SqliteCompletionEntry, { ki
 
 /** 建议只引用准确目录名；同名字段保留不同别名的限定插入，CTE声明不伪装成FROM绑定。 */
 export async function sqliteCompletionSuggestions(analysis: Extract<SqliteCompletionAnalysis, { status: 'ready' }>, directory: SqliteCompletionDirectory): Promise<{ items: SqliteCompletionItem[]; incomplete: boolean }> {
+  if (analysis.parameter) return {
+    items: analysis.parameter.items.map(({ name, statementCount }) => {
+      const label = ':' + name;
+      return { label, kind: 'variable', insertText: label, detail: statementCount ? text.parameter.references(statementCount) : text.parameter.otherStatement };
+    }),
+    incomplete: analysis.parameter.incomplete === true,
+  };
   const items: SqliteCompletionItem[] = [], seen = new Set<string>(), qualifiers = analysis.qualifiers;
   const prefix = fold(analysis.columnType ? analysis.target.prefix.replace(/[\t ]+/g, ' ') : analysis.target.prefix);
   let incomplete = false;
