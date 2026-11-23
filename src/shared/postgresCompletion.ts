@@ -4,6 +4,7 @@ export const postgresCompletionLimits = { source: 64 * 1024, tokens: 4096, items
 const text = z.string().max(postgresCompletionLimits.name).refine(value => !value.includes('\0'));
 const name = text.refine(value => value.length > 0);
 const target = z.object({ connectionId: name, database: name, prefix: text, sessionId: name.optional() });
+const fieldIdentifier = name.refine(value => !/[\uD800-\uDFFF]/u.test(value) && new TextEncoder().encode(value).length <= 63);
 const functionCall = z.object({
   argumentCount: z.number().int().min(0).max(postgresCompletionLimits.tokens), scalarAlias: name.optional(),
 }).strict();
@@ -28,6 +29,8 @@ export const postgresCompletionSchema = z.discriminatedUnion('kind', [
   target.extend({ kind: z.literal('relations'), schema: name.optional(), routine: routine.optional(), mergeTarget: z.literal(true).optional() }).strict(),
   target.extend({ kind: z.literal('columns'), relations: z.array(postgresCompletionReferenceSchema).min(1).max(postgresCompletionLimits.relations),
     routine: routine.optional() }).strict(),
+  target.extend({ kind: z.literal('columnDetails'), prefix: fieldIdentifier,
+    relations: z.array(z.object({ name: fieldIdentifier, schema: fieldIdentifier.optional() }).strict()).min(1).max(postgresCompletionLimits.relations) }).strict(),
   target.extend({ kind: z.literal('routines'), routine }).strict(),
   target.extend({ kind: z.literal('signatures'), prefix: name, routine }).strict(),
 ]);
@@ -40,6 +43,8 @@ export type PostgresCompletionItem =
   | { kind: 'schema'; name: string }
   | { kind: 'table' | 'view'; schema: string; name: string }
   | { kind: 'column'; reference: number; name: string; type: string }
+  | { kind: 'columnDetail'; reference: number; name: string; schema: string; relation: string; type: string;
+    nullable: boolean; expression: string | null; generated: boolean; comment: string | null; temporary: boolean }
   | { kind: 'routine'; schema: string; name: string; arguments: string; returns: string | null; category: 'f' | 'p' | 'a' | 'w';
     parameters?: PostgresRoutineParameter[]; directArguments?: number };
 export interface PostgresCompletionResult {

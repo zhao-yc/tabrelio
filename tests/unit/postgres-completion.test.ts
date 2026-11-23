@@ -4,7 +4,7 @@ import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../src/shared/postgresCompletion';
 import { createPostgresCompletionProvider } from '../../src/renderer/postgresCompletionProvider';
 import { describe, expect, it, vi } from 'vitest';
-import { analyzePostgresCompletion, analyzePostgresObjectDefinition, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
+import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresObjectDefinition, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from '../../src/renderer/postgresNamedParameterReferences';
 
 /** 测试使用竖线表示编辑器光标，其余 SQL 原样进入生产词法。 */
@@ -23,10 +23,28 @@ it('对象定义只解析光标所在关系原名，保留限定名称及嵌套�
   expect(relation('SELECT * FROM app.gen|erate(1)')).toBeUndefined();
   expect(relation('SELECT * FROM "table" WHERE id = \"s|tr\"')).toBeUndefined();
   expect(relation('WITH target AS (SELECT 1) UPDATE tar|get SET value=1')).toMatchObject({ name: 'target' });
+  expect(relation('INSERT INTO "Case".tar|get (value) VALUES (1)')).toMatchObject({ schema: 'Case', name: 'target' });
   expect(relation('MERGE INTO app.t USING app.so|urce s ON t.id = s.id WHEN MATCHED THEN DELETE')).toMatchObject({ schema: 'app', name: 'source' });
   const ambiguous = "SELECT 'a\\'; SELECT * FROM tab|le_name; -- '";
   expect(relation(ambiguous, true)).toMatchObject({ name: 'table_name' });
   expect(relation(ambiguous)).toBeUndefined();
+});
+
+it('字段悬停解析精确名称、可见层及候选关系，避开别名声明、类型和本地投影', () => {
+  const field = (marked: string) => analyzePostgresFieldHover(marked.replace('|', ''), marked.indexOf('|'));
+  expect(field('SELECT x."Am|ount" FROM app.orders AS x')).toMatchObject({ name: 'Amount', relations: [{ schema: 'app', name: 'orders', alias: 'x' }] });
+  expect(field('SELECT app.orders.aM|OUNT FROM app.orders')).toMatchObject({ name: 'amount', relations: [{ schema: 'app', name: 'orders' }] });
+  expect(field('SELECT (SELECT x.a|mt FROM app.inner_table x) FROM app.outer_table x')).toMatchObject({ relations: [{ name: 'inner_table' }] });
+  expect(field('SELECT a.id FROM public.a a JOIN public.b b ON a.id=b.id WHERE aM|OUNT>1'))
+    .toMatchObject({ name: 'amount', relations: [{ name: 'a', alias: 'a' }, { name: 'b', alias: 'b' }] });
+  expect(field('INSERT INTO accounts (amount) VALUES (1) RETURNING new.a|mount')).toMatchObject({ name: 'amount', relations: [{ name: 'accounts', alias: 'new' }] });
+  for (const sample of [
+    'WITH x AS (SELECT 1 id) SELECT x.i|d FROM x', 'SELECT x.i|d FROM (SELECT 1 id) x',
+    'SELECT x.i|d FROM app.orders AS x(id)', 'SELECT x.id::x.i|d FROM app.orders x',
+    'SELECT 1 AS am|ount FROM app.orders', 'SELECT 1 AS amount FROM app.orders ORDER BY am|ount',
+    'SELECT i|d FROM a JOIN b USING (id)', 'SELECT a.id FROM a, b JOIN c ON a.i|d=c.id',
+    'SELECT app.o|rders.id FROM app.orders', 'SELECT x.i|d(1) FROM app.orders x',
+  ]) expect(field(sample), sample).toBeUndefined();
 });
 
 it('参数定位识别最近调用、命名参数、数组和嵌套逗号', () => {
@@ -385,6 +403,54 @@ function editor(marked: string, request: (input: PostgresCompletionInput) => Pro
     signature: () => provider.signatureHelp.provideSignatureHelp(model, position, token, { triggerKind: 1, isRetrigger: false }),
     hover: () => provider.hover.provideHover(model, position, token) };
 }
+
+it('悬停仅发送结构化字段请求，保留原备注文字并拒绝歧义、短回包和迟到结果', async () => {
+  const first = { kind: 'columnDetail', reference: 0, schema: 'app', relation: 'orders', name: 'amount', type: 'numeric(22,6)',
+    nullable: false, expression: '0.00', generated: false, comment: '<b>金额</b>', temporary: false } as const;
+  const request = vi.fn(async () => ({ items: [first], incomplete: false }));
+  const exact = editor('SELECT o.am|ount FROM app.orders o', request, '原会话');
+  const response = await exact.hover();
+  expect(request).toHaveBeenCalledWith({ kind: 'columnDetails', connectionId: '原连接', database: '原库', sessionId: '原会话',
+    prefix: 'amount', relations: [{ schema: 'app', name: 'orders' }] });
+  expect(response?.contents[0]).toMatchObject({ value: expect.stringContaining('    允许NULL（目录）：否'), supportHtml: false, isTrusted: false });
+  expect(response?.contents[0].value).toContain('    备注：<b>金额</b>');
+
+  const ambiguous = editor('SELECT am|ount FROM app.orders a CROSS JOIN app.orders b', async () => ({
+    items: [first, { ...first, reference: 1 }], incomplete: false,
+  }));
+  const conflict = (await ambiguous.hover())?.contents[0].value;
+  expect(conflict).toContain('未限定字段存在多个候选来源');
+  expect(conflict).toContain('"a" → "app"."orders"."amount"');
+  expect(conflict).toContain('"b" → "app"."orders"."amount"');
+  expect(conflict).not.toContain('numeric');
+
+  const partial = editor('SELECT o.am|ount FROM app.orders o', async () => ({ items: [first], incomplete: true }));
+  expect(await partial.hover()).toBeNull();
+  let release: ((reply: PostgresCompletionResult) => void) | undefined;
+  const stale = editor('SELECT o.am|ount FROM app.orders o', () => new Promise(resolve => { release = resolve; }));
+  const pending = stale.hover();
+  stale.provider.invalidate();
+  release?.({ items: [first], incomplete: false });
+  expect(await pending).toBeNull();
+  for (const client of [exact, ambiguous, partial, stale]) client.provider.dispose();
+});
+
+it('物理字段目录只按完整解析的候选消歧，字段无权或关系未确认时拒绝其它候选代替', async () => {
+  const input: PostgresCompletionInput = { kind: 'columnDetails', connectionId: '原连接', database: '原库', prefix: 'Amount',
+    relations: [{ schema: 'sales', name: 'orders' }, { name: 'closed_orders' }] };
+  const first = { c0: '1', c1: 'sales', c2: 'orders', c3: 't', c4: 'Amount', c5: 'numeric(28,7)', c6: 'f',
+    c7: '1.00', c8: 'f', c9: null, c10: 'f' };
+  const withoutName = { c0: '2', c3: 'f' };
+  const unreadable = { c0: '2', c3: 't', c4: null };
+  for (const [rows, incomplete] of [[[first, withoutName], false], [[first, unreadable], true], [[first], true]] as const) {
+    const query = vi.fn(async (sql: string, _values?: unknown[]) => ({ rows: sql.includes('to_regclass') ? rows : [], truncated: false }));
+    const connection = { database: '原库', query } as unknown as PostgresConnection;
+    const result = await readPostgresCompletion(connection, input);
+    expect(query).toHaveBeenLastCalledWith(expect.stringContaining('pg_catalog.to_regclass'), [['"sales"."orders"', '"closed_orders"'], 'Amount'], expect.any(Object));
+    expect(result.incomplete).toBe(incomplete);
+    expect(result.items).toEqual(incomplete ? [] : [expect.objectContaining({ kind: 'columnDetail', name: 'Amount', nullable: false })]);
+  }
+});
 
 it('离线参数补全优先建议本语句的匹配名称，整段替换并保留后续类型转换', async () => {
   const active = '[$ne_tail]', marked = "SELECT [$needle], [$Needle], '[$never]'; SELECT [$near], [$ne|_tail]::int, [$near]";

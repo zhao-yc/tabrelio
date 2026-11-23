@@ -2,10 +2,11 @@ import type * as monaco from 'monaco-editor';
 import type { PostgresCompletionInput, PostgresCompletionReference, PostgresCompletionResult } from '../shared/postgresCompletion';
 import { postgresCompletionLimits } from '../shared/postgresCompletion';
 import { postgresIdentifier } from '../shared/postgresSql';
-import { analyzePostgresCompletion, analyzePostgresSignature } from './postgresCompletionAnalysis';
+import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresSignature, type PostgresFieldTarget } from './postgresCompletionAnalysis';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from './postgresNamedParameterReferences';
 import { postgresSignatureHelp } from './postgresSignatureHelp';
 import { postgresZh } from './locales/postgres.zh-CN';
+import { sqlFieldHoverZh as fieldText } from './locales/sqlFieldHover.zh-CN';
 
 export interface PostgresCompletionScope { tabId: string; connectionId: string; database: string; connectionVersion: number; sessionId?: string; }
 type Kind = 'schema' | 'table' | 'view' | 'column' | 'routine' | 'keyword' | 'variable';
@@ -14,6 +15,27 @@ const keywords = ['SELECT','FROM','JOIN','LEFT JOIN','RIGHT JOIN','INNER JOIN','
   'HAVING','LIMIT','OFFSET','INSERT INTO','VALUES','UPDATE','SET','DELETE FROM','RETURNING','ON CONFLICT',
   'DISTINCT','WITH','UNION ALL','IS NULL','IS NOT NULL','CASE','WHEN','THEN','ELSE','END','BEGIN','COMMIT','ROLLBACK',
   'WINDOW','OVER','FILTER','PARTITION BY','ROWS','RANGE','BETWEEN','UNBOUNDED','PRECEDING','FOLLOWING','CURRENT ROW'];
+
+/** 名称、默认值和备注均作为纯文本显示，不能在悬停中产生HTML或可点击命令。 */
+function fieldHoverText(field: PostgresFieldTarget, result: PostgresCompletionResult): string | undefined {
+  if (result.incomplete || result.deferred) return;
+  const items = result.items.filter(item => item.kind === 'columnDetail')
+    .filter(item => item.name === field.name && !!field.relations[item.reference]);
+  if (!items.length) return;
+  const qualified = (item: typeof items[number]) => [item.schema, item.relation, item.name].map(postgresIdentifier).join('.');
+  const relation = (item: typeof items[number]) => {
+    const alias = field.relations[item.reference].alias;
+    return alias ? postgresIdentifier(alias) + ' → ' + qualified(item) : qualified(item);
+  };
+  const [item] = items;
+  const lines = items.length > 1 ? [fieldText.ambiguous, ...items.map(relation)] : [
+    fieldText.field + '：' + relation(item), fieldText.source + '：' + (item.temporary ? fieldText.temporary : fieldText.permanent),
+    fieldText.type + '：' + item.type, fieldText.catalogNullable + '：' + (item.nullable ? fieldText.yes : fieldText.no),
+    (item.generated ? fieldText.generatedExpression : fieldText.defaultValue) + '：' + (item.expression ?? fieldText.noDefault),
+    fieldText.comment + '：' + (item.comment ?? fieldText.none),
+  ];
+  return lines.join('\n').split(/\r\n|\r|\n/).map(line => '    ' + line).join('\n');
+}
 
 /** 等待短防抖，编辑取消立即唤醒，目录在途请求只由原承诺收尾。 */
 function debounce(signal: AbortSignal, milliseconds: number): Promise<void> {
@@ -44,6 +66,7 @@ export function createPostgresCompletionProvider(options: {
   let active: AbortController | undefined;
   let inFlight: Promise<PostgresCompletionResult> | undefined;
   let signatureGeneration = 0;
+  let hoverGeneration = 0;
   let disposed = false;
   const { connectionId, database, sessionId } = options.scope;
   const target = { connectionId, database, ...(sessionId ? { sessionId } : {}) };
@@ -86,15 +109,30 @@ export function createPostgresCompletionProvider(options: {
   return {
     signatureHelp,
     hover: {
-      provideHover(model, position, token) {
+      async provideHover(model, position, token) {
         if (disposed || !options.current() || options.model() !== model || model.isDisposed() || token.isCancellationRequested ||
             model.getValueLength() > postgresCompletionLimits.source) return null;
-        const fact = postgresNamedParameterHover(model.getValue(), model.getOffsetAt(position), options.standardStrings);
-        if (!fact) return null;
-        const start = model.getPositionAt(fact.start), end = model.getPositionAt(fact.end);
-        return { range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column },
-          contents: [{ value: '`[$' + fact.name + ']` · ' + parameterText.title },
-            { value: parameterText.references(fact.statementCount, fact.draftCount) }] };
+        const generation = ++hoverGeneration, version = model.getVersionId();
+        const source = model.getValue(), offset = model.getOffsetAt(position);
+        const range = (value: { start: number; end: number }) => {
+          const start = model.getPositionAt(value.start), end = model.getPositionAt(value.end);
+          return { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+        };
+        const fact = postgresNamedParameterHover(source, offset, options.standardStrings);
+        if (fact) return { range: range(fact), contents: [{ value: '`[$' + fact.name + ']` · ' + parameterText.title },
+          { value: parameterText.references(fact.statementCount, fact.draftCount) }] };
+        if (active) return null;
+        const field = analyzePostgresFieldHover(source, offset, options.standardStrings);
+        if (!field) return null;
+        const current = () => !disposed && !active && hoverGeneration === generation && !token.isCancellationRequested &&
+          options.current() && options.model() === model && !model.isDisposed() && model.getVersionId() === version;
+        try {
+          const result = await request({ ...target, kind: 'columnDetails', prefix: field.name,
+            relations: field.relations.map(({ alias: _, ...relation }) => relation) }, current);
+          if (!result || !current()) return null;
+          const value = fieldHoverText(field, result);
+          return value ? { range: range(field), contents: [{ value, isTrusted: false, supportHtml: false }] } : null;
+        } catch { return null; }
       },
     },
     triggerCharacters: ['.', '"', '$'],
@@ -175,6 +213,7 @@ export function createPostgresCompletionProvider(options: {
             sortText: '0' + String(suggestions.length).padStart(3, '0') });
         }
         for (const item of result.items) {
+          if (item.kind === 'columnDetail') continue;
           const filterText = quoted ? '"' + item.name.replaceAll('"', '""') : item.name;
           const common = { range, kind: options.kinds[item.kind], filterText, sortText: '0' + String(suggestions.length).padStart(3, '0') };
           if (item.kind === 'schema' && query?.kind === 'relations' && !query.schema) {
@@ -232,8 +271,8 @@ export function createPostgresCompletionProvider(options: {
       }
     },
     /** 标签切换即撤销本次请求，返回原标签也不会复活旧建议。 */
-    invalidate() { active?.abort(); signatureGeneration++; },
+    invalidate() { active?.abort(); signatureGeneration++; hoverGeneration++; },
     /** 卸载后只终止本地交付，原目录承诺仍由引擎按原连接收尾。 */
-    dispose() { disposed = true; active?.abort(); signatureGeneration++; },
+    dispose() { disposed = true; active?.abort(); signatureGeneration++; hoverGeneration++; },
   };
 }

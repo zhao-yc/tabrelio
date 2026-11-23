@@ -2062,6 +2062,85 @@ test('PostgreSQL 语句折叠使用真实会话缓存更新范围', async () => 
   await quitDesktop();
 });
 
+test('PostgreSQL 字段悬停读取真实目录并区分同名、临时和歧义来源', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query(`CREATE SCHEMA hover_source;
+      CREATE TABLE public.hover_probe ("Amount" numeric(28,7) NOT NULL DEFAULT 17.25, amount text,
+        "Calculated" numeric(28,7) GENERATED ALWAYS AS ("Amount" + 1) STORED);
+      COMMENT ON COLUMN public.hover_probe."Amount" IS '<b>精确金额</b>';
+      CREATE TABLE hover_source.hover_probe ("Amount" varchar(16) DEFAULT '路径优先');`);
+    const sql = 'SELECT h."Amount" FROM public.hover_probe h;', history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await prepare({id: '', name: '隔离 PostgreSQL 字段悬停', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, sql);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const identity = (await inspectModel()).identity;
+    const hover = tab().locator('.monaco-hover:visible');
+    const show = async (source: string, word: string, pointer = false) => {
+      await replaceDraft(source);
+      const position = {lineNumber: 1, column: source.indexOf(word) + 3};
+      await modelSelection(position.lineNumber, position.column);
+      if (pointer) {
+        const point = await editor().evaluate((element, location) => {
+          const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+          const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+          const cursor = instance?.getScrolledVisiblePosition(location), rect = instance?.getDomNode()?.getBoundingClientRect();
+          if (!cursor || !rect) throw Error('缺少字段可见位置');
+          return {x: rect.left + cursor.left, y: rect.top + cursor.top + cursor.height / 2};
+        }, position);
+        await page.mouse.move(point.x, point.y);
+      } else {
+        await page.keyboard.press('ControlOrMeta+K');
+        await page.keyboard.press('ControlOrMeta+I');
+      }
+    };
+    const read = async (source: string, word: string, expected: readonly string[], pointer = false) => {
+      const baseline = await history();
+      await show(source, word, pointer);
+      for (const text of expected) await expect(hover).toContainText(text);
+      if (pointer) {
+        await expect(hover.locator('b')).toHaveCount(0);
+        await page.screenshot({path: info.outputPath('PostgreSQL字段真实目录悬停.png'), animations: 'disabled'});
+      }
+      await page.keyboard.press('Escape');
+      await expect(hover).not.toBeVisible();
+      expect(await history()).toEqual(baseline);
+      expect((await inspectModel()).sql).toBe(source);
+      expect((await inspectModel()).identity).toEqual(identity);
+    };
+    await read(sql, 'Amount', ['"public"."hover_probe"."Amount"', 'numeric(28,7)', '允许NULL（目录）：否', '17.25', '<b>精确金额</b>'], true);
+    await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+    await read('SELECT h.amount FROM public.hover_probe h;', 'amount', ['"amount"', '类型：text']);
+    await read('SELECT h."Calculated" FROM public.hover_probe h;', 'Calculated', ['生成表达式（目录文本）', '"Amount" +']);
+    await read('SELECT "Amount" FROM public.hover_probe a CROSS JOIN hover_source.hover_probe b;', 'Amount',
+      ['未限定字段存在多个候选来源', '"a" → "public"', '"b" → "hover_source"']);
+
+    const execute = async (source: string) => {
+      await replaceDraft(source);
+      await command('execute-all');
+      await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === source)).toBe(true);
+      await expect.poll(() => enabled('execute-all')).toBe(true);
+    };
+    await execute('SET search_path = hover_source, public');
+    await execute('SELECT 8472 AS retained_result');
+    const prior = tab().getByRole('gridcell', {name: '8472', exact: true});
+    await expect(prior).toBeVisible();
+    await read('SELECT h."Amount" FROM hover_probe h;', 'Amount', ['"hover_source"."hover_probe"', 'character varying(16)', '路径优先']);
+    await expect(prior).toBeVisible();
+    await execute('CREATE TEMP TABLE hover_probe ("Amount" bigint NOT NULL DEFAULT 99)');
+    await read('SELECT h."Amount" FROM hover_probe h;', 'Amount', ['"pg_temp"."hover_probe"', '当前会话临时表', '类型：bigint', '99']);
+    await read(sql, 'Amount', ['"public"."hover_probe"', 'numeric(28,7)']);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL 查询光标查看对象定义按原搜索路径解析并保留原事务', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

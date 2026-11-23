@@ -8,13 +8,18 @@ type Group = { kind: 'group'; start: number; end: number; closed: boolean; closi
 type Part = PostgresEditorToken | Group;
 interface Projection { names: (string | null)[]; stars: PostgresCompletionReference[]; exact: boolean; declaration?: LocalReferenceRange; }
 export interface PostgresCompletionRelation extends PostgresCompletionReference { alias?: string; projection?: Projection; qualifiedOnly?: boolean; }
-interface ScopedRelation extends PostgresCompletionRelation { declaration?: LocalReferenceRange; usingColumns?: string[]; }
+interface ScopedRelation extends PostgresCompletionRelation { declaration?: LocalReferenceRange; usingColumns?: string[]; physical?: true; }
 interface PhysicalRelation extends LocalReferenceRange { name: string; schema?: string; }
+export interface PostgresFieldTarget extends LocalReferenceRange {
+  name: string;
+  relations: { name: string; schema?: string; alias?: string }[];
+}
 interface ReferenceTrace {
   edges: Map<PostgresEditorToken, LocalReferenceRange>;
   declarations: Map<number, 'alias' | 'cte'>;
   implicitNames: Map<number, Set<string>>;
   physicalRelations?: PhysicalRelation[];
+  field?: { offset: number; target?: PostgresFieldTarget };
   unsupported: boolean;
 }
 interface RelationSpan { end: number; relation: number; }
@@ -255,11 +260,43 @@ function traceQualifier(parts: Part[], i: number, visible: ScopedRelation[][], t
   }
 }
 
+const bareFieldPrefix = new Set(['SELECT', 'DISTINCT', 'ALL', 'WHERE', 'ON', 'WHEN', 'THEN', 'ELSE', 'AND', 'OR', 'NOT', 'BETWEEN', 'LIKE', 'ILIKE']);
+
+/** 只在已确认的表达式位置收集字段，限定名沿查询块遮蔽规则解析。 */
+function traceField(parts: Part[], i: number, visible: ScopedRelation[][], field: NonNullable<ReferenceTrace['field']>, bare: boolean): void {
+  const token = parts[i], name = identifier(token), before = parts[i - 1], after = parts[i + 1];
+  if (!name || token.start > field.offset || field.offset > token.end || stop.has(keyword(token)) ||
+      punct(after, '.') || after?.kind === 'group' && after.closing === ')' ||
+      punct(after, '=') && punct(parts[i + 2], '>') || punct(after, ':') && punct(parts[i + 2], '=')) return;
+  let candidates: ScopedRelation[] | undefined;
+  if (punct(before, '.')) {
+    const owner = identifier(parts[i - 2]);
+    const scoped = punct(parts[i - 3], '.');
+    const schema = scoped ? identifier(parts[i - 4]) : undefined;
+    const prefix = parts[i - (scoped ? 5 : 3)];
+    if (!owner || scoped && !schema || punct(prefix, '.') || punct(prefix, ':') || ['AS', 'COLLATE'].includes(keyword(prefix))) return;
+    for (const scope of visible) {
+      const matches = scope.filter(relation => schema ? !relation.alias && relation.name === owner && relation.schema === schema :
+        (relation.alias ?? relation.name) === owner);
+      if (!matches.length) continue;
+      if (matches.length === 1) candidates = matches;
+      break;
+    }
+  } else if (bare && (bareFieldPrefix.has(keyword(before)) || before?.kind === 'punct' && expressionOperators.has(before.text))) {
+    candidates = visible.map(scope => scope.filter(relation => !relation.qualifiedOnly)).find(scope => scope.length);
+  }
+  if (!candidates?.length || candidates.length > limits.relations || candidates.some(relation => !relation.physical)) return;
+  field.target = { ...rangeOf(token), name, relations: candidates.map(({ name, schema, alias }) => ({ name, schema, alias })) };
+}
+
 /** 表达式子查询沿用可见的父查询；表来源自身的括号已经按 LATERAL 规则处理。 */
 function traceExpressions(parts: Part[], scope: Scope, refs: ScopedRelation[], outer: ScopedRelation[][],
   relations: ReadonlyMap<number, RelationSpan>, trace: ReferenceTrace): void {
   const levels = [refs, ...outer];
   const update = keyword(parts[0]) === 'UPDATE';
+  const bareSelect = !!trace.field && keyword(parts[0]) === 'SELECT' &&
+    !parts.some(part => ['NATURAL', 'USING'].includes(keyword(part)));
+  let bare = bareSelect;
   let joinStart = 0, lastRelation = -1;
   let inAssignments = false, assignmentTarget = false;
   for (let i = 0; i < parts.length && !trace.unsupported; i++) {
@@ -269,6 +306,7 @@ function traceExpressions(parts: Part[], scope: Scope, refs: ScopedRelation[], o
       if (word === 'FROM' || word === 'USING' || punct(part, ',')) joinStart = span.relation;
       levels[0] = refs;
       inAssignments = false;
+      bare = false;
       i = span.end - 1;
       continue;
     }
@@ -287,11 +325,15 @@ function traceExpressions(parts: Part[], scope: Scope, refs: ScopedRelation[], o
     if (endsFrom.has(word)) { levels[0] = refs; lastRelation = -1; }
     // ON 只可见本 JOIN 链已加入的关系，逗号分隔的前序表仍属于另外的 FROM 项。
     if (word === 'ON' && lastRelation >= 0) levels[0] = refs.slice(joinStart, lastRelation + 1);
+    if (endsFrom.has(word) || word === 'ON') bare = bareSelect && (word === 'WHERE' || word === 'ON');
     if (part.kind === 'group') {
       const command = keyword(part.parts[0]);
       if (referenceCommands.has(command)) parseQuery(part.parts, scope, levels, undefined, trace);
       else traceExpressions(part.parts, scope, levels[0], outer, new Map(), trace);
-    } else traceQualifier(parts, i, levels, trace);
+    } else {
+      traceQualifier(parts, i, levels, trace);
+      if (trace.field) traceField(parts, i, levels, trace.field, bare);
+    }
   }
 }
 
@@ -302,7 +344,7 @@ function returningScope(parts: Part[], refs: ScopedRelation[], outer: ScopedRela
   const visible = [...refs], specified = new Set<string>();
   const addAlias = (alias: string, declaration?: Part) => {
     if (declaration) trace?.declarations.set(declaration.start, 'alias');
-    visible.push({ name: target?.name ?? alias, schema: target?.schema, alias, declaration, qualifiedOnly: true });
+    visible.push({ name: target?.name ?? alias, schema: target?.schema, physical: target?.physical, alias, declaration, qualifiedOnly: true });
   };
   let start = 0;
   if (keyword(parts[0]) === 'WITH') {
@@ -326,8 +368,8 @@ function returningScope(parts: Part[], refs: ScopedRelation[], outer: ScopedRela
   return { refs: visible, start };
 }
 
-function traceReturning(parts: Part[], scope: Scope, refs: ScopedRelation[], outer: ScopedRelation[][], trace: ReferenceTrace): void {
-  const result = returningScope(parts, refs, outer, undefined, trace);
+function traceReturning(parts: Part[], scope: Scope, refs: ScopedRelation[], outer: ScopedRelation[][], trace: ReferenceTrace, target?: ScopedRelation): void {
+  const result = returningScope(parts, refs, outer, target, trace);
   if (!result) { trace.unsupported = true; return; }
   traceExpressions(parts.slice(result.start), scope, result.refs, outer, new Map(), trace);
 }
@@ -384,7 +426,8 @@ function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], tra
     index += 2;
     if (!name || stop.has(keyword(parts[index - 1]))) return false;
   }
-  const target: ScopedRelation = { name, schema };
+  trace.physicalRelations?.push({ name, ...(schema ? { schema } : {}), start: parts[2].start, end: parts[index - 1].end });
+  const target: ScopedRelation = { name, schema, physical: true };
   if (keyword(parts[index]) === 'AS') {
     const declaration = parts[index + 1], alias = identifier(declaration);
     if (!alias || stop.has(keyword(declaration))) return false;
@@ -426,10 +469,10 @@ function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], tra
     if (keyword(parts[action + 1]) === 'UPDATE') {
       if (!arbiter.length || keyword(parts[action + 2]) !== 'SET') return false;
       reserveImplicitName(trace, target.declaration, 'excluded');
-      traceExpressions(parts.slice(action + 1, end), scope, [target, { name: 'excluded' }], outer, new Map(), trace);
+      traceExpressions(parts.slice(action + 1, end), scope, [target, { ...target, alias: 'excluded', declaration: undefined, qualifiedOnly: true }], outer, new Map(), trace);
     } else if (action + 2 !== end) return false;
   }
-  if (returning >= 0 && !trace.unsupported) traceReturning(parts.slice(returning + 1), scope, [target], outer, trace);
+  if (returning >= 0 && !trace.unsupported) traceReturning(parts.slice(returning + 1), scope, [target], outer, trace, target);
   return !trace.unsupported;
 }
 
@@ -933,7 +976,8 @@ function readMergeRelation(parts: Part[], start: number, entryEnd: number, targe
   if (alias || name) analysis.names.add(alias ?? name);
   if (declaration) trace?.declarations.set(declaration.start, 'alias');
   if (renamed.names) projection = rename(projection ?? unknown, renamed.names);
-  return { relation: { name, schema, alias, projection, declaration: declaration ?? cte }, next: renamed.next };
+  return { relation: { name, schema, alias, projection, declaration: declaration ?? cte,
+    ...(name && !projection ? { physical: true as const } : {}) }, next: renamed.next };
 }
 
 interface MergeSource { relations: ScopedRelation[]; root?: ScopedRelation; projection: Projection; next: number; joined: boolean; }
@@ -1378,7 +1422,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       if (target && command === 'DELETE' && main[end] && !['USING', 'WHERE', 'RETURNING'].includes(keyword(main[end]))) return unsupported();
       spans!.set(i, { end, relation: refs.length });
       if (alias) trace.declarations.set(part.start, 'alias');
-      refs.push({ name, alias, schema, declaration: alias ? part : cte });
+      refs.push({ name, alias, schema, declaration: alias ? part : cte, ...(name && !projection ? { physical: true } : {}) });
       i = end - 1;
       continue;
     }
@@ -1386,7 +1430,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   }
   if (trace) {
     traceExpressions(returning < 0 ? main : main.slice(0, returning), scope, refs, outer, spans!, trace);
-    if (returning >= 0 && !trace.unsupported) traceReturning(main.slice(returning + 1), scope, refs, outer, trace);
+    if (returning >= 0 && !trace.unsupported) traceReturning(main.slice(returning + 1), scope, refs, outer, trace, write ? refs[0] : undefined);
     return { projection: unknown };
   }
   const projection = project(main, refs);
@@ -1429,10 +1473,10 @@ const noLocalReference = { status: 'blocked', reason: 'syntax' } as const;
 const rangeOf = ({ start, end }: LocalReferenceRange): LocalReferenceRange => ({ start, end });
 
 /** 声明及物理对象共用严格作用域分析，不能将引用截断或猜作同名关系。 */
-function tracePostgresStatement(source: string, offset: number, mode: boolean, physical = false):
+function tracePostgresStatement(source: string, offset: number, mode: boolean, intent: 'binding' | 'relation' | 'field' = 'binding'):
   { tokens: PostgresEditorToken[]; trace: ReferenceTrace } | Extract<LocalBindingReferences, { status: 'blocked' }> {
   let statement: ReturnType<typeof currentPostgresStatement>;
-  try { statement = currentPostgresStatement(source, offset, mode, physical); }
+  try { statement = currentPostgresStatement(source, offset, mode, intent !== 'binding'); }
   catch { return noLocalReference; }
   const scanned = scanPostgresEditorTokens(statement.sql, limits.tokens, mode);
   if (!scanned) return { status: 'blocked', reason: 'budget' } as const;
@@ -1442,11 +1486,11 @@ function tracePostgresStatement(source: string, offset: number, mode: boolean, p
     (encoder.encode(token.text).length > 63 || token.kind === 'identifier' &&
       (token.open || !token.text || /u&$/i.test(statement.sql.slice(Math.max(0, token.start - 2), token.start)))))) return noLocalReference;
   const tokens = scanned.map(token => ({ ...token, start: token.start + statement.start, end: token.end + statement.start }));
-  if (!physical && !tokens.some(token => identifier(token) && offset >= token.start && offset <= token.end)) return noLocalReference;
+  if (intent !== 'relation' && !tokens.some(token => identifier(token) && offset >= token.start && offset <= token.end)) return noLocalReference;
   const parts = groupStatement(tokens, offset, statement.end, true);
   if (!parts) return noLocalReference;
   const trace: ReferenceTrace = { edges: new Map(), declarations: new Map(), implicitNames: new Map(), unsupported: false,
-    ...(physical ? { physicalRelations: [] } : {}) };
+    ...(intent === 'relation' ? { physicalRelations: [] } : intent === 'field' ? { field: { offset } } : {}) };
   parseQuery(parts, new Map(), [], undefined, trace);
   return trace.unsupported ? noLocalReference : { tokens, trace };
 }
@@ -1482,9 +1526,20 @@ function analyzePostgresBinding<T extends LocalBindingReferences | LocalRename>(
 export function analyzePostgresObjectDefinition(source: string, offset: number, standardStrings?: boolean): PhysicalRelation | undefined {
   if (source.length > limits.source || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || /[\uD800-\uDFFF]/u.test(source)) return;
   const find = (mode: boolean) => {
-    const analysis = tracePostgresStatement(source, offset, mode, true);
+    const analysis = tracePostgresStatement(source, offset, mode, 'relation');
     if ('status' in analysis) return;
     return analysis.trace.physicalRelations?.find(relation => relation.start <= offset && offset <= relation.end);
+  };
+  const result = find(standardStrings ?? true);
+  if (result && (standardStrings !== undefined || !source.includes('\\') || JSON.stringify(result) === JSON.stringify(find(false)))) return result;
+}
+
+/** 未连接时两种字符串规则必须确认同一字段范围及同一组关系。 */
+export function analyzePostgresFieldHover(source: string, offset: number, standardStrings?: boolean): PostgresFieldTarget | undefined {
+  if (source.length > limits.source || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || /[\uD800-\uDFFF]/u.test(source)) return;
+  const find = (mode: boolean) => {
+    const result = tracePostgresStatement(source, offset, mode, 'field');
+    return 'status' in result ? undefined : result.trace.field?.target;
   };
   const result = find(standardStrings ?? true);
   if (result && (standardStrings !== undefined || !source.includes('\\') || JSON.stringify(result) === JSON.stringify(find(false)))) return result;

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 查询编辑器可在确认物理字段来源时悬停查看模式、表、数据类型、目录可空性、默认值或生成表达式及备注。原会话的搜索路径、临时对象和精确引号规则参与解析。同一未限定字段命中多个来源时提示加限定名。Q01、R01 继续为部分覆盖。 [Navicat 编辑器 Hover Info](https://pgsql.navicat.com/en/navicat-18-highlights)
+
 2026-11-24 源码增量。PostgreSQL 查询页可从光标处查看物理表或视图的只读目录定义。未限定名称先按实际会话的 `search_path` 和临时对象规则解析，再核对目录 OID。查看不会运行当前草稿，活动事务期间会提示稍后查看。Q01、O05、R01 继续为部分覆盖。 [Navicat SQL 编辑器](https://www.navicat.com/en/products/navicat-premium-release-note.html)
 
 2026-11-24 源码增量。PostgreSQL 查询编辑器输入 `[$` 后可复用草稿已有的命名值参数，按大小写过滤并优先显示本语句使用的名称。接受建议时补齐完整模板，悬停可查看本语句及整份草稿的引用次数。这两项操作均可离线完成。Q01、Q06 继续为部分覆盖。 [PostgreSQL 词法结构](https://www.postgresql.org/docs/current/sql-syntax-lexical.html)

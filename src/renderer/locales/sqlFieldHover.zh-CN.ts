@@ -6,4 +6,5 @@ export const sqlFieldHoverZh = {
   output: 'SELECT输出别名', expression: '类型由查询表达式决定',
   readTemporary: '完整属性须在“会话临时对象”显式读取结构后确认；不会读取同名永久表代替。',
   ambiguous: '未限定字段存在多个候选来源，请使用表别名确认：',
+  catalogNullable: '允许NULL（目录）', generatedExpression: '生成表达式（目录文本）',
 } as const;

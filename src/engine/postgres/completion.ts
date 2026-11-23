@@ -1,6 +1,7 @@
 import { postgresCompletionLimits, postgresRoutineParameterSchema, type PostgresCompletionInput, type PostgresCompletionItem,
   type PostgresCompletionResult } from '../../shared/postgresCompletion';
 import type { PostgresConnection } from './connection';
+import { postgresIdentifier } from '../../shared/postgresSql';
 
 const eq = 'OPERATOR(pg_catalog.=)';
 const ne = 'OPERATOR(pg_catalog.<>)';
@@ -192,8 +193,44 @@ async function columns(connection: PostgresConnection, input: Extract<PostgresCo
   return { items, incomplete: result.truncated || result.rows.length === rowLimit };
 }
 
+/** 对每个候选精确解析原关系。任何目录缺项或字段不可见都不能作为排除歧义的证据。 */
+async function columnDetails(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'columnDetails' }>, session: boolean): Promise<PostgresCompletionResult> {
+  const names = input.relations.map(({ schema, name }) => (schema ? postgresIdentifier(schema) + '.' : '') + postgresIdentifier(name));
+  const result = await connection.query(`
+    WITH ${namespaces(session)}, refs AS (
+      SELECT r.position, pg_catalog.to_regclass(r.name)::pg_catalog.oid AS oid
+      FROM pg_catalog.unnest($1::pg_catalog.text[]) WITH ORDINALITY AS r(name, position)
+    )
+    SELECT r.position, n.schema, c.relname::pg_catalog.text, a.attnum IS NOT NULL, f.attname::pg_catalog.text,
+      pg_catalog.format_type(f.atttypid, f.atttypmod), NOT f.attnotnull,
+      pg_catalog.pg_get_expr(d.adbin, d.adrelid), f.attgenerated::pg_catalog.text ${ne} '',
+      pg_catalog.col_description(f.attrelid, f.attnum), c.relnamespace ${eq} pg_catalog.pg_my_temp_schema()
+    FROM refs r JOIN pg_catalog.pg_class c ON c.oid ${eq} r.oid
+    JOIN namespaces n ON n.oid ${eq} c.relnamespace
+    LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid ${eq} c.oid AND a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped
+      AND a.attname::pg_catalog.text COLLATE pg_catalog."C" ${eq} $2::pg_catalog.text
+    LEFT JOIN LATERAL (
+      SELECT a.* WHERE pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT,INSERT,UPDATE,REFERENCES')
+    ) f ON true
+    LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid ${eq} f.attrelid AND d.adnum ${eq} f.attnum
+    WHERE c.relkind::pg_catalog.text ${eq} ANY ${relationKinds}
+    ORDER BY r.position`, [names, input.prefix], { rows: names.length, bytes: 256 * 1024 });
+  if (result.truncated || result.rows.length !== names.length) return { items: [], incomplete: true };
+  const items: PostgresCompletionItem[] = [];
+  for (const [reference, row] of result.rows.entries()) {
+    if (Number(row.c0) !== reference + 1 || row.c3 !== 't' && row.c3 !== 'f') return { items: [], incomplete: true };
+    if (row.c3 === 'f') continue;
+    if (typeof row.c1 !== 'string' || typeof row.c2 !== 'string' || row.c4 !== input.prefix || typeof row.c5 !== 'string' ||
+        (row.c7 !== null && typeof row.c7 !== 'string') || (row.c9 !== null && typeof row.c9 !== 'string') ||
+        ![row.c6, row.c8, row.c10].every(flag => flag === 't' || flag === 'f')) return { items: [], incomplete: true };
+    items.push({ kind: 'columnDetail', reference, schema: row.c1, relation: row.c2, name: row.c4, type: row.c5,
+      nullable: row.c6 === 't', expression: row.c7, generated: row.c8 === 't', comment: row.c9, temporary: row.c10 === 't' });
+  }
+  return { items, incomplete: false };
+}
+
 /** 查实际可执行的重载。原会话由 PostgreSQL 解析 search_path，同名不同签名仍保留。 */
-async function routines(connection: PostgresConnection, input: PostgresCompletionInput, session: boolean): Promise<PostgresCompletionResult> {
+async function routines(connection: PostgresConnection, input: Exclude<PostgresCompletionInput, { kind: 'columnDetails' }>, session: boolean): Promise<PostgresCompletionResult> {
   const target = input.routine!;
   const exact = input.kind === 'signatures';
   const limit = input.kind === 'routines' || exact ? postgresCompletionLimits.items : 40;
@@ -249,6 +286,7 @@ export async function readPostgresCompletion(connection: PostgresConnection, inp
   if (connection.database !== input.database) throw Error('PostgreSQL 补全目标数据库已变化');
   const query = async () => {
     if (input.kind === 'routines' || input.kind === 'signatures') return routines(connection, input, session);
+    if (input.kind === 'columnDetails') return columnDetails(connection, input, session);
     const base = await (input.kind === 'relations' ? relations(connection, input, session) : columns(connection, input, session));
     if (!input.routine) return base;
     const supplemental = await routines(connection, input, session);
