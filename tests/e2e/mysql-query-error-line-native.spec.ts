@@ -1,7 +1,7 @@
 import { createConnection, type RowDataPacket } from 'mysql2/promise';
 import { test, expect, page, ownedDesktopResources, confirmOwnedDesktopExit, retainOwnedDesktopResources, pageErrors } from './desktop-fixture';
 import { navigationMenuCheckbox, navigationMenuItem } from './navigation-menu';
-import { observeQueryFailureSource } from './query-failure-source-observer';
+import { observeQueryFailureSource, observeQueryMarkerText } from './query-failure-source-observer';
 import { queryFailureSourceZh as text } from '../../src/renderer/locales/queryFailureSource.zh-CN';
 import { queryContinueOnErrorZh as continuing } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 import { queryWarningsZh } from '../../src/renderer/locales/queryWarnings.zh-CN';
@@ -82,6 +82,8 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     const firstLine = '  FROM WHERE 1', secondLine = '  WHERE AND 2';
     const failed = "SELECT '前序🧭' AS prior;\nSELECT '同句😀' AS sample\n" + firstLine + ';';
     await execute(failed + '\nSELECT 9 AS tail;'); await locate(line, firstLine);
+    const executionMarkers = () => page.evaluate(observeQueryMarkerText, text.markerSource);
+    await expect.poll(executionMarkers).toEqual([firstLine]);
     const from = failed.indexOf("SELECT '同句");
     for (const target of [currentStatementZh.action, currentStatementZh.selectionOnly]) {
       const before = (await history()).length;
@@ -121,7 +123,7 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     expect(entry?.success).toBe(false);
     expect(JSON.stringify(entry)).not.toContain('内部合成参数');
     expect(await query.locator('.error-box').innerText()).not.toContain(Buffer.from(sample).toString('hex'));
-    await write('SELECT 5;'); await expect(line).toBeDisabled();
+    await write('SELECT 5;'); await expect(line).toBeDisabled(); await expect.poll(executionMarkers).toEqual([]);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

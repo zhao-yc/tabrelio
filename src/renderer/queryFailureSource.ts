@@ -10,6 +10,10 @@ interface Capture {
   scope(): QueryFailureSourceScope; subscribe(changed: () => void): () => void;
   onInvalidated(): void;
 }
+export interface QueryFailureMark {
+  failure: QueryFailure;
+  range: monaco.IRange;
+}
 
 /** UTF16半开区间不能拆开CRLF或一个完整代理对。 */
 function boundary(source: string, offset: number): boolean {
@@ -25,6 +29,7 @@ export class QueryFailureSourceLease {
   private range: { start: number; end: number } | undefined;
   private draft: string | undefined;
   private publishedFull = false;
+  private clearMarks?: () => void;
 
   /** 唯一创建入口验证真实全文或选区，调用方不能自行传入推测的基址。 */
   static capture(capture: Capture): QueryFailureSourceLease | undefined {
@@ -127,6 +132,41 @@ export class QueryFailureSourceLease {
     try { return this.active() && this.select(this.checkedErrorRange(failure)); } catch { return false; }
   }
 
+  /** 标记和定位共用原模型及选区基址。缺少精确位置时只标起始行，长语句仍可从回执整句定位。 */
+  markFailures(failures: readonly QueryFailure[], publish: (model: monaco.editor.ITextModel, marks: QueryFailureMark[]) => () => void): (() => void) | undefined {
+    this.clearMarks?.();
+    this.clearMarks = undefined;
+    if (!this.current()) return;
+    const marks: QueryFailureMark[] = [];
+    for (const failure of failures.slice(0, 100)) {
+      try {
+        const statement = this.checkedRange(failure.sourceRange);
+        let precise: typeof statement | undefined;
+        if (failure.errorRange) {
+          try { precise = this.checkedErrorRange(failure); } catch { /* 不采信越出语句的精确位置。 */ }
+        }
+        const selected = precise ?? statement;
+        const start = this.model.getPositionAt(selected.start), end = this.model.getPositionAt(selected.end);
+        const firstLineOnly = !precise && start.lineNumber !== end.lineNumber;
+        marks.push({failure, range: {startLineNumber: start.lineNumber, startColumn: start.column,
+          endLineNumber: firstLineOnly ? start.lineNumber : end.lineNumber,
+          endColumn: firstLineOnly ? this.model.getLineMaxColumn(start.lineNumber) : end.column}});
+      } catch { /* 未确认的单条范围不妨碍其他真实失败的标记。 */ }
+    }
+    if (!marks.length || !this.current()) return;
+    try {
+      const clear = publish(this.model, marks);
+      if (!this.valid) { clear(); return; }
+      const release = () => {
+        if (this.clearMarks !== release) return;
+        this.clearMarks = undefined;
+        try { clear(); } catch { /* 标记的清理不能阻止租约回收。 */ }
+      };
+      this.clearMarks = release;
+      return release;
+    } catch { return; }
+  }
+
   /** 读取与定位共用同一原模型租约，取完整正文且不移动光标。 */
   readRange(value: unknown): string | undefined {
     try {
@@ -152,7 +192,7 @@ export class QueryFailureSourceLease {
   }
 
   /** 一次失效即释放全部监听；同文Undo、同ID连接恢复或迟到回调都不能复活。 */
-  private invalidate(): void { if (!this.valid) return; this.valid = false; for (const subscription of this.subscriptions.splice(0)) { try { subscription.dispose(); } catch { /* 其它监听仍须精确释放。 */ } } try { this.capture.onInvalidated(); } catch { /* 定位失效通知不能影响原查询。 */ } }
+  private invalidate(): void { if (!this.valid) return; this.valid = false; this.clearMarks?.(); for (const subscription of this.subscriptions.splice(0)) { try { subscription.dispose(); } catch { /* 其它监听仍须精确释放。 */ } } try { this.capture.onInvalidated(); } catch { /* 定位失效通知不能影响原查询。 */ } }
   dispose(): void { this.invalidate(); }
 }
 

@@ -16,3 +16,16 @@ export function observeQueryFailureSource() {
     const start = model.getOffsetAt(range.getStartPosition()), end = model.getOffsetAt(range.getEndPosition()); return { start, end, text: source.slice(start, end) };
   }) ?? null };
 }
+
+/** 仅读取当前查询页的实际 Monaco 标记和对应原文。 */
+export function observeQueryMarkerText(label: string): string[] {
+  const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+  const editors = api?.editor.getEditors().filter(editor => {
+    const node = editor.getContainerDomNode();
+    return node.isConnected && !!node.closest('.query-tab') && node.getClientRects().length > 0;
+  });
+  const model = editors?.length === 1 && editors[0].getModel();
+  if (!api || !model) throw Error('原查询模型不可观察');
+  return api.editor.getModelMarkers({resource: model.uri}).filter(marker => marker.source === label)
+    .map(marker => model.getValueInRange(marker));
+}

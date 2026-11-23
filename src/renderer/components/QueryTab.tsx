@@ -122,6 +122,7 @@ import { QueryWarningsViewIntent, sameQueryWarningsExecution, type QueryWarnings
 import { queryWarningsZh } from '../locales/queryWarnings.zh-CN';
 import type { QueryFailure } from '../../shared/queryFailure';
 import { captureQueryFailureSource, type QueryFailureSourceLease, type QueryFailureSourceScope } from '../queryFailureSource';
+import { useQueryFailureMarkers } from '../useQueryFailureMarkers';
 import { queryFailureSourceZh as sourceLocationText } from '../locales/queryFailureSource.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import { pinLimits, pinnedResultSnapshotName, pinnedResultTooltip, renamePinnedResult, snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
@@ -1497,6 +1498,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const resultColumnWidths = layoutMatches ? columnLayout?.layout.widths : undefined;
   const resultModal=!!objectDefinition||!!warningsDialog||!!comparisonLease||!!statisticsLease||!!presetLease||!!closeRequest||!!exportResult||!!archiveOutcome||!!activeOrigins||!!activeMysqlOrigins||!!recordEdit||!!recordRelation||!!mysqlRelation||!!mysqlBatch||!!queryRowSql||save||!!resultSqlPreview||!!snippets||parameterSource!==null||streamExportSource!==null||!!sqliteFullExport||sessionObjects||recovery||!!databaseSwitchDialog;
   const failureLocator = failureSource.current;
+  useQueryFailureMarkers(failureLocator, outcome);
   // SQLite筛选明确选择原存储类，先筛选再排序；所有消费者共用同一最终视图与租约。
   const filterBinding=resultFilter.bind(viewSource,resultContext,visibleColumns);
   const filterView=resultFilter.view(filterBinding);

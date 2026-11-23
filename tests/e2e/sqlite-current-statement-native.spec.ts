@@ -3,6 +3,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { currentStatementZh } from '../../src/renderer/locales/currentStatement.zh-CN';
 import { queryFailureSourceZh } from '../../src/renderer/locales/queryFailureSource.zh-CN';
+import { observeQueryMarkerText } from './query-failure-source-observer';
 import { sqliteSyntaxCheckZh as syntaxText } from '../../src/renderer/locales/sqlSyntaxCheck.zh-CN';
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { queryContinueOnErrorZh as continueText } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
@@ -322,6 +323,8 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     await step(() => expect(receipt).toContainText(/第 1 条语句 · 本条耗时 \d+ ms · 产生 1005 行 · 保留 1000 行/));
     await step(() => expect(query().locator('.tab-status')).toContainText(/本次总耗时 \d+ ms/));
     const beforeLocate = await step(audit), beforeLocationHistory = await history();
+    const executionMarkers = () => page.evaluate(observeQueryMarkerText, queryFailureSourceZh.markerSource);
+    await step(() => expect.poll(executionMarkers).toEqual(['m']));
     await step(() => expect(locate).toBeEnabled()); await step(() => locate.click());
     expect((await model()).selections).toEqual([{start: failedStart, end: failedEnd}]);
     await step(() => query().getByRole('button', {name: queryLayoutZh.placement, exact: true}).click());
@@ -339,6 +342,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     expect(await history()).toEqual(beforeLocationHistory);
     expect(beforeLocationHistory.find(entry => entry.sql === full)?.success).toBe(false);
     await write("SELECT '编辑后范围失效';");
+    await step(() => expect.poll(executionMarkers).toEqual([]));
     await step(() => expect(locate).toBeDisabled());
     await step(() => expect(precise).toBeDisabled());
     await step(() => expect(locateResult()).toBeDisabled());

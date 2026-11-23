@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import type * as monaco from 'monaco-editor';
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { captureQueryFailureSource, type QueryFailureSourceScope } from '../../src/renderer/queryFailureSource';
+import type { QueryFailure } from '../../src/shared/queryFailure';
 
 let Builder: any, prototype: monaco.editor.ITextModel; const buffers: Array<{ dispose(): void }> = [];
 /** 位置与UTF16换行映射使用本仓安装的真实Monaco，生命周期事件为RAM端口。 */
@@ -43,6 +44,26 @@ it('渲染可依据即将提交的模态状态，实际定位仍检查当前 DOM
 });
 it.each(['content', 'modelDispose', 'editorDispose'])('%s即使同文字恢复仍永久撤销且通知一次', kind => { const f = fixture(), lease = f.create()!; lease.bindRange({ start: 0, end: 3 }); f.emit(kind); f.emit(kind); expect(lease.locate()).toBe(false); expect(f.invalidated).toHaveBeenCalledOnce(); expect(f.subscriptions()).toBe(0); });
 it('模型换走再换回不能复活；无事件版本漂移也会在点击前拒绝', () => { const f = fixture(), lease = f.create()!; lease.bindRange({ start: 0, end: 3 }); f.swap({}); f.swap(f.model); expect(lease.locate()).toBe(false); const next = f.create()!; next.bindRange({ start: 0, end: 3 }); (f.model as any)._versionId++; expect(next.locate()).toBe(false); expect(f.editor.setSelection).not.toHaveBeenCalled(); });
+it('标记映射真实选区，保留精确字符和末尾位置，只在失败语句起始行做回退', () => {
+  const f = fixture('SELECT 1;\r\nSELECT 🧭\r\n + invalid;'), offset = f.source.indexOf('SELECT 🧭');
+  const source = f.source.slice(offset), emoji = source.indexOf('🧭');
+  f.select(offset, f.source.length);
+  const lease = f.create(source)!;
+  const failure: QueryFailure = {statementOrdinal: 1, statementsCompleted: 0, message: '失败', sourceRange: {start: 0, end: source.length}};
+  const precise = {...failure, errorRange: {start: emoji, end: emoji + 2}}, eof = {...failure, errorRange: {start: source.length, end: source.length}};
+  const clear = vi.fn(), publish = vi.fn(() => clear);
+  const range = (line: number, from: number, to: number) => ({startLineNumber: line, startColumn: from, endLineNumber: line, endColumn: to});
+  const release = lease.markFailures([precise, eof, failure, {...failure, sourceRange: undefined}], publish);
+  expect(publish).toHaveBeenCalledExactlyOnceWith(f.model, [
+    {failure: precise, range: range(2, 8, 10)},
+    {failure: eof, range: range(3, 12, 12)},
+    {failure, range: range(2, 1, 10)},
+  ]);
+  expect(f.editor.setSelection).not.toHaveBeenCalled();
+  f.emit('content'); release?.();
+  expect(clear).toHaveBeenCalledOnce();
+  expect(lease.markFailures([precise], publish)).toBeUndefined(); expect(publish).toHaveBeenCalledOnce();
+});
 it.each(['present', 'connectionId', 'connectionVersion', 'tabId'] as const)('%s的ABA永久失效，不因同ID或修订恢复复活', key => { const f = fixture(), lease = f.create()!; lease.bindRange({ start: 0, end: 3 }); const previous = f.scope[key]; Object.assign(f.scope, { [key]: typeof previous === 'boolean' ? false : typeof previous === 'number' ? previous + 1 : 'other' }); f.emit('scope'); Object.assign(f.scope, { [key]: previous }); f.emit('scope'); expect(lease.locate()).toBe(false); expect(f.subscriptions()).toBe(0); });
 it('旧workspace正文可自然发布为本模型全文，发布后退回旧draft仍失效', () => { const f = fixture('SELECT 2;', 'SELECT 1;'), lease = f.create()!; expect(lease.bindRange({ start: 0, end: 8 })).toBe(true); f.scope.draft = f.source; f.emit('scope'); expect(lease.locate()).toBe(true); f.scope.draft = 'SELECT 1;'; f.emit('scope'); expect(lease.locate()).toBe(false); });
 it('外部不同草稿抢先到来即撤销，之后自然正文到达也不复活', () => { const f = fixture('SELECT 2;', 'SELECT 1;'), lease = f.create()!; lease.bindRange({ start: 0, end: 8 }); f.scope.draft = '外来SQL'; f.emit('scope'); f.scope.draft = f.source; f.emit('scope'); expect(lease.locate()).toBe(false); expect(f.editor.setSelection).not.toHaveBeenCalled(); });

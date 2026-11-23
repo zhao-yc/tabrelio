@@ -25,6 +25,7 @@ import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { queryParameterReuseZh as reuseText } from '../../src/renderer/locales/queryParameterReuse.zh-CN';
 import { queryFailureSourceZh as failureText } from '../../src/renderer/locales/queryFailureSource.zh-CN';
+import { observeQueryMarkerText } from './query-failure-source-observer';
 import { queryPartialOutcomeZh as partialText } from '../../src/renderer/locales/queryPartialOutcome.zh-CN';
 import { queryContinueOnErrorZh as continueText } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 import { postgresTransactionSettingsZh as transactionText } from '../../src/renderer/locales/postgresTransactionSettings.zh-CN';
@@ -541,6 +542,12 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await observer.query('TRUNCATE public.continue_sentinel');
     await choice().check(); await command('execute-all');
     await expect(report()).toContainText(continueText.counts(5, 3, 2)); await expect(report()).toContainText(continueText.reachedEnd);
+    const executionMarkers = () => page.evaluate(observeQueryMarkerText, failureText.markerSource);
+    await expect.poll(async () => (await executionMarkers()).sort()).toEqual(['SELECT 1/0', 'm']);
+    await modelSelection(2, 8);
+    await page.keyboard.press('ControlOrMeta+K'); await page.keyboard.press('ControlOrMeta+I');
+    await expect(tab().locator('.monaco-hover:visible')).toContainText('column "missing_column" does not exist');
+    await page.keyboard.press('Escape');
     expect(await records()).toEqual([1, 2, 3]); expect(await sessions()).toEqual(original);
     const beforeLocate = await history();
     for (const [ordinal, statement] of [[2, 'SELECT missing_column'], [4, 'SELECT 1/0']] as const) {
@@ -561,7 +568,7 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await page.screenshot({path: info.outputPath('PostgreSQL遇错继续摘要.png')});
 
     const transactional = 'BEGIN;\nINSERT INTO public.continue_sentinel VALUES (4);\nSELECT missing_column;\nINSERT INTO public.continue_sentinel VALUES (5);\nROLLBACK;\nINSERT INTO public.continue_sentinel VALUES (6);';
-    await replaceDraft(transactional); await command('execute-all');
+    await replaceDraft(transactional); await expect.poll(executionMarkers).toEqual([]); await command('execute-all');
     await expect(report()).toContainText(continueText.counts(6, 4, 2)); await expect(report()).toContainText(continueText.reachedEnd);
     expect(await records()).toEqual([1, 2, 3, 6]); expect(await sessions()).toEqual(original);
     await expect(report()).toContainText('current transaction is aborted');

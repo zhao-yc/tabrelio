@@ -111,6 +111,7 @@ import { postgresSearchPathZh as searchPathText } from '../locales/postgresSearc
 import { PostgresQueryTimeoutsDialog } from './PostgresQueryTimeoutsDialog';
 import { postgresQueryTimeoutsZh as timeoutText } from '../locales/postgresQueryTimeouts.zh-CN';
 import { captureQueryFailureSource, type QueryFailureSourceLease, type QueryFailureSourceScope } from '../queryFailureSource';
+import { useQueryFailureMarkers } from '../useQueryFailureMarkers';
 import { QueryPartialOutcomeNotice } from './QueryPartialOutcomeNotice';
 import { PostgresNoticesPanel } from './PostgresNoticesPanel';
 import type { PostgresNoticeEntry } from '../../shared/postgresNotices';
@@ -281,6 +282,7 @@ export function PostgresQueryTab({
   const parameterReuse = useRef<QueryParameterReuseOwner | null>(null), parameterTask = useRef('');
   const parameterState = useRef<{ sessionId: string; known: boolean }>({ sessionId: '', known: false });
   const failureSource = useRef<QueryFailureSourceLease | undefined>(undefined);
+  useQueryFailureMarkers(failureSource.current, outcome);
   const [, refreshFailureSource] = useState(0);
   const [continueOnError, setContinueOnError] = useState(false);
   const [sessionSetting, setSessionSetting] = useState<{intent: QueryTransactionSettingsIntent; scope: Scope; mode: 'transaction' | 'search-path' | 'timeouts'; changed: string}>();
