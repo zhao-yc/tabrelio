@@ -85,6 +85,77 @@ it('复合排序排除隐藏列并按 SQLite 名称去重，保留目录不完�
   expect(result.items.map(item => item.insertText)).toEqual(['"ID"', '"visible"', '"gen"']);
   expect(result.incomplete).toBe(true);
 });
+
+it('USING 只补全两侧共有的未选列，按原范围插入后 SQLite 可执行复合连接', async () => {
+  const marked = 'SELECT a.tag, b.note FROM main.a JOIN temp.b USING (id, "Na|suffix")';
+  const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE main.a(id INTEGER, name TEXT, tag TEXT); CREATE TEMP TABLE b(ID INTEGER, Name TEXT, note TEXT);
+      INSERT INTO a VALUES(1,'同名','合并'), (2,'不同','不匹配'); INSERT INTO b VALUES(1,'同名','结果'), (2,'其它','丢弃');`);
+    const load = vi.fn(async (request: SqliteCompletionLookup) => {
+      if (request.kind !== 'columns' || !request.schema) throw Error('预期明确的连接侧');
+      const entries = db.prepare('SELECT name FROM pragma_table_xinfo(?, ?)').all(request.table, request.schema)
+        .map(row => column(String(row.name), request.table, request.schema));
+      return { entries, incomplete: false, stamp: '1:1' };
+    });
+    const { items } = await sqliteCompletionSuggestions(analysis, { load });
+    expect(items.map(item => item.insertText)).toEqual(['"Name"']);
+    expect(load.mock.calls).toEqual([[{ kind: 'columns', table: 'a', schema: 'main', prefix: 'Na' }],
+      [{ kind: 'columns', table: 'b', schema: 'temp', prefix: 'Na' }]]);
+    const sql = source.slice(0, analysis.target.start) + items[0].insertText + source.slice(analysis.target.end);
+    expect(db.prepare(sql).all()).toEqual([{ tag: '合并', note: '结果' }]);
+  } finally { db.close(); }
+});
+
+it.each(['JOIN', 'RIGHT JOIN', 'FULL JOIN'])('USING 处理 %s 的左侧同名列和早期显式合并', async operator => {
+  const marked = `SELECT * FROM a JOIN b USING (id) ${operator} c USING (|)`;
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const d = directory([column('ID'), column('duplicated')]);
+  const result = await sqliteCompletionSuggestions(analysis, d);
+  const labels = result.items.map(item => item.label);
+  expect(labels).toEqual(operator === 'JOIN' ? ['ID', 'duplicated'] : ['ID']);
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE a(id,duplicated); CREATE TABLE b(id,duplicated); CREATE TABLE c(id,duplicated)');
+    for (const item of result.items) expect(() => db.prepare(marked.replace('|', item.insertText))).not.toThrow();
+    if (operator !== 'JOIN') expect(() => db.prepare(marked.replace('|', 'duplicated'))).toThrow(/ambiguous/i);
+  } finally { db.close(); }
+});
+
+it('同层后续 RIGHT JOIN 也启用消歧，但其列不进入当前 USING', async () => {
+  const marked = 'SELECT * FROM a JOIN b ON 1 JOIN c USING (|) RIGHT JOIN d ON 1';
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const load = vi.fn(async (query: SqliteCompletionLookup): Promise<{ entries: SqliteCompletionEntry[]; incomplete: boolean; stamp: string }> => {
+    if (query.kind !== 'columns') throw Error('预期列目录');
+    const names = query.table === 'a' ? ['id', 'key'] : query.table === 'b' ? ['id'] : ['id', 'key'];
+    return { entries: names.map(name => column(name, query.table)), incomplete: false, stamp: '1:0' };
+  });
+  const { items } = await sqliteCompletionSuggestions(analysis, { load });
+  expect(items.map(item => item.label)).toEqual(['key']);
+  expect(load.mock.calls.map(([query]) => query.kind === 'columns' && query.table)).toEqual(['a', 'b', 'c']);
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE a(id,key); CREATE TABLE b(id); CREATE TABLE c(id,key); CREATE TABLE d(id)');
+    expect(() => db.prepare(marked.replace('|', items[0].insertText))).not.toThrow();
+    expect(() => db.prepare(marked.replace('|', 'id'))).toThrow(/ambiguous/i);
+  } finally { db.close(); }
+});
+
+it('USING 排除其它槽位的列，重复物理关系只读取一次，未知左侧保留部分状态', async () => {
+  const marked = "SELECT * FROM main.subject a JOIN main.SUBJECT b ON 1 JOIN json_each('[]') j ON 1 JOIN temp.subject c USING(ID, |)";
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const d = directory([column('id'), column('shared')]);
+  const result = await sqliteCompletionSuggestions(analysis, d);
+  expect(d.load.mock.calls).toEqual([[{ kind: 'columns', table: 'subject', schema: 'main', prefix: '' }],
+    [{ kind: 'columns', table: 'subject', schema: 'temp', prefix: '' }]]);
+  expect(result.items.map(item => item.label)).toEqual(['shared']);
+  expect(result.incomplete).toBe(true);
+});
 it('准确别名字段只替最后标识符，Unicode引号和片段语法保持普通文本', async () => {
   const d = directory([column('字段"🚢.${x}')]), result = await sqliteCompletionSuggestions(ready(), d);
   expect(d.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'subject', prefix: '' }); expect(result.items[0]).toMatchObject({ label: '字段"🚢.${x}', insertText: '"字段""🚢.${x}"', kind: 'column' });

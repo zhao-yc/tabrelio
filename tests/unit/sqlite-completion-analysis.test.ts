@@ -39,7 +39,49 @@ it('递归CTE的递归成员可补显式列，锚点不借递归成员中的绑�
 it('派生表投影保持本地输出，不为同名别名查询永久元数据',()=>{expect(ready('SELECT d.| FROM (SELECT source.id AS item,1 AS flag FROM source) AS d').relations).toEqual([{kind:'local',source:'derived',name:'d',alias:'d',columns:['item','flag']}]);expect(analyze('SELECT d.| FROM (SELECT * FROM source) AS d')).toMatchObject({status:'blocked',reason:'local-output'});});
 it('普通相关子查询可见外层alias，FROM派生体不借外层行，内层同alias优先',()=>{const correlated=ready('SELECT * FROM outer_table o WHERE EXISTS (SELECT o.| FROM inner_table i)');expect(correlated.relations.map(item=>item.alias)).toEqual(['i','o']);const derived=ready('SELECT * FROM outer_table o JOIN (SELECT i.| FROM inner_table i) d ON 1=1');expect(derived.relations).toEqual([{kind:'physical',name:'inner_table',alias:'i'}]);const shadow=ready('SELECT * FROM outer_table t WHERE EXISTS (SELECT t.| FROM inner_table t)');expect(shadow.relations).toEqual([{kind:'physical',name:'inner_table',alias:'t'}]);});
 it('trigger体内分号不伪造独立SELECT；后继statement仍准确隔离',()=>{expect(analyze('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT x.| FROM secret x; END;')).toMatchObject({status:'blocked',reason:'trigger'});expect(ready('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT CASE WHEN 1 THEN 2 END; END; SELECT t.| FROM actual t').relations).toEqual([{kind:'physical',name:'actual',alias:'t'}]);});
-it.each(['SELECT x.| FROM json_each(\'[]\') x','SELECT x.| FROM (a JOIN b) x','SELECT * FROM a JOIN b USING(|)','SELECT * FROM a INDEXED BY |','WITH c(x) AS(SELECT 1) UPDATE c SET |'])('未知SQLite复杂上下文明确blocked，不伪造物理关系 %#',source=>{expect(analyze(source).status).toBe('blocked');});
+it.each(['SELECT x.| FROM json_each(\'[]\') x','SELECT x.| FROM (a JOIN b) x','SELECT * FROM a INDEXED BY |','WITH c(x) AS(SELECT 1) UPDATE c SET |'])('未知SQLite复杂上下文明确blocked，不伪造物理关系 %#',source=>{expect(analyze(source).status).toBe('blocked');});
+
+it('USING 只交付当前连接两侧关系，保留原游标范围和前后已填项', () => {
+  const value = ready('SELECT * FROM main.a x JOIN temp.b y USING ("已选", na|suffix, [后选]) JOIN json_each(\'[]\') j ON 1');
+  expect(value).toMatchObject({ target: { prefix: 'na' }, syntax: ['column'], qualifiers: [], relations: [], using: {
+    left: [{ operand: { source: { name: 'a', schema: 'main' } } }], right: { source: { name: 'b', schema: 'temp' } }, used: ['已选', '后选'],
+  } });
+});
+
+it('USING 复用明确的 CTE 和派生表列，RIGHT/FULL 连接记录此前的列合并', () => {
+  const value = ready('WITH a(id) AS (VALUES(1)) SELECT * FROM a JOIN (SELECT 1 AS id) b USING(id) NATURAL JOIN c FULL JOIN d USING(i|d)');
+  expect(value.using).toEqual({ left: [
+    { operand: { columns: ['id'] } }, { operand: { columns: ['id'] }, merged: ['id'] }, { operand: { source: { name: 'c' } }, merged: true },
+  ], right: { source: { name: 'd' } }, used: [], uniqueLeft: true });
+});
+
+it.each([
+  'SELECT * FROM out o WHERE EXISTS(SELECT * FROM a JOIN b USING(|))',
+  'SELECT id FROM first UNION ALL SELECT id FROM a JOIN b USING(|)',
+  'INSERT INTO dst SELECT * FROM a JOIN b USING(|)',
+  'UPDATE dst SET n = 1 FROM a JOIN b INDEXED BY b_idx USING(|)',
+  'SELECT * FROM a, b NOT INDEXED USING(|',
+])('USING 隔离子查询外层、集合分支和写入目标：%s', sql => {
+  expect(ready(sql).using).toEqual({ left: [{ operand: { source: { name: 'a' } } }], right: { source: { name: 'b' } }, used: [] });
+});
+
+it.each([
+  'SELECT * FROM a USING(|)', 'SELECT * FROM a NATURAL JOIN b USING(|)', 'SELECT * FROM a JOIN b ON 1 USING(|)',
+  'SELECT * FROM a JOIN b USING (a.i|d)', 'SELECT * FROM a JOIN b USING (i|d + 1)', 'SELECT * FROM a JOIN b WHERE using(|)',
+  'SELECT * FROM a JOIN b AS USING(|)',
+])('非有效 USING 列位置不读取目录：%s', sql => {
+  expect(analyze(sql).status).toBe('blocked');
+});
+
+it('USING 的 Worker 回包不能同时携带外层绑定、解析模式或未验证目录字段', () => {
+  const marked = 'SELECT * FROM a JOIN b USING(|)', { source, offset } = query(marked), value = ready(marked);
+  const projection = value.using!;
+  for (const fields of [{ relations: [{ kind: 'physical', name: 'a' }] }, { using: { ...projection, used: ['x', 'X'] } },
+    { using: { ...projection, left: [] } }, { using: { ...projection, right: { source: { name: 'b', schema: 'unknown' } } } }]) {
+    expect(() => validateSqliteCompletionAnalysis({ ...value, ...fields }, source, offset)).toThrow();
+  }
+  expect(() => validateSqliteCompletionAnalysis(value, source, offset, 'hover')).toThrow();
+});
 it.each(['UNION', 'UNION ALL', 'INTERSECT', 'EXCEPT'])('集合运算%s的两侧以光标所在分支为准', operator => {
   expect(ready(`SELECT s.| FROM main.first AS s ${operator} SELECT s.id FROM temp.second AS s`).relations)
     .toEqual([{ kind: 'physical', schema: 'main', name: 'first', alias: 's' }]);

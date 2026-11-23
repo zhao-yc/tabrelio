@@ -11,11 +11,48 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   let incomplete = false;
   const add = (item: SqliteCompletionItem) => {
     if (!fold(item.label).startsWith(prefix)) return;
-    const key = analysis.output ? fold(item.label) : item.kind + '\0' + item.insertText;
+    const key = analysis.output || analysis.using ? fold(item.label) : item.kind + '\0' + item.insertText;
     if (seen.has(key)) return;
     if (items.length >= sqliteCompletionLimits.suggestions) { incomplete = true; return; }
     seen.add(key); items.push(item);
   };
+  if (analysis.using) {
+    const { left, right, used, uniqueLeft } = analysis.using;
+    const cache = new Map<string, SqliteCompletionOutput>();
+    const columns = async (operand: typeof right) => {
+      if ('columns' in operand) {
+        incomplete ||= !operand.columns.length;
+        return operand.columns.map(name => ({ name, hidden: false }));
+      }
+      const { name, schema } = operand.source, key = (schema ?? '') + '\0' + fold(name);
+      let metadata = cache.get(key);
+      if (!metadata) {
+        metadata = await directory.load({ kind: 'columns', table: name, prefix: analysis.target.prefix, ...(schema ? { schema } : {}) });
+        cache.set(key, metadata);
+      }
+      incomplete ||= metadata.incomplete;
+      return metadata.entries.filter(entry => entry.kind === 'column');
+    };
+    const names = new Map<string, { count: number; visible: boolean }>();
+    // 含 RIGHT/FULL JOIN 的查询块按合并后的左侧列消歧。
+    for (const { operand, merged } of left) {
+      const explicit = new Set(Array.isArray(merged) ? merged.map(fold) : []);
+      for (const { name, hidden } of await columns(operand)) {
+        const key = fold(name), known = names.get(key) ?? { count: 0, visible: false };
+        const combines = known.count > 0 && (explicit.has(key) || merged === true && !hidden && known.visible);
+        names.set(key, { count: known.count + Number(!combines), visible: known.visible || !hidden });
+      }
+    }
+    if (uniqueLeft && incomplete) return { items, incomplete };
+    const excluded = new Set(used.map(fold));
+    for (const { name } of await columns(right)) {
+      const key = fold(name), known = names.get(key);
+      if (known && (!uniqueLeft || known.count === 1) && !excluded.has(key)) {
+        add({ label: name, kind: 'column', insertText: quote(name), detail: text.joinColumn });
+      }
+    }
+    return { items, incomplete };
+  }
   const bound = analysis.relations.filter(relation => relation.kind === 'physical' || !relation.declaration);
   const declarations = analysis.relations.filter(relation => relation.kind === 'local' && relation.declaration);
   if (analysis.output) {
