@@ -1,4 +1,4 @@
-import { postgresCompletionLimits as limits, type PostgresCatalogRelation, type PostgresCompletionReference,
+import { postgresCompletionLimits as limits, postgresTimeZonePrefix, type PostgresCatalogRelation, type PostgresCompletionReference,
   type PostgresConflictSelection, type PostgresRoutineCompletionTarget } from '../shared/postgresCompletion';
 import { currentPostgresStatement, scanPostgresEditorTokens, type PostgresEditorToken } from '../shared/postgresSql';
 import type { DeclaredLocalReferences, LocalBindingReferences, LocalReferenceRange, LocalReferences } from '../shared/localReferences';
@@ -48,6 +48,7 @@ type Query = { kind: 'relations'; schema?: string; ctes?: string[]; mergeTarget?
   { kind: 'lockKeywords'; items: string[] } |
   { kind: 'sampleMethods'; schema?: string } |
   { kind: 'collations'; schema?: string } |
+  { kind: 'timeZones'; literal: boolean } |
   { kind: 'recursiveKeys'; names: string[]; source?: PostgresJoinSource; excluded: string[] } |
   { kind: 'conflictTarget'; relation: PostgresCatalogRelation; selection: PostgresConflictSelection } | PostgresUsingColumns;
 export interface PostgresCompletionAnalysis {
@@ -3004,7 +3005,11 @@ function collationFrame(parts: Part[], offset: number, query: StatementQuery | u
 
 function collationEntry(parts: Part[], index: number): boolean {
   const value = parts[index - 1];
-  return mergeKeyword(parts, index) === 'COLLATE' && !!value && (value.kind === 'group' ? value.closed
+  return mergeKeyword(parts, index) === 'COLLATE' && endsValue(value);
+}
+
+function endsValue(value?: Part): boolean {
+  return !!value && (value.kind === 'group' ? value.closed
     : value.kind === 'blocked' ? !value.open : value.kind === 'punct' ? /^[0-9]$/.test(value.text)
       : !stop.has(keyword(value)) || keyword(value) === 'NULL');
 }
@@ -3043,10 +3048,84 @@ export function analyzePostgresCollationHover(source: string, offset: number, st
   if (result && (standardStrings !== undefined || !source.includes('\\') || JSON.stringify(result) === JSON.stringify(resolve(false)))) return result;
 }
 
+interface TimeZoneSlot extends LocalReferenceRange { prefix: string; name?: string; literal: boolean; }
+
+/** 只在完整时区操作符、会话设置和已知函数的时区实参处识别值槽。 */
+function timeZonePosition(parts: Part[], start: number, literal: boolean): boolean {
+  const first = keyword(parts[0]);
+  if (first === 'SET') {
+    const index = ['LOCAL', 'SESSION'].includes(keyword(parts[1])) ? 2 : 1;
+    const timeZone = keyword(parts[index]) === 'TIME' && keyword(parts[index + 1]) === 'ZONE';
+    const setting = keyword(parts[index]) === 'TIMEZONE' && (keyword(parts[index + 1]) === 'TO' || punct(parts[index + 1], '='));
+    return (timeZone || setting) && parts[index + 1].end <= start &&
+      (literal ? parts[index + 2]?.start === start : !parts[index + 2] && parts[index + 1].end < start);
+  }
+
+  const body = statementQuery(parts, start)?.parts;
+  if (!body || !commands.has(keyword(body[0])) && keyword(body[0]) !== 'MERGE' && !startsReferenceQuery(body[0])) return false;
+  let frame = body;
+  let call: string | undefined;
+  for (let group = frame.findIndex(part => part.kind === 'group' && contains(part, start)); group >= 0;
+    group = frame.findIndex(part => part.kind === 'group' && contains(part, start))) {
+    const dotted = punct(frame[group - 2], '.');
+    const schema = dotted ? identifier(frame[group - 3]) : undefined;
+    call = !dotted || schema === 'pg_catalog' && !punct(frame[group - 4], '.') ? identifier(frame[group - 1]) : undefined;
+    frame = (frame[group] as Group).parts;
+  }
+  let slot = frame.findIndex(part => part.start >= start);
+  if (slot < 0) slot = frame.length;
+  if (literal ? frame[slot]?.start !== start : frame[slot] &&
+    !punct(frame[slot], ',') && !endsFrom.has(keyword(frame[slot])) && !['AS', 'FROM'].includes(keyword(frame[slot]))) return false;
+  const before = frame[slot - 1];
+  if (keyword(before) === 'ZONE' && keyword(frame[slot - 2]) === 'TIME' && mergeKeyword(frame, slot - 3) === 'AT' &&
+      endsValue(frame[slot - 4])) return literal || before.end < start;
+  if (slot && !punct(before, ',')) return false;
+  const argument = frame.slice(0, slot).filter(token => punct(token, ',')).length;
+  return call === 'timezone' && argument === 0 || call === 'date_trunc' && argument === 2;
+}
+
+/** 接受简单单引号时区值，不穿过注释、转义、跨行续接或其它字面量的范围。 */
+function timeZoneSlot(source: string, offset: number, tokens: PostgresEditorToken[]): TimeZoneSlot | undefined {
+  const blocked = tokens.find(token => token.kind === 'blocked' && token.start <= offset &&
+    (offset < token.end || token.open && offset === token.end));
+  if (blocked && (source[blocked.start] !== "'" || offset <= blocked.start)) return;
+  const start = blocked?.start ?? offset, end = blocked?.end ?? offset;
+  const content = blocked ? source.slice(start + 1, end - Number(!blocked.open)) : '';
+  if (!postgresTimeZonePrefix.safeParse(content).success) return;
+  if (blocked) {
+    const next = tokens.find(token => token.start >= end && !(token.kind === 'blocked' && token.text === 'comment'));
+    if (next && source[next.start] === "'" && /[\r\n]/.test(source.slice(end, next.start))) return;
+  }
+  const parts = groupStatement(tokens, offset, source.length);
+  if (!parts || !timeZonePosition(parts, start, !!blocked)) return;
+  return { start, end, prefix: blocked ? source.slice(start + 1, offset) : '', literal: !!blocked,
+    ...(blocked && !blocked.open && content ? { name: content } : {}) };
+}
+
+/** 未确认字符串模式时，只有两个模式解析为同一时区值才读取目录。 */
+function matchedTimeZone(source: string, offset: number, tokens: PostgresEditorToken[], standardStrings?: boolean): TimeZoneSlot | undefined {
+  const slot = timeZoneSlot(source, offset, tokens);
+  if (!slot || standardStrings !== undefined || !source.includes('\\')) return slot;
+  const alternate = scanPostgresEditorTokens(source, limits.tokens, false);
+  if (alternate && JSON.stringify(slot) === JSON.stringify(timeZoneSlot(source, offset, alternate))) return slot;
+}
+
+export function analyzePostgresTimeZoneHover(source: string, offset: number, standardStrings?: boolean):
+  (LocalReferenceRange & { name: string }) | undefined {
+  if (source.length > limits.source || offset < 0 || offset > source.length || source.includes('\0') ||
+      !/\b(?:zone|timezone|date_trunc)\b/i.test(source)) return;
+  const tokens = scanPostgresEditorTokens(source, limits.tokens, standardStrings ?? true);
+  const slot = tokens && matchedTimeZone(source, offset, tokens, standardStrings);
+  if (slot?.name) return { start: slot.start, end: slot.end, name: slot.name };
+}
+
 /** 定位当前标识符，屏蔽注释、字符串和参数，再解析当前语句的查询作用域。 */
 export function analyzePostgresCompletion(source: string, offset: number, standardStrings?: boolean): PostgresCompletionAnalysis | undefined {
   if (source.length > limits.source || offset < 0 || offset > source.length || source.includes('\0')) return;
   const all = scanPostgresEditorTokens(source, limits.tokens, standardStrings ?? true);
+  const timeZone = all && /\b(?:zone|timezone|date_trunc)\b/i.test(source) && matchedTimeZone(source, offset, all, standardStrings);
+  if (timeZone) return { start: timeZone.start, end: timeZone.end, prefix: timeZone.prefix,
+    quoted: false, query: { kind: 'timeZones', literal: timeZone.literal } };
   if (!all || all.some(token => token.kind === 'blocked' && offset > token.start &&
       (offset < token.end || token.open && offset === token.end))) return;
   const target = all.find(token => (token.kind === 'word' || token.kind === 'identifier') && offset >= token.start && offset <= token.end);

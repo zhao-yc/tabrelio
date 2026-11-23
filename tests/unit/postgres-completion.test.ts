@@ -5,7 +5,7 @@ import type { PostgresCompletionInput, PostgresCompletionResult } from '../../sr
 import { createPostgresCompletionProvider } from '../../src/renderer/postgresCompletionProvider';
 import { describe, expect, it, vi } from 'vitest';
 import { analyzePostgresCollationHover, analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresLocalReferences, analyzePostgresLocalRename,
-  analyzePostgresObjectDefinition, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
+  analyzePostgresObjectDefinition, analyzePostgresSignature, analyzePostgresTimeZoneHover } from '../../src/renderer/postgresCompletionAnalysis';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from '../../src/renderer/postgresNamedParameterReferences';
 import { postgresConflictExpression } from '../../src/shared/postgresConflictExpression';
 
@@ -14,6 +14,67 @@ function at(marked: string) {
   const offset = marked.indexOf('|');
   return analyzePostgresCompletion(marked.slice(0, offset) + marked.slice(offset + 1), offset);
 }
+
+it.each([
+  ['SELECT created_at AT TIME ZONE | FROM events', '', false],
+  ["SELECT created_at AT TIME ZONE 'Asia/|tail' FROM events", 'Asia/', true],
+  ["SELECT created_at AT TIME ZONE 'America/New_Y|", 'America/New_Y', true],
+  ["SELECT (created_at AT /* gap */ TIME ZONE 'Etc/GMT+|tail') FROM events", 'Etc/GMT+', true],
+  ["SET LOCAL TIME ZONE 'Asia/Sh|tail'", 'Asia/Sh', true],
+  ["SET SESSION timezone = 'Eu|tail'", 'Eu', true],
+  ["SET timezone TO |", '', false],
+  ["SELECT pg_catalog.timezone('Asia/Sh|tail', created_at) FROM events", 'Asia/Sh', true],
+  ["SELECT date_trunc('day', (SELECT max(created_at) FROM events), |)", '', false],
+  ["CREATE VIEW daily AS SELECT date_trunc('day', ts, 'UTC|tail') FROM events", 'UTC', true],
+  ["EXPLAIN SELECT ts AT TIME ZONE 'UTC|tail' FROM events", 'UTC', true],
+])('命名时区按运算符、函数和会话值槽补全：%s', (sql, prefix, literal) => {
+  expect(at(sql)).toMatchObject({prefix, query: {kind: 'timeZones', literal}});
+});
+
+it.each([
+  "SELECT 'Asia/Sh|tail'", "SELECT '-- AT TIME ZONE a|b'", "SELECT ts AT TIME ZONE E'Asia/Sh|tail'",
+  "SELECT ts AT TIME ZONE 'Asia/'\n 'Sh|tail'", "SELECT ts AT TIME ZONE INTERVAL '+08:|00'",
+  "SELECT other.timezone('Asia/Sh|tail', ts) FROM t", "SELECT timezone(ts, 'Asia/Sh|tail') FROM t",
+  "SELECT date_trunc('da|y', ts, 'UTC') FROM t", "SELECT ts AT TIME ZONE zone_col| FROM t",
+  "SELECT t.at TIME ZONE 'Asia/Sh|tail' FROM t", "ALTER ROLE analyst SET TIMEZONE TO 'Asia/Sh|tail'",
+])('普通字符串、动态表达式和其他语句保持原有补全：%s', sql => {
+  expect(at(sql)?.query?.kind).not.toBe('timeZones');
+  expect(analyzePostgresTimeZoneHover(sql.replace('|', ''), sql.indexOf('|'))).toBeUndefined();
+});
+
+it('时区整段替换引号与后缀，悬停按精确名称请求数据库快照', async () => {
+  const request = vi.fn(async (): Promise<PostgresCompletionResult> => ({ items: [{kind: 'timeZone', name: 'America/New_York',
+    abbreviation: 'EDT', daylight: true, offsetSeconds: -14400}], incomplete: false }));
+  const marked = "SELECT timezone('america/new_y|tail', ts) FROM events";
+  const exact = editor("SELECT ts AT TIME ZONE 'america/new_y|ork' FROM events", request, '时区会话');
+  const edit = editor(marked, request, '时区会话');
+  const offlineRequest = vi.fn(async () => ({items: [], incomplete: false}));
+  const offline = editor("SET LOCAL TIME ZONE 'ut|tail'", offlineRequest);
+  try {
+    const item = (await edit.suggest())?.suggestions[0];
+    expect(item).toMatchObject({label: {label: 'America/New_York'}, insertText: "'America/New_York'", filterText: "'America/New_York'"});
+    if (!item || !('startColumn' in item.range)) throw Error('缺少整段替换范围');
+    const source = marked.replace('|', '');
+    expect(source.slice(item.range.startColumn - 1, item.range.endColumn - 1)).toBe("'america/new_ytail'");
+    const hover = await exact.hover();
+    expect(hover?.contents[0]).toMatchObject({supportHtml: false, isTrusted: false});
+    expect(hover?.contents[0].value).toContain('查询时 UTC 偏移：UTC-04:00');
+    expect(request).toHaveBeenNthCalledWith(1, {kind: 'timeZones', prefix: 'america/new_y', connectionId: '原连接', database: '原库', sessionId: '时区会话'});
+    expect(request).toHaveBeenNthCalledWith(2, {kind: 'timeZones', prefix: 'america/new_york', exact: true,
+      connectionId: '原连接', database: '原库', sessionId: '时区会话'});
+    expect((await offline.suggest())?.suggestions.map(item => item.insertText)).toContain("'UTC'");
+    expect(offlineRequest).not.toHaveBeenCalled();
+  } finally { for (const current of [exact, edit, offline]) current.provider.dispose(); }
+});
+
+it('时区目录按原协议解码偏移秒数和夏令时，准确绑定前缀', async () => {
+  const query = vi.fn(async (_sql: string, _values?: unknown[]) => ({rows: [{c0: 'Asia/Kathmandu', c1: '+0545', c2: '20700', c3: 'f'}], truncated: false}));
+  const connection = {database: '原库', query} as unknown as PostgresConnection;
+  expect(await readPostgresCompletion(connection, {kind: 'timeZones', connectionId: '原连接', database: '原库',
+    prefix: 'asia/kathmandu', exact: true})).toEqual({items: [{kind: 'timeZone', name: 'Asia/Kathmandu',
+    abbreviation: '+0545', offsetSeconds: 20700, daylight: false}], incomplete: false});
+  expect(query.mock.calls.at(-1)?.slice(0, 2)).toEqual([expect.stringContaining('pg_timezone_names'), ['asia/kathmandu', 2, true]]);
+});
 
 it.each([
   ['SELECT label COLLATE | FROM records', undefined],

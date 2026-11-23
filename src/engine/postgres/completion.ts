@@ -1,4 +1,4 @@
-import { postgresCompletionLimits, postgresJoinColumnLimit, postgresRoutineParameterSchema, type PostgresCompletionInput, type PostgresCompletionItem,
+import { postgresCompletionLimits, postgresJoinColumnLimit, postgresRoutineParameterSchema, postgresTimeZonePrefix, type PostgresCompletionInput, type PostgresCompletionItem,
   type PostgresCompletionResult } from '../../shared/postgresCompletion';
 import type { PostgresConnection } from './connection';
 import { postgresIdentifier } from '../../shared/postgresSql';
@@ -473,6 +473,28 @@ async function collations(connection: PostgresConnection, input: Extract<Postgre
   return { items, incomplete: result.truncated || result.rows.length === limit };
 }
 
+/** PostgreSQL 自己提供命名时区及查询时快照，使用秒数避免 IntervalStyle 改变展示结果。 */
+async function timeZones(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'timeZones' }>): Promise<PostgresCompletionResult> {
+  const limit = input.exact ? 2 : rowLimit;
+  const fold = (term: string) => `pg_catalog.lower(${term} COLLATE pg_catalog."C")`;
+  const name = fold('z.name'), prefix = fold('$1::pg_catalog.text');
+  const result = await connection.query(`
+    SELECT z.name, z.abbrev, pg_catalog.date_part('epoch', z.utc_offset)::pg_catalog.int4, z.is_dst
+    FROM pg_catalog.pg_timezone_names z
+    WHERE CASE WHEN $3::pg_catalog.bool THEN ${name} ${eq} ${prefix}
+      ELSE pg_catalog.strpos(${name}, ${prefix}) ${eq} 1 END
+    ORDER BY (${name} ${eq} ${fold("pg_catalog.current_setting('TimeZone')")}) DESC, z.name COLLATE pg_catalog."C" LIMIT $2
+  `, [input.prefix, limit, !!input.exact], { rows: limit, bytes: 128 * 1024 });
+  const items: PostgresCompletionItem[] = [];
+  for (const { c0, c1, c2, c3 } of result.rows.slice(0, limit - 1)) {
+    const offsetSeconds = typeof c2 === 'string' && /^-?\d+$/.test(c2) ? Number(c2) : NaN;
+    if (typeof c0 !== 'string' || !c0 || !postgresTimeZonePrefix.safeParse(c0).success || typeof c1 !== 'string' ||
+        c1.length > 64 || !Number.isSafeInteger(offsetSeconds) || Math.abs(offsetSeconds) >= 86400 || (c3 !== 't' && c3 !== 'f')) continue;
+    items.push({ kind: 'timeZone', name: c0, abbreviation: c1, offsetSeconds, daylight: c3 === 't' });
+  }
+  return { items, incomplete: result.truncated || result.rows.length === limit };
+}
+
 /** 查实际可执行的重载。原会话由 PostgreSQL 解析 search_path，同名不同签名仍保留。 */
 async function routines(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'relations' | 'columns' | 'routines' | 'signatures' }>, session: boolean): Promise<PostgresCompletionResult> {
   const target = input.routine!;
@@ -535,6 +557,7 @@ export async function readPostgresCompletion(connection: PostgresConnection, inp
     if (input.kind === 'conflictTargets') return conflictTargets(connection, input, session);
     if (input.kind === 'sampleMethods') return sampleMethods(connection, input, session);
     if (input.kind === 'collations') return collations(connection, input, session);
+    if (input.kind === 'timeZones') return timeZones(connection, input);
     const base = await (input.kind === 'relations' ? relations(connection, input, session) : columns(connection, input, session));
     if (!input.routine) return base;
     const supplemental = await routines(connection, input, session);

@@ -2594,6 +2594,67 @@ test('PostgreSQL 普通 UPDATE 和 DELETE 按会话权限补全赋值、条件�
   await quitDesktop();
 });
 
+test('PostgreSQL 时区值补全使用数据库目录并保留字面量边界', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query("SET TIME ZONE 'UTC'");
+    const startup = "SET TIME ZONE 'UTC'";
+    await prepare({id: '', name: '隔离 PostgreSQL 时区目录', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, startup);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await command('execute-all');
+    await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === startup)).toBe(true);
+    await expect.poll(() => enabled('execute-all')).toBe(true);
+    const baseline = await history(), identity = (await inspectModel()).identity;
+    const accept = async (draft: string, prefix: string, expected: string) => {
+      const original = "'" + prefix + "tail'";
+      await replaceDraft(draft);
+      await modelSelection(1, draft.indexOf(original) + prefix.length + 2);
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText([expected]);
+      await page.keyboard.press('Enter');
+      const completed = draft.replace(original, "'" + expected + "'");
+      await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+      return completed;
+    };
+    const shifted = await accept("SELECT (TIMESTAMPTZ '2020-01-15 01:00:00+00' AT TIME ZONE 'America/New_Ytail')::text AS local_time",
+      'America/New_Y', 'America/New_York');
+    const truncated = await accept("SELECT pg_catalog.date_trunc('day', TIMESTAMPTZ '2020-07-01 03:00:00+00', 'Asia/Toktail')::text AS day_start",
+      'Asia/Tok', 'Asia/Tokyo');
+    const setting = await accept("SET LOCAL TIME ZONE 'Asia/Shangtail'", 'Asia/Shang', 'Asia/Shanghai');
+    await replaceDraft(setting);
+    await modelSelection(1, setting.indexOf('Asia/Shanghai') + 4);
+    await page.keyboard.press('ControlOrMeta+K');
+    await page.keyboard.press('ControlOrMeta+I');
+    const hover = tab().locator('.monaco-hover:visible');
+    for (const term of ['Asia/Shanghai', '查询时 UTC 偏移：UTC+08:00', '查询时使用夏令时：否']) await expect(hover).toContainText(term);
+    await page.screenshot({path: info.outputPath('PostgreSQL-时区原生目录悬停.png'), animations: 'disabled'});
+    await page.keyboard.press('Escape');
+    expect(await history()).toEqual(baseline);
+    expect((await inspectModel()).identity).toEqual(identity);
+    expect((await observer.query(shifted)).rows).toEqual([{local_time: '2020-01-14 20:00:00'}]);
+    expect((await observer.query(shifted.replace('2020-01-15', '2020-07-15'))).rows).toEqual([{local_time: '2020-07-14 21:00:00'}]);
+    expect((await observer.query(truncated)).rows).toEqual([{day_start: '2020-06-30 15:00:00+00'}]);
+    await observer.query('BEGIN');
+    try {
+      await observer.query(setting);
+      expect((await observer.query("SELECT current_setting('TimeZone') AS zone")).rows).toEqual([{zone: 'Asia/Shanghai'}]);
+    } finally { await observer.query('ROLLBACK'); }
+    expect((await observer.query("SELECT current_setting('TimeZone') AS zone")).rows).toEqual([{zone: 'UTC'}]);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL COLLATE 按原会话解析同名规则并悬停目录信息', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

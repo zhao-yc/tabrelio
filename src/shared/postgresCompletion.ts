@@ -4,6 +4,7 @@ export const postgresCompletionLimits = { source: 64 * 1024, tokens: 4096, items
 export const postgresJoinColumnLimit = 256;
 const text = z.string().max(postgresCompletionLimits.name).refine(value => !value.includes('\0'));
 const name = text.refine(value => value.length > 0);
+export const postgresTimeZonePrefix = text.regex(/^[A-Za-z0-9_/+-]*$/);
 const target = z.object({ connectionId: name, database: name, prefix: text, sessionId: name.optional() });
 const fieldIdentifier = name.refine(value => !/[\uD800-\uDFFF]/u.test(value) && new TextEncoder().encode(value).length <= 63);
 const catalogRelation = z.object({ name: fieldIdentifier, schema: fieldIdentifier.optional() }).strict();
@@ -47,6 +48,7 @@ export const postgresCompletionSchema = z.discriminatedUnion('kind', [
   target.extend({ kind: z.literal('conflictTargets'), relation: catalogRelation, selection: conflictSelection }).strict(),
   target.extend({ kind: z.literal('sampleMethods'), schema: fieldIdentifier.optional() }).strict(),
   target.extend({ kind: z.literal('collations'), schema: fieldIdentifier.optional(), exact: z.literal(true).optional() }).strict(),
+  target.extend({ kind: z.literal('timeZones'), prefix: postgresTimeZonePrefix, exact: z.literal(true).optional() }).strict(),
   target.extend({ kind: z.literal('routines'), routine }).strict(),
   target.extend({ kind: z.literal('signatures'), prefix: name, routine }).strict(),
 ]);
@@ -62,6 +64,7 @@ export type PostgresCompletionItem =
   | { kind: 'sampleMethod'; schema: string; name: string }
   | { kind: 'collation'; schema: string; name: string; provider: 'b' | 'c' | 'd' | 'i';
     deterministic: boolean; locale: string | null; encoding: string | null }
+  | { kind: 'timeZone'; name: string; abbreviation: string; offsetSeconds: number; daylight: boolean }
   | { kind: 'joinColumns'; reference: number; names: string[] }
   | { kind: 'conflictConstraint'; name: string; constraint: 'primary' | 'unique' | 'exclusion' }
   | { kind: 'conflictKey'; name: string; columns: string[]; primary: boolean }

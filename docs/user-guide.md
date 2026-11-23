@@ -1008,6 +1008,8 @@ PostgreSQL 的 `JOIN USING` 和 `NATURAL JOIN` 合并键在结果里只建议一
 
 在 PostgreSQL 查询、列定义或索引定义的 `COLLATE` 后，可按当前会话的搜索路径或显式 schema 补全排序规则。接受候选会用正确的引号写入名称，规则悬停可查看提供程序、区域设置、字符编码和确定性。离线可选 `C`、`POSIX` 和 `default`。 [PostgreSQL 排序规则](https://www.postgresql.org/docs/18/collation.html)
 
+编写 PostgreSQL 的 `AT TIME ZONE`、`SET TIME ZONE`、`timezone(时区, 日期时间)` 或 `date_trunc(单位, 带时区时间戳, 时区)` 时，可补全命名时区。连接后候选来自数据库目录，离线候选来自本机时区库。接受候选会替换整个简单单引号值，保留其它 SQL。悬停显示查询时的 UTC 偏移、缩写和夏令时状态。 [PostgreSQL 日期与时间函数](https://www.postgresql.org/docs/18/functions-datetime.html#FUNCTIONS-DATETIME-ZONECONVERT) · [时区目录](https://www.postgresql.org/docs/18/view-pg-timezone-names.html)
+
 编写 PostgreSQL 的 `INSERT … ON CONFLICT … DO UPDATE` 时，`SET` 左侧按 `UPDATE` 权限补全目标列。在赋值右侧和动作 `WHERE` 中，可用目标表别名读取既有行，用 `excluded.` 读取待插入行，两者都按 `SELECT` 权限补全。存在已连接会话时，权限及表目录按该会话解析。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)
 
 在 PostgreSQL 的 `ON CONFLICT` 后按 Ctrl+空格，可选择由普通列组成且无谓词的完整主键或唯一键。括号内已填的列会保留，接受候选会补齐缺项。`ON CONSTRAINT` 后可选用目标表的约束名，写明 `DO NOTHING` 时也可选择排斥约束。列权限和同名表以当前会话为准。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)

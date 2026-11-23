@@ -1,9 +1,10 @@
 import type * as monaco from 'monaco-editor';
 import type { PostgresCompletionInput, PostgresCompletionReference, PostgresCompletionResult } from '../shared/postgresCompletion';
-import { postgresCompletionLimits } from '../shared/postgresCompletion';
+import { postgresCompletionLimits, postgresTimeZonePrefix } from '../shared/postgresCompletion';
 import { postgresIdentifier } from '../shared/postgresSql';
 import { postgresConflictExpression } from '../shared/postgresConflictExpression';
-import { analyzePostgresCollationHover, analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresSignature, catalogColumnReferences,
+import { analyzePostgresCollationHover, analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresSignature,
+  analyzePostgresTimeZoneHover, catalogColumnReferences,
   isJoinedProjection, type PostgresFieldTarget } from './postgresCompletionAnalysis';
 import { joinCatalogRelations, joinedOutputColumns, sharedJoinColumns } from './postgresJoinColumns';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from './postgresNamedParameterReferences';
@@ -30,6 +31,26 @@ function collationHoverText(result: PostgresCompletionResult, name: string, sche
     ...(item.locale ? [postgresZh.collationLocale + '：' + item.locale] : []),
     postgresZh.collationEncoding + '：' + (item.encoding ?? postgresZh.collationAnyEncoding),
   ].join('\n').split(/\r\n|\r|\n/).map(line => '    ' + line).join('\n');
+}
+
+function zoneHoverText(result: PostgresCompletionResult, name: string): string | undefined {
+  if (result.incomplete || result.deferred || result.items.length !== 1 || result.items[0].kind !== 'timeZone') return;
+  const item = result.items[0];
+  if (item.name.toLowerCase() !== name.toLowerCase()) return;
+  const absolute = Math.abs(item.offsetSeconds);
+  const two = (value: number) => String(value).padStart(2, '0');
+  const seconds = absolute % 60;
+  const offset = (item.offsetSeconds < 0 ? '-' : '+') + two(Math.floor(absolute / 3600)) + ':' +
+    two(Math.floor(absolute / 60) % 60) + (seconds ? ':' + two(seconds) : '');
+  return [postgresZh.timeZoneName + '：' + item.name, postgresZh.timeZoneOffset + '：UTC' + offset,
+    postgresZh.timeZoneAbbreviation + '：' + item.abbreviation, postgresZh.timeZoneDaylight + '：' + (item.daylight ? fieldText.yes : fieldText.no),
+  ].join('\n').split(/\r\n|\r|\n/).map(line => '    ' + line).join('\n');
+}
+
+let localTimeZones: string[] | undefined;
+function desktopTimeZones(): string[] {
+  // 离线候选来自 Electron 自己的时区库，UTC 不依赖 Intl 的别名策略。
+  return localTimeZones ??= [...new Set(['UTC', ...(Intl.supportedValuesOf?.('timeZone') ?? [])])];
 }
 
 /** 名称、默认值和备注均作为纯文本显示，不能在悬停中产生HTML或可点击命令。 */
@@ -141,6 +162,13 @@ export function createPostgresCompletionProvider(options: {
         const current = () => !disposed && !active && hoverGeneration === generation && !token.isCancellationRequested &&
           options.current() && options.model() === model && !model.isDisposed() && model.getVersionId() === version;
         try {
+          const timeZone = analyzePostgresTimeZoneHover(source, offset, options.standardStrings);
+          if (timeZone) {
+            if (!sessionId) return null;
+            const result = await request({ ...target, kind: 'timeZones', prefix: timeZone.name, exact: true }, current);
+            const value = result && current() ? zoneHoverText(result, timeZone.name) : undefined;
+            return value ? { range: range(timeZone), contents: [{ value, isTrusted: false, supportHtml: false }] } : null;
+          }
           const collation = analyzePostgresCollationHover(source, offset, options.standardStrings);
           if (collation) {
             if (!sessionId) return null;
@@ -159,7 +187,7 @@ export function createPostgresCompletionProvider(options: {
         } catch { return null; }
       },
     },
-    triggerCharacters: ['.', '"', '$'],
+    triggerCharacters: ['.', '"', '$', "'"],
     /** 先校验本地词法，只向服务端发送目标和前缀。 */
     async provideCompletionItems(model, position, context, token) {
       const empty = { suggestions: [] };
@@ -195,9 +223,29 @@ export function createPostgresCompletionProvider(options: {
         const analysis = analyzePostgresCompletion(source, offset, options.standardStrings);
         if (!analysis) return empty;
         const { query, prefix, quoted, routine } = analysis;
+        if (context?.triggerCharacter === "'" && query?.kind !== 'timeZones') return empty;
         const start = model.getPositionAt(analysis.start), end = model.getPositionAt(analysis.end);
         if (start.lineNumber !== end.lineNumber) return empty;
         const range = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+        if (query?.kind === 'timeZones') {
+          let result: PostgresCompletionResult | undefined;
+          if (sessionId) {
+            await debounce(controller.signal, 100);
+            try { result = await request({ ...target, kind: 'timeZones', prefix }, current); }
+            catch { if (current()) options.status('unavailable'); }
+            if (!current()) return empty;
+          }
+          if (result?.deferred) options.status(result.deferred === 'transaction' ? 'sessionUnknown' : 'unavailable');
+          else if (result?.incomplete) options.status('partial');
+          const catalog = result && !result.deferred ? result.items.filter(item => item.kind === 'timeZone').map(item => item.name) : undefined;
+          const names = (catalog ?? desktopTimeZones()).filter(name => name.toLowerCase().startsWith(prefix.toLowerCase()) &&
+            postgresTimeZonePrefix.safeParse(name).success);
+          if (names.length > postgresCompletionLimits.items) options.status('partial');
+          return { incomplete: true, suggestions: names.slice(0, postgresCompletionLimits.items).map((name, index) => ({
+            range, kind: options.kinds.variable, label: { label: name, description: catalog ? postgresZh.timeZoneName : postgresZh.desktopTimeZone },
+            insertText: "'" + name + "'", filterText: query.literal ? "'" + name + "'" : name, sortText: String(index).padStart(3, '0'),
+          })) };
+        }
         if (query?.kind === 'collations') {
           let result: PostgresCompletionResult | undefined;
           if (sessionId) {
@@ -440,7 +488,8 @@ export function createPostgresCompletionProvider(options: {
             sortText: '0' + String(suggestions.length).padStart(3, '0') });
         }
         for (const item of result.items) {
-          if (item.kind === 'columnDetail' || item.kind === 'joinColumns' || item.kind === 'sampleMethod' || item.kind === 'collation' || item.kind === 'conflictConstraint' ||
+          if (item.kind === 'columnDetail' || item.kind === 'joinColumns' || item.kind === 'sampleMethod' || item.kind === 'collation' ||
+              item.kind === 'timeZone' || item.kind === 'conflictConstraint' ||
               item.kind === 'conflictKey' || item.kind === 'conflictIndex') continue;
           const filterText = quoted ? '"' + item.name.replaceAll('"', '""') : item.name;
           const common = { range, kind: options.kinds[item.kind], filterText, sortText: '0' + String(suggestions.length).padStart(3, '0') };
