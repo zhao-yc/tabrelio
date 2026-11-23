@@ -23,6 +23,35 @@ it('命名窗口改名保留物理字段、另一查询块同名窗口和独立�
   expect(edited('SELECT 1 WINDOW ¦unused AS ()', 'win')).toBe('SELECT 1 WINDOW "win" AS ()');
 });
 
+it('整体 JOIN 的别名只改括号外及可关联子查询，保留内部同名别名和列清单', () => {
+  expect(edited('SELECT ¦j.key FROM (a j JOIN b r ON j.id=r.id) j(key, other) ' +
+    'CROSS JOIN LATERAL (SELECT j.key) q WHERE j.key>0', '整组'))
+    .toBe('SELECT "整组".key FROM (a j JOIN b r ON j.id=r.id) "整组"(key, other) ' +
+      'CROSS JOIN LATERAL (SELECT "整组".key) q WHERE "整组".key>0');
+  expect(rename('SELECT ¦j.id FROM (a x JOIN b y ON x.id=y.id) j JOIN c c ON c.id=j.id', 'c'))
+    .toEqual({status: 'blocked', reason: 'collision'});
+});
+
+it('USING AS 改名保留同名连接键和其它列，拒绝未确定的整行引用', () => {
+  expect(edited('SELECT ¦id.id, a.id FROM a JOIN b USING (id) AS id WHERE id.id>0', 'key_group'))
+    .toBe('SELECT "key_group".id, a.id FROM a JOIN b USING (id) AS "key_group" WHERE "key_group".id>0');
+  expect(edited('WITH a(id,n) AS (VALUES (4,7)), b(id,m) AS (VALUES (4,9)) SELECT ¦id.id, a.n FROM a JOIN b USING (id) AS id', 'key_group'))
+    .toBe('WITH a(id,n) AS (VALUES (4,7)), b(id,m) AS (VALUES (4,9)) SELECT "key_group".id, a.n FROM a JOIN b USING (id) AS "key_group"');
+  expect(rename('SELECT ¦j.id, row_to_json(j) FROM a JOIN b USING (id) AS j', 'key_group'))
+    .toEqual({status: 'blocked', reason: 'unresolved'});
+});
+
+it('已确认的连接输出列清单可改名，两侧输入的同名合并键仍保留', () => {
+  const sql = 'WITH a(id,n) AS (VALUES (1,2)), b(id,m) AS (VALUES (1,3)) SELECT w.¦key ' +
+    'FROM (a JOIN b USING (id)) w(key) ORDER BY key';
+  expect(edited(sql, 'shown')).toBe('WITH a(id,n) AS (VALUES (1,2)), b(id,m) AS (VALUES (1,3)) SELECT w."shown" ' +
+    'FROM (a JOIN b USING (id)) w("shown") ORDER BY "shown"');
+  expect(rename('WITH a(¦id) AS (VALUES (1)), b(id) AS (VALUES (1)) SELECT w.id FROM (a JOIN b USING (id)) w', 'next'))
+    .toEqual({status: 'blocked', reason: 'unresolved'});
+  expect(edited('WITH a(id,¦value) AS (VALUES (1,2)) SELECT a.value FROM a JOIN ledger USING (id)', 'amount'))
+    .toBe('WITH a(id,"amount") AS (VALUES (1,2)) SELECT a."amount" FROM a JOIN ledger USING (id)');
+});
+
 it('窗口改名拒绝本块冲突或无法完整绑定的同名继承项', () => {
   expect(rename('SELECT sum(1) OVER ¦base WINDOW base AS (), next AS ()', 'next'))
     .toEqual({status: 'blocked', reason: 'collision'});

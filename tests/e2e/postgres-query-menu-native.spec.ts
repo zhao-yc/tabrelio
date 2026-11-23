@@ -1900,6 +1900,64 @@ test('PostgreSQL 离线整组重命名投影列并保留物理字段和内层同
   expect(pageErrors).toEqual([]);
 });
 
+test('PostgreSQL 离线定位整体 JOIN 和 USING AS 别名并独立改名', async ({}, info) => {
+  const first = [
+    'SELECT j.key, (SELECT j.id FROM (VALUES (8)) j(id)) AS retained',
+    'FROM ((VALUES (4)) j(id) JOIN (VALUES (4)) r(id) ON j.id=r.id) AS j(key,other)',
+    'WHERE j.key>0;',
+  ];
+  const second = [
+    'WITH a(id,n) AS (VALUES (4,7)), b(id,m) AS (VALUES (4,9))',
+    'SELECT id.id, a.n FROM a JOIN b USING (id) AS id',
+    'WHERE id.id>0;',
+  ];
+  await prepare({id: '', name: '离线 PostgreSQL 连接别名', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'postgres'}, first.join('\n'));
+  await resizeQueryWindow(1280, 920, 0.75);
+  const initial = await inspectModel(), input = editor().locator('.rename-box input.rename-input');
+  const cases = [
+    { lines: first, row: 1, original: 'j', name: 'whole_pair', changed: [
+      first[0].replace('SELECT j.key', 'SELECT "whole_pair".key'),
+      first[1].replace('AS j(key,other)', 'AS "whole_pair"(key,other)'),
+      first[2].replace('j.key', '"whole_pair".key'),
+    ] },
+    { lines: second, row: 2, original: 'id', name: 'join_key', changed: [
+      second[0],
+      second[1].replace('SELECT id.id', 'SELECT "join_key".id').replace('AS id', 'AS "join_key"'),
+      second[2].replace('id.id', '"join_key".id'),
+    ] },
+  ];
+  for (const { lines, row, original, name, changed } of cases) {
+    const sql = lines.join('\n'), column = lines[row - 1].indexOf('SELECT ') + 'SELECT '.length + 1;
+    await replaceDraft(sql);
+    await modelSelection(row, column);
+    await page.keyboard.press('F12');
+    await expect.poll(async () => (await inspectModel()).position).toMatchObject({
+      lineNumber: 2, column: lines[1].lastIndexOf('AS ' + original) + 'AS '.length + 1,
+    });
+    await page.keyboard.press('Shift+F12');
+    const peek = editor().locator('.peekview-widget.reference-zone-widget');
+    await expect(peek.locator('.ref-tree .monaco-list-row[role="treeitem"][aria-level="1"]')).toHaveCount(3);
+    await page.keyboard.press('Escape');
+    await expect(peek).not.toBeVisible();
+    await modelSelection(row, column);
+    await page.keyboard.press('F2');
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue(original);
+    await input.fill(name);
+    await input.press('Enter');
+    await expect(input).not.toBeVisible();
+    await expect.poll(async () => (await inspectModel()).sql).toBe(changed.join('\n'));
+    await page.screenshot({path: info.outputPath(name + '.png'), animations: 'disabled'});
+    await page.keyboard.press('ControlOrMeta+Z');
+    await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+  }
+  expect((await inspectModel()).identity).toEqual(initial.identity);
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('PostgreSQL 离线命名窗口补全、定位声明和整组改名', async ({}, info) => {
   const lines = ['SELECT count(*) OVER buSuffix, count(*) OVER derived',
     'FROM (VALUES (1),(1),(2)) q(grp)', 'WINDOW bucket AS (PARTITION BY grp),', '  derived AS (bucket ORDER BY grp);'];

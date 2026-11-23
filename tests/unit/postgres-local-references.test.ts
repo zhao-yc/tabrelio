@@ -179,16 +179,53 @@ it('跳过字符串、注释、模式限定函数和类型，并停在当前语�
     references: [{ start: 'SELECT s.id FROM a s; SELECT '.length }] });
 });
 
-it('离线拒绝依赖字符串模式的绑定，并拒绝尚未支持的关系结构', () => {
+it('离线拒绝依赖字符串模式、不完整结构及不可见关系', () => {
   const mode = "SELECT '\\' AS literal, ¦s.id FROM t s";
   expect(at(mode, true)).toMatchObject({ status: 'ready' });
   expect(at(mode, false)).toMatchObject({ status: 'blocked' });
   expect(at(mode)).toMatchObject({ status: 'blocked' });
-  for (const sql of ['SELECT ¦s.id FROM (t s JOIN other o ON s.id=o.id)',
-    'SELECT ¦s.id FROM a JOIN b USING (id) AS s', 'SELECT ¦s.id FROM t s WHERE (s.id=1',
+  for (const sql of ['SELECT ¦s.id FROM (t s JOIN other o ON s.id=o.id) whole',
+    'SELECT ¦s.other FROM a JOIN b USING (id) AS s', 'SELECT ¦s.id FROM t s WHERE (s.id=1',
     'SELECT ¦s.id FROM t U&"\\0073"', 'SELECT ¦s.id FROM a s JOIN b s ON true']) {
     expect(at(sql), sql).toMatchObject({ status: 'blocked' });
   }
+});
+
+it('普通查询的 JOIN 括号可保留输入名或将它们隐藏在整体别名后', () => {
+  const source = 'SELECT whole.id FROM (a AS x JOIN b AS y ON x.id=y.id) AS whole ' +
+    'CROSS JOIN LATERAL (SELECT whole.id) z WHERE whole.id>0';
+  const ranges = [...source.matchAll(/\bwhole\b/g)].map(match => ({start: match.index, end: match.index + match[0].length}));
+  expect(analyzePostgresLocalReferences(source, ranges[2].start)).toEqual({status: 'ready', target: ranges[2],
+    declaration: ranges[1], references: [ranges[0], ranges[2], ranges[3]]});
+  expect(at('SELECT x.id FROM (a AS x JOIN b AS y ON ¦x.id=y.id)')).toMatchObject({
+    status: 'ready', references: [expect.any(Object), expect.any(Object)]});
+  expect(at('SELECT whole.id FROM (a AS x JOIN b AS y ON ¦x.id=y.id) whole')).toMatchObject({
+    status: 'ready', references: [expect.any(Object)]});
+  expect(at('SELECT whole.id FROM (a x JOIN b y ON ¦whole.id=y.id) whole')).toMatchObject({status: 'blocked'});
+});
+
+it('USING AS 仅索引连接键限定名，并保留各个 JOIN、UPDATE 和 DELETE 的原作用域', () => {
+  for (const sql of [
+    'SELECT ¦shared.*, a.id FROM a JOIN b USING (id) AS shared WHERE shared.id>0',
+    'SELECT a.id FROM a JOIN b USING (id) AS shared JOIN c ON ¦shared.id=c.id',
+    'UPDATE t SET value=¦shared.id FROM a JOIN b USING (id) AS shared WHERE t.id=shared.id RETURNING shared.id',
+    'DELETE FROM t USING a JOIN b USING (id) AS shared WHERE t.id=shared.id RETURNING ¦shared.id',
+  ]) expect(at(sql), sql).toMatchObject({status: 'ready'});
+  for (const sql of [
+    'SELECT shared.id FROM a JOIN (b JOIN c ON ¦shared.id=c.id) USING (id) AS shared',
+    'SELECT ¦shared.other FROM a JOIN b USING (id) AS shared',
+    'SELECT ¦shared.id FROM (a JOIN b USING (id) AS shared) whole',
+    'SELECT ¦shared.id FROM a JOIN b USING (id,id) AS shared',
+    'DELETE FROM dst d USING (a x JOIN b y ON ¦d.id=y.id) whole WHERE whole.id=d.id',
+  ]) expect(at(sql), sql).toMatchObject({status: 'blocked'});
+});
+
+it('整体 JOIN 列清单可导航至显式列声明，合并键本身没有单侧定义', () => {
+  const sql = 'WITH a(id, n) AS (VALUES (1,2)), b(id, m) AS (VALUES (1,3)) ' +
+    'SELECT w.¦key, w.n FROM (a JOIN b USING (id)) w(key)';
+  expect(at(sql)).toMatchObject({status: 'ready', declaration: {start: sql.lastIndexOf('key') - 1}});
+  expect(at('WITH a(id) AS (VALUES (1)), b(id) AS (VALUES (1)) SELECT w.¦id FROM (a FULL JOIN b USING (id)) w'))
+    .toMatchObject({status: 'blocked'});
 });
 
 it('写入目标仅在赋值、条件及输出表达式可见，SET 左侧不绑定关系', () => {

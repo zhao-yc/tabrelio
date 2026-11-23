@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 普通查询支持整体 JOIN 别名、`USING AS` 别名的离线导航、引用查找和整组改名。采用实际 JOIN 作用域，保留同名列及内部绑定，明确的整体 JOIN 输出列清单可重命名。Q01、O05 继续为部分覆盖。 [PostgreSQL SELECT](https://www.postgresql.org/docs/18/sql-select.html)
+
 2026-11-24 源码增量。PostgreSQL 查询补全保留连接输出的列顺序和合并键，可经星号、CTE 与派生表传到外层及后续 JOIN。区分整体 JOIN 别名和 `USING (...) AS alias` 的可见列，重名的非合并列需要可用限定名。Q01、R01 继续为部分覆盖。 [PostgreSQL 连接表](https://www.postgresql.org/docs/18/queries-table-expressions.html)
 
 2026-11-24 源码增量。PostgreSQL 的 `JOIN USING` 补全按实际左右操作数推荐共有列，跳过已写入的键和单侧歧义。支持嵌套连接、已知 CTE／派生表、位置列别名与原会话的真实目录。Q01、R01 继续为部分覆盖。 [PostgreSQL 连接表](https://www.postgresql.org/docs/18/queries-table-expressions.html)
