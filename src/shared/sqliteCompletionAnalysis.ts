@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits, sqliteCompletionSourceKey, sqliteCompletionSourceSchema, sqliteCompletionTableSchema, sqliteForeignKeySelectionSchema, sqliteTriggerTargetMode, type SqliteCompletionSource, type SqliteCompletionTable } from './sqliteCompletion';
 import type { LocalReferenceToken } from './localReferenceIndex';
-import type { PhysicalObjectAnalysis } from './physicalObjectAnalysis';
+import type { PhysicalObjectAnalysis, PhysicalObjectTokenContext } from './physicalObjectValidation';
+import type { SqliteDefinitionTriggerScope } from './objectDefinition';
 
 type DmlRole = 'mutation-target' | 'excluded' | 'returning-target';
 export type SqliteCompletionRelation = ({ kind: 'physical'; alias?: string; visibleColumnsOnly?: true; dmlRole?: DmlRole } & SqliteCompletionSource | { kind: 'local'; source: 'cte' | 'derived' | 'group'; name: string; alias?: string; columns: string[]; declaration?: true; projection?: number }) & { scopeDepth?: number; afterOuterJoin?: true };
@@ -179,6 +180,44 @@ function createTriggerTarget(tokens: Token[], head: number, end: number) {
   const begin = at < end && keyword(tokens[at], 'begin') ? at : undefined;
   const temporary = header.temporary || header.schema === 'temp' || schema === 'temp';
   return { on, object, event, tableIndex, table, schema, temporary, updateOf, when, begin };
+}
+
+type TriggerDraft = NonNullable<ReturnType<typeof createTriggerTarget>>;
+type TriggerRange = { start: number; end: number };
+
+function triggerWhenContains(tokens: Token[], draft: TriggerDraft, end: number, target: TriggerRange, sourceEnd: number): boolean {
+  return draft.when !== undefined && target.start >= tokens[draft.when].end && target.end <= (tokens[draft.begin ?? end]?.start ?? sourceEnd);
+}
+
+/** 动作范围只包含所在步骤，WHEN 中仅将实际子查询交给普通查询作用域。 */
+function triggerActionAt(tokens: Token[], draft: TriggerDraft, end: number, target: TriggerRange, offset: number, sourceEnd: number): TriggerRange | undefined {
+  if (draft.when !== undefined && triggerWhenContains(tokens, draft, end, target, sourceEnd)) {
+    return subqueryAt(tokens, draft.when + 1, draft.begin ?? end, offset, sourceEnd);
+  }
+  if (draft.begin === undefined || target.start < tokens[draft.begin].end) return;
+  let start = draft.begin + 1;
+  for (let i = start; i <= end; i++) {
+    if (i < end && (tokens[i].kind !== 'symbol' || tokens[i].value !== ';' || tokens[i].depth !== 0)) continue;
+    if (target.start >= tokens[start - 1].end && target.end <= (tokens[i]?.start ?? sourceEnd)) {
+      if (start === i || !triggerSteps.some(word => keyword(tokens[start], word))) return;
+      const mutation = ['update', 'delete'].some(word => keyword(tokens[start], word));
+      if (tokens.slice(start + 1, i).some((token, index) => token.depth === 0 &&
+        (keyword(token, 'returning') || mutation && ['order', 'limit', 'indexed'].some(word => keyword(token, word)) ||
+          keyword(token, 'default') && keyword(tokens[start + index + 2], 'values')))) return;
+      return { start, end: i };
+    }
+    start = i + 1;
+  }
+}
+
+/** 同一个词法判断用于生成和核对定义回包。只有未指定归属的永久触发器需要目录解析。 */
+function triggerDefinitionScope(draft: TriggerDraft, onTarget: boolean): {
+  defaultDatabase?: 'main' | 'temp'; triggerScope?: SqliteDefinitionTriggerScope;
+} {
+  if (onTarget) return { ...(draft.schema ? { defaultDatabase: draft.schema } : {}), triggerScope: { kind: 'target', object: draft.object } };
+  if (draft.temporary) return {};
+  if (draft.schema === 'main') return { defaultDatabase: 'main' };
+  return draft.table ? { triggerScope: { kind: 'body', table: draft.table, object: draft.object } } : {};
 }
 
 /** 从绑定取准确目录身份，别名和 SQL 实参不会进入列元数据请求。 */
@@ -454,19 +493,27 @@ export function sqliteReferenceContext(source: string, offset: number): { status
 }
 
 /** 对象回包校验复用方言词法并保留点号token，限定名无需字符串拆分或正则猜测。 */
-export function sqlitePhysicalObjectContext(source: string, offset: number): { status: 'ready'; target: LocalReferenceToken; tokens: Token[]; defaultDatabase?: 'main' | 'temp' } | { status: 'blocked'; reason: string } {
+export function sqlitePhysicalObjectContext(source: string, offset: number): PhysicalObjectTokenContext {
   try {
     if (typeof source !== 'string' || source.length > limits.sourceUnits) fail('budget');
     if (!unicode(source) || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || !boundary(source, offset)) fail('input');
     const tokens = lex(source, offset, true), statement = statementAt(tokens, offset), target = targetAt(source, tokens, offset, 'object'), active = tokens.slice(statement.start, statement.end);
-    if (statement.trigger) fail('trigger');
     const token = active.find(token => token.start === target.start && token.end === target.end);
-    if (!token || active.some(token => token.closed === false || token.value === '(' && token.pair === undefined || token.value === ')' && token.pair === undefined)) fail('syntax');
+    if (!token || active.some(token => token.closed === false || token.kind === 'symbol' && ['(', ')'].includes(token.value) && token.pair === undefined)) fail('syntax');
     const head = explainedHead(tokens, statement.start);
+    if (statement.trigger) {
+      const draft = createTriggerTarget(tokens, head, statement.end);
+      if (!draft?.table) fail('trigger');
+      const onTarget = tokens[draft.tableIndex] === token;
+      const range = onTarget ? { start: draft.on + 1, end: draft.tableIndex + 1 } : triggerActionAt(tokens, draft, statement.end, target, offset, source.length);
+      if (!range) fail('trigger');
+      return { status: 'ready', target: { start: token.start, end: token.end }, tokens: tokens.slice(range.start, range.end),
+        ...triggerDefinitionScope(draft, onTarget) };
+    }
     const body = createQueryBody(tokens, head, statement.end), index = createIndexTarget(tokens, head, statement.end);
     const defaultDatabase = body?.viewSchema && target.start >= body.afterAs ? body.viewSchema :
       index?.schema && target.start >= (tokens[index.tableIndex]?.start ?? Infinity) ? index.schema : undefined;
-    return { status: 'ready', target: { start: token.start, end: token.end, value: token.value }, tokens: active,
+    return { status: 'ready', target: { start: token.start, end: token.end }, tokens: active,
       ...(defaultDatabase ? { defaultDatabase } : {}) };
   } catch (reason) { return { status: 'blocked', reason: reason instanceof Error && /^[a-z-]{1,64}$/.test(reason.message) ? reason.message : 'analysis' }; }
 }
@@ -898,8 +945,8 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       return { mode, ...(existingCall ? { existingCall: true } : {}) };
     }
     const active = tokens.slice(statement.start, statement.end);
-    if (active.some(token => token.value === '#' || token.value === ']' || token.value === ')' && token.pair === undefined)) fail('syntax');
-    if (intent === 'object' && active.some(token => token.closed === false || token.value === '(' && token.pair === undefined)) fail('syntax');
+    if (active.some(token => token.kind === 'symbol' && (token.value === '#' || token.value === ']' || token.value === ')' && token.pair === undefined))) fail('syntax');
+    if (intent === 'object' && active.some(token => token.closed === false || token.kind === 'symbol' && token.value === '(' && token.pair === undefined)) fail('syntax');
     let relationBudget = 0;
     const localProjections: SqliteLocalProjection[] = [], sourceIndex = new Map<ProjectionSource, number>();
     const stagedSources: ProjectionSource[] = [], compiled = new Map<ProjectionSource, number>(), compiling = new Set<ProjectionSource>();
@@ -1617,17 +1664,27 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         ...(outputAliases ? { outputAliases } : {}), ...(functions ? { functions } : {}) };
     }
     /** 动作沿用普通查询分析，但每条动作独立；整个触发体在实际触发目标的命名空间中解析。 */
-    function analyzeTrigger(): { trigger: SqliteTriggerContext } | { parsed: ScopeResult; body: SqliteTriggerBodyContext } | undefined {
-      if (intent === 'object' || intent === 'definition') return;
+    function analyzeTrigger(): { trigger: SqliteTriggerContext } | { parsed: ScopeResult; body?: SqliteTriggerBodyContext } | undefined {
+      if (intent === 'definition') return;
       const trigger = triggerDraft;
       if (!trigger) return;
-      const { on, object, event, tableIndex, table, schema, temporary, updateOf, when, begin } = trigger;
+      const { on, object, event, tableIndex, table, schema, temporary, updateOf } = trigger;
       const next = targetIndex >= 0 ? tokens[targetIndex + 1] : undefined;
       const tableSlot = targetIndex === tableIndex || !intent && target.start === target.end &&
         target.start >= tokens[tableIndex - 1].end && target.end <= (tokens[Math.min(tableIndex, statement.end)]?.start ?? source.length);
-      if (tableSlot && qualifiers.length <= 1 && next?.value !== '.') return { trigger: { kind: 'target', object, ...(schema ? { schema } : {}) } };
+      if (tableSlot && qualifiers.length <= 1 && next?.value !== '.') {
+        if (intent === 'object') {
+          if (!table) return;
+          const relation: SqliteCompletionRelation = { kind: 'physical', name: table, ...(schema ? { schema } : {}) };
+          return { parsed: { bindings: [{ relation, start: on + 1, end: tableIndex + 1, referenceIndex: tableIndex, unknown: false }],
+            ctes: new Map(), syntax: ['relation'] } };
+        }
+        return { trigger: { kind: 'target', object, ...(schema ? { schema } : {}) } };
+      }
       if (!table) return;
       const sourceTable = { name: table, ...(schema ? { schema } : {}) };
+      const action = triggerActionAt(tokens, trigger, statement.end, target, offset, source.length);
+      if (intent === 'object') return action ? { parsed: scope(action.start, action.end, new Map(), [], 0) } : undefined;
       if (updateOf !== undefined && !qualifiers.length && target.start >= tokens[updateOf - 1].end && target.end <= tokens[on].start) {
         let start = updateOf, active = false;
         const used: string[] = [];
@@ -1647,28 +1704,8 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       const canSuggestRows = !existingCall && !qualifiers.length && !intent && !target.quoted && next?.value !== '.' &&
         !keyword(tokens[priorIndex], 'as') && available.some(name => name.startsWith(fold(target.prefix)));
 
-      let parsed: ScopeResult | undefined;
-      const whenEnd = begin ?? statement.end;
-      if (when !== undefined && target.start >= tokens[when].end && target.end <= (tokens[whenEnd]?.start ?? source.length)) {
-        const nested = subqueryAt(tokens, when + 1, whenEnd, offset, source.length);
-        if (nested) parsed = scope(nested.start, nested.end, new Map(), [], 0);
-      } else if (begin !== undefined && target.start >= tokens[begin].end) {
-        let step = begin + 1;
-        for (let i = step; i <= statement.end; i++) {
-          if (i < statement.end && (tokens[i].kind !== 'symbol' || tokens[i].value !== ';' || tokens[i].depth !== 0)) continue;
-          if (target.start >= tokens[step - 1].end && target.end <= (tokens[i]?.start ?? source.length)) {
-            if (step === i || !triggerSteps.some(word => keyword(tokens[step], word))) return;
-            const mutation = ['update', 'delete'].some(word => keyword(tokens[step], word));
-            if (tokens.slice(step + 1, i).some((token, index) => token.depth === 0 &&
-              (keyword(token, 'returning') || mutation && ['order', 'limit', 'indexed'].some(word => keyword(token, word)) ||
-                keyword(token, 'default') && keyword(tokens[step + index + 2], 'values')))) return;
-            parsed = scope(step, i, new Map(), [], 0);
-            break;
-          }
-          step = i + 1;
-        }
-        if (!parsed) return;
-      } else return;
+      if (!action && !triggerWhenContains(tokens, trigger, statement.end, target, source.length)) return;
+      const parsed = action ? scope(action.start, action.end, new Map(), [], 0) : undefined;
       const expression = !existingCall && (!parsed || parsed.syntax.includes('column') && !parsed.unqualified && !parsed.using && !parsed.windowNames &&
         !parsed.output && !parsed.indexSource);
       const shadowed = new Set(parsed?.bindings.map(binding => fold(binding.relation.alias ?? binding.relation.name)));
@@ -1713,10 +1750,12 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       if (matches.length !== 1) fail('ambiguous');
       const binding = matches[0]; if (binding.relation.kind !== 'physical' || binding.relation.tableFunction || binding.referenceIndex === undefined) fail('local');
       const table = tokens[binding.referenceIndex], database = binding.referenceIndex === binding.start + 2 && tokens[binding.start + 1]?.value === '.' ? tokens[binding.start] : undefined;
-      const defaultDatabase = viewSchema ?? indexDraft?.schema;
+      const navigation = triggerDraft ? triggerDefinitionScope(triggerDraft, binding.referenceIndex === triggerDraft.tableIndex) : {};
+      const defaultDatabase = navigation.defaultDatabase ?? viewSchema ?? indexDraft?.schema;
       if (table.kind !== 'id' || !table.closed && table.quoted || database && (database.kind !== 'id' || tokens[binding.start + 1]?.value !== '.')) fail('syntax');
       physicalObject?.({ status: 'ready', target: { start: target.start, end: target.end }, object: { table: table.value, tableRange: { start: table.start, end: table.end },
-        ...(database ? { database: database.value, databaseRange: { start: database.start, end: database.end } } : defaultDatabase ? { defaultDatabase } : {}) } });
+        ...(database ? { database: database.value, databaseRange: { start: database.start, end: database.end } } : defaultDatabase ? { defaultDatabase } : {}),
+        ...(navigation.triggerScope ? { triggerScope: navigation.triggerScope } : {}) } });
     }
     let definition: SqliteLocalDefinition | undefined, kind: 'alias' | 'cte' | 'physical' = 'physical';
     if (intent === 'definition') {

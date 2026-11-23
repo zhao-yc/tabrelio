@@ -83,6 +83,33 @@ describe('MySQL完整AST物理关系角色', () => {
 
 describe('SQLite既有结构解析的物理binding', () => {
   it.each([
+    ['CREATE TRIGGER main.t AFTER UPDATE ON sub|ject BEGIN SELECT 1; END;', { table: 'subject', defaultDatabase: 'main', triggerScope: { kind: 'target', object: 'table' } }],
+    ['CREATE TEMP TRIGGER t INSTEAD OF INSERT ON main.summar|y BEGIN SELECT NEW.id; END;', { table: 'summary', database: 'main', triggerScope: { kind: 'target', object: 'view' } }],
+    ['CREATE TRIGGER t AFTER UPDATE ON owner BEGIN SELECT 1; UPDATE lo|g SET value=NEW.value; END;', { table: 'log', triggerScope: { kind: 'body', table: 'owner', object: 'table' } }],
+    ['CREATE TRIGGER t AFTER UPDATE ON main.owner WHEN NEW.value = \'(\' AND EXISTS(SELECT 1 FROM lo|g) BEGIN SELECT 1; END;', { table: 'log', defaultDatabase: 'main' }],
+    ['CREATE TEMP TRIGGER t AFTER UPDATE ON main.owner BEGIN SELECT al|ias.value FROM subject alias; END;', { table: 'subject' }],
+    ['EXPLAIN CREATE TRIGGER t AFTER UPDATE ON owner BEGIN SELECT CASE WHEN 1 THEN 2 END; SELECT * FROM lo|g; END;', { table: 'log', triggerScope: { kind: 'body', table: 'owner', object: 'table' } }],
+  ] as const)('从触发目标、WHEN 子查询及当前动作解析物理表：%s', (marked, object) => {
+    const { source, offset } = input(marked), result = analyzeSqlitePhysicalObject(source, offset);
+    expect(result).toMatchObject({ status: 'ready', object });
+    expect(validPhysicalObjectAnalysis(result, source, offset, 'sqlite')).toBe(true);
+  });
+
+  it('拒绝替换触发归属、读取前一条动作或把伪行认作物理对象', () => {
+    const { source, offset } = input('CREATE TRIGGER t AFTER UPDATE ON source BEGIN SELECT 1 FROM old_table; SELECT a|.value FROM subject a; END;');
+    const result = analyzeSqlitePhysicalObject(source, offset);
+    if (result.status !== 'ready') throw Error(result.reason);
+    const sibling = source.indexOf('old_table');
+    for (const object of [
+      { ...result.object, triggerScope: { kind: 'body', table: 'subject', object: 'table' } },
+      { ...result.object, triggerScope: { kind: 'body', table: 'source', object: 'view' } },
+      { ...result.object, triggerScope: undefined },
+      { ...result.object, table: 'old_table', tableRange: { start: sibling, end: sibling + 'old_table'.length } },
+    ]) expect(validPhysicalObjectAnalysis({ ...result, object }, source, offset, 'sqlite')).toBe(false);
+    const pseudo = input('CREATE TRIGGER t AFTER UPDATE ON source BEGIN SELECT NE|W.value; END;');
+    expect(analyzeSqlitePhysicalObject(pseudo.source, pseudo.offset).status).toBe('blocked');
+  });
+  it.each([
     ['SELECT 1 FROM «sub|ject»', 'subject', undefined],
     ['SELECT |s.id FROM main.«subject» AS s', 'subject', 'main'],
     ['SELECT main.sub|ject.id FROM main.«subject»', 'subject', 'main'],

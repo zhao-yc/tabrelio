@@ -97,6 +97,15 @@ describe('显式对象定义读取控制器', () => {
     expect(f.ports.read).toHaveBeenCalledExactlyOnceWith({ connectionId: '原查询连接', sessionId: '原查询会话', database: 'main', table: 'target', taskId: 'object-definition:唯一编号' });
     expect(f.last().output).toMatchObject({ database: 'main', temporary: false });
   });
+  it('SQLite动态触发体在同一读取请求上绑定原会话和触发归属', async () => {
+    const f = fixture({ dialect: 'sqlite' });
+    const source = 'CREATE TRIGGER t AFTER UPDATE ON owner BEGIN UPDATE target SET value=NEW.value; END;';
+    const offset = source.indexOf('target') + 2;
+    f.worker.object.mockResolvedValue(analyzeSqlitePhysicalObject(source, offset));
+    await new ObjectDefinitionReader({ ...f.ports, source, offset }).start();
+    expect(f.ports.read).toHaveBeenCalledExactlyOnceWith({ connectionId: '原查询连接', sessionId: '原查询会话', table: 'target',
+      taskId: 'object-definition:唯一编号', triggerScope: { kind: 'body', table: 'owner', object: 'table' } });
+  });
   it('无session按保存连接事实派生能力，模式保持未知且不创建用户会话', async () => {
     const f = fixture({ session: false }); await f.reader.start();
     expect(f.ports.state).not.toHaveBeenCalled(); expect(f.ports.read.mock.calls[0][0]).not.toHaveProperty('sessionId');

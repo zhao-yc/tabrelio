@@ -71,6 +71,18 @@ async function readSchemaEncoding(driver: SqliteDriverSession, control: Definiti
   return encoding;
 }
 
+/** 触发目标先应用 SQLite 的同名对象遮蔽规则，再核对允许的关系类型。 */
+async function triggerOwnerSchema(driver: SqliteDriverSession, table: string, object: 'table' | 'view', database: 'main' | 'temp' | undefined,
+  control: DefinitionControl): Promise<'main' | 'temp'> {
+  const scope = database ? 'schema = ?' : "schema IN ('main','temp')";
+  const [row] = await read(driver, 'SELECT schema,type,name FROM pragma_table_list() WHERE ' + scope +
+    ' AND name = ? COLLATE NOCASE ORDER BY schema DESC LIMIT 1', database ? [database, table] : [table], control);
+  if (!row || row[1] !== object || typeof row[2] !== 'string' || /^sqlite_/i.test(row[2]) || row[0] !== 'main' && row[0] !== 'temp') {
+    throw Error('SQLite触发目标不存在或类型不适用');
+  }
+  return row[0];
+}
+
 /** 原session沿用已有事务；仅独立物理只读连接建立并回滚自己的准确目录快照。 */
 export async function readSqliteObjectDefinition(driver: SqliteDriverSession, input: ObjectDefinitionInput, control: DefinitionControl): Promise<ObjectDefinitionOutput> {
   const database = sqliteObjectDefinitionDatabase(input.database);
@@ -79,9 +91,21 @@ export async function readSqliteObjectDefinition(driver: SqliteDriverSession, in
   try {
     if (!input.sessionId) { if (!driver.readOnly) throw Error('SQLite独立对象定义读取要求物理只读连接'); began = true; await read(driver, 'BEGIN', [], control); }
     const encoding = await readSchemaEncoding(driver, control);
-    const schemas: ('main' | 'temp')[] = database ? [database] : input.sessionId ? ['temp', 'main'] : ['main'];
+    let schemas: ('main' | 'temp')[] = database ? [database] : input.sessionId ? ['temp', 'main'] : ['main'];
     const versions: [schema: 'main' | 'temp', version: string][] = [];
-    for (const schema of schemas) versions.push([schema, await stamp(driver, schema, control)]);
+    const trigger = input.triggerScope;
+    // 动态归属及定义一起受同一组目录版本约束，防止两次查找之间换库或命中已替换对象。
+    const observed: ('main' | 'temp')[] = trigger?.kind === 'body' && input.sessionId ? ['temp', 'main'] : schemas;
+    for (const schema of observed) versions.push([schema, await stamp(driver, schema, control)]);
+    if (trigger?.kind === 'target') {
+      schemas = [await triggerOwnerSchema(driver, input.table, trigger.object, database ?? (input.sessionId ? undefined : 'main'), control)];
+    } else if (trigger?.kind === 'body') {
+      const owner = await triggerOwnerSchema(driver, trigger.table, trigger.object, input.sessionId ? undefined : 'main', control);
+      if (owner === 'main') {
+        if (database === 'temp') throw Error('SQLite永久触发器的动作不能引用临时库');
+        schemas = ['main'];
+      }
+    }
     let target: { schema: 'main' | 'temp'; name: string; kind: 'table' | 'view'; bytes: number } | undefined;
     for (const schema of schemas) {
       const row = (await read(driver, 'SELECT CAST(name AS BLOB),type,length(CAST(sql AS BLOB)) FROM ' + schema + ".sqlite_schema WHERE name = ? COLLATE NOCASE ORDER BY CASE WHEN type IN ('table','view') THEN 0 ELSE 1 END LIMIT 1", [input.table], control))[0];

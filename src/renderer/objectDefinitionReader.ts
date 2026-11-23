@@ -144,7 +144,9 @@ export class ObjectDefinitionReader {
       // SQLite 按原 DDL 上下文取得固定库，没有固定库的单段名称交给原会话解析。
       const database = analysis.object.database ?? analysis.object.defaultDatabase ?? (this.dialect === 'sqlite' ? undefined : cached ? cached.databaseKnown ? cached.database ?? undefined : undefined : this.scope.databaseUnknown ? undefined : this.scope.database);
       if (this.dialect !== 'sqlite' && database === undefined) throw new ReaderFailure(text.context);
-      const input = objectDefinitionInputSchema.parse({ connectionId: this.scope.connectionId, ...(this.scope.sessionId ? { sessionId: this.scope.sessionId } : {}), ...(database === undefined ? {} : { database }), table: analysis.object.table, taskId: objectDefinitionTaskPrefix + this.ports.id() });
+      const input = objectDefinitionInputSchema.parse({ connectionId: this.scope.connectionId, ...(this.scope.sessionId ? { sessionId: this.scope.sessionId } : {}),
+        ...(database === undefined ? {} : { database }), table: analysis.object.table, taskId: objectDefinitionTaskPrefix + this.ports.id(),
+        ...(analysis.object.triggerScope ? { triggerScope: analysis.object.triggerScope } : {}) });
       this.check(operation);
       const pending: Pending = { id: input.taskId, sent: false, settled: false, work: Promise.resolve(undefined as unknown as ObjectDefinitionOutput) };
       operation.pending = pending;

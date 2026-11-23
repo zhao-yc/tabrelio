@@ -653,6 +653,7 @@ export class Engine {
       case 'query.objectDefinition': {
         const { profile, ...raw } = input;
         const request = objectDefinitionInputSchema.parse(raw);
+        if (request.triggerScope) throw Error('触发器目录范围仅支持SQLite连接');
         // 严格关闭未确认时旧资源仍占据用途槽位，显式断开恢复后才在下一次准入归还。
         for (const id of this.objectDefinitions) if (!this.tasks.has(id) && !this.independentTasks.has(id) && !this.independentResources.owns(id)) this.objectDefinitions.delete(id);
         if (this.objectDefinitions.size >= objectDefinitionLimits.active || this.objectDefinitions.has(request.taskId)) throw Error('对象定义读取已达并发上限，请等待原任务及资源收尾');

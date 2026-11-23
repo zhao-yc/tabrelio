@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import type { SqliteProcessExit, SqliteProcessTransport, SqliteWorkerRequest, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
 import type { SqliteConnectionProfile, TaskEvent } from '../../src/shared/contracts';
-import { objectDefinitionTaskPrefix, type ObjectDefinitionOutput } from '../../src/shared/objectDefinition';
+import { objectDefinitionTaskPrefix, type ObjectDefinitionOutput, type SqliteDefinitionTriggerScope } from '../../src/shared/objectDefinition';
 vi.mock('electron', () => ({ utilityProcess: { fork: () => { throw Error('对象定义测试必须使用真实Node子进程'); } } }));
 import { SqliteRuntime } from '../../src/main/sqliteRuntime';
 
@@ -44,6 +44,31 @@ function execute(app: SqliteRuntime, sessionId: string, sql: string) { return ap
 function definition(app: SqliteRuntime, connectionId: string, table = 'subject', sessionId?: string, database?: string, taskId = objectDefinitionTaskPrefix + ++serial): Promise<ObjectDefinitionOutput> { return app.request('query.objectDefinition', { connectionId, table, taskId, ...(sessionId ? { sessionId } : {}), ...(database ? { database } : {}) }); }
 
 describe('SQLite对象定义真实只读运行时', () => {
+  it('同一会话内先定位实际触发目标，再查动作关联的永久或临时定义', async () => {
+    const p = profile('CREATE TABLE owner(main_id INTEGER); CREATE TABLE subject(main_value TEXT); CREATE VIEW subject_view AS SELECT main_value FROM subject;'),
+      { app, events } = runtime([p]), session = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, session.sessionId, 'BEGIN; CREATE TEMP TABLE subject(temp_value INTEGER); CREATE TEMP VIEW owner_view AS SELECT 1 AS temp_id;');
+    const before = await app.request('query.completionState', session), count = events.length, start = processes[0].sent.length;
+    const read = (table: string, triggerScope: SqliteDefinitionTriggerScope, database?: string) =>
+      app.request('query.objectDefinition', { connectionId: p.id, sessionId: session.sessionId, table, triggerScope, ...(database ? { database } : {}),
+        taskId: objectDefinitionTaskPrefix + ++serial });
+    const main = { kind: 'body', table: 'owner', object: 'table' } as const;
+    expect(await read('subject', main)).toMatchObject({ database: 'main', ddl: 'CREATE TABLE subject(main_value TEXT)', request: { triggerScope: main } });
+    expect(await read('subject', { kind: 'body', table: 'owner_view', object: 'view' })).toMatchObject({ database: 'temp', ddl: 'CREATE TABLE subject(temp_value INTEGER)' });
+    await expect(read('subject', main, 'temp')).rejects.toThrow('永久触发器');
+    await expect(read('subject', { kind: 'body', table: 'owner_view', object: 'table' })).rejects.toThrow('类型不适用');
+    expect(await read('subject_view', { kind: 'target', object: 'view' }, 'main')).toMatchObject({ database: 'main', kind: 'view' });
+    await expect(read('subject', { kind: 'target', object: 'view' })).rejects.toThrow('类型不适用');
+    expect(events).toHaveLength(count);
+    expect(await app.request('query.completionState', session)).toEqual(before);
+    expect(await app.request('query.sessionState', session)).toMatchObject({ transactionOpen: true });
+    const sql = statements({ ...processes[0], sent: processes[0].sent.slice(start) });
+    expect(sql).toContain('PRAGMA temp.schema_version');
+    expect(sql).toContain('PRAGMA main.schema_version');
+    expect(sql.some(statement => /^(BEGIN|ROLLBACK|COMMIT|INSERT|UPDATE|CREATE)/.test(statement))).toBe(false);
+    await app.request('query.transaction', { ...session, action: 'rollback' });
+  });
+
   it('独立只读快照返回真实大小写和完整DDL，无用户任务且准确退出', async () => {
     const p = profile(), { app, events } = runtime([p]), value = await definition(app, p.id);
     expect(value).toMatchObject({ database: 'main', name: 'Subject', kind: 'table', temporary: false, ddl: 'CREATE TABLE Subject(id INTEGER PRIMARY KEY,note TEXT)' });

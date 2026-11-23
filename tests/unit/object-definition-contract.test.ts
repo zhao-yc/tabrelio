@@ -37,4 +37,13 @@ describe('对象完整定义跨进程边界', () => {
     const unicode = { ...sqlite, table: 'Ä' };
     expect(() => assertObjectDefinitionOutput({ ...result, request: unicode, name: 'ä' }, unicode, 'sqlite')).toThrow();
   });
+  it('SQLite触发范围只能携带关联表或视图身份，确认包必须回传原范围', () => {
+    const triggered = { ...request, database: 'main', triggerScope: { kind: 'target', object: 'view' } as const };
+    const result = { ...output, request: triggered, database: 'main', temporary: false, kind: 'view', ddl: 'CREATE VIEW "表" AS SELECT 1' };
+    expect(() => assertObjectDefinitionOutput(result, triggered, 'sqlite')).not.toThrow();
+    expect(() => assertObjectDefinitionOutput({ ...result, kind: 'table' }, triggered, 'sqlite')).toThrow();
+    expect(() => assertObjectDefinitionOutput({ ...result, request }, triggered, 'sqlite')).toThrow();
+    expect(() => assertObjectDefinitionOutput(result, triggered, 'mysql')).toThrow();
+    expect(() => objectDefinitionInputSchema.parse({ ...request, triggerScope: { kind: 'body', object: 'table', table: 't', sql: 'SELECT 1' } })).toThrow();
+  });
 });

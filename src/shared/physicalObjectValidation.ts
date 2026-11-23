@@ -1,12 +1,13 @@
 import { completionLimits } from './sqlCompletion';
 import { sqliteCompletionLimits } from './sqliteCompletion';
+import type { SqliteDefinitionTriggerScope } from './objectDefinition';
 
-export type PhysicalObjectTokenContext = { status: 'blocked'; reason: string } | { status: 'ready'; tokens: { start: number; end: number; value: string; kind: string; closed?: boolean }[]; target: { start: number; end: number }; defaultDatabase?: 'main' | 'temp' };
+export type PhysicalObjectTokenContext = { status: 'blocked'; reason: string } | { status: 'ready'; tokens: { start: number; end: number; value: string; kind: string; closed?: boolean }[]; target: { start: number; end: number }; defaultDatabase?: 'main' | 'temp'; triggerScope?: SqliteDefinitionTriggerScope };
 
 export interface PhysicalObjectRange { start: number; end: number; }
 export type PhysicalObjectAnalysis = { status: 'blocked'; reason: string } | {
   status: 'ready'; target: PhysicalObjectRange;
-  object: { table: string; database?: string; tableRange: PhysicalObjectRange; databaseRange?: PhysicalObjectRange; defaultDatabase?: 'main' | 'temp' };
+  object: { table: string; database?: string; tableRange: PhysicalObjectRange; databaseRange?: PhysicalObjectRange; defaultDatabase?: 'main' | 'temp'; triggerScope?: SqliteDefinitionTriggerScope };
 };
 
 /** 只接受固定字段的普通记录；线程不得夹带URI、SQL、动作或目录结果。 */
@@ -25,11 +26,19 @@ export function validPhysicalObjectTokens(value: unknown, source: string, offset
   if (!object || typeof object !== 'object' || Array.isArray(object)) return false;
   const qualified = Object.hasOwn(object, 'database');
   const inferred = Object.hasOwn(object, 'defaultDatabase');
-  if (!record(object, qualified ? 'database,databaseRange,table,tableRange' : inferred ? 'defaultDatabase,table,tableRange' : 'table,tableRange')) return false;
+  const hasTrigger = Object.hasOwn(object, 'triggerScope');
+  const keys = qualified ? 'database,databaseRange,table,tableRange' : inferred ? 'defaultDatabase,table,tableRange' : 'table,tableRange';
+  if (!record(object, keys + (hasTrigger ? ',triggerScope' : ''))) return false;
   const name = (value: unknown): value is string => typeof value === 'string' && (dialect === 'mysql' ? value.length > 0 && value.length <= 64 && !/[\0\ud800-\udfff]/.test(value) : value.length > 0 && value.length <= sqliteCompletionLimits.nameUnits && !value.includes('\0') && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value));
   if (!name(object.table) || qualified && (!name(object.database) || dialect === 'sqlite' && !['main', 'temp'].includes(object.database.replace(/[A-Z]/g, character => character.toLowerCase())))) return false;
   if (bytes(object.table) + (qualified ? bytes(object.database as string) : 0) > 4096) return false;
   if (context.status !== 'ready') return false;
+  const expectedScope = context.triggerScope, trigger = object.triggerScope;
+  if (hasTrigger !== !!expectedScope || expectedScope && (dialect !== 'sqlite' ||
+    !record(trigger, expectedScope.kind === 'body' ? 'kind,object,table' : 'kind,object') ||
+    trigger.kind !== expectedScope.kind || trigger.object !== expectedScope.object ||
+    expectedScope.kind === 'body' && (!name(trigger.table) || trigger.table !== expectedScope.table ||
+      bytes(object.table) + bytes(trigger.table) + (qualified ? bytes(object.database as string) : 0) > 4096))) return false;
   // SQLite 的永久视图或指定库的索引可决定物理表查找库，单段表名仍按原 token 核对。
   if (inferred && (dialect !== 'sqlite' || object.defaultDatabase !== 'main' && object.defaultDatabase !== 'temp') ||
     !qualified && object.defaultDatabase !== context.defaultDatabase ||

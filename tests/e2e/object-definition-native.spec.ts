@@ -101,7 +101,18 @@ test('活动A查询在树选B及概要替换后仍由更多和右键读取A完�
       if (command === 'query.execute' && (typeof value.sql !== 'string' || value.sql.replaceAll('\r\n', '\n') !== input.bootstrap || value.currentStatement !== undefined || state.facts.some(fact => fact.command === command))) return deny('非本例唯一固定bootstrap脚本');
       if (command === 'query.transaction' && value.action !== 'rollback') return deny('非明确原事务回滚');
       if (command === 'query.cancel' && (typeof value.taskId !== 'string' || !/^(?:object-definition:|sqlite-completion:)/.test(value.taskId))) return deny('取消不是本例目录任务');
-      if (command === 'query.objectDefinition' && (value.connectionId !== state.pickerIds[0] || !['subject', 'subject_view'].includes(String(value.table)) || value.database !== undefined && value.database !== 'main' || typeof value.taskId !== 'string' || !value.taskId.startsWith('object-definition:') || Object.keys(value).some(key => !['connectionId', 'sessionId', 'database', 'table', 'taskId'].includes(key)))) return deny('对象读取不是准确A关系');
+      if (command === 'query.objectDefinition') {
+        const scope = value.triggerScope;
+        const triggerTarget = scope && typeof scope === 'object' && 'kind' in scope && scope.kind === 'target' &&
+          'object' in scope && scope.object === 'table' && Object.keys(scope).length === 2 && value.table === 'subject' && value.database === 'main';
+        const triggerAction = scope && typeof scope === 'object' && 'kind' in scope && scope.kind === 'body' &&
+          'object' in scope && scope.object === 'table' && 'table' in scope && scope.table === 'outside_control' &&
+          Object.keys(scope).length === 3 && value.table === 'subject' && value.database === undefined;
+        if (value.connectionId !== state.pickerIds[0] || !['subject', 'subject_view'].includes(String(value.table)) ||
+          value.database !== undefined && value.database !== 'main' || typeof value.taskId !== 'string' || !value.taskId.startsWith('object-definition:') ||
+          Object.keys(value).some(key => !['connectionId', 'sessionId', 'database', 'table', 'taskId', 'triggerScope'].includes(key)) ||
+          scope !== undefined && (!value.sessionId || !triggerTarget && !triggerAction)) return deny('对象读取不是准确A关系');
+      }
       const observed = command.startsWith('query.') || command.startsWith('sessions.') || command === 'connections.save';
       const fact: Fact | undefined = observed ? { command, request: structuredClone(value) } : undefined; if (fact) state.facts.push(fact); state.commands.push(command); state.pending++;
       try { const reply = await original(event, payload); check(); if (fact) fact.reply = structuredClone(reply); if (command === 'sessions.open' && reply && typeof reply === 'object' && 'ok' in reply && reply.ok === true && 'result' in reply && reply.result && typeof reply.result === 'object' && 'sessionId' in reply.result && typeof reply.result.sessionId === 'string') state.sessions.push(reply.result.sessionId); return reply; }
@@ -183,6 +194,18 @@ test('活动A查询在树选B及概要替换后仍由更多和右键读取A完�
     stage = 'ALTER TABLE 草稿的未限定表仍由原事务解析到临时表';
     await read('ALTER TABLE sub|ject RENAME TO preview_subject', 'more', { name: 'subject', kind: 'table', schema: 'temp', marker: 'OBJECT_DEFINITION_A_TEMP', session });
     expect(facts(await step(audit), 'query.objectDefinition').at(-1)?.request).not.toHaveProperty('database');
+    expect(await sessionState()).toEqual(beforeTransaction); expect(disk()).toEqual(baseline);
+    stage = '触发目标及永久、临时触发体按原事务读取命中的物理定义';
+    await read('CREATE TRIGGER preview_trigger AFTER UPDATE ON main.sub|ject BEGIN SELECT 1; END;', 'more',
+      { name: 'subject', kind: 'table', schema: 'main', marker: 'OBJECT_DEFINITION_A_MAIN', session });
+    expect(facts(await step(audit), 'query.objectDefinition').at(-1)?.request).toMatchObject({ database: 'main', triggerScope: { kind: 'target', object: 'table' } });
+    await read('CREATE TRIGGER preview_trigger AFTER INSERT ON outside_control BEGIN SELECT 1; UPDATE sub|ject SET main_marker=1; END;', 'more',
+      { name: 'subject', kind: 'table', schema: 'main', marker: 'OBJECT_DEFINITION_A_MAIN', session });
+    const triggerAction = facts(await step(audit), 'query.objectDefinition').at(-1)?.request;
+    expect(triggerAction).toMatchObject({ triggerScope: { kind: 'body', table: 'outside_control', object: 'table' } });
+    expect(triggerAction).not.toHaveProperty('database');
+    await read('CREATE TEMP TRIGGER preview_trigger AFTER INSERT ON main.outside_control BEGIN SELECT s|.temp_marker FROM subject s; END;', 'more',
+      { name: 'subject', kind: 'table', schema: 'temp', marker: 'OBJECT_DEFINITION_A_TEMP', session });
     expect(await sessionState()).toEqual(beforeTransaction); expect(disk()).toEqual(baseline);
     stage = '实际关闭正在打开的预览，只取消所属读取且磁盘及原事务保持';
     const cancelModel = await at('SELECT s|.temp_marker FROM subject s'), cancelBefore = await step(audit); await clickMenu(query(), text.entry); await step(() => expect(dialog()).toBeVisible()); await step(() => page.keyboard.press('Escape')); await step(() => expect(dialog()).toHaveCount(0)); await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); expect(await model()).toEqual(cancelModel); expect(await sessionState()).toEqual(beforeTransaction); expect(disk()).toEqual(baseline);

@@ -3,7 +3,9 @@ import { definitionTextWithinBudget } from './definitionNavigation';
 
 export const objectDefinitionLimits = { active: 2, identifierUnits: 512, ddlBytes: 2 * 1024 * 1024, rowBytes: 2 * 1024 * 1024 + 16 * 1024 } as const;
 export const objectDefinitionTaskPrefix = 'object-definition:';
-export interface ObjectDefinitionInput { connectionId: string; sessionId?: string; database?: string; table: string; taskId: string; }
+export type SqliteDefinitionTriggerScope = { kind: 'target'; object: 'table' | 'view' } |
+  { kind: 'body'; table: string; object: 'table' | 'view' };
+export interface ObjectDefinitionInput { connectionId: string; sessionId?: string; database?: string; table: string; taskId: string; triggerScope?: SqliteDefinitionTriggerScope; }
 export interface ObjectDefinitionOutput { request: ObjectDefinitionInput; database: string; name: string; kind: 'table' | 'view'; temporary: boolean; ddl: string; revision?: number; }
 
 /** 仅拒绝无损Unicode无法表达的名称；合法补充平面字符不变成替换字符。 */
@@ -36,10 +38,18 @@ function fields(value: unknown, required: readonly string[], optional: readonly 
 }
 const id = z.string().min(1).max(200).refine(value => !value.includes('\0') && wellFormed(value), '对象定义编号无效');
 const identifier = z.string().refine(objectDefinitionIdentifier, '对象名须为1～512个有效Unicode字符且不能含NUL');
+const triggerScope = z.preprocess((value, context) => {
+  try { return fields(value, ['kind', 'object'], ['table']); }
+  catch { context.addIssue({ code: 'custom', message: 'SQLite触发器目录范围无效' }); return z.NEVER; }
+}, z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('target'), object: z.enum(['table', 'view']) }).strict(),
+  z.object({ kind: z.literal('body'), table: identifier, object: z.enum(['table', 'view']) }).strict(),
+]));
 export const objectDefinitionInputSchema = z.preprocess((value, context) => {
-  try { return fields(value, ['connectionId', 'table', 'taskId'], ['sessionId', 'database']); }
+  try { return fields(value, ['connectionId', 'table', 'taskId'], ['sessionId', 'database', 'triggerScope']); }
   catch { context.addIssue({ code: 'custom', message: '对象定义参数无效' }); return z.NEVER; }
-}, z.object({ connectionId: id, sessionId: id.optional(), database: identifier.optional(), table: identifier, taskId: id.refine(value => value.startsWith(objectDefinitionTaskPrefix) && value.length > objectDefinitionTaskPrefix.length, '对象定义任务编号前缀无效或缺少后缀') }).strict());
+}, z.object({ connectionId: id, sessionId: id.optional(), database: identifier.optional(), table: identifier, triggerScope: triggerScope.optional(),
+  taskId: id.refine(value => value.startsWith(objectDefinitionTaskPrefix) && value.length > objectDefinitionTaskPrefix.length, '对象定义任务编号前缀无效或缺少后缀') }).strict());
 
 /** DDL沿用完整定义原文约束：2MiB、合法Unicode；NUL不做替换或截断。 */
 export function objectDefinitionDdl(value: unknown): value is string {
@@ -60,10 +70,12 @@ export function assertObjectDefinitionOutput(value: unknown, input: ObjectDefini
     const output = fields(value, ['request', 'database', 'name', 'kind', 'temporary', 'ddl'], ['revision']);
     const request = objectDefinitionInputSchema.parse(output.request);
     const expected = objectDefinitionInputSchema.parse(input);
-    if (request.connectionId !== expected.connectionId || request.sessionId !== expected.sessionId || request.database !== expected.database || request.table !== expected.table || request.taskId !== expected.taskId) throw Error();
+    if (request.connectionId !== expected.connectionId || request.sessionId !== expected.sessionId || request.database !== expected.database ||
+      request.table !== expected.table || request.taskId !== expected.taskId || JSON.stringify(request.triggerScope) !== JSON.stringify(expected.triggerScope)) throw Error();
     const sqlite = dialect === 'sqlite';
     if (!objectDefinitionIdentifier(output.database) || !objectDefinitionIdentifier(output.name) || (sqlite ? sqliteFold(output.name) !== sqliteFold(expected.table) : output.name !== expected.table) || expected.database !== undefined && (sqlite ? sqliteFold(output.database) !== sqliteFold(expected.database) : output.database !== expected.database) || sqlite && !['main', 'temp'].includes(output.database) || !['table', 'view'].includes(output.kind as string) || typeof output.temporary !== 'boolean' || output.temporary && !expected.sessionId || !objectDefinitionDdl(output.ddl)) throw Error();
     if (sqlite && (output.temporary !== (output.database === 'temp') || !expected.sessionId && output.database !== 'main')) throw Error();
+    if (expected.triggerScope && (!sqlite || expected.triggerScope.kind === 'target' && output.kind !== expected.triggerScope.object)) throw Error();
     if (!sqlite && output.temporary && output.kind !== 'table') throw Error();
     if (Object.hasOwn(output, 'revision') && (!expected.sessionId || !Number.isSafeInteger(output.revision) || (output.revision as number) < 0)) throw Error();
   } catch { throw Error('对象完整定义回包无效，请重新读取'); }
