@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CompletionSessionState } from '../../src/shared/sqlCompletion';
 import type { ObjectDefinitionInput, ObjectDefinitionOutput } from '../../src/shared/objectDefinition';
 import type { PhysicalObjectAnalysis } from '../../src/shared/physicalObjectAnalysis';
+import { analyzeSqlitePhysicalObject } from '../../src/shared/sqlitePhysicalObject';
 import { ObjectDefinitionReader, type ObjectDefinitionView } from '../../src/renderer/objectDefinitionReader';
 import { objectDefinitionZh as text } from '../../src/renderer/locales/objectDefinition.zh-CN';
 
@@ -87,6 +88,14 @@ describe('显式对象定义读取控制器', () => {
     expect(f.ports.read.mock.calls[0][0]).not.toHaveProperty('database');
     expect(f.last().output).toMatchObject({ database: 'temp', temporary: true, kind: 'view' });
     expect(f.worker.object.mock.calls[0][2]).toEqual({});
+  });
+  it('SQLite永久视图正文的未限定表定向读取 main 并保留原会话', async () => {
+    const f = fixture({ dialect: 'sqlite' });
+    const source = 'CREATE VIEW saved AS SELECT * FROM target', offset = source.lastIndexOf('target') + 2;
+    f.worker.object.mockResolvedValue(analyzeSqlitePhysicalObject(source, offset));
+    await new ObjectDefinitionReader({ ...f.ports, source, offset }).start();
+    expect(f.ports.read).toHaveBeenCalledExactlyOnceWith({ connectionId: '原查询连接', sessionId: '原查询会话', database: 'main', table: 'target', taskId: 'object-definition:唯一编号' });
+    expect(f.last().output).toMatchObject({ database: 'main', temporary: false });
   });
   it('无session按保存连接事实派生能力，模式保持未知且不创建用户会话', async () => {
     const f = fixture({ session: false }); await f.reader.start();

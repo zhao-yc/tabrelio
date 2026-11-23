@@ -23,6 +23,8 @@ const scenarios = [
     incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: '7' },
   { verb: 'COLLATE', prefix: "SELECT 'Z' AS marker UNION ALL SELECT 'a' ORDER BY marker COLLATE ", typed: 'no', column: 'NOCASE',
     trail: '', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'a' },
+  { verb: 'CREATE VIEW', prefix: 'CREATE VIEW completion_view(display_value) AS SELECT s.', typed: 'vir', column: 'virtual_value',
+    trail: ' FROM subject s', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: '旧!' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
@@ -43,8 +45,11 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
   } finally { db.close(); }
   const disk = () => {
     const db = new DatabaseSync(filePath, { readOnly: true });
-    try { return { row: db.prepare('SELECT id,value,virtual_value FROM subject').get(),
-      other: db.prepare('SELECT * FROM excluded').get(), inbox: db.prepare('SELECT * FROM inbox').get() }; }
+    try {
+      const view = db.prepare("SELECT sql FROM sqlite_schema WHERE name='completion_view' AND type='view'").get();
+      return { row: db.prepare('SELECT id,value,virtual_value FROM subject').get(), other: db.prepare('SELECT * FROM excluded').get(),
+        inbox: db.prepare('SELECT * FROM inbox').get(), ...(view ? { view: { sql: view.sql, rows: db.prepare('SELECT display_value FROM completion_view').all() } } : {}) };
+    }
     finally { db.close(); }
   };
   interface Fact { command: string; input: Record<string, unknown>; reply?: unknown; }
@@ -152,9 +157,10 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(disk()).toEqual(before);
     await (await navigationMenuItem(query, { name: zh.query.text011, exact: true })).click();
-    await expect.poll(disk).toEqual({ ...before, row: scenario.row });
+    const created = scenario.verb === 'CREATE VIEW' ? { view: { sql: accepted, rows: [{ display_value: scenario.output }] } } : {};
+    await expect.poll(disk).toEqual({ ...before, row: scenario.row, ...created });
     const grid = query.locator('.result-body').getByRole('grid');
-    await expect(grid).toContainText(scenario.output);
+    if (scenario.verb !== 'CREATE VIEW') await expect(grid).toContainText(scenario.output);
     if (lookupKind === 'collations') {
       await expect(grid.getByRole('row').nth(1).getByText('a', { exact: true })).toBeVisible();
       await expect(grid.getByRole('row').nth(2).getByText('Z', { exact: true })).toBeVisible();
@@ -175,7 +181,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
 
 for (const scenario of scenarios) {
   test.describe(scenario.verb, () => {
-    const enabled = scenario.verb === 'COLLATE' ? process.env.DBARK_SQLITE_COLLATION_COMPLETION_NATIVE === '1' :
+    const enabled = scenario.verb === 'CREATE VIEW' ? process.env.DBARK_SQLITE_CREATE_QUERY_COMPLETION_NATIVE === '1' :
+      scenario.verb === 'COLLATE' ? process.env.DBARK_SQLITE_COLLATION_COMPLETION_NATIVE === '1' :
       scenario.verb === '函数' ? process.env.DBARK_SQLITE_FUNCTION_COMPLETION_NATIVE === '1' : scenario.verb === 'INDEXED BY' ? process.env.DBARK_SQLITE_INDEX_COMPLETION_NATIVE === '1' :
       process.env.DBARK_SQLITE_DML_COMPLETION_NATIVE === '1' || scenario.verb === 'UPSERT' && process.env.DBARK_SQLITE_UPSERT_COMPLETION_NATIVE === '1';
     test.skip(!enabled || process.argv.includes('--list'), '需要显式启用离线 SQLite 编辑器专项');

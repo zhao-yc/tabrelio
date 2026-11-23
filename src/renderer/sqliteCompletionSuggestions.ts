@@ -1,4 +1,4 @@
-import { sqliteCompletionRelationMatches, type SqliteCompletionAnalysis } from '../shared/sqliteCompletionAnalysis';
+import { sqliteCompletionRelationMatches, sqliteQueryBodyKeywords, type SqliteCompletionAnalysis } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
@@ -44,6 +44,10 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     if (items.length >= sqliteCompletionLimits.suggestions) { incomplete = true; return; }
     seen.add(key); items.push(item);
   };
+  if (analysis.syntax.includes('query-start')) {
+    for (const keyword of sqliteQueryBodyKeywords) add({ label: keyword, kind: 'keyword', insertText: keyword, detail: text.keyword });
+    return { items, incomplete };
+  }
   const addFunctions = async (context: FunctionContext) => {
     const metadata = await directory.load({ kind: 'functions', prefix: analysis.target.prefix });
     incomplete ||= metadata.incomplete;
@@ -160,16 +164,17 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     return { items, incomplete };
   }
   if (analysis.syntax.includes('relation') && qualifiers.length <= 1) {
-    const schema = qualifiers.length === 1 && ['main', 'temp'].includes(fold(qualifiers[0])) ? fold(qualifiers[0]) as 'main' | 'temp' : undefined;
-    if (!qualifiers.length || schema) {
-      if (!schema) {
+    const explicit = qualifiers.length === 1 && ['main', 'temp'].includes(fold(qualifiers[0])) ? fold(qualifiers[0]) as 'main' | 'temp' : undefined;
+    const schema = explicit ?? analysis.viewSchema;
+    if (!qualifiers.length || explicit) {
+      if (!explicit) {
         for (const local of declarations) add({ label: local.name, kind: 'table', insertText: quote(local.name), detail: text.cte });
-        for (const namespace of ['main', 'temp']) add({ label: namespace, kind: 'database', insertText: quote(namespace) + '.', detail: text.schema, trigger: true });
+        for (const namespace of analysis.viewSchema ? [analysis.viewSchema] : ['main', 'temp']) add({ label: namespace, kind: 'database', insertText: quote(namespace) + '.', detail: text.schema, trigger: true });
       }
       const metadata = await directory.load({ kind: 'relations', prefix: analysis.target.prefix, ...(schema ? { schema } : {}) }); incomplete ||= metadata.incomplete;
       const shadowed = new Set(declarations.map(relation => fold(relation.name)));
       for (const entry of metadata.entries) {
-        if (entry.kind !== 'table' && entry.kind !== 'view' || !schema && shadowed.has(fold(entry.name))) continue;
+        if (entry.kind !== 'table' && entry.kind !== 'view' || !explicit && shadowed.has(fold(entry.name))) continue;
         add({ label: entry.name, kind: entry.kind, insertText: quote(entry.name), detail: (entry.kind === 'view' ? text.view : text.table) + ' · ' + entry.schema + (entry.schema === 'temp' ? ' · ' + text.temporary : '') });
       }
     }

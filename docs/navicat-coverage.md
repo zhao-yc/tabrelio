@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite `CREATE VIEW … AS` 和 `CREATE TABLE … AS` 的查询体支持候选、悬停和对象定义定位。永久视图固定使用 `main`，临时视图和查询建表遵循原会话的同名临时对象规则。Q01 继续为部分覆盖。 [SQLite CREATE VIEW](https://www.sqlite.org/lang_createview.html) · [SQLite CREATE TABLE AS](https://www.sqlite.org/lang_createtable.html#createtabas)
+
 2026-11-23 源码增量。SQLite 编辑器支持 `COLLATE` 的原生规则候选和悬停，覆盖比较、普通及复合排序、窗口、UPSERT 冲突目标、建表列和索引表达式。Q01 继续为部分覆盖。 [SQLite 排序规则](https://www.sqlite.org/datatype3.html#collation)
 
 2026-11-23 源码增量。SQLite 编辑器按实际运行时目录建议内置标量、聚合和窗口函数，支持参数位置、现有调用的名称替换，以及固定或可变参数悬停。函数候选按查询子句和写入表达式作用域过滤。Q01 继续为部分覆盖。 [SQLite 函数目录](https://www.sqlite.org/pragma.html#pragma_function_list)

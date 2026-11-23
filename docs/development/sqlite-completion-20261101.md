@@ -4,6 +4,8 @@
 
 SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段、表别名，明确输出列的 CTE／派生表，以及 `main`／`temp` 限定。建议按准确名称使用 SQLite 双引号转义，以普通文本插入；同名字段保留各自别名限定。INSERT 字段清单、UPDATE 赋值左侧及 RETURNING 使用目标表字段。
 
+`CREATE VIEW … AS` 和 `CREATE TABLE … AS` 后可补全 `SELECT`、`WITH` 或 `VALUES`。查询体沿用字段、表、函数、索引和排序规则补全，以及悬停和对象定位。声明的目标名和视图列清单保留原文。永久视图将未限定来源解析到自身的 `main` 库，临时视图和查询建表沿用原会话的临时表优先规则。CTE 保留对未限定关系名的遮蔽优先级。 [SQLite CREATE VIEW](https://www.sqlite.org/lang_createview.html) · [SQLite CREATE TABLE AS](https://www.sqlite.org/lang_createtable.html#createtabas)
+
 `COLLATE` 后可补全及悬停当前 SQLite 连接登记的排序规则。适用位置包括比较、分组、普通及复合查询排序、窗口、UPSERT 冲突目标，以及 `CREATE TABLE` 和 `CREATE INDEX` 的规则位置。候选整体替换规则名，兼容 SQLite 接受的引号写法。内置说明区分字节比较、ASCII 大小写折叠和忽略尾部空格。补全只读固定的 `PRAGMA collation_list`。 [SQLite 排序规则](https://www.sqlite.org/datatype3.html#collation) · [SQLite 排序规则目录](https://www.sqlite.org/pragma.html#pragma_collation_list)
 
 输入内置函数名的一部分即可在常见表达式位置补全。候选读取实际 SQLite 运行时的 `function_list`，显示固定或可变参数个数。接受候选自动插入括号并进入参数位置，已有括号时只替换函数名。`HAVING` 可建议聚合，必须带 `OVER` 的内置窗口函数仅在普通 `SELECT` 输出和排序表达式中提供模板。悬停已写出的调用可查看目录签名。`VALUES` 中的函数补全独立于写入目标的列目录。 [SQLite 函数目录](https://www.sqlite.org/pragma.html#pragma_function_list) · [SQLite 窗口函数](https://www.sqlite.org/windowfunctions.html)
@@ -49,6 +51,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-23 查询建表与建视图增量。WIN11-TEST 不可达，未派发任务。本机 macOS arm64 通过严格类型检查、源码构建和 36 份相关套件的 935 项。原生 SQLite 用例使用同名主表和临时表，核对永久视图、临时视图及查询建表的实际结果。Electron 编辑器专项 7 项通过。建视图草稿在补全和悬停阶段只读取 `main.subject` 的列目录，显式执行后在合成库回读了准确视图定义和值。既有编辑器全流程回归 1 项在原 120 秒门槛内通过，两次应用正常退出。对象定义专项 1 项通过，真实菜单在有同名临时表的原事务中请求 `main.subject`，显示永久表定义且保持事务与磁盘。日志和原始报告保存在 `.cache/sqlite-create-query-completion/verified/`。Windows 界面和安装包待验。
 
 2026-11-23 排序规则增量。WIN11-TEST 不可达，未派发任务。本机 macOS arm64 通过严格类型检查、源码构建和 28 份相关套件的 825 项。原生单元验证固定规则目录不受同名临时表遮蔽，原事务和目录修订保持。Electron 编辑器专项 6 项通过。`COLLATE` 只读取规则目录，接受 `NOCASE` 后显式执行复合查询，结果依次为 `a`、`Z`。补全和悬停期间数据库、会话和历史保持原状。既有全流程回归 1 项在 109.1 秒通过，两次应用均正常退出。初轮单元测试中，光标夹具误取了拼接运算符 `||` 的竖线，修正后通过。日志与报告保存在 `.cache/sqlite-collation-completion/`。Windows 界面和安装包待验。
 

@@ -1,12 +1,12 @@
 import { completionLimits } from './sqlCompletion';
 import { sqliteCompletionLimits } from './sqliteCompletion';
 
-export type PhysicalObjectTokenContext = { status: 'blocked'; reason: string } | { status: 'ready'; tokens: { start: number; end: number; value: string; kind: string; closed?: boolean }[]; target: { start: number; end: number } };
+export type PhysicalObjectTokenContext = { status: 'blocked'; reason: string } | { status: 'ready'; tokens: { start: number; end: number; value: string; kind: string; closed?: boolean }[]; target: { start: number; end: number }; defaultDatabase?: 'main' };
 
 export interface PhysicalObjectRange { start: number; end: number; }
 export type PhysicalObjectAnalysis = { status: 'blocked'; reason: string } | {
   status: 'ready'; target: PhysicalObjectRange;
-  object: { table: string; database?: string; tableRange: PhysicalObjectRange; databaseRange?: PhysicalObjectRange };
+  object: { table: string; database?: string; tableRange: PhysicalObjectRange; databaseRange?: PhysicalObjectRange; defaultDatabase?: 'main' };
 };
 
 /** 只接受固定字段的普通记录；线程不得夹带URI、SQL、动作或目录结果。 */
@@ -24,11 +24,16 @@ export function validPhysicalObjectTokens(value: unknown, source: string, offset
   const object = value.object;
   if (!object || typeof object !== 'object' || Array.isArray(object)) return false;
   const qualified = Object.hasOwn(object, 'database');
-  if (!record(object, qualified ? 'database,databaseRange,table,tableRange' : 'table,tableRange')) return false;
+  const inferred = Object.hasOwn(object, 'defaultDatabase');
+  if (!record(object, qualified ? 'database,databaseRange,table,tableRange' : inferred ? 'defaultDatabase,table,tableRange' : 'table,tableRange')) return false;
   const name = (value: unknown): value is string => typeof value === 'string' && (dialect === 'mysql' ? value.length > 0 && value.length <= 64 && !/[\0\ud800-\udfff]/.test(value) : value.length > 0 && value.length <= sqliteCompletionLimits.nameUnits && !value.includes('\0') && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value));
   if (!name(object.table) || qualified && (!name(object.database) || dialect === 'sqlite' && !['main', 'temp'].includes(object.database.replace(/[A-Z]/g, character => character.toLowerCase())))) return false;
   if (bytes(object.table) + (qualified ? bytes(object.database as string) : 0) > 4096) return false;
   if (context.status !== 'ready') return false;
+  // 永久 SQLite 视图有固定查找库，即使 SQL 没有显式库名 token 也要核对该语义。
+  if (inferred && (dialect !== 'sqlite' || object.defaultDatabase !== 'main') ||
+    !qualified && object.defaultDatabase !== context.defaultDatabase ||
+    qualified && context.defaultDatabase && String(object.database).toLowerCase() !== context.defaultDatabase) return false;
   const tokens = context.tokens, origin = context.target;
   /** 范围必须对应同语句的完整单个名称，不接收跨词、截断或别条语句的位置。 */
   const tokenAt = (value: unknown) => record(value, 'end,start') && Number.isSafeInteger(value.start) && Number.isSafeInteger(value.end) ? tokens.find(token => token.closed !== false && ['id', 'word', 'identifier'].includes(token.kind) && token.start === value.start && token.end === value.end) : undefined;
