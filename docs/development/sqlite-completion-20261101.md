@@ -4,6 +4,8 @@
 
 SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段、表别名，明确输出列的 CTE／派生表，以及 `main`／`temp` 限定。建议按准确名称使用 SQLite 双引号转义，以普通文本插入；同名字段保留各自别名限定。INSERT 字段清单、UPDATE 赋值左侧及 RETURNING 使用目标表字段。
 
+SQLite UPSERT 的 `ON CONFLICT` 可按当前连接的主键、rowid 和唯一索引补齐完整冲突目标。直接在关键字后补全可带入表达式及部分索引的原有 `WHERE`。在已有括号中可补齐普通唯一键的剩余项，保留已输入的项和后续动作。候选使用索引真实排序规则，复杂手写表达式和谓词仍提供列提示。完整与部分索引可能匹配同组目标时，目录标记部分可用。 [SQLite UPSERT](https://www.sqlite.org/lang_upsert.html)
+
 编辑 `PRAGMA` 时可补全库限定和名称，候选来自当前 SQLite 的 `pragma_list`，并受查询窗口的只读 PRAGMA 授权约束。表结构、索引、外键和完整性检查语句还可在括号或等号后补入对象名。候选保留原库限定和参数写法。通常同名临时对象优先，`table_list` 展示全部匹配，`index_info` 和 `index_xinfo` 在没有同名索引时可解析无 rowid 表。接受候选和悬停只读目录，设置写入继续由 SQLite 原生授权拦截。 [SQLite PRAGMA](https://www.sqlite.org/pragma.html)
 
 在查询来源处输入 `pragma_` 可补全实际可用的表值 PRAGMA，并悬停查看原生参数签名。空白参数位置或正在编辑的单引号参数可补入对象与库名字符串，相关字段及计算表达式继续按普通 SQL 解析。函数名前的库限定决定模块查找和遮蔽，函数末尾的库名参数决定对象目录。例如 `temp.pragma_table_xinfo('subject','main')` 会读取主库对象。候选及悬停只读取声明与对象目录，结果列继续沿用表值函数字段解析。 [SQLite PRAGMA 函数](https://www.sqlite.org/pragma.html#pragfunc)
@@ -71,6 +73,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-24 UPSERT 冲突目标增量。WIN11-TEST 不可达，本机 macOS arm64 使用 Node.js 24.17.0，通过原生运行时、严格类型检查、源码构建和 46 份套件的 1,228 项测试。合成 SQLite 逐项编译确认实际目录候选，覆盖临时表遮蔽、rowid 别名、无 rowid 复合主键和部分表达式索引。Electron 编辑器 25 项通过。新用例验证反序复合键和带 `WHERE` 的表达式索引，接受候选时只读目录，显式执行后各更新原行，行数均保持一行且返回生成列。原会话完整回归 1 项通过，耗时 108.7 秒，两次应用正常退出。报告位于 `.cache/sqlite-conflict-completion/final/`。Windows 界面及安装包待验。
 
 2026-11-24 表值 PRAGMA 增量。WIN11-TEST 不可达，本机 macOS arm64 使用 Node.js 24.17.0，通过原生运行时、严格类型检查、源码构建和 46 份套件的 1,226 项测试。真实 SQLite 核对表值模块的隐藏参数、临时同名表遮蔽、显式库限定和只读授权。Electron 编辑器 23 项通过，两条新增用例分别补入已有调用的函数名，以及为 `temp.pragma_table_xinfo` 补入主库对象字符串。悬停只读目录，明确执行后返回生成列。原会话完整回归 1 项通过，耗时 109.4 秒，两次应用正常退出。报告位于 `.cache/sqlite-pragma-function-completion/final/`。Windows 界面及安装包待验。
 

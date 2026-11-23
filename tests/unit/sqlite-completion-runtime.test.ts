@@ -59,6 +59,55 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('UPSERT 完整目标通过原生编译核验，临时对象、部分索引以及 rowid 规则准确', async () => {
+    const p = profile('冲突目标', `
+      CREATE TABLE subject(id INTEGER PRIMARY KEY,email TEXT,zone TEXT,active INTEGER,note TEXT);
+      CREATE UNIQUE INDEX pair ON subject(email COLLATE NOCASE,zone DESC);
+      CREATE UNIQUE INDEX active_expression ON subject(lower(email) COLLATE NOCASE) WHERE active=1;
+      CREATE UNIQUE INDEX full_note ON subject(note);
+      CREATE UNIQUE INDEX partial_note ON subject(note) WHERE active=1;
+      CREATE UNIQUE INDEX ineffective ON subject(id,active) WHERE active=1;
+      CREATE INDEX ordinary ON subject(active);
+      CREATE TABLE implicit(rowid TEXT,_rowid_ TEXT,k TEXT);
+      CREATE TABLE ordered(x TEXT,y TEXT,PRIMARY KEY(x,y)) WITHOUT ROWID;
+    `);
+    const { app, events } = runtime([p]), session = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, session.sessionId, 'BEGIN; CREATE TEMP TABLE subject(id INTEGER PRIMARY KEY,local_ref TEXT UNIQUE);');
+    const state = await app.request('query.completionState', session), count = events.length;
+    const load = (table: string, schema?: 'main' | 'temp') =>
+      completion(app, p.id, { kind: 'conflict-keys', table, ...(schema ? { schema } : {}) }, session.sessionId);
+    const main = await load('SUBJECT', 'main'), temporary = await load('subject');
+    expect(temporary.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'conflict-key', schema: 'temp', name: 'id', origin: 'pk' }),
+      expect.objectContaining({ kind: 'conflict-key', schema: 'temp', terms: [{ name: 'local_ref', collation: 'BINARY', sql: '"local_ref" COLLATE "BINARY"' }] }),
+    ]));
+    expect(main.incomplete).toBe(true);
+    expect(main.entries.map(entry => entry.name).sort()).toEqual(['active_expression', 'full_note', 'id', 'pair']);
+    const implicit = await load('implicit', 'main'), ordered = await load('ordered', 'main');
+    expect(implicit.entries).toEqual([expect.objectContaining({ origin: 'rowid', name: 'oid' })]);
+    expect(ordered.entries).toEqual([expect.objectContaining({ origin: 'pk', terms: [
+      { name: 'x', collation: 'BINARY', sql: '"x" COLLATE "BINARY"' },
+      { name: 'y', collation: 'BINARY', sql: '"y" COLLATE "BINARY"' },
+    ] })]);
+    const filePath = p.sqlite.filePath;
+    if (!filePath) throw Error('本例需要合成库文件');
+    const native = new DatabaseSync(filePath);
+    try {
+      for (const [catalog, values] of [[main, "1,'a','z',1,'note'"], [implicit, "'text','text','value'"], [ordered, "'x','y'"]] as const) {
+        for (const entry of catalog.entries) {
+          if (entry.kind !== 'conflict-key') throw Error('实际目录没有返回冲突键');
+          const target = '(' + entry.terms.map(term => term.sql).join(', ') + ')' + (entry.predicate ? ' WHERE ' + entry.predicate : '');
+          expect(() => native.prepare('EXPLAIN INSERT INTO "' + entry.table + '" VALUES(' + values + ') ON CONFLICT ' + target + ' DO NOTHING')).not.toThrow();
+        }
+      }
+    } finally { native.close(); }
+    expect(await app.request('query.completionState', session)).toEqual(state);
+    expect(await app.request('query.sessionState', session)).toMatchObject({ transactionOpen: true });
+    expect(events).toHaveLength(count);
+    expect(statements(processes.at(-1)!).some(sql => /\bINSERT INTO\b/i.test(sql))).toBe(false);
+    await execute(app, session.sessionId, 'ROLLBACK');
+  });
+
   it('表值 PRAGMA 目录来自真实隐藏参数，并遵循原会话模块遮蔽', async () => {
     const p = profile('表值 PRAGMA 目录'), { app, events } = runtime([p]);
     const read = (prefix: string, sessionId?: string, schema?: 'main' | 'temp') =>

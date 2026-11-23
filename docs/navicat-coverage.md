@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。SQLite UPSERT 编辑器按实际主键、rowid 及唯一索引提供完整冲突目标候选，支持复合键补齐、排序规则、表达式和部分索引谓词。Q01 继续为部分覆盖。 [SQLite UPSERT](https://www.sqlite.org/lang_upsert.html)
+
 2026-11-24 源码增量。SQLite 查询来源支持表值 PRAGMA 名称、对象名和库名参数补全与悬停。模块签名来自原生隐藏参数，区分函数命名空间和对象所在库，同名表、视图与 CTE 可遮蔽模块。Q01 继续为部分覆盖。 [SQLite PRAGMA 函数](https://www.sqlite.org/pragma.html#pragfunc)
 
 2026-11-23 源码增量。SQLite 查询编辑器支持只读 `PRAGMA` 名称、库限定以及表、索引、外键与完整性检查的对象参数补全和悬停。目录遵循各命令的库内查找与同名规则。Q01 继续为部分覆盖。 [SQLite PRAGMA](https://www.sqlite.org/pragma.html)

@@ -35,7 +35,7 @@ function fixture() {
 
 it('冲突目标、部分索引谓词和多列赋值左侧限定在物理目标', () => {
   for (const marked of [
-    'INSERT INTO main.subject AS t(id,value) VALUES(1,\'new\') ON CONFLICT(i|d) DO UPDATE SET value=excluded.value',
+    'INSERT INTO main.subject AS t(id,value) VALUES(1,\'new\') ON CONFLICT(lower(va|lue)) DO UPDATE SET value=excluded.value',
     'INSERT INTO main.subject AS t(id,value) VALUES(1,\'new\') ON CONFLICT(lower(value)) WHERE val|ue IS NOT NULL DO UPDATE SET value=excluded.value',
     'INSERT INTO main.subject AS t(id,value) VALUES(1,\'new\') ON CONFLICT(id) DO UPDATE SET (id,va|lue)=(excluded.id,excluded.value)',
   ]) {
@@ -71,9 +71,39 @@ it('INSERT SELECT、WITH 与冲突动作独立，JOIN 里调用 conflict() 保�
   const right = ready(sql.replace('excluded.value', 'excluded.va|lue'));
   expect(right.relations.map(relation => relation.alias)).toEqual([undefined, 'excluded']);
   const draft = ready('INSERT INTO main.subject(id,value) SELECT id,value FROM inbox WHERE true ON CONFLICT(i|d)');
-  expect(draft.relations).toEqual([expect.objectContaining({ name: 'subject', dmlRole: 'mutation-target' })]);
+  expect(draft.conflictKey).toMatchObject({ table: 'subject', schema: 'main', mode: 'terms', used: [] });
   const nested = ready('INSERT INTO main.subject(id,value) VALUES(1,(SELECT i.va|lue FROM inbox i))');
   expect(nested.relations).toEqual([{ kind: 'physical', name: 'inbox', alias: 'i' }]);
+});
+
+it('冲突目标补入完整键，保留后续动作与已填项，并允许反序组合', async () => {
+  const head = "INSERT INTO main.subject(email,zone) VALUES('a','z') ON CONFLICT ";
+  const tail = ' DO NOTHING;';
+  const load = vi.fn(async (_query: SqliteCompletionLookup): Promise<SqliteCompletionOutput> => ({
+    stamp: '1:0', incomplete: false, entries: [
+      { kind: 'conflict-key', name: 'pair', table: 'subject', schema: 'main', origin: 'c', terms: [
+        { name: 'email', collation: 'NOCASE', sql: '"email" COLLATE "NOCASE"' },
+        { name: 'zone', collation: 'BINARY', sql: '"zone" COLLATE "BINARY"' },
+      ] },
+      { kind: 'conflict-key', name: 'active_expression', table: 'subject', schema: 'main', origin: 'c',
+        terms: [{ sql: 'lower(email)' }], predicate: 'active = 1' },
+    ],
+  }));
+  const whole = head + 'lo|suffix' + tail;
+  const wholeAnalysis = ready(whole);
+  expect(wholeAnalysis.conflictKey).toMatchObject({ table: 'subject', schema: 'main', mode: 'whole', used: [] });
+  const [partial] = (await sqliteCompletionSuggestions(wholeAnalysis, { load })).items;
+  const original = input(whole).source, { start, end } = wholeAnalysis.target;
+  expect(original.slice(0, start) + partial.insertText + original.slice(end)).toBe(head + '(lower(email)) WHERE active = 1' + tail);
+  const first = ready(head + '(zo|suffix)' + tail);
+  expect((await sqliteCompletionSuggestions(first, { load })).items).toMatchObject([{ insertText: '"zone" COLLATE "BINARY", "email" COLLATE "NOCASE"' }]);
+  const rest = ready(head + '(zone COLLATE BINARY, em|suffix)' + tail);
+  expect(rest.conflictKey?.used).toEqual([{ name: 'zone', collation: 'BINARY' }]);
+  expect((await sqliteCompletionSuggestions(rest, { load })).items).toMatchObject([{ insertText: '"email" COLLATE "NOCASE"' }]);
+  const mismatched = ready(head + '(zone COLLATE NOCASE, em|suffix)' + tail);
+  expect((await sqliteCompletionSuggestions(mismatched, { load })).items).toEqual([]);
+  expect(load.mock.calls.every(([query]) => query.kind === 'conflict-keys' && query.table === 'subject' && query.prefix === '' && query.schema === 'main')).toBe(true);
+  expect(ready(head + '(lo|suffix) WHERE active = 1' + tail).conflictKey).toBeUndefined();
 });
 
 it('待插入行与旧行共用一次真实列目录，接受候选后按原生语义写入并返回', async () => {

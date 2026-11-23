@@ -95,7 +95,7 @@ export async function resolveSqliteTriggerBody(
     if (entry.schema === 'temp') return { status: 'ready', directory };
   }
   return { status: 'ready', schema: 'main', directory: { load(query) {
-    if (query.kind !== 'columns' && query.kind !== 'relations' && query.kind !== 'indexes') return directory.load(query);
+    if (query.kind !== 'columns' && query.kind !== 'relations' && query.kind !== 'indexes' && query.kind !== 'conflict-keys') return directory.load(query);
     if (query.schema === 'temp') throw Error('SQLite永久触发体不能读取TEMP关系');
     return directory.load({ ...query, schema: 'main' });
   } } };
@@ -148,6 +148,31 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   const body = triggerBody ? await resolveSqliteTriggerBody(triggerBody, directory) : undefined;
   if (body?.status === 'unavailable') return { items, incomplete: body.incomplete };
   if (body) directory = body.directory;
+  if (analysis.conflictKey) {
+    const { table, schema, mode, used } = analysis.conflictKey;
+    const result = await directory.load({ kind: 'conflict-keys', table, prefix: '', ...(schema ? { schema } : {}) });
+    const labelOf = (term: { name?: string; label?: string; sql: string }) => term.name ?? term.label ?? term.sql;
+    for (const entry of result.entries) {
+      if (entry.kind !== 'conflict-key' || mode === 'terms' && entry.predicate) continue;
+      const remaining = [...entry.terms], matched = used.every(term => {
+        const index = remaining.findIndex(key => key.name !== undefined && fold(key.name) === fold(term.name) &&
+          (term.collation === undefined || key.collation !== undefined && fold(key.collation) === fold(term.collation)));
+        if (index < 0) return false;
+        remaining.splice(index, 1);
+        return true;
+      });
+      if (!matched) continue;
+      // SQLite 允许按其它顺序填写同一组键项。优先把与正在输入的前缀匹配的一项放在开头。
+      const first = remaining.findIndex(term => fold(labelOf(term)).startsWith(prefix));
+      if (first < 0) continue;
+      const terms = [remaining[first], ...remaining.slice(0, first), ...remaining.slice(first + 1)];
+      const sql = terms.map(term => term.sql).join(', ');
+      const insertText = mode === 'whole' ? '(' + sql + ')' + (entry.predicate ? ' WHERE ' + entry.predicate : '') : sql;
+      add({ label: terms.map(labelOf).join(', '), insertText, kind: 'index',
+        detail: [entry.predicate ? text.conflictKey.partial : text.conflictKey[entry.origin], entry.schema, entry.name].join(' · ') });
+    }
+    return { items, incomplete: incomplete || result.incomplete };
+  }
   if (analysis.pragmaFunction?.kind === 'argument') {
     const slot = await sqlitePragmaFunctionArgument(analysis.pragmaFunction, directory);
     if (slot.kind === 'schema') for (const name of ['main', 'temp']) {

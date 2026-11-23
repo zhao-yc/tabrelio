@@ -19,6 +19,13 @@ export type SqliteSchemaObjectKind = z.infer<typeof sqliteSchemaObjectKind>;
 export const sqliteMaintenanceOperation = z.enum(['analyze', 'reindex']);
 export const sqlitePragmaObject = z.enum(sqlitePragmasWithObjectArgument);
 export const sqlitePragmaFunctionName = functionName.refine(value => sqlitePragmaFunctionBase(value) !== undefined);
+const conflictSql = z.string().min(1).max(8192).refine(unicode);
+export const sqliteConflictTermSchema = z.object({ sql: conflictSql, name: name.optional(), label: conflictSql.optional(), collation: name.optional() }).strict();
+export const sqliteConflictSelectionSchema = z.object({
+  table: name, schema: schema.optional(), mode: z.enum(['whole', 'terms']),
+  used: z.array(z.object({ name, collation: name.optional() }).strict()).max(sqliteCompletionLimits.entries),
+}).strict().refine(value => value.mode !== 'whole' || !value.used.length);
+export type SqliteConflictSelection = z.infer<typeof sqliteConflictSelectionSchema>;
 export const sqliteForeignKeySelectionSchema = z.object({
   arity: z.number().int().min(1).max(sqliteCompletionLimits.entries),
   used: z.array(name).max(sqliteCompletionLimits.entries),
@@ -46,6 +53,7 @@ export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
     .strict().refine(value => value.exact === undefined || value.prefix === ''),
   z.object({ ...base, kind: z.literal('pragmas'), withArgument: z.literal(true).optional() }).strict(),
   z.object({ ...base, kind: z.literal('pragma-functions'), schema: schema.optional() }).strict(),
+  z.object({ ...base, kind: z.literal('conflict-keys'), table: name, schema: schema.optional(), prefix: z.literal('') }).strict(),
   z.object({ ...base, kind: z.literal('pragma-objects'), pragma: sqlitePragmaObject, schema: schema.optional(), exact: name.optional() })
     .strict().refine(value => value.exact === undefined || value.prefix === ''),
   z.object({ ...base, kind: z.literal('stamp') }).strict(),
@@ -64,6 +72,8 @@ export const sqliteCompletionEntrySchema = z.discriminatedUnion('kind', [
   z.object({ name: z.literal('EXPRESSIONS'), kind: z.literal('maintenance-option') }).strict(),
   z.object({ name: functionName, kind: z.literal('pragma') }).strict(),
   z.object({ name: sqlitePragmaFunctionName, kind: z.literal('pragma-function'), objectArgument: z.boolean(), schemaArgument: z.boolean() }).strict(),
+  z.object({ name, kind: z.literal('conflict-key'), schema, table: name, origin: z.enum(['pk', 'u', 'c', 'rowid']),
+    terms: z.array(sqliteConflictTermSchema).min(1).max(sqliteCompletionLimits.entries), predicate: conflictSql.optional() }).strict(),
   z.object({ name, kind: z.literal('pragma-object'), schema, object: z.enum(['table', 'view', 'index']), owner: name.optional() }).strict()
     .refine(value => (value.object === 'index') === (value.owner !== undefined)),
 ]);

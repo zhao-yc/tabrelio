@@ -31,6 +31,13 @@ export const sqliteCompletionZh = {
   triggerRow: { new: 'SQLite 触发器 NEW 行', old: 'SQLite 触发器 OLD 行' },
   dropObject: { table: 'SQLite 表', view: 'SQLite 视图', index: 'SQLite 索引', trigger: 'SQLite 触发器' },
   dropOwner: '关联对象',
+  conflictKey: {
+    pk: '主键冲突目标',
+    u: '唯一约束冲突目标',
+    c: '唯一索引冲突目标',
+    rowid: 'rowid 冲突目标',
+    partial: '带条件的唯一索引',
+  },
   maintenance: {
     analyze: { schema: '收集整个数据库的查询规划统计', table: '收集表及其索引的查询规划统计', index: '收集单个索引的查询规划统计' },
     reindex: { table: '重建表的所有索引', index: '重建单个索引' },

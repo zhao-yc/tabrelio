@@ -60,6 +60,16 @@ const scenarios = [
     trail: "('subject') AS p", incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'virtual_value' },
   { verb: 'PRAGMA FUNCTION ARGUMENT', prefix: 'SELECT p.name FROM temp.pragma_table_xinfo(', typed: 'subj', column: 'subject',
     trail: ",'main') AS p", incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'virtual_value' },
+  { verb: 'CONFLICT COMPOSITE',
+    prefix: "INSERT INTO main.subject(id,value,old_extra,id_related) VALUES(2,'新','保留','组') ON CONFLICT (",
+    typed: 'id_rel', column: 'id_related, old_extra', target: '"id_related" COLLATE "BINARY", "old_extra" COLLATE "BINARY"',
+    trail: ') DO UPDATE SET value=excluded.value RETURNING virtual_value', incoming: false,
+    row: { id: 1, value: '新', virtual_value: '新!' }, output: '新!' },
+  { verb: 'CONFLICT PARTIAL',
+    prefix: "INSERT INTO main.subject(id,value,old_extra,id_related) VALUES(2,'新','保留','启用') ON CONFLICT ",
+    typed: 'lo', column: 'lower(old_extra)', target: '((lower(old_extra)) COLLATE "BINARY") WHERE id_related = \'启用\'',
+    trail: ' DO UPDATE SET value=excluded.value RETURNING virtual_value', incoming: false,
+    row: { id: 1, value: '新', virtual_value: '新!' }, output: '新!' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
@@ -80,15 +90,16 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
   const pragmaName = scenario.verb === 'PRAGMA NAME', pragmaObject = scenario.verb === 'PRAGMA OBJECT';
   const pragmaFunctionSource = scenario.verb === 'PRAGMA FUNCTION SOURCE';
   const pragmaFunctionArgument = scenario.verb === 'PRAGMA FUNCTION ARGUMENT';
+  const conflictKey = 'target' in scenario;
   const targetTable = strictType ? 'strict_subject' : triggerAction ? 'trigger_log' : 'subject';
-  const lookupKind = pragmaName ? 'pragmas' : pragmaObject ? 'pragma-objects' :
+  const lookupKind = conflictKey ? 'conflict-keys' : pragmaName ? 'pragmas' : pragmaObject ? 'pragma-objects' :
     analyzeIndex ? 'maintenance-objects' : dropIndex ? 'drop-objects' : foreignTable || triggerTarget ? 'relations' : strictType ? 'table-options' : scenario.verb === 'INDEXED BY' ? 'indexes' :
     scenario.verb === '函数' ? 'functions' : scenario.verb === 'COLLATE' ? 'collations' : 'columns';
   const alterColumn = scenario.verb === 'RENAME COLUMN' ? 'rename' : scenario.verb === 'DROP COLUMN' ? 'drop' : undefined;
   const { prefix, trail, typed, column } = scenario;
   const opener = pragmaFunctionArgument ? "'" : '', cursor = prefix + opener + typed;
   const draft = cursor + 'suffix' + opener + trail;
-  const accepted = prefix + (scenario.verb === '函数' ? column + '(' + scenario.args + ')' :
+  const accepted = prefix + (conflictKey ? scenario.target : scenario.verb === '函数' ? column + '(' + scenario.args + ')' :
     strictType || createType || pragmaName || pragmaFunctionSource ? column : pragmaFunctionArgument ? "'" + column + "'" : '"' + column + '"') + trail;
   const db = new DatabaseSync(filePath);
   try {
@@ -100,6 +111,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
       CREATE TABLE excluded(other TEXT); CREATE TABLE inbox(id INTEGER PRIMARY KEY,value TEXT); CREATE INDEX inbox_other ON inbox(value);
       INSERT INTO subject(id,value) VALUES(1,'旧'); INSERT INTO excluded VALUES('不变'); INSERT INTO inbox VALUES(1,'新🚢');`);
     if (triggerAction) db.exec("INSERT INTO trigger_log VALUES('基准','未改')");
+    if (scenario.verb === 'CONFLICT COMPOSITE') db.exec("UPDATE subject SET id_related='组'; CREATE UNIQUE INDEX subject_pair ON subject(old_extra,id_related);");
+    if (scenario.verb === 'CONFLICT PARTIAL') db.exec("UPDATE subject SET id_related='启用'; CREATE UNIQUE INDEX subject_partial ON subject(lower(old_extra)) WHERE id_related = '启用';");
   } finally { db.close(); }
   const disk = () => {
     const db = new DatabaseSync(filePath, { readOnly: true });
@@ -118,11 +131,13 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
       const dropIndexRemaining = dropIndex ? !!db.prepare("SELECT name FROM sqlite_schema WHERE name='subject_by_value' AND type='index'").get() : undefined;
       const indexStats = analyzeIndex && db.prepare("SELECT 1 FROM sqlite_schema WHERE name='sqlite_stat1'").get() ?
         db.prepare('SELECT tbl,idx,stat FROM sqlite_stat1').all() : undefined;
+      const rowCount = conflictKey ? db.prepare('SELECT count(*) AS count FROM subject').get()?.count : undefined;
       return { row: db.prepare('SELECT id,value,virtual_value FROM subject').get(), other: db.prepare('SELECT * FROM excluded').get(),
         inbox: db.prepare('SELECT * FROM inbox').get(), ...(view ? { view: { sql: view.sql, rows: db.prepare('SELECT display_value FROM completion_view').all() } } : {}),
         ...(indexed ? { indexed } : {}), ...(altered ? { altered } : {}), ...(addedColumn ? { addedColumn } : {}),
         ...(declaredColumn ? { declaredColumn } : {}), ...(foreignKey ? { foreignKey } : {}), ...(trigger ? { trigger } : {}),
-        ...(triggerLog ? { triggerLog } : {}), ...(dropIndex ? { dropIndexRemaining } : {}), ...(indexStats ? { indexStats } : {}) };
+        ...(triggerLog ? { triggerLog } : {}), ...(dropIndex ? { dropIndexRemaining } : {}), ...(indexStats ? { indexStats } : {}),
+        ...(conflictKey ? { rowCount } : {}) };
     }
     finally { db.close(); }
   };
@@ -181,6 +196,10 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
                 (input.exact === undefined ? input.prefix === setup.typed : input.prefix === '' && input.exact === setup.catalogName);
               if (!valid) throw Error('表值 PRAGMA 参数目录越出本例');
             }
+            if (setup.conflictKey && input.kind !== 'stamp' &&
+              (input.kind !== 'conflict-keys' || input.table !== 'subject' || input.schema !== 'main' || input.prefix !== '')) {
+              throw Error('UPSERT 冲突目录越出本例');
+            }
             if (setup.isTrigger && input.kind !== 'stamp') {
               if (setup.triggerAction && input.kind === 'trigger-owner') {
                 if (input.triggerTarget !== 'table' || input.table !== 'subject' || input.prefix !== '' || 'schema' in input) throw Error('触发体归属越出实际目标');
@@ -220,7 +239,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         return entry(event, payload);
       });
     }, { filePath, connectionId, accepted, lookupKind, targetTable, typed, catalogName: column, createType, foreignChild, foreignColumn, triggerTarget, isTrigger, triggerAction, dropIndex, analyzeIndex, pragmaName, pragmaObject,
-      pragmaFunctionSource, pragmaFunctionArgument, createIndex: scenario.verb === 'CREATE INDEX', alterColumn });
+      pragmaFunctionSource, pragmaFunctionArgument, conflictKey, createIndex: scenario.verb === 'CREATE INDEX', alterColumn });
 
     await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
     await page.evaluate(async ({ id, sql }) => {
@@ -253,7 +272,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     const before = disk(), previous = (await snapshot()).length;
     await page.keyboard.press('Control+Space');
     const widget = query.locator('.suggest-widget:visible');
-    await expect(widget.locator('.monaco-list-row .label-name').filter({ hasText: new RegExp('^' + column + '$') })).toHaveCount(1);
+    const label = column.replace(/[.*+?^$(){}|[\]\\]/g, '\\$&');
+    await expect(widget.locator('.monaco-list-row .label-name').filter({ hasText: new RegExp('^' + label + '$') })).toHaveCount(1);
     if (foreignColumn) await expect(widget.locator('.monaco-list-row .label-name').filter({ hasText: /^id_related$/ })).toHaveCount(0);
     if (triggerTarget) await expect(widget.locator('.monaco-list-row .label-name').filter({ hasText: /^subject_view$/ })).toHaveCount(0);
     await expect(widget.locator('.monaco-list-row.focused .label-name')).toHaveText(column);
@@ -273,6 +293,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         pragmaObject ? expect.objectContaining({ kind: 'pragma-objects', pragma: 'table_xinfo', schema: 'main', prefix: typed }) :
         pragmaFunctionSource ? expect.objectContaining({ kind: 'pragma-functions', prefix: typed }) :
         pragmaFunctionArgument ? expect.objectContaining({ kind: 'pragma-objects', pragma: 'table_xinfo', schema: 'main', prefix: typed }) :
+        conflictKey ? expect.objectContaining({ kind: 'conflict-keys', schema: 'main', table: 'subject', prefix: '' }) :
         triggerTarget ? expect.objectContaining({ kind: 'relations', schema: 'main', triggerTarget: 'table', prefix: typed }) :
         foreignTable ? expect.objectContaining({ kind: 'relations', schema: 'main', foreignKey: true, prefix: typed }) :
         lookupKind === 'functions' || lookupKind === 'collations' ? expect.objectContaining({ kind: lookupKind, prefix: typed }) :
@@ -282,39 +303,41 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
       ...(scenario.verb === 'CREATE INDEX' ? [expect.objectContaining({ kind: 'functions', prefix: typed, deterministicOnly: true })] : []),
     ]);
     expect(completion.every(fact => fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true)).toBe(true);
-    if (scenario.verb === '函数') {
-      expect((await inspect()).offset).toBe(prefix.length + column.length + 1);
-      await page.keyboard.insertText(scenario.args);
-      await expect.poll(async () => (await inspect()).sql).toBe(accepted);
-      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowLeft' : 'Home');
-      for (const _point of prefix + column.slice(0, 2)) await page.keyboard.press('ArrowRight');
-      expect((await inspect()).offset).toBe(prefix.length + 2);
-    } else await page.keyboard.press('ArrowLeft');
-    await page.keyboard.press(modifier + '+K');
-    await page.keyboard.press(modifier + '+I');
-    const hover = query.locator('.monaco-hover:visible');
-    if (scenario.incoming) await expect(hover).toContainText('UPSERT 待插入行');
-    if (lookupKind === 'indexes') await expect(hover).toContainText('SQLite 索引');
-    if (lookupKind === 'functions') await expect(hover).toContainText('SQLite 标量函数');
-    else if (lookupKind === 'collations') await expect(hover).toContainText('忽略 ASCII 字母的大小写');
-    else if (strictType) await expect(hover).toContainText('SQLite STRICT 类型');
-    else if (createType) await expect(hover).toContainText('REAL 亲和性');
-    else if (foreignTable) await expect(hover).toContainText('SQLite 外键父表');
-    else if (foreignColumn) await expect(hover).toContainText('"main"."subject"."id"');
-    else if (triggerTarget) await expect(hover).toContainText('SQLite 触发目标表');
-    else if (triggerRow) await expect(hover).toContainText('SQLite 触发器 NEW 行');
-    else if (triggerAction) await expect(hover).toContainText('"main"."trigger_log"');
-    else if (dropIndex) await expect(hover).toContainText('"main"."subject_by_value"');
-    else if (pragmaName) await expect(hover).toContainText('包括生成列和隐藏列');
-    else if (pragmaObject) await expect(hover).toContainText('"main"."subject"');
-    else if (pragmaFunctionSource) await expect(hover).toContainText('SQLite 表值函数 pragma_table_xinfo');
-    else if (pragmaFunctionArgument) await expect(hover).toContainText('"main"."subject"');
-    else if (analyzeIndex) {
-      await expect(hover).toContainText('"main"."subject_by_value"');
-      await expect(hover).toContainText('收集单个索引的查询规划统计');
+    if (!conflictKey) {
+      if (scenario.verb === '函数') {
+        expect((await inspect()).offset).toBe(prefix.length + column.length + 1);
+        await page.keyboard.insertText(scenario.args);
+        await expect.poll(async () => (await inspect()).sql).toBe(accepted);
+        await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowLeft' : 'Home');
+        for (const _point of prefix + column.slice(0, 2)) await page.keyboard.press('ArrowRight');
+        expect((await inspect()).offset).toBe(prefix.length + 2);
+      } else await page.keyboard.press('ArrowLeft');
+      await page.keyboard.press(modifier + '+K');
+      await page.keyboard.press(modifier + '+I');
+      const hover = query.locator('.monaco-hover:visible');
+      if (scenario.incoming) await expect(hover).toContainText('UPSERT 待插入行');
+      if (lookupKind === 'indexes') await expect(hover).toContainText('SQLite 索引');
+      if (lookupKind === 'functions') await expect(hover).toContainText('SQLite 标量函数');
+      else if (lookupKind === 'collations') await expect(hover).toContainText('忽略 ASCII 字母的大小写');
+      else if (strictType) await expect(hover).toContainText('SQLite STRICT 类型');
+      else if (createType) await expect(hover).toContainText('REAL 亲和性');
+      else if (foreignTable) await expect(hover).toContainText('SQLite 外键父表');
+      else if (foreignColumn) await expect(hover).toContainText('"main"."subject"."id"');
+      else if (triggerTarget) await expect(hover).toContainText('SQLite 触发目标表');
+      else if (triggerRow) await expect(hover).toContainText('SQLite 触发器 NEW 行');
+      else if (triggerAction) await expect(hover).toContainText('"main"."trigger_log"');
+      else if (dropIndex) await expect(hover).toContainText('"main"."subject_by_value"');
+      else if (pragmaName) await expect(hover).toContainText('包括生成列和隐藏列');
+      else if (pragmaObject) await expect(hover).toContainText('"main"."subject"');
+      else if (pragmaFunctionSource) await expect(hover).toContainText('SQLite 表值函数 pragma_table_xinfo');
+      else if (pragmaFunctionArgument) await expect(hover).toContainText('"main"."subject"');
+      else if (analyzeIndex) {
+        await expect(hover).toContainText('"main"."subject_by_value"');
+        await expect(hover).toContainText('收集单个索引的查询规划统计');
+      }
+      else await expect(hover).toContainText('"main"."subject"');
+      await page.keyboard.press('Escape');
     }
-    else await expect(hover).toContainText('"main"."subject"');
-    await page.keyboard.press('Escape');
     expect((await snapshot()).filter(fact => fact.command === 'query.execute' || fact.command === 'sessions.open')).toEqual([]);
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(disk()).toEqual(before);
@@ -377,6 +400,7 @@ for (const scenario of scenarios) {
       scenario.verb === 'ANALYZE INDEX' ? process.env.DBARK_SQLITE_MAINTENANCE_COMPLETION_NATIVE === '1' :
       scenario.verb.startsWith('PRAGMA FUNCTION ') ? process.env.DBARK_SQLITE_PRAGMA_FUNCTION_COMPLETION_NATIVE === '1' :
       scenario.verb.startsWith('PRAGMA ') ? process.env.DBARK_SQLITE_PRAGMA_COMPLETION_NATIVE === '1' :
+      scenario.verb.startsWith('CONFLICT ') ? process.env.DBARK_SQLITE_CONFLICT_COMPLETION_NATIVE === '1' :
       scenario.verb.startsWith('TRIGGER ') ? process.env.DBARK_SQLITE_TRIGGER_COMPLETION_NATIVE === '1' :
       scenario.verb === 'FOREIGN KEY TABLE' || scenario.verb === 'FOREIGN KEY COLUMN' ? process.env.DBARK_SQLITE_FOREIGN_KEY_COMPLETION_NATIVE === '1' :
       scenario.verb === 'STRICT TYPE' || scenario.verb === 'CREATE TYPE' ? process.env.DBARK_SQLITE_COLUMN_TYPE_COMPLETION_NATIVE === '1' :

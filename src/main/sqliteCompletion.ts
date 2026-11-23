@@ -1,8 +1,9 @@
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
-import { foldSqliteCompletionName as fold, sqliteCompletionLimits, sqliteCompletionOutputSchema, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput, type SqliteForeignKeySelection } from '../shared/sqliteCompletion';
+import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionLimits, sqliteCompletionOutputSchema, sqliteConflictTermSchema, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput, type SqliteForeignKeySelection } from '../shared/sqliteCompletion';
 import { inspectSqliteTableColumnCollations, sqliteTableRebuildPlanLimits } from '../shared/sqliteTableRebuildPlan';
 import { readableSqlitePragma } from '../shared/sqlitePragmaAccess';
+import { parseSqliteIndexDesign } from '../shared/sqliteIndexes';
 import { sqliteDropObjectQuery } from './sqliteDropObjects';
 
 interface CompletionControl { check(): void; sessionRevision?: number; }
@@ -40,7 +41,7 @@ function supportsSqlite353(version: string): boolean {
 function tableIdentity(driver: SqliteDriverSession, input: { schema?: 'main' | 'temp'; table: string }, control: CompletionControl, includeOptions = false) {
   // 先定位实际关系再看类型，避免临时视图或虚拟表遮蔽时误读 main 的目录。
   const scope = input.schema ? 'schema = ?' : "schema IN ('main','temp')";
-  return read(driver, 'SELECT name,schema,type' + (includeOptions ? ',strict' : '') + ' FROM pragma_table_list() WHERE ' + scope + " AND name = ? COLLATE NOCASE ORDER BY schema DESC LIMIT 1", [...(input.schema ? [input.schema] : []), input.table], control, 1);
+  return read(driver, 'SELECT name,schema,type' + (includeOptions ? ',strict,wr' : '') + ' FROM pragma_table_list() WHERE ' + scope + " AND name = ? COLLATE NOCASE ORDER BY schema DESC LIMIT 1", [...(input.schema ? [input.schema] : []), input.table], control, 1);
 }
 
 /** 只接受 SQLite 能用于外键的完整唯一键。读取原库目录和定义，不准备编辑器语句或读取业务行。 */
@@ -121,6 +122,89 @@ async function foreignKeyColumns(driver: SqliteDriverSession, table: string, sch
 
 const flag = (value: SqliteValue): boolean | undefined => value && typeof value === 'object' && value.type === 'integer' &&
   (value.value === '0' || value.value === '1') ? value.value === '1' : undefined;
+
+type ConflictKey = Extract<SqliteCompletionEntry, { kind: 'conflict-key' }>;
+
+/** 从 SQLite 确认的唯一目录生成目标，表达式和谓词沿用保存的索引定义。仅查目录，不准备或执行 INSERT。 */
+async function conflictKeys(driver: SqliteDriverSession, input: Extract<SqliteCompletionLookup, { kind: 'conflict-keys' }>, control: CompletionControl) {
+  const found = await tableIdentity(driver, input, control, true);
+  const table = found.rows[0]?.[0], schema = found.rows[0]?.[1], withoutRowid = flag(found.rows[0]?.[4]);
+  const entries: ConflictKey[] = [];
+  if (typeof table !== 'string' || found.rows[0]?.[2] !== 'table' || /^sqlite_/i.test(table)) return { entries, incomplete: false };
+  if (schema !== 'main' && schema !== 'temp' || withoutRowid === undefined) throw Error('SQLite 冲突目标目录无效');
+  const xinfo = await read(driver, 'SELECT name,type,pk FROM pragma_table_xinfo(?,?) ORDER BY cid LIMIT 1025', [table, schema], control, 1025);
+  if (xinfo.truncated || xinfo.rows.length > 1024) return { entries, incomplete: true };
+  const columns = xinfo.rows.map(([name]) => {
+    if (typeof name !== 'string') throw Error('SQLite 冲突目标字段目录无效');
+    return { name };
+  });
+  const limit = sqliteCompletionLimits.entries;
+  const list = await read(driver, `SELECT i.name,i.origin,i.partial,k.cid,k.name,k.coll
+    FROM pragma_index_list(?,?) i CROSS JOIN pragma_index_xinfo(i.name,?) k
+    WHERE i."unique" = 1 AND k."key" = 1 ORDER BY i.seq,k.seqno LIMIT 257`, [table, schema, schema], control, 257);
+  let incomplete = list.truncated || list.rows.length > limit;
+  const incompleteIndexFacts = incomplete;
+  const rows = list.rows.slice(0, limit), last = rows.at(-1)?.[0];
+  const partialTail = list.truncated || list.rows.length > limit && list.rows[limit][0] === last;
+  const indexes = new Map<string, { origin: 'c' | 'pk' | 'u'; partial: boolean; terms: { cid: string; name: string | null; collation: string }[] }>();
+  for (const [name, origin, rawPartial, cid, column, collation] of rows) {
+    if (partialTail && name === last) continue;
+    const partial = flag(rawPartial);
+    if (typeof name !== 'string' || origin !== 'c' && origin !== 'pk' && origin !== 'u' || partial === undefined ||
+      !cid || typeof cid !== 'object' || cid.type !== 'integer' || column !== null && typeof column !== 'string' || typeof collation !== 'string') {
+      throw Error('SQLite 唯一索引目录无效');
+    }
+    let index = indexes.get(name);
+    if (!index) { index = { origin, partial, terms: [] }; indexes.set(name, index); }
+    index.terms.push({ cid: cid.value, name: column, collation });
+  }
+  const primary = xinfo.rows.filter(([, , pk]) => pk && typeof pk === 'object' && pk.type === 'integer' && pk.value !== '0');
+  const [primaryName, declaredType] = primary[0] ?? [];
+  const rowidAlias = !withoutRowid && !incomplete && primary.length === 1 && typeof primaryName === 'string' &&
+    typeof declaredType === 'string' && fold(declaredType) === 'integer' && ![...indexes.values()].some(index => index.origin === 'pk') ? primaryName : undefined;
+  if (!withoutRowid) {
+    const occupied = new Set(columns.map(column => fold(column.name)));
+    const rowid = rowidAlias ?? ['rowid', '_rowid_', 'oid'].find(name => !occupied.has(name));
+    if (rowid) entries.push({ kind: 'conflict-key', table, schema, name: rowid, origin: rowidAlias ? 'pk' : 'rowid', terms: [{ name: rowid, sql: quote(rowid) }] });
+  }
+  const ddlNames = [...indexes].filter(([, index]) => index.partial || index.terms.some(term => term.cid === '-2')).map(([name]) => name);
+  const definitions = new Map<string, string>();
+  if (ddlNames.length) {
+    const result = await read(driver, `SELECT name,CASE WHEN length(CAST(sql AS BLOB)) <= 65536 THEN sql END FROM ${schema}.sqlite_schema
+      WHERE type = 'index' AND tbl_name = ? COLLATE BINARY AND name IN (${ddlNames.map(() => '?').join(',')})`, [table, ...ddlNames], control, limit);
+    incomplete ||= result.truncated;
+    for (const [name, sql] of result.rows) if (typeof name === 'string' && typeof sql === 'string') definitions.set(name, sql);
+  }
+  const shape = (index: { terms: { cid: string; collation: string }[] }) =>
+    JSON.stringify(index.terms.map(term => [term.cid, fold(term.collation)]).sort((left, right) =>
+      left[0].localeCompare(right[0]) || left[1].localeCompare(right[1])));
+  const completeShapes = new Set([...indexes.values()].filter(index => !index.partial).map(shape));
+  for (const [name, index] of indexes) {
+    // 独立索引包含 INTEGER PRIMARY KEY 别名时，SQLite 在冲突目标中把该列解析为 rowid。
+    if (index.terms.some(term => term.cid === '-1' || rowidAlias && term.name !== null && fold(term.name) === fold(rowidAlias))) continue;
+    // 同形完整索引可能先于部分索引匹配。无法证明独立部分目标时，保留手写入口。
+    if (index.partial && (incompleteIndexFacts || completeShapes.has(shape(index)))) { incomplete = true; continue; }
+    const definition = definitions.get(name), design = definition ? parseSqliteIndexDesign(definition, columns) : undefined;
+    const requiresDesign = index.partial || index.terms.some(term => term.cid === '-2');
+    if (requiresDesign && (!design || !design.unique || fold(design.name) !== fold(name) ||
+      design.keys.length !== index.terms.length || !!design.where !== index.partial)) { incomplete = true; continue; }
+    const terms = index.terms.flatMap<ConflictKey['terms'][number]>((term, position) => {
+      const suffix = ' COLLATE ' + quote(term.collation), parsed = design?.keys[position];
+      if (term.cid === '-2') {
+        if (parsed?.kind !== 'expression') return [];
+        // 括号保留复合表达式内部的运算及 COLLATE 结合关系，外层使用真实键项的规则区分同形目标。
+        return [{ sql: '(' + parsed.expression + ')' + suffix, label: parsed.expression }];
+      }
+      if (term.name === null) return [];
+      return [{ name: term.name, collation: term.collation, sql: quote(term.name) + suffix }];
+    });
+    const predicate = design?.where;
+    if (terms.length !== index.terms.length || terms.some(term => !sqliteConflictTermSchema.safeParse(term).success) ||
+      predicate && predicate.length > 8192) { incomplete = true; continue; }
+    entries.push({ kind: 'conflict-key', name, table, schema, origin: index.origin, terms, ...(predicate ? { predicate } : {}) });
+  }
+  return { entries: entries.slice(0, limit), incomplete: incomplete || entries.length > limit };
+}
 const functionTypes = { s: 'scalar', a: 'aggregate', w: 'window' } as const;
 const publicSqliteFunctions = new Set(['sqlite_compileoption_get', 'sqlite_compileoption_used', 'sqlite_offset', 'sqlite_source_id', 'sqlite_version']);
 // SQLite 公共函数标志。允许索引使用确定性标量，但不建议只能在顶层调用的函数。
@@ -364,6 +448,10 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
     }
   } else if (input.kind === 'pragma-functions') {
     const result = await pragmaFunctions(driver, input, control);
+    incomplete = result.incomplete;
+    for (const entry of result.entries) if (!append(entry)) break;
+  } else if (input.kind === 'conflict-keys') {
+    const result = await conflictKeys(driver, input, control);
     incomplete = result.incomplete;
     for (const entry of result.entries) if (!append(entry)) break;
   } else if (input.kind === 'pragma-objects') {

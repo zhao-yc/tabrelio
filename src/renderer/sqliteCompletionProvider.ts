@@ -95,6 +95,8 @@ export function createSqliteCompletionProvider(ports: Ports) {
               if (query.kind === 'pragmas') return entry.kind !== 'pragma' || !fold(entry.name).startsWith(fold(query.prefix)) ||
                 !readableSqlitePragma(entry.name, query.withArgument ? '' : null);
               if (query.kind === 'pragma-functions') return entry.kind !== 'pragma-function' || !fold(entry.name).startsWith(fold(query.prefix));
+              if (query.kind === 'conflict-keys') return entry.kind !== 'conflict-key' || fold(entry.table) !== fold(query.table) ||
+                query.schema !== undefined && entry.schema !== query.schema;
               if (query.kind === 'pragma-objects') {
                 if (entry.kind !== 'pragma-object' || query.schema !== undefined && entry.schema !== query.schema) return true;
                 if (entry.object === 'index' && query.pragma !== 'index_info' && query.pragma !== 'index_xinfo' ||
@@ -103,7 +105,7 @@ export function createSqliteCompletionProvider(ports: Ports) {
                 return query.exact === undefined ? !name.startsWith(fold(query.prefix)) : name !== fold(query.exact);
               }
               if (entry.kind === 'function' || entry.kind === 'collation' || entry.kind === 'maintenance-option' || entry.kind === 'maintenance-object' ||
-                entry.kind === 'pragma' || entry.kind === 'pragma-object' || entry.kind === 'pragma-function') return true;
+                entry.kind === 'pragma' || entry.kind === 'pragma-object' || entry.kind === 'pragma-function' || entry.kind === 'conflict-key') return true;
               if (query.kind === 'trigger-owner') return entry.kind !== query.triggerTarget || fold(entry.name) !== fold(query.table);
               if (query.schema !== undefined && entry.schema !== query.schema) return true;
               if (query.kind === 'drop-objects') return entry.kind !== 'drop-object' || entry.object !== query.object ||
@@ -117,6 +119,7 @@ export function createSqliteCompletionProvider(ports: Ports) {
             const names = result.entries.map(entry => {
               if (query.kind === 'maintenance-objects') return (entry.kind === 'maintenance-object' ? entry.object + '\0' + entry.schema : entry.kind) + '\0' + fold(entry.name);
               if (query.kind === 'pragma-objects' && query.pragma === 'table_list' && entry.kind === 'pragma-object') return entry.schema + '\0' + fold(entry.name);
+              if (query.kind === 'conflict-keys' && entry.kind === 'conflict-key') return entry.origin + '\0' + fold(entry.name);
               return fold(entry.name);
             });
             if (new Set(names).size !== names.length) throw stale();
