@@ -9,6 +9,7 @@ const relationKinds = "(ARRAY['r','p','v','m','f']::pg_catalog.text[])";
 const relationPermission = "(pg_catalog.has_table_privilege(c.oid, 'SELECT,INSERT,UPDATE,DELETE,REFERENCES') OR pg_catalog.has_any_column_privilege(c.oid, 'SELECT,INSERT,UPDATE,REFERENCES'))";
 const rowLimit = postgresCompletionLimits.items + 1;
 const commandBudget = () => ({ rows: 0, bytes: 1024 });
+const isCatalogName = (name: unknown): name is string => typeof name === 'string' && !!name && !name.includes('\0') && new TextEncoder().encode(name).length <= 63;
 
 /** 允许当前物理会话的临时 schema，绝不暴露别的会话的内部编号。 */
 function namespaces(session: boolean): string {
@@ -273,8 +274,79 @@ async function joinColumns(connection: PostgresConnection, input: Extract<Postgr
   return { items, incomplete: false };
 }
 
+/** 只读取一个已解析目标的约束与键列。目录内的 SQL 表达式不会写入编辑器。 */
+async function conflictTargets(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'conflictTargets' }>,
+  session: boolean): Promise<PostgresCompletionResult> {
+  const { relation, selection, prefix } = input;
+  const name = (relation.schema ? postgresIdentifier(relation.schema) + '.' : '') + postgresIdentifier(relation.name);
+  const target = `WITH ${namespaces(session)}, target AS (
+    SELECT c.oid FROM pg_catalog.pg_class c JOIN namespaces n ON n.oid ${eq} c.relnamespace
+    WHERE c.oid ${eq} pg_catalog.to_regclass($1::pg_catalog.text)::pg_catalog.oid
+      AND c.relkind::pg_catalog.text ${eq} ANY (ARRAY['r','p']::pg_catalog.text[])
+      AND (pg_catalog.has_table_privilege(c.oid, 'INSERT') OR pg_catalog.has_any_column_privilege(c.oid, 'INSERT'))
+      ${session || relation.schema ? '' : `AND NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_class other JOIN namespaces ns ON ns.oid ${eq} other.relnamespace
+        WHERE other.oid ${ne} c.oid AND other.relname ${eq} c.relname
+          AND other.relkind::pg_catalog.text ${eq} ANY ${relationKinds}
+      )`}
+  )`;
+  const budget = { rows: rowLimit, bytes: 512 * 1024 };
+  if (selection.mode === 'constraint') {
+    const result = await connection.query(`${target}
+      SELECT co.conname::pg_catalog.text, CASE WHEN i.indisexclusion THEN 'exclusion' WHEN i.indisprimary THEN 'primary' ELSE 'unique' END
+      FROM target t JOIN pg_catalog.pg_constraint co ON co.conrelid ${eq} t.oid
+      JOIN pg_catalog.pg_index i ON i.indrelid ${eq} t.oid AND i.indexrelid ${eq} co.conindid
+      WHERE co.contype::pg_catalog.text ${eq} ANY (ARRAY['p','u','x']::pg_catalog.text[])
+        AND co.convalidated AND NOT co.condeferrable AND i.indisvalid AND i.indisready AND i.indislive AND i.indimmediate
+        AND CASE WHEN i.indisexclusion THEN $3::pg_catalog.bool ELSE i.indisunique END
+        AND pg_catalog.strpos(pg_catalog.lower(co.conname::pg_catalog.text), pg_catalog.lower($2::pg_catalog.text)) ${eq} 1
+        AND NOT EXISTS (SELECT 1 FROM pg_catalog.unnest(co.conkey) k(attnum)
+          WHERE NOT CASE WHEN k.attnum ${eq} 0 THEN pg_catalog.has_table_privilege(t.oid, 'SELECT')
+            ELSE pg_catalog.has_column_privilege(t.oid, k.attnum, 'SELECT') END)
+      ORDER BY i.indisprimary DESC, co.conname LIMIT $4`, [name, prefix, selection.allowExclusion === true, rowLimit], budget);
+    const items: PostgresCompletionItem[] = [];
+    for (const row of result.rows.slice(0, postgresCompletionLimits.items)) {
+      if (isCatalogName(row.c0) && (row.c1 === 'primary' || row.c1 === 'unique' || row.c1 === 'exclusion'))
+        items.push({ kind: 'conflictConstraint', name: row.c0, constraint: row.c1 });
+    }
+    return { items, incomplete: result.truncated || result.rows.length === rowLimit };
+  }
+  // PostgreSQL 会推断出所有同键索引。若键组也命中可延迟约束，即使存在立即索引也不能建议该组。
+  const result = await connection.query(`${target}, keys AS (
+    SELECT i.indexrelid, i.indimmediate, i.indisprimary,
+      pg_catalog.array_agg(a.attnum ORDER BY a.attnum) AS attnums,
+      pg_catalog.array_agg(a.attname::pg_catalog.text ORDER BY k.position) AS names
+    FROM target t JOIN pg_catalog.pg_index i ON i.indrelid ${eq} t.oid
+    CROSS JOIN LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
+    JOIN pg_catalog.pg_attribute a ON a.attrelid ${eq} i.indrelid AND a.attnum ${eq} k.attnum AND NOT a.attisdropped
+    WHERE i.indisunique AND NOT i.indisexclusion AND i.indisvalid AND i.indisready AND i.indislive
+      AND i.indpred IS NULL AND i.indexprs IS NULL AND k.position OPERATOR(pg_catalog.<=) i.indnkeyatts
+      AND i.indnkeyatts BETWEEN 1 AND 32 AND a.attnum OPERATOR(pg_catalog.>) 0
+    GROUP BY i.indexrelid, i.indimmediate, i.indisprimary, i.indnkeyatts
+    HAVING pg_catalog.count(DISTINCT a.attnum) ${eq} i.indnkeyatts
+      AND pg_catalog.bool_and(pg_catalog.has_column_privilege(i.indrelid, a.attnum, 'SELECT'))
+  )
+  SELECT c.relname::pg_catalog.text, k.indisprimary, pg_catalog.to_json(k.names)::pg_catalog.text
+  FROM keys k JOIN pg_catalog.pg_class c ON c.oid ${eq} k.indexrelid
+  WHERE k.indimmediate AND k.names OPERATOR(pg_catalog.@>) $3::pg_catalog.text[]
+    AND EXISTS (SELECT 1 FROM pg_catalog.unnest(k.names) AS col(name)
+      WHERE NOT (col.name ${eq} ANY ($3::pg_catalog.text[]))
+        AND pg_catalog.strpos(pg_catalog.lower(col.name), pg_catalog.lower($2::pg_catalog.text)) ${eq} 1)
+    AND NOT EXISTS (SELECT 1 FROM keys deferred WHERE NOT deferred.indimmediate AND deferred.attnums ${eq} k.attnums)
+  ORDER BY k.indisprimary DESC, c.relname LIMIT $4`, [name, prefix, selection.used, rowLimit], budget);
+  const items: PostgresCompletionItem[] = [];
+  for (const row of result.rows.slice(0, postgresCompletionLimits.items)) {
+    if (!isCatalogName(row.c0) || (row.c1 !== 't' && row.c1 !== 'f') || typeof row.c2 !== 'string') continue;
+    let columns: unknown;
+    try { columns = JSON.parse(row.c2); } catch { continue; }
+    if (Array.isArray(columns) && columns.length > 0 && columns.length <= 32 && new Set(columns).size === columns.length && columns.every(isCatalogName))
+      items.push({ kind: 'conflictKey', name: row.c0, columns, primary: row.c1 === 't' });
+  }
+  return { items, incomplete: result.truncated || result.rows.length === rowLimit };
+}
+
 /** 查实际可执行的重载。原会话由 PostgreSQL 解析 search_path，同名不同签名仍保留。 */
-async function routines(connection: PostgresConnection, input: Exclude<PostgresCompletionInput, { kind: 'columnDetails' | 'joinColumns' }>, session: boolean): Promise<PostgresCompletionResult> {
+async function routines(connection: PostgresConnection, input: Exclude<PostgresCompletionInput, { kind: 'columnDetails' | 'joinColumns' | 'conflictTargets' }>, session: boolean): Promise<PostgresCompletionResult> {
   const target = input.routine!;
   const exact = input.kind === 'signatures';
   const limit = input.kind === 'routines' || exact ? postgresCompletionLimits.items : 40;
@@ -332,6 +404,7 @@ export async function readPostgresCompletion(connection: PostgresConnection, inp
     if (input.kind === 'routines' || input.kind === 'signatures') return routines(connection, input, session);
     if (input.kind === 'columnDetails') return columnDetails(connection, input, session);
     if (input.kind === 'joinColumns') return joinColumns(connection, input, session);
+    if (input.kind === 'conflictTargets') return conflictTargets(connection, input, session);
     const base = await (input.kind === 'relations' ? relations(connection, input, session) : columns(connection, input, session));
     if (!input.routine) return base;
     const supplemental = await routines(connection, input, session);

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 的 `ON CONFLICT` 可补全无谓词的普通列主键和唯一键、补齐复合键及引用可用约束名。候选遵守原会话的表可见性、SELECT 列权限、可延迟索引及排斥约束的动作限制。Q01、R01 继续为部分覆盖。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)
+
 2026-11-24 源码增量。PostgreSQL 的 `INSERT … SELECT` 来源补全复用普通查询作用域，支持 CTE、集合查询分支和 `TABLE`，排除写入目标。目标列清单只在基础列位置按 `INSERT` 列权限补全。Q01、R01 继续为部分覆盖。 [PostgreSQL INSERT](https://www.postgresql.org/docs/18/sql-insert.html)
 
 2026-11-24 源码增量。PostgreSQL 冲突更新分别按 `UPDATE` 列权限补全赋值目标、按 `SELECT` 列权限补全既有行和 `excluded` 待插入行。动作谓词和相关子查询沿用各自可见范围，`RETURNING` 保持独立作用域。Q01、R01 继续为部分覆盖。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)

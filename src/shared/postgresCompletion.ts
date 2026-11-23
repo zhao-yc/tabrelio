@@ -8,6 +8,12 @@ const target = z.object({ connectionId: name, database: name, prefix: text, sess
 const fieldIdentifier = name.refine(value => !/[\uD800-\uDFFF]/u.test(value) && new TextEncoder().encode(value).length <= 63);
 const catalogRelation = z.object({ name: fieldIdentifier, schema: fieldIdentifier.optional() }).strict();
 export type PostgresCatalogRelation = z.infer<typeof catalogRelation>;
+const conflictSelection = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('constraint'), allowExclusion: z.literal(true).optional() }).strict(),
+  z.object({ mode: z.literal('key'), used: z.array(fieldIdentifier).max(31)
+    .refine(items => new Set(items).size === items.length) }).strict(),
+]);
+export type PostgresConflictSelection = z.infer<typeof conflictSelection>;
 const functionCall = z.object({
   argumentCount: z.number().int().min(0).max(postgresCompletionLimits.tokens), scalarAlias: name.optional(),
 }).strict();
@@ -38,6 +44,7 @@ export const postgresCompletionSchema = z.discriminatedUnion('kind', [
     relations: z.array(catalogRelation).min(1).max(postgresCompletionLimits.relations) }).strict(),
   target.extend({ kind: z.literal('joinColumns'), prefix: z.literal(''),
     relations: z.array(catalogRelation).min(1).max(postgresCompletionLimits.relations) }).strict(),
+  target.extend({ kind: z.literal('conflictTargets'), relation: catalogRelation, selection: conflictSelection }).strict(),
   target.extend({ kind: z.literal('routines'), routine }).strict(),
   target.extend({ kind: z.literal('signatures'), prefix: name, routine }).strict(),
 ]);
@@ -51,6 +58,8 @@ export type PostgresCompletionItem =
   | { kind: 'table' | 'view'; schema: string; name: string }
   | { kind: 'column'; reference: number; name: string; type: string }
   | { kind: 'joinColumns'; reference: number; names: string[] }
+  | { kind: 'conflictConstraint'; name: string; constraint: 'primary' | 'unique' | 'exclusion' }
+  | { kind: 'conflictKey'; name: string; columns: string[]; primary: boolean }
   | { kind: 'columnDetail'; reference: number; name: string; schema: string; relation: string; type: string;
     nullable: boolean; expression: string | null; generated: boolean; comment: string | null; temporary: boolean }
   | { kind: 'routine'; schema: string; name: string; arguments: string; returns: string | null; category: 'f' | 'p' | 'a' | 'w';

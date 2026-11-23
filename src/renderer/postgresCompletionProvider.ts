@@ -195,6 +195,46 @@ export function createPostgresCompletionProvider(options: {
         let inventoryFailed = false;
         const normalize = (name: string) => quoted ? name : name.replace(/[A-Z]/g, letter => letter.toLowerCase());
         const joinMatches = (name: string) => normalize(name).startsWith(normalize(prefix));
+        if (query?.kind === 'conflictTarget') {
+          await debounce(controller.signal, 100);
+          try {
+            const result = await request({ ...target, kind: 'conflictTargets', relation: query.relation, selection: query.selection, prefix }, current);
+            if (!result || !current()) return empty;
+            if (result.deferred) options.status(result.deferred === 'transaction' ? 'sessionUnknown' : 'unavailable');
+            else if (result.incomplete) options.status('partial');
+            const suggestions: monaco.languages.CompletionItem[] = [];
+            const seen = new Set<string>();
+            for (const item of result.items) {
+              let names: string[], description: string, key: string;
+              if (query.selection.mode === 'constraint' && item.kind === 'conflictConstraint' && joinMatches(item.name)) {
+                if (item.constraint === 'exclusion' && !query.selection.allowExclusion) continue;
+                names = [item.name];
+                description = item.constraint === 'primary' ? postgresZh.conflictPrimary :
+                  item.constraint === 'unique' ? postgresZh.conflictUnique : postgresZh.conflictExclusion;
+                key = item.name;
+              } else if (query.selection.mode === 'key' && item.kind === 'conflictKey') {
+                const used = query.selection.used;
+                if (!used.every(name => item.columns.includes(name))) continue;
+                const rest = item.columns.filter(name => !used.includes(name));
+                const first = rest.findIndex(joinMatches);
+                if (first < 0) continue;
+                key = JSON.stringify([...rest].sort());
+                names = [rest[first], ...rest.slice(0, first), ...rest.slice(first + 1)];
+                description = (item.primary ? postgresZh.conflictPrimary : postgresZh.conflictUnique) + ' · ' + item.name;
+              } else continue;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              const sql = names.map(postgresIdentifier).join(', ');
+              suggestions.push({ range, kind: options.kinds.column, label: { label: names.join(', '), description },
+                insertText: query.whole ? '(' + sql + ')' : sql, filterText: quoted ? postgresIdentifier(names[0]) : names[0],
+                sortText: String(suggestions.length).padStart(3, '0') });
+            }
+            return { incomplete: true, suggestions: suggestions.slice(0, postgresCompletionLimits.items) };
+          } catch {
+            if (current()) options.status('unavailable');
+            return empty;
+          }
+        }
         if (using || joinOutput) {
           const sources = using ? [using.left, using.right] : joinOutput
             ? [joinOutput.source, ...joinOutput.qualifiers.map(item => item.source)] : [];
@@ -279,7 +319,7 @@ export function createPostgresCompletionProvider(options: {
             sortText: '0' + String(suggestions.length).padStart(3, '0') });
         }
         for (const item of result.items) {
-          if (item.kind === 'columnDetail' || item.kind === 'joinColumns') continue;
+          if (item.kind === 'columnDetail' || item.kind === 'joinColumns' || item.kind === 'conflictConstraint' || item.kind === 'conflictKey') continue;
           const filterText = quoted ? '"' + item.name.replaceAll('"', '""') : item.name;
           const common = { range, kind: options.kinds[item.kind], filterText, sortText: '0' + String(suggestions.length).padStart(3, '0') };
           if (item.kind === 'schema' && query?.kind === 'relations' && !query.schema) {

@@ -2575,6 +2575,88 @@ test('PostgreSQL INSERT SELECT 隔离目标列权限和读取来源', async ({},
   await quitDesktop();
 });
 
+test('PostgreSQL 冲突目标按原会话补全复合键和可用约束', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    const path = 'SET search_path TO conflict_scope, public';
+    await observer.query(`CREATE SCHEMA conflict_scope;
+      CREATE TABLE public.arbiter_probe (legacy int PRIMARY KEY);
+      CREATE TABLE conflict_scope.arbiter_probe (
+        id int PRIMARY KEY, realm int, entry_code text, payload text, partial_key text, slow_key int, era int4range,
+        CONSTRAINT "Pair ""键""" UNIQUE (realm,entry_code) INCLUDE (payload),
+        CONSTRAINT slow_constraint UNIQUE (slow_key) DEFERRABLE INITIALLY IMMEDIATE,
+        CONSTRAINT range_guard EXCLUDE USING gist (era WITH &&));
+      CREATE UNIQUE INDEX immediate_slow ON conflict_scope.arbiter_probe (slow_key);
+      CREATE UNIQUE INDEX only_some ON conflict_scope.arbiter_probe (partial_key) WHERE payload <> '';
+      CREATE UNIQUE INDEX expression_key ON conflict_scope.arbiter_probe (lower(entry_code));
+      INSERT INTO conflict_scope.arbiter_probe VALUES (1,9,'甲','原值',null,1,'[1,3)');
+      CREATE ROLE conflict_column_role NOLOGIN;
+      GRANT USAGE ON SCHEMA conflict_scope TO conflict_column_role;
+      GRANT INSERT (id,realm,entry_code,payload), SELECT (id) ON conflict_scope.arbiter_probe TO conflict_column_role;
+      ${path}`);
+    await prepare({id: '', name: '隔离 PostgreSQL 冲突目标', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, path);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const executeSetting = async (statement: string) => {
+      await replaceDraft(statement);
+      await command('execute-all');
+      await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === statement)).toBe(true);
+      await expect.poll(() => enabled('execute-all')).toBe(true);
+    };
+    await executeSetting(path);
+    const baseline = await history(), identity = (await inspectModel()).identity;
+    const show = async (draft: string, slot: string, prefix: string, names: string[]) => {
+      await replaceDraft(draft);
+      await modelSelection(1, draft.indexOf(slot) + prefix.length + 1);
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText(names);
+    };
+    const accept = async (draft: string, slot: string, prefix: string, label: string, insert: string) => {
+      await show(draft, slot, prefix, [label]);
+      await page.keyboard.press('Enter');
+      const completed = draft.replace(slot, insert);
+      await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+      expect(await history()).toEqual(baseline);
+      expect((await inspectModel()).identity).toEqual(identity);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+      return completed;
+    };
+    const base = "INSERT INTO arbiter_probe (id,realm,entry_code,payload) VALUES (2,9,'甲','新值') ON CONFLICT ";
+    const update = ' DO UPDATE SET payload=excluded.payload';
+    await show(base + '(key_tail)' + update, 'key_tail', '', ['id', 'realm, entry_code']);
+    await show(base + 'ON CONSTRAINT key_tail' + update, 'key_tail', '', ['arbiter_probe_pkey', 'Pair "键"']);
+    const whole = await accept(base + 're_tail' + update, 're_tail', 're', 'realm, entry_code', '("realm", "entry_code")');
+    const remainder = await accept(base + '(realm, ent_tail)' + update, 'ent_tail', 'ent', 'entry_code', '"entry_code"');
+    const named = await accept(base + 'ON CONSTRAINT Pa_tail' + update, 'Pa_tail', 'Pa', 'Pair "键"', postgresIdentifier('Pair "键"'));
+    const excluded = await accept("INSERT INTO arbiter_probe (id,realm,entry_code,era) VALUES (3,10,'乙',int4range(2,4)) " +
+      'ON CONFLICT ON CONSTRAINT ra_tail DO NOTHING', 'ra_tail', 'ra', 'range_guard', '"range_guard"');
+    // 每个候选独立执行并回滚，核对真实冲突结果及原行恢复。
+    for (const sql of [whole, remainder, named, excluded]) {
+      await observer.query('BEGIN');
+      try {
+        expect((await observer.query(sql)).rowCount).toBe(sql === excluded ? 0 : 1);
+        expect((await observer.query({text: 'SELECT id,payload FROM arbiter_probe', rowMode: 'array'})).rows)
+          .toEqual([[1, sql === excluded ? '原值' : '新值']]);
+      } finally { await observer.query('ROLLBACK'); }
+    }
+    expect((await observer.query({text: 'SELECT id,payload FROM arbiter_probe', rowMode: 'array'})).rows).toEqual([[1,'原值']]);
+    await executeSetting('SET ROLE conflict_column_role');
+    await show(base + '(key_tail) DO NOTHING', 'key_tail', '', ['id']);
+    await show(base + 'ON CONSTRAINT key_tail DO NOTHING', 'key_tail', '', ['arbiter_probe_pkey']);
+    await page.screenshot({path: info.outputPath('PostgreSQL冲突目标补全.png'), animations: 'disabled'});
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL 字段悬停读取真实目录并区分同名、临时和歧义来源', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

@@ -339,6 +339,49 @@ it('ON CONFLICT DO UPDATE 区分赋值目标、既有行、EXCLUDED 和条件作
   ]) expect(at(sample)?.query, sample).toBeUndefined();
 });
 
+it('冲突目标补全区分键组、约束名、动作和读取来源', () => {
+  const insert = 'INSERT INTO app.items AS t VALUES (1) ON CONFLICT ';
+  expect(at(insert + 're|_tail')?.query).toEqual({kind: 'conflictTarget', relation: {name: 'items', schema: 'app'},
+    selection: {mode: 'key', used: []}, whole: true});
+  expect(at(insert + '(re|_tail, "标签") DO UPDATE SET value=excluded.value')?.query)
+    .toMatchObject({selection: {mode: 'key', used: ['标签']}});
+  expect(at(insert + '("标签", |')?.query).toMatchObject({selection: {mode: 'key', used: ['标签']}});
+  expect(at(insert + 'ON CONSTRAINT "Case| x" DO NOTHING')?.query)
+    .toMatchObject({selection: {mode: 'constraint', allowExclusion: true}});
+  expect(at(insert + 'ON CONSTRAINT |')?.query).toMatchObject({selection: {mode: 'constraint'}});
+  expect(at(insert + 'ON CONSTRAINT | DO UPDATE SET v=0')?.query).not.toMatchObject({selection: {allowExclusion: true}});
+  for (const example of ['(id, id, |)', '(lower(x), |)', '(s.|)', '(key, |) WHERE live DO NOTHING', 'ON CONSTRAINT app.|']) {
+    expect(at(insert + example)?.query, example).toBeUndefined();
+  }
+  const source = 'INSERT INTO app.items SELECT 1 FROM source s JOIN flags ON ';
+  expect(at(source + 'conf|lict')?.query?.kind).toBe('columns');
+  expect(at(source + 'conflict ON CONFLICT (|')?.query?.kind).toBe('conflictTarget');
+});
+
+it('冲突键补齐其余列并保留后续已填项，约束名使用原引号且不泄露排斥约束', async () => {
+  const insert = 'INSERT INTO app.items VALUES (1) ON CONFLICT ';
+  const marked = insert + '(re|_tail, id) DO UPDATE SET v=0';
+  const request = vi.fn(async (): Promise<PostgresCompletionResult> => ({incomplete: false, items: [
+    {kind: 'conflictKey', name: 'first_index', columns: ['id', 'zone', 'region'], primary: false},
+    {kind: 'conflictKey', name: 'same_keys', columns: ['region', 'id', 'zone'], primary: false},
+    {kind: 'conflictKey', name: 'missing_id', columns: ['region'], primary: false},
+  ]}));
+  const keys = editor(marked, request, '现有会话');
+  const constraints = editor(insert + 'ON CONSTRAINT "Case| x" DO UPDATE SET v=0', async () => ({incomplete: false, items: [
+    {kind: 'conflictConstraint', name: 'Case"键', constraint: 'unique'},
+    {kind: 'conflictConstraint', name: 'CaseOnlyNothing', constraint: 'exclusion'},
+    {kind: 'conflictConstraint', name: 'caseLower', constraint: 'unique'},
+  ]}));
+  try {
+    const items = (await keys.suggest())?.suggestions;
+    expect(items?.map(item => item.insertText)).toEqual(['"region", "zone"']);
+    expect(items?.[0].range).toMatchObject({startColumn: insert.length + 2, endColumn: insert.length + 2 + 're_tail'.length});
+    expect(request).toHaveBeenCalledExactlyOnceWith({kind: 'conflictTargets', connectionId: '原连接', database: '原库',
+      sessionId: '现有会话', prefix: 're', relation: {name: 'items', schema: 'app'}, selection: {mode: 'key', used: ['id']}});
+    expect((await constraints.suggest())?.suggestions.map(item => item.insertText)).toEqual(['"Case""键"']);
+  } finally { keys.provider.dispose(); constraints.provider.dispose(); }
+});
+
 it('冲突更新目录传实际表和所需列权限，现有标签和完整替换范围保留', async () => {
   const sql = 'INSERT INTO app.items AS t VALUES (1) ON CONFLICT (id) DO UPDATE SET ';
   for (const [clause, columnAccess] of [['na|_tail=excluded.name', 'update'], ['name=excluded.na|_tail', 'select']] as const) {

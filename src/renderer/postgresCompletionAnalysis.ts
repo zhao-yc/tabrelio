@@ -1,4 +1,5 @@
-import { postgresCompletionLimits as limits, type PostgresCompletionReference, type PostgresRoutineCompletionTarget } from '../shared/postgresCompletion';
+import { postgresCompletionLimits as limits, type PostgresCatalogRelation, type PostgresCompletionReference,
+  type PostgresConflictSelection, type PostgresRoutineCompletionTarget } from '../shared/postgresCompletion';
 import { currentPostgresStatement, scanPostgresEditorTokens, type PostgresEditorToken } from '../shared/postgresSql';
 import type { DeclaredLocalReferences, LocalBindingReferences, LocalReferenceRange, LocalReferences } from '../shared/localReferences';
 import { planLocalRename, quoteLocalRename, type LocalRename } from '../shared/localRename';
@@ -40,7 +41,8 @@ interface ReferenceTrace {
 interface RelationSpan { end: number; relation: number; joined?: true; }
 type Scope = ReadonlyMap<string, Projection>;
 type Query = { kind: 'relations'; schema?: string; ctes?: string[]; mergeTarget?: true } |
-  { kind: 'columns'; relations: PostgresCompletionRelation[]; qualified: boolean; joinOutput?: PostgresJoinOutput } | PostgresUsingColumns;
+  { kind: 'columns'; relations: PostgresCompletionRelation[]; qualified: boolean; joinOutput?: PostgresJoinOutput } |
+  { kind: 'conflictTarget'; relation: PostgresCatalogRelation; selection: PostgresConflictSelection; whole?: true } | PostgresUsingColumns;
 export interface PostgresCompletionAnalysis {
   start: number;
   end: number;
@@ -851,6 +853,44 @@ function readConflictAction(parts: Part[], start: number, end: number): { on: nu
   return null;
 }
 
+/** 没有 DO 动作时，只接受不会被读取来源的 JOIN 吸收的 ON CONFLICT。 */
+function pendingConflictOn(parts: Part[], start: number, end: number): number | undefined {
+  if (!startsReferenceQuery(parts[start]) && keyword(parts[start]) !== 'DEFAULT') return;
+  let awaitingCondition = 0;
+  for (let index = start; index < end; index++) {
+    const join = mergeJoin(parts, index);
+    if (join) {
+      if (join.qualified) awaitingCondition++;
+      index = join.next - 1;
+      continue;
+    }
+    const word = mergeKeyword(parts, index);
+    if (word !== 'ON' && word !== 'USING') continue;
+    if (awaitingCondition) awaitingCondition--;
+    else if (word === 'ON' && index + 1 < end && keyword(parts[index + 1]) === 'CONFLICT') return index;
+  }
+}
+
+/** 保护手写表达式和谓词。只在单标识符位置给出完整键组或约束名。 */
+function completeConflictTarget(parts: Part[], context: QueryContext, target: ScopedRelation, afterConflict: number,
+  allowExclusion: boolean): Query | undefined {
+  const { name, schema } = target;
+  if (!name || [name, schema].some(value => value && new TextEncoder().encode(value).length > 63)) return;
+  const relation = { name, ...(schema ? { schema } : {}) };
+  const nameSlot = (items: Part[], open: number) => !items.length ? context.start === context.offset && context.offset >= open
+    : items.length === 1 && ['word', 'identifier'].includes(items[0].kind) && items[0].start === context.start;
+  const [first, second] = parts;
+  if (keyword(first) === 'ON' && keyword(second) === 'CONSTRAINT' && nameSlot(parts.slice(2), second.end)) {
+    return { kind: 'conflictTarget', relation, selection: { mode: 'constraint', ...(allowExclusion ? { allowExclusion: true } : {}) } };
+  }
+  if (parts.length === 1 && first.kind === 'group') {
+    const used = activeColumnList(first, context);
+    if (used && used.length <= 31) return { kind: 'conflictTarget', relation, selection: { mode: 'key', used } };
+  } else if (nameSlot(parts, afterConflict)) {
+    return { kind: 'conflictTarget', relation, selection: { mode: 'key', used: [] }, whole: true };
+  }
+}
+
 /** INSERT 来源独立解析。目标只在冲突索引、更新动作和 RETURNING 的相应范围可见。 */
 function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], trace: ReferenceTrace): Projection | undefined {
   const destination = readInsertTarget(parts, trace);
@@ -1503,10 +1543,9 @@ function recordJoinColumnTokens(group: Part | undefined, trace: ReferenceTrace):
   if (group?.kind === 'group') for (const token of group.parts) if (identifier(token)) trace.joinColumnTokens.add(token.start);
 }
 
-/** USING 括号内只接受完整列名位置。两侧输入均按当前 JOIN 的实际操作数读取。 */
-function joinUsingQuery(group: Group, context: QueryContext, left: Projection, right: Projection): PostgresUsingColumns {
-  const result: PostgresUsingColumns = { kind: 'using', excluded: [] };
-  if (group.closing !== ')') return result;
+/** 唯一活动项可替换，其余项必须是完整、互异的列名。 */
+function activeColumnList(group: Group, context: QueryContext): string[] | undefined {
+  if (group.closing !== ')') return;
   const names = new Set<string>();
   let active = false, start = 0, open = group.start + 1;
   for (let end = 0; end <= group.parts.length; end++) {
@@ -1515,22 +1554,24 @@ function joinUsingQuery(group: Group, context: QueryContext, left: Projection, r
     const token = group.parts[start];
     if (open <= context.offset && context.offset <= close) {
       if (end > start + 1 || end === start + 1 &&
-        (token.start !== context.start || !['word', 'identifier'].includes(token.kind))) return result;
+        (token.start !== context.start || !['word', 'identifier'].includes(token.kind))) return;
       active = true;
     } else {
       const name = end === start + 1 ? identifier(token) : undefined;
-      if (!name || names.has(name) || new TextEncoder().encode(name).length > 63) return result;
+      if (!name || names.has(name) || new TextEncoder().encode(name).length > 63) return;
       names.add(name);
     }
     start = end + 1;
     open = close + 1;
   }
-  if (active) {
-    result.left = projectedJoinSource(left);
-    result.right = projectedJoinSource(right);
-    result.excluded = [...names];
-  }
-  return result;
+  if (active) return [...names];
+}
+
+/** USING 的两侧输入均按当前 JOIN 的实际操作数读取。 */
+function joinUsingQuery(group: Group, context: QueryContext, left: Projection, right: Projection): PostgresUsingColumns {
+  const excluded = activeColumnList(group, context);
+  return excluded ? { kind: 'using', left: projectedJoinSource(left), right: projectedJoinSource(right), excluded }
+    : { kind: 'using', excluded: [] };
 }
 
 /** JOIN ON 只可见当前两个操作数。右侧尚未遇到 ON／USING 时，继续解析其未加括号的 JOIN。 */
@@ -1731,7 +1772,13 @@ function completeInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], 
     completeWriteAction(parts.slice(conflict.action + 1, end), [current, pending], { ...target, columnAccess: 'update' }, analysis, boundary);
     return analysis.active ?? { projection: unknown };
   }
-  const sourceEnd = conflict?.on ?? end;
+  const on = conflict?.on ?? pendingConflictOn(parts, header.start, end);
+  if (on !== undefined && context.offset >= parts[on + 1].end && context.offset < (parts[conflict?.action ?? end]?.start ?? Infinity)) {
+    const query = completeConflictTarget(parts.slice(on + 2, conflict?.action ?? end), context, target,
+      parts[on + 1].end, !!conflict && keyword(parts[conflict.action + 1]) === 'NOTHING');
+    return { projection: unknown, query };
+  }
+  const sourceEnd = on ?? end;
   const first = parts[header.start];
   if (first && startsReferenceQuery(first) && context.offset >= first.start && context.offset < (parts[sourceEnd]?.start ?? Infinity)) {
     // 查询来源只继承 WITH 和真实外层，写入目标与冲突动作不参与 SELECT 的名称绑定。
@@ -2430,11 +2477,11 @@ export function analyzePostgresCompletion(source: string, offset: number, standa
     ? selectClauseKeywords(source, parts, { start, end, offset, prefix: prefixUpper }) : undefined;
   if (clause?.continuation) return { start, end, prefix, quoted, keywords: clause.items };
   const parsed = parts && parseQuery(parts, new Map(), [], { offset, start, left });
-  if (parsed?.query?.kind === 'using' || parsed?.query?.kind === 'columns' && parsed.query.joinOutput) {
+  if (parsed?.query?.kind === 'using' || parsed?.query?.kind === 'conflictTarget' || parsed?.query?.kind === 'columns' && parsed.query.joinOutput) {
     // 目录目标必须在离线的两种字符串模式下有一致的词法边界。
     if (standardStrings === undefined && source.includes('\\') &&
       JSON.stringify(all) !== JSON.stringify(scanPostgresEditorTokens(source, limits.tokens, false))) return;
-    if (parsed.query.kind === 'using') return { start, end, prefix, quoted, query: parsed.query };
+    if (parsed.query.kind !== 'columns') return { start, end, prefix, quoted, query: parsed.query };
   }
   if (parsed?.windows) {
     const result = { start, end, prefix, quoted, windows: parsed.windows };
