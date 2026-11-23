@@ -1,6 +1,6 @@
 import { sqliteCompletionRelationMatches, type SqliteCompletionAnalysis, type SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry } from '../shared/sqliteCompletion';
-import { sqliteCollationDetails, sqliteColumnTypeDetails, sqliteColumnTypeMode, sqliteFunctionDetails, sqliteIndexDetails, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
+import { sqliteCollationDetails, sqliteColumnTypeDetails, sqliteColumnTypeMode, sqliteForeignKeyCatalog, sqliteFunctionDetails, sqliteIndexDetails, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 import { sqliteFieldHoverZh as text } from './locales/sqliteFieldHover.zh-CN';
 import { sqliteCompletionZh } from './locales/sqliteCompletion.zh-CN';
 import { sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
@@ -31,6 +31,27 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
     if (strict === undefined) return;
     const details = sqliteColumnTypeDetails(name.replace(/[\t ]+/g, ' ').toUpperCase(), strict);
     if (details.length) return markdown([display(name), ...details]);
+    return;
+  }
+  if (analysis.foreignKey) {
+    const context = analysis.foreignKey, sameName = (value: string) => fold(value) === fold(name);
+    if (context.kind === 'local-column') {
+      if (!context.columns.some(sameName)) return;
+      return markdown([context.self ? sqliteCompletionZh.foreignParentColumn : sqliteCompletionZh.foreignChildColumn, display(name), sqliteCompletionZh.foreignSelf]);
+    }
+    if (context.kind === 'parent' && context.self && sameName(context.self)) {
+      return markdown([sqliteCompletionZh.foreignParent, display(name), sqliteCompletionZh.foreignSelf]);
+    }
+    const result = await sqliteForeignKeyCatalog(context, prefix, directory);
+    if (result.incomplete) return;
+    const entry = result.entries.find(entry => sameName(entry.name));
+    if (context.kind === 'parent' && entry?.kind === 'table') {
+      return markdown([sqliteCompletionZh.foreignParent, display(entry.schema) + '.' + display(entry.name)]);
+    }
+    if (context.kind === 'parent-column' && entry?.kind === 'column' && !entry.hidden) {
+      return markdown([sqliteCompletionZh.foreignParentColumn, display(entry.schema) + '.' + display(entry.table) + '.' + display(entry.name),
+        text.declaredType + '：' + (entry.declaredType ? display(entry.declaredType) : text.noDeclaredType)]);
+    }
     return;
   }
   if (analysis.syntax.includes('collation')) {

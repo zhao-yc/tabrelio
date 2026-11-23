@@ -33,7 +33,17 @@ const indexTargetContext = z.object({ schema: z.enum(['main', 'temp']).optional(
 type IndexTargetContext = z.infer<typeof indexTargetContext>;
 const columnTypeContext = z.union([z.object({ strict: z.boolean() }).strict(), z.object({ source: sqliteCompletionTableSchema }).strict()]);
 type ColumnTypeContext = z.infer<typeof columnTypeContext>;
-export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword' | 'index' | 'collation' | 'query-start' | 'column-type')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; viewSchema?: 'main'; indexTarget?: IndexTargetContext; alterTable?: true; columnType?: ColumnTypeContext; indexSource?: SqliteCompletionTable; functions?: FunctionContext; output?: OutputProjection; outputAliases?: OutputAliasHints; windowNames?: SqliteWindowNames; using?: UsingProjection; joinGroup?: QualifiedJoinGroup; localProjections?: SqliteLocalProjection[]; unqualifiedColumns?: true; writableColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
+const foreignName = sqliteCompletionTableSchema.shape.name;
+const foreignNames = z.array(foreignName).max(limits.entries);
+const foreignOwner = z.union([z.object({ schema: z.enum(['main', 'temp']) }).strict(), z.object({ child: sqliteCompletionTableSchema }).strict()]);
+type ForeignKeyOwner = z.infer<typeof foreignOwner>;
+const foreignKeyContext = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('parent'), owner: foreignOwner, self: foreignName.optional() }).strict(),
+  z.object({ kind: z.literal('parent-column'), owner: foreignOwner, table: foreignName, used: foreignNames }).strict(),
+  z.object({ kind: z.literal('local-column'), columns: foreignNames, used: foreignNames, self: foreignName.optional(), partial: z.literal(true).optional() }).strict(),
+]);
+export type SqliteForeignKeyContext = z.infer<typeof foreignKeyContext>;
+export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword' | 'index' | 'collation' | 'query-start' | 'column-type' | 'foreign-key')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; viewSchema?: 'main'; indexTarget?: IndexTargetContext; alterTable?: true; columnType?: ColumnTypeContext; foreignKey?: SqliteForeignKeyContext; indexSource?: SqliteCompletionTable; functions?: FunctionContext; output?: OutputProjection; outputAliases?: OutputAliasHints; windowNames?: SqliteWindowNames; using?: UsingProjection; joinGroup?: QualifiedJoinGroup; localProjections?: SqliteLocalProjection[]; unqualifiedColumns?: true; writableColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
 type Token = { kind: 'id' | 'string' | 'number' | 'parameter' | 'symbol'; value: string; start: number; end: number; depth: number; quoted?: boolean; closed?: boolean; pair?: number };
 type ProjectionSource = { start: number; end: number; ctes: Map<string, Cte> };
 type Cte = { name: string; columns?: string[]; start: number; end: number; declaration: SqliteLocalDefinition; projectionSource?: ProjectionSource };
@@ -717,6 +727,69 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       return { bindings: [], ctes: new Map(), syntax: ['column-type'], columnType, typeTarget };
     }
 
+    function foreignKeyScope(foreignKey: SqliteForeignKeyContext): ScopeResult {
+      return { bindings: [], ctes: new Map(), syntax: ['foreign-key'], foreignKey };
+    }
+
+    /** 清单只接受一个标识符，已写列从其它候选中排除。 */
+    function foreignKeyColumnList(openIndex: number, close: number): string[] | undefined {
+      const open = tokens[openIndex];
+      if (target.start < open.end || target.end > (tokens[close]?.start ?? source.length)) return;
+      const used = new Set<string>();
+      let active = false, start = openIndex + 1;
+      for (let i = start; i <= close; i++) {
+        if (i < close && !(tokens[i].kind === 'symbol' && tokens[i].value === ',' && tokens[i].depth === open.depth + 1)) continue;
+        const oneName = start + 1 === i && ddlName(tokens[start]);
+        if (start + 1 === i && targetIndex === start || start === i && !intent && target.start === target.end &&
+          target.start >= tokens[start - 1].end && target.end <= (tokens[i]?.start ?? source.length)) active = true;
+        else if (oneName) used.add(fold(tokens[start].value));
+        start = i + 1;
+      }
+      return active && used.size <= limits.entries ? [...used] : undefined;
+    }
+
+    /** REFERENCES 固定在子表所在库。建表自引用从当前声明取列，避免借用已存在同名表。 */
+    function foreignKeyAt(begin: number, end: number, owner: ForeignKeyOwner, draft?: { name: string; columns: string[] }): ScopeResult | undefined {
+      if (intent === 'object' || intent === 'definition' || qualifiers.length) return;
+      const first = tokens[begin];
+      if (!ddlName(first)) return;
+      let key = begin;
+      if (keyword(first, 'constraint') && ddlName(tokens[begin + 1])) key += 2;
+      const localColumns = (columns: string[], used: string[], self?: string) => foreignKeyScope({
+        kind: 'local-column', columns: columns.slice(0, limits.entries), used, ...(self ? { self } : {}),
+        ...(columns.length > limits.entries ? { partial: true } : {}),
+      });
+      let reference = -1;
+      if (draft && keyword(tokens[key], 'foreign') && keyword(tokens[key + 1], 'key')) {
+        const childOpen = key + 2, open = tokens[childOpen];
+        if (open?.kind !== 'symbol' || open.value !== '(') return;
+        const close = open.pair ?? end, used = foreignKeyColumnList(childOpen, close);
+        if (used) return localColumns(draft.columns, used);
+        reference = close + 1;
+        if (!keyword(tokens[reference], 'references')) return;
+      } else {
+        if (!first.quoted && tableConstraintWords.has(fold(first.value))) return;
+        for (let i = begin + 1; i < end && tokens[i].end <= target.start; i++) {
+          const token = tokens[i];
+          if (token.depth !== first.depth) continue;
+          if (keyword(token, 'constraint') && ddlName(tokens[i + 1])) i++;
+          else if (keyword(token, 'references')) reference = i;
+        }
+      }
+      if (reference < 0 || reference >= end) return;
+      const parentIndex = reference + 1, parent = tokens[parentIndex], open = tokens[parentIndex + 1];
+      if (open?.kind === 'symbol' && open.value === '.') return;
+      if (targetIndex === parentIndex || !intent && target.start === target.end &&
+        target.start >= tokens[reference].end && target.end <= (tokens[Math.min(parentIndex, end)]?.start ?? source.length)) {
+        return foreignKeyScope({ kind: 'parent', owner, ...(draft ? { self: draft.name } : {}) });
+      }
+      if (!ddlName(parent) || open?.kind !== 'symbol' || open.value !== '(') return;
+      const used = foreignKeyColumnList(parentIndex + 1, open.pair ?? end);
+      if (!used) return;
+      if (draft && fold(draft.name) === fold(parent.value)) return localColumns(draft.columns, used, draft.name);
+      return foreignKeyScope({ kind: 'parent-column', owner, table: parent.value, used });
+    }
+
     function createTableDefinitionAt(head: number, end: number): ScopeResult | undefined {
       if (!keyword(tokens[head], 'create')) return;
       const header = createHeader(tokens, head, end);
@@ -726,12 +799,26 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       if (open?.kind !== 'symbol' || open.value !== '(' || target.start < open.end || target.end > (tokens[close]?.start ?? source.length)) return;
       if (collationAt(at, close)) return collationScope();
       const strict = tokens.slice(close + 1, end).some(token => keyword(token, 'strict'));
+      const schema = header.schema ?? (header.temporary ? 'temp' : 'main');
+      const columns: string[] = [];
+      let active: [number, number] | undefined;
       let begin = at + 1;
       for (let i = begin; i <= close; i++) {
         if (i !== close && !(tokens[i].kind === 'symbol' && tokens[i].value === ',' && tokens[i].depth === open.depth + 1)) continue;
-        if (target.start >= (tokens[begin]?.start ?? Infinity) && target.end <= (tokens[i]?.start ?? source.length)) return columnTypeAt(begin, i, { strict });
+        if (begin < i) {
+          const column = tokens[begin];
+          if (ddlName(column) && (column.quoted || !tableConstraintWords.has(fold(column.value)))) columns.push(column.value);
+          if (target.start >= column.start && target.end <= (tokens[i]?.start ?? source.length)) active = [begin, i];
+        }
         begin = i + 1;
       }
+      if (!active) return;
+      const [start, finish] = active;
+      if ((schema === 'main' || schema === 'temp') && (!header.temporary || schema === 'temp')) {
+        const foreignKey = foreignKeyAt(start, finish, { schema }, { name: tokens[at - 1].value, columns });
+        if (foreignKey) return foreignKey;
+      }
+      return columnTypeAt(start, finish, { strict });
     }
     function functionsAt(mode: FunctionContext['mode']): FunctionContext | undefined {
       if (intent === 'object' || intent === 'definition' || intent === 'hover' && !existingCall || qualifiers.length || target.quoted && !existingCall ||
@@ -838,7 +925,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       }
       return { head: i, ctes, declared };
     }
-    type ScopeResult = { bindings: Binding[]; ctes: Map<string, Cte>; syntax: Ready['syntax']; indexSource?: SqliteCompletionTable; indexTarget?: IndexTargetContext; alterTable?: true; columnType?: ColumnTypeContext; typeTarget?: Ready['target']; functions?: FunctionContext; output?: OutputProjection; outputAliases?: OutputAliasHints; windowNames?: SqliteWindowNames; windowDefinition?: SqliteLocalDefinition; using?: UsingProjection; joinStarScope?: JoinStarScope; unqualified?: true; writable?: true };
+    type ScopeResult = { bindings: Binding[]; ctes: Map<string, Cte>; syntax: Ready['syntax']; indexSource?: SqliteCompletionTable; indexTarget?: IndexTargetContext; alterTable?: true; columnType?: ColumnTypeContext; foreignKey?: SqliteForeignKeyContext; typeTarget?: Ready['target']; functions?: FunctionContext; output?: OutputProjection; outputAliases?: OutputAliasHints; windowNames?: SqliteWindowNames; windowDefinition?: SqliteLocalDefinition; using?: UsingProjection; joinStarScope?: JoinStarScope; unqualified?: true; writable?: true };
     function alterScope(head: number, end: number): ScopeResult {
       const first = head + 2, ctes = new Map<string, Cte>();
       let at = first, schema: 'main' | 'temp' | undefined;
@@ -861,7 +948,10 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       if (keyword(tokens[column], 'column')) column++;
       if (keyword(operation, 'add')) {
         if (ddlName(tokens[column]) && collationAt(column, end)) return collationScope();
-        const type = columnTypeAt(column, end, { source: { name: table.value, ...(schema ? { schema } : {}) } });
+        const child = { name: table.value, ...(schema ? { schema } : {}) };
+        const foreignKey = foreignKeyAt(column, end, { child });
+        if (foreignKey) return foreignKey;
+        const type = columnTypeAt(column, end, { source: child });
         if (type) return type;
       }
       // 只读取源列。RENAME TO、新列定义和约束动作都没有旧列目录角色。
@@ -1453,6 +1543,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
     }
     const parsed = scope(queryBody?.start ?? statementHead, statement.end, new Map(), [], 0);
     if (parsed.columnType && parsed.typeTarget) return { status: 'ready', target: parsed.typeTarget, syntax: parsed.syntax, qualifiers, relations: [], columnType: parsed.columnType };
+    if (parsed.foreignKey) return { status: 'ready', target, syntax: parsed.syntax, qualifiers, relations: [], foreignKey: parsed.foreignKey };
     if (parsed.syntax.includes('query-start')) return { status: 'ready', target, syntax: parsed.syntax, qualifiers, relations: [] };
     if (parsed.syntax.includes('collation')) return { status: 'ready', target, syntax: parsed.syntax, qualifiers, relations: [] };
     if (collationTarget) fail('collation');
@@ -1622,7 +1713,7 @@ const relationSchema = z.discriminatedUnion('kind', [
 ]);
 const resultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('blocked'), reason: z.string().regex(/^[a-z-]{1,64}$/) }).strict(),
-  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.nameUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword', 'index', 'collation', 'query-start', 'column-type'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations * 2 - 1), viewSchema: z.literal('main').optional(), indexTarget: indexTargetContext.optional(), alterTable: z.literal(true).optional(), columnType: columnTypeContext.optional(), indexSource: sqliteCompletionTableSchema.optional(), functions: functionContext.optional(), output: outputProjection.optional(), outputAliases: outputAliasSchema.optional(), windowNames: windowNameSchema.optional(), using: usingProjection.optional(), joinGroup: qualifiedGroup.optional(), localProjections: localProjectionSchema.optional(), unqualifiedColumns: z.literal(true).optional(), writableColumns: z.literal(true).optional(), definition: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).strict().optional() }).strict(),
+  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.nameUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword', 'index', 'collation', 'query-start', 'column-type', 'foreign-key'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations * 2 - 1), viewSchema: z.literal('main').optional(), indexTarget: indexTargetContext.optional(), alterTable: z.literal(true).optional(), columnType: columnTypeContext.optional(), foreignKey: foreignKeyContext.optional(), indexSource: sqliteCompletionTableSchema.optional(), functions: functionContext.optional(), output: outputProjection.optional(), outputAliases: outputAliasSchema.optional(), windowNames: windowNameSchema.optional(), using: usingProjection.optional(), joinGroup: qualifiedGroup.optional(), localProjections: localProjectionSchema.optional(), unqualifiedColumns: z.literal(true).optional(), writableColumns: z.literal(true).optional(), definition: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).strict().optional() }).strict(),
 ]);
 /** Client只核有界回包形状与原范围，不在渲染线程重新解析整份用户SQL。 */
 export function validateSqliteCompletionAnalysis(raw: unknown, source: string, offset: number, intent?: SqliteAnalysisIntent): SqliteCompletionAnalysis {
@@ -1632,8 +1723,9 @@ export function validateSqliteCompletionAnalysis(raw: unknown, source: string, o
   const collation = value.syntax.includes('collation');
   const queryStart = value.syntax.includes('query-start');
   const columnType = value.syntax.includes('column-type');
-  if (!!value.columnType !== columnType) fail('response');
-  if ((collation || queryStart || columnType) && (intent === 'object' || intent === 'definition' || value.syntax.length !== 1 || value.qualifiers.length || value.relations.length || value.viewSchema ||
+  const foreignKey = value.syntax.includes('foreign-key');
+  if (!!value.columnType !== columnType || !!value.foreignKey !== foreignKey) fail('response');
+  if ((collation || queryStart || columnType || foreignKey) && (intent === 'object' || intent === 'definition' || value.syntax.length !== 1 || value.qualifiers.length || value.relations.length || value.viewSchema ||
     value.indexTarget || value.alterTable || value.indexSource || value.functions || value.output || value.outputAliases || value.windowNames || value.using || value.joinGroup ||
     value.localProjections || value.unqualifiedColumns || value.writableColumns || value.definition)) fail('response');
   if (queryStart && (intent || value.target.quoted || !sqliteQueryBodyKeywords.some(word => fold(word).startsWith(fold(value.target.prefix))))) fail('response');

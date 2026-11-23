@@ -58,7 +58,7 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
   };
   if (input.kind === 'relations') {
     const scope = input.schema ? 'schema = ?' : "schema IN ('main','temp') AND (schema = 'temp' OR NOT EXISTS (SELECT 1 FROM pragma_table_list() t WHERE t.schema = 'temp' AND t.name = p.name COLLATE NOCASE))";
-    const visible = visibleSql + (input.indexTable ? " AND type = 'table'" : input.alterTable ? " AND type <> 'view'" : '');
+    const visible = visibleSql + (input.indexTable || input.foreignKey ? " AND type = 'table'" : input.alterTable ? " AND type <> 'view'" : '');
     const result = await read(driver, 'SELECT name,type,schema FROM pragma_table_list() p WHERE ' + scope + ' AND ' + visible + ' AND ' + prefixSql + " ORDER BY schema DESC,name COLLATE NOCASE,name LIMIT 257", [...(input.schema ? [input.schema] : []), input.prefix, input.prefix], control, 257);
     incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
     for (const row of result.rows.slice(0, sqliteCompletionLimits.entries)) {
@@ -71,7 +71,7 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
     const target = found.rows[0];
     const table = target ? target[0] : input.table;
     const schema = target ? target[1] : input.schema ?? 'main';
-    const allowed = input.indexTable || input.alterColumn ? target?.[2] === 'table' : target ? input.tableFunction ? target[2] === 'virtual' :
+    const allowed = input.indexTable || input.alterColumn || input.foreignKey ? target?.[2] === 'table' : target ? input.tableFunction ? target[2] === 'virtual' :
       ['table', 'view', 'virtual'].includes(target[2] as string) : input.tableFunction === true;
     if (allowed && typeof table === 'string' && !/^sqlite_/i.test(table) && (input.alterColumn !== 'nullability' || supportsAlterNullability(driver.version))) {
       if (schema !== 'main' && schema !== 'temp') throw Error('SQLite补全字段所属库无效');

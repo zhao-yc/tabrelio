@@ -17,9 +17,11 @@ const oneColumnMode = (value: { tableFunction?: true; indexTable?: true; alterCo
   [value.tableFunction, value.indexTable, value.alterColumn].filter(Boolean).length <= 1;
 const base = { connectionId: id, sessionId: id.optional(), taskId: id.refine(value => value.startsWith(sqliteCompletionTaskPrefix) && value.length > sqliteCompletionTaskPrefix.length), prefix: z.string().max(sqliteCompletionLimits.prefixUnits).refine(value => value.length <= sqliteCompletionLimits.prefixUnits && unicode(value)) };
 export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
-  z.object({ ...base, kind: z.literal('relations'), schema: schema.optional(), indexTable: z.literal(true).optional(), alterTable: z.literal(true).optional() }).strict()
-    .refine(value => !(value.indexTable && value.alterTable)),
-  z.object({ ...base, kind: z.literal('columns'), schema: schema.optional(), table: name, ...columnMode }).strict().refine(oneColumnMode),
+  z.object({ ...base, kind: z.literal('relations'), schema: schema.optional(), indexTable: z.literal(true).optional(),
+    alterTable: z.literal(true).optional(), foreignKey: z.literal(true).optional() }).strict()
+    .refine(value => [value.indexTable, value.alterTable, value.foreignKey].filter(Boolean).length <= 1 && (!value.foreignKey || value.schema !== undefined)),
+  z.object({ ...base, kind: z.literal('columns'), schema: schema.optional(), table: name, ...columnMode, foreignKey: z.literal(true).optional() })
+    .strict().refine(value => oneColumnMode(value) && (!value.foreignKey || value.schema !== undefined && !value.indexTable && !value.tableFunction && !value.alterColumn)),
   z.object({ ...base, kind: z.literal('indexes'), schema: schema.optional(), table: name }).strict(),
   z.object({ ...base, kind: z.literal('functions'), prefix: base.prefix.regex(/^[a-z][a-z0-9_]*$/i), deterministicOnly: z.literal(true).optional() }).strict(),
   z.object({ ...base, kind: z.literal('collations') }).strict(),

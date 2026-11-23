@@ -1,4 +1,4 @@
-import { sqliteCompletionRelationMatches, sqliteQueryBodyKeywords, type SqliteCompletionAnalysis } from '../shared/sqliteCompletionAnalysis';
+import { sqliteCompletionRelationMatches, sqliteQueryBodyKeywords, type SqliteCompletionAnalysis, type SqliteForeignKeyContext } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 import { sqliteTableImportAffinity } from '../shared/sqliteTableImport';
@@ -22,6 +22,24 @@ export function sqliteColumnTypeDetails(name: string, strict: boolean): string[]
   if (strict) return strictColumnTypes.includes(name) ? [text.strictType, ...(name === 'ANY' ? [text.anyStorage] : [])] : [];
   return [text.ordinaryType, text.typeAffinity[sqliteTableImportAffinity(name)]];
 }
+
+/** ALTER 先确定子表身份，随后只读取同库父表目录。建表声明已给出明确命名空间。 */
+export async function sqliteForeignKeyCatalog(
+  context: Exclude<SqliteForeignKeyContext, { kind: 'local-column' }>, prefix: string, directory: SqliteCompletionDirectory,
+): Promise<Pick<SqliteCompletionOutput, 'entries' | 'incomplete'>> {
+  const { owner } = context;
+  let schema;
+  if ('schema' in owner) schema = owner.schema;
+  else {
+    const child = await directory.load({ kind: 'table-options', table: owner.child.name, prefix: '', ...(owner.child.schema ? { schema: owner.child.schema } : {}) });
+    const entry = child.entries[0];
+    if (child.incomplete || entry?.kind !== 'table-options') return { entries: [], incomplete: child.incomplete };
+    schema = entry.schema;
+  }
+  return directory.load(context.kind === 'parent' ? { kind: 'relations', schema, prefix, foreignKey: true } :
+    { kind: 'columns', table: context.table, schema, prefix, foreignKey: true });
+}
+
 const keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'ON', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'WITH', 'AS', 'DISTINCT', 'UNION ALL', 'IS NULL', 'IS NOT NULL', 'RETURNING', 'WINDOW', 'OVER', 'FILTER', 'PARTITION BY', 'ROWS', 'RANGE', 'BETWEEN', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'CURRENT ROW', 'EXPLAIN QUERY PLAN'];
 const windowSpecKeywords = ['PARTITION BY', 'ORDER BY', 'ROWS', 'RANGE', 'GROUPS'];
 
@@ -69,6 +87,29 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     const { strict, incomplete } = await sqliteColumnTypeMode(analysis.columnType, directory);
     if (strict !== undefined) for (const name of strict ? strictColumnTypes : ordinaryColumnTypes) {
       add({ label: name, kind: 'keyword', insertText: name, detail: sqliteColumnTypeDetails(name, strict).join(' · ') });
+    }
+    return { items, incomplete };
+  }
+  if (analysis.foreignKey) {
+    const context = analysis.foreignKey;
+    if (context.kind === 'local-column') {
+      for (const name of context.columns) if (!context.used.includes(fold(name))) {
+        add({ label: name, kind: 'column', insertText: quote(name), detail: context.self ? text.foreignParentColumn : text.foreignChildColumn });
+      }
+      return { items, incomplete: incomplete || context.partial === true };
+    }
+    if (context.kind === 'parent' && context.self) {
+      add({ label: context.self, kind: 'table', insertText: quote(context.self), detail: text.foreignParent + ' · ' + text.foreignSelf });
+    }
+    const catalog = await sqliteForeignKeyCatalog(context, analysis.target.prefix, directory);
+    incomplete ||= catalog.incomplete;
+    for (const entry of catalog.entries) {
+      if (context.kind === 'parent' && entry.kind === 'table') {
+        add({ label: entry.name, kind: 'table', insertText: quote(entry.name), detail: text.foreignParent + ' · ' + entry.schema });
+      } else if (context.kind === 'parent-column' && entry.kind === 'column' && !entry.hidden && !context.used.includes(fold(entry.name))) {
+        const detail = [text.foreignParentColumn, entry.schema + '.' + entry.table, entry.declaredType].filter(Boolean).join(' · ');
+        add({ label: entry.name, kind: 'column', insertText: quote(entry.name), detail });
+      }
     }
     return { items, incomplete };
   }

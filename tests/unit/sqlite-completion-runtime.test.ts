@@ -59,6 +59,27 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('外键目录按子表所在库读取普通父表和列，原事务内的同名视图不会替换另一库的表', async () => {
+    const p = profile('外键目录', 'CREATE TABLE parent(main_id INTEGER PRIMARY KEY); CREATE TABLE shadowed(main_key INTEGER PRIMARY KEY); CREATE VIEW parent_view AS SELECT * FROM parent;');
+    const { app, events } = runtime([p]), { sessionId } = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, sessionId, 'BEGIN; CREATE TEMP TABLE parent(temp_id INTEGER PRIMARY KEY); CREATE TEMP VIEW parent_view AS SELECT 1; CREATE TEMP VIEW shadowed AS SELECT 1');
+    const state = await app.request('query.completionState', { sessionId }), count = events.length;
+    for (const schema of ['main', 'temp'] as const) {
+      expect((await completion(app, p.id, { kind: 'relations', schema, foreignKey: true, prefix: 'parent' }, sessionId)).entries)
+        .toEqual([{ kind: 'table', name: 'parent', schema }]);
+      expect((await completion(app, p.id, { kind: 'columns', table: 'parent', schema, foreignKey: true }, sessionId)).entries)
+        .toEqual([expect.objectContaining({ kind: 'column', name: schema + '_id', schema, table: 'parent' })]);
+      expect((await completion(app, p.id, { kind: 'columns', table: 'parent_view', schema, foreignKey: true }, sessionId)).entries).toEqual([]);
+    }
+    expect((await completion(app, p.id, { kind: 'columns', table: 'shadowed', schema: 'main', foreignKey: true }, sessionId)).entries)
+      .toEqual([expect.objectContaining({ name: 'main_key', schema: 'main' })]);
+    expect((await completion(app, p.id, { kind: 'columns', table: 'shadowed', schema: 'temp', foreignKey: true }, sessionId)).entries).toEqual([]);
+    expect(await app.request('query.completionState', { sessionId })).toEqual(state);
+    expect(await app.request('query.sessionState', { sessionId })).toMatchObject({ transactionOpen: true });
+    expect(events).toHaveLength(count);
+    await execute(app, sessionId, 'ROLLBACK');
+  });
+
   it('加列的类型模式读取实际目标表并保留临时遮蔽和原事务', async () => {
     const p = profile('表类型模式', 'CREATE TABLE subject(id INTEGER) STRICT; CREATE VIEW subject_view AS SELECT * FROM subject;');
     const { app, events } = runtime([p]);

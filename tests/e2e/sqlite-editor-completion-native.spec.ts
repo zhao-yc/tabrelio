@@ -35,6 +35,10 @@ const scenarios = [
     trail: '', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'ANY' },
   { verb: 'CREATE TYPE', prefix: 'CREATE TABLE completion_typed(amount ', typed: 'DOUBLE  PR', column: 'DOUBLE PRECISION',
     trail: '(10,2) NOT NULL)', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'DOUBLE PRECISION(10,2)' },
+  { verb: 'FOREIGN KEY TABLE', prefix: 'CREATE TABLE completion_fk(owner INTEGER REFERENCES ', typed: 'subj', column: 'subject',
+    trail: '(id) ON DELETE CASCADE)', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'CASCADE' },
+  { verb: 'FOREIGN KEY COLUMN', prefix: 'ALTER TABLE strict_subject ADD COLUMN linked INTEGER REFERENCES subject(', typed: 'i', column: 'id',
+    trail: ')', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'NO ACTION' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
@@ -44,8 +48,11 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
   const connectionId = 'sqlite-editor-completion';
   const strictType = scenario.verb === 'STRICT TYPE';
   const createType = scenario.verb === 'CREATE TYPE';
+  const foreignTable = scenario.verb === 'FOREIGN KEY TABLE', foreignColumn = scenario.verb === 'FOREIGN KEY COLUMN';
+  const foreignChild = foreignTable ? 'completion_fk' : foreignColumn ? 'strict_subject' : undefined;
+  const foreignField = foreignTable ? 'owner' : 'linked';
   const targetTable = strictType ? 'strict_subject' : 'subject';
-  const lookupKind = strictType ? 'table-options' : scenario.verb === 'INDEXED BY' ? 'indexes' :
+  const lookupKind = foreignTable ? 'relations' : strictType ? 'table-options' : scenario.verb === 'INDEXED BY' ? 'indexes' :
     scenario.verb === '函数' ? 'functions' : scenario.verb === 'COLLATE' ? 'collations' : 'columns';
   const alterColumn = scenario.verb === 'RENAME COLUMN' ? 'rename' : scenario.verb === 'DROP COLUMN' ? 'drop' : undefined;
   const { prefix, trail, typed, column } = scenario;
@@ -70,10 +77,12 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
       const altered = alterColumn ? { extra, value: extra === 'renamed_extra' ? db.prepare('SELECT renamed_extra FROM subject').get()?.renamed_extra : undefined } : undefined;
       const addedColumn = strictType ? db.prepare("SELECT name,type FROM pragma_table_xinfo('strict_subject','main') WHERE name='imported'").get() : undefined;
       const declaredColumn = createType ? db.prepare("SELECT name,upper(type) AS type,\"notnull\" FROM pragma_table_xinfo('completion_typed','main')").get() : undefined;
+      const foreignKey = foreignChild ? db.prepare('SELECT "table" AS parent, "from" AS child, "to" AS target, on_delete AS onDelete FROM pragma_foreign_key_list(?,?)')
+        .get(foreignChild, 'main') : undefined;
       return { row: db.prepare('SELECT id,value,virtual_value FROM subject').get(), other: db.prepare('SELECT * FROM excluded').get(),
         inbox: db.prepare('SELECT * FROM inbox').get(), ...(view ? { view: { sql: view.sql, rows: db.prepare('SELECT display_value FROM completion_view').all() } } : {}),
         ...(indexed ? { indexed } : {}), ...(altered ? { altered } : {}), ...(addedColumn ? { addedColumn } : {}),
-        ...(declaredColumn ? { declaredColumn } : {}) };
+        ...(declaredColumn ? { declaredColumn } : {}), ...(foreignKey ? { foreignKey } : {}) };
     }
     finally { db.close(); }
   };
@@ -104,10 +113,17 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
           if (command === 'sqlite.completion') {
             if (setup.createType) throw Error('建表声明类型无需访问目录');
             if ('sql' in input) throw Error('目录接收了编辑器原文');
+            if (setup.foreignChild && input.kind !== 'stamp') {
+              if (input.kind === 'table-options' && setup.foreignColumn) {
+                if (input.table !== setup.foreignChild || input.prefix !== '' || input.schema !== undefined) throw Error('外键子表越出本例');
+              } else if (input.kind !== setup.lookupKind || input.foreignKey !== true || input.schema !== 'main' ||
+                input.prefix !== setup.catalogName && input.prefix !== setup.typed ||
+                (setup.foreignColumn ? input.table !== 'subject' : 'table' in input)) throw Error('外键父表越出本例');
+            }
             if (input.kind === 'functions' || input.kind === 'collations') {
               const indexFunction = setup.createIndex && input.kind === 'functions' && input.deterministicOnly === true && input.prefix === setup.typed;
               if (!indexFunction && (input.kind !== setup.lookupKind || input.prefix !== setup.catalogName && input.prefix !== setup.typed) || 'table' in input || 'schema' in input) throw Error('连接目录越出本例');
-            } else if (input.kind === setup.lookupKind && (input.table !== setup.targetTable || input.schema !== 'main' ||
+            } else if (!setup.foreignChild && input.kind === setup.lookupKind && (input.table !== setup.targetTable || input.schema !== 'main' ||
               setup.createIndex && input.indexTable !== true || input.alterColumn !== setup.alterColumn ||
               input.kind === 'table-options' && input.prefix !== '')) throw Error('目录越出真实目标');
           }
@@ -120,7 +136,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         }
         return entry(event, payload);
       });
-    }, { filePath, connectionId, accepted, lookupKind, targetTable, typed, catalogName: column, createType,
+    }, { filePath, connectionId, accepted, lookupKind, targetTable, typed, catalogName: column, createType, foreignChild, foreignColumn,
       createIndex: scenario.verb === 'CREATE INDEX', alterColumn });
 
     await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
@@ -162,9 +178,12 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     const completion = (await snapshot()).slice(previous).filter(fact => fact.command === 'sqlite.completion');
     const requests = completion.map(fact => sqliteCompletionInputSchema.parse(fact.input));
     expect(requests.filter(input => input.kind !== 'stamp')).toEqual(createType ? [] : [
-      lookupKind === 'functions' || lookupKind === 'collations' ? expect.objectContaining({ kind: lookupKind, prefix: typed }) :
+      ...(foreignColumn ? [expect.objectContaining({ kind: 'table-options', table: foreignChild, prefix: '' })] : []),
+      foreignTable ? expect.objectContaining({ kind: 'relations', schema: 'main', foreignKey: true, prefix: typed }) :
+        lookupKind === 'functions' || lookupKind === 'collations' ? expect.objectContaining({ kind: lookupKind, prefix: typed }) :
         expect.objectContaining({ kind: lookupKind, table: targetTable, schema: 'main', prefix: strictType ? '' : typed,
-          ...(scenario.verb === 'CREATE INDEX' ? { indexTable: true } : {}), ...(alterColumn ? { alterColumn } : {}) }),
+          ...(scenario.verb === 'CREATE INDEX' ? { indexTable: true } : {}), ...(alterColumn ? { alterColumn } : {}),
+          ...(foreignColumn ? { foreignKey: true } : {}) }),
       ...(scenario.verb === 'CREATE INDEX' ? [expect.objectContaining({ kind: 'functions', prefix: typed, deterministicOnly: true })] : []),
     ]);
     expect(completion.every(fact => fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true)).toBe(true);
@@ -185,6 +204,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     else if (lookupKind === 'collations') await expect(hover).toContainText('忽略 ASCII 字母的大小写');
     else if (strictType) await expect(hover).toContainText('SQLite STRICT 类型');
     else if (createType) await expect(hover).toContainText('REAL 亲和性');
+    else if (foreignTable) await expect(hover).toContainText('SQLite 外键父表');
+    else if (foreignColumn) await expect(hover).toContainText('"main"."subject"."id"');
     else await expect(hover).toContainText('"main"."subject"');
     await page.keyboard.press('Escape');
     expect((await snapshot()).filter(fact => fact.command === 'query.execute' || fact.command === 'sessions.open')).toEqual([]);
@@ -197,9 +218,20 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
       alterColumn === 'drop' ? { altered: { extra: undefined, value: undefined } } : {};
     const addedColumn = strictType ? { addedColumn: { name: 'imported', type: scenario.output } } : {};
     const declaredColumn = createType ? { declaredColumn: { name: 'amount', type: scenario.output, notnull: 1 } } : {};
-    await expect.poll(disk).toEqual({ ...before, row: scenario.row, ...created, ...altered, ...addedColumn, ...declaredColumn });
+    const foreignKey = foreignChild ? { foreignKey: { parent: 'subject', child: foreignField, target: 'id', onDelete: scenario.output } } : {};
+    await expect.poll(disk).toEqual({ ...before, row: scenario.row, ...created, ...altered, ...addedColumn, ...declaredColumn, ...foreignKey });
+    if (foreignChild) {
+      const integrity = new DatabaseSync(filePath, { enableForeignKeyConstraints: true });
+      try {
+        integrity.exec('BEGIN');
+        const insert = integrity.prepare(foreignTable ? 'INSERT INTO completion_fk(owner) VALUES(?)' : 'INSERT INTO strict_subject(linked) VALUES(?)');
+        expect(() => insert.run(999)).toThrow('FOREIGN KEY constraint failed');
+        expect(insert.run(1).changes).toBe(1);
+        integrity.exec('ROLLBACK');
+      } finally { integrity.close(); }
+    }
     const grid = query.locator('.result-body').getByRole('grid');
-    if (scenario.verb !== 'CREATE VIEW' && scenario.verb !== 'CREATE INDEX' && !alterColumn && !strictType && !createType) await expect(grid).toContainText(scenario.output);
+    if (scenario.verb !== 'CREATE VIEW' && scenario.verb !== 'CREATE INDEX' && !alterColumn && !strictType && !createType && !foreignChild) await expect(grid).toContainText(scenario.output);
     if (lookupKind === 'collations') {
       await expect(grid.getByRole('row').nth(1).getByText('a', { exact: true })).toBeVisible();
       await expect(grid.getByRole('row').nth(2).getByText('Z', { exact: true })).toBeVisible();
@@ -220,7 +252,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
 
 for (const scenario of scenarios) {
   test.describe(scenario.verb, () => {
-    const enabled = scenario.verb === 'STRICT TYPE' || scenario.verb === 'CREATE TYPE' ? process.env.DBARK_SQLITE_COLUMN_TYPE_COMPLETION_NATIVE === '1' :
+    const enabled = scenario.verb === 'FOREIGN KEY TABLE' || scenario.verb === 'FOREIGN KEY COLUMN' ? process.env.DBARK_SQLITE_FOREIGN_KEY_COMPLETION_NATIVE === '1' :
+      scenario.verb === 'STRICT TYPE' || scenario.verb === 'CREATE TYPE' ? process.env.DBARK_SQLITE_COLUMN_TYPE_COMPLETION_NATIVE === '1' :
       scenario.verb === 'RENAME COLUMN' || scenario.verb === 'DROP COLUMN' ? process.env.DBARK_SQLITE_ALTER_TABLE_COMPLETION_NATIVE === '1' :
       scenario.verb === 'CREATE INDEX' ? process.env.DBARK_SQLITE_CREATE_INDEX_COMPLETION_NATIVE === '1' :
       scenario.verb === 'CREATE VIEW' ? process.env.DBARK_SQLITE_CREATE_QUERY_COMPLETION_NATIVE === '1' :
