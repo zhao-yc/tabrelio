@@ -1860,6 +1860,43 @@ test('PostgreSQL 方言着色跨行匹配 dollar 标签和嵌套注释', async (
   expect(pageErrors).toEqual([]);
 });
 
+test('PostgreSQL 离线定位 CTE 列声明并高亮同一投影的引用', async ({}, info) => {
+  const lines = ['WITH q AS (SELECT 1 AS amount),',
+    '  copied AS (SELECT q.amount FROM q)',
+    'SELECT c.amount, (SELECT d.amount FROM (SELECT 2 AS amount) d) AS other_value',
+    'FROM copied c', 'ORDER BY amount;'];
+  const sql = lines.join('\n');
+  await prepare({id: '', name: '离线 PostgreSQL 投影引用', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, sql);
+  await resizeQueryWindow(1280, 920, 0.75);
+  const initial = await inspectModel(), column = lines[2].indexOf('amount') + 3;
+  await modelSelection(3, column);
+  await command('editor-local-references');
+  await modelSelection(3, column);
+  const rendered = editor().locator('.view-lines .view-line');
+  await expect(rendered.nth(0).locator('.sql-local-declaration')).toHaveText('amount');
+  for (const line of [1, 2, 4]) await expect(rendered.nth(line).locator('.sql-local-reference')).toHaveText('amount');
+  await expect(editor().locator('.sql-local-declaration')).toHaveCount(1);
+  await expect(editor().locator('.sql-local-reference')).toHaveCount(3);
+
+  await page.keyboard.press('F12');
+  await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 1, column: lines[0].indexOf('amount') + 1});
+  await page.keyboard.press('Shift+F12');
+  const peek = editor().locator('.peekview-widget.reference-zone-widget');
+  const rows = peek.locator('.ref-tree .monaco-list-row[role="treeitem"][aria-level="1"]');
+  await expect(rows).toHaveCount(4);
+  await expect(peek.locator('.ref-tree .monaco-list-row[aria-selected="true"]')).toHaveCount(1);
+  await expect(rows.last()).toContainText('ORDER BY');
+  await page.screenshot({path: info.outputPath('PostgreSQL投影字段引用.png'), animations: 'disabled'});
+  await rows.last().dblclick();
+  await expect(peek).not.toBeVisible();
+  await expect.poll(async () => (await inspectModel()).position?.lineNumber).toBe(5);
+  expect(await inspectModel()).toMatchObject({sql, selected: 'amount', identity: initial.identity});
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('PostgreSQL 命名参数离线补全已有名称并悬停查看引用次数', async ({}, info) => {
   const sql = ["SELECT [$needle], [$near], [$Needle], '[$never]';", 'SELECT [$near], ['].join('\n');
   await prepare({id: '', name: '离线 PostgreSQL 参数补全', dialect: 'postgresql', group: '', color: '#123456',

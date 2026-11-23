@@ -6,6 +6,56 @@ function at(marked: string, standardStrings?: boolean) {
   return analyzePostgresLocalReferences(sql, offset, standardStrings);
 }
 
+it('CTE 位置列、通配透传及 ORDER BY 共同指向最初的确定列声明', () => {
+  const sql = 'WITH base("Total") AS (VALUES (1)), q AS (SELECT base.* FROM base) ' +
+    'SELECT z."Total" FROM q z WHERE "Total"=1 ORDER BY "Total" DESC NULLS FIRST';
+  const spans = [...sql.matchAll(/"Total"/g)].map(match => ({ start: match.index, end: match.index + match[0].length }));
+  for (const target of spans) expect(analyzePostgresLocalReferences(sql, target.start + 2)).toEqual({
+    status: 'ready', target, declaration: spans[0], references: spans.slice(1),
+  });
+});
+
+it('同名内层投影及显式重命名分别保留自己的列声明', () => {
+  const sql = 'WITH q AS (SELECT 1 AS id), link AS (SELECT q.id FROM q) ' +
+    'SELECT l.id, d.id, (SELECT q.id FROM (SELECT 3 AS id) q) AS nested FROM link l CROSS JOIN (SELECT 2 AS source) d(id)';
+  const span = (start: number) => ({ start, end: start + 2 });
+  const fromCte = sql.indexOf('q.id') + 2, fromDerived = sql.indexOf('d.id') + 2;
+  expect(analyzePostgresLocalReferences(sql, sql.indexOf('l.id') + 3)).toMatchObject({ status: 'ready',
+    declaration: span(sql.indexOf('AS id') + 3), references: [span(fromCte), span(sql.indexOf('l.id') + 2)] });
+  expect(analyzePostgresLocalReferences(sql, fromDerived + 1)).toMatchObject({ status: 'ready',
+    declaration: span(sql.lastIndexOf('d(id)') + 2), references: [span(fromDerived)] });
+  expect(analyzePostgresLocalReferences(sql, sql.lastIndexOf('q.id') + 3)).toMatchObject({ status: 'ready',
+    declaration: span(sql.lastIndexOf('AS id') + 3), references: [span(sql.lastIndexOf('q.id') + 2)] });
+});
+
+it('递归 CTE 从首分支取得列身份，集合排序使用首分支输出', () => {
+  const sql = 'WITH RECURSIVE nums(n) AS (VALUES (1) UNION ALL SELECT x.n+1 FROM nums x WHERE x.n<5) SELECT nums.n FROM nums';
+  const offsets = [...sql.matchAll(/\.n\b/g)].map(match => match.index + 1);
+  const spans = offsets.map(start => ({ start, end: start + 1 }));
+  expect(analyzePostgresLocalReferences(sql, offsets[1])).toMatchObject({ status: 'ready',
+    declaration: { start: sql.indexOf('nums(n)') + 5 }, references: spans });
+  const union = 'SELECT 1 AS out_name UNION ALL SELECT 2 AS ignored ORDER BY out_name DESC';
+  expect(analyzePostgresLocalReferences(union, union.lastIndexOf('out_name') + 2)).toMatchObject({ status: 'ready',
+    declaration: { start: union.indexOf('out_name') }, references: [{ start: union.lastIndexOf('out_name') }] });
+  const order = 'WITH q AS (SELECT 1 AS id) SELECT 2 AS id FROM q ORDER BY id';
+  expect(analyzePostgresLocalReferences(order, order.lastIndexOf('id'))).toMatchObject({ status: 'ready',
+    declaration: { start: order.lastIndexOf('AS id') + 3 } });
+  expect(at('WITH q AS (SELECT 1 AS id) SELECT 2 AS other FROM q ORDER BY ¦id')).toMatchObject({ status: 'ready' });
+});
+
+it('保留限定名消歧，并跳过重复或未知投影、类型和排序表达式', () => {
+  for (const sql of [
+    'WITH q AS (SELECT 1 AS id, 2 AS id) SELECT q.¦id FROM q',
+    'WITH q AS (SELECT source.*, 1 AS id FROM source) SELECT q.¦id FROM q',
+    'WITH q AS (SELECT 1 AS id) SELECT ¦id FROM q a CROSS JOIN q b',
+    'WITH q AS (SELECT 1 AS id) SELECT ¦id FROM q CROSS JOIN unknown_source',
+    'WITH q AS (SELECT 1 AS id) SELECT 1::q.¦id FROM q',
+    'SELECT 1 AS id FROM selected ORDER BY ¦id + 1',
+    'SELECT 1 AS id FROM selected GROUP BY ¦id',
+  ]) expect(at(sql), sql).toMatchObject({ status: 'blocked' });
+  expect(at('WITH q AS (SELECT 1 AS id) SELECT b.¦id FROM q a CROSS JOIN q b')).toMatchObject({ status: 'ready' });
+});
+
 it('命名参数在整份草稿内按大小写匹配，位置参数和字面量不参与', () => {
   const sql = `SELECT [$needle], [$Needle], '[$needle]', "[$needle]", $body$[$needle];$body$;\n` +
     '/* 外层 /* [$needle] */ */ SELECT $1, [$needle]; -- [$needle]';
