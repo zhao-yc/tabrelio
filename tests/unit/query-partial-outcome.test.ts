@@ -100,7 +100,10 @@ describe('查询首错停止且只保留完整前序结果', () => {
   });
   it('完整成功输出形状不新增failure；空脚本、普通行集及状态包保持兼容', async () => {
     scenario = (_managed, sql, query) => { if (sql.startsWith('UPDATE')) ok(query, 3); else { rows(query, [['成功']]); query.emit('end'); } };
-    const output = await execute('SELECT value;UPDATE t SET n=1'); expect(Object.keys(output).sort()).toEqual(['elapsedMs', 'mysqlResultSourceRanges', 'results', 'transactionOpen']); expect(output.results).toHaveLength(2); expect(output.transactionOpen).toBe(true); expect(events.at(-1)?.status).toBe('completed');
+    const output = await execute('SELECT value;UPDATE t SET n=1');
+    expect(Object.keys(output).sort()).toEqual(['elapsedMs', 'mysqlResultSourceRanges', 'mysqlResultStatementOrdinals', 'results', 'transactionOpen']);
+    expect(output.results).toHaveLength(2); expect(output.mysqlResultStatementOrdinals).toEqual([1, 2]);
+    expect(output.transactionOpen).toBe(true); expect(events.at(-1)?.status).toBe('completed');
     expect((await execute('/* 空脚本 */', { taskId: 'empty' })).results).toEqual([]);
   });
   it('已完成写操作不自动回滚或重连，扫描尾部失败保留完整状态结果与可信事务位', async () => {

@@ -33,6 +33,7 @@ describe('失败原始模板UTF16位置由当前调度确认', () => {
     const source = ' SELECT same;\r\n  SELECT same;\r\nSELECT tail;'; let count = 0; scenario = (_managed, _sql, query) => ++count === 1 ? ok(query) : fail(query);
     const output = await execute(source); const start = source.lastIndexOf('SELECT same'); expect(output.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1, sourceRange: { start, end: start + 'SELECT same'.length } }); expect(source.slice(output.failure!.sourceRange!.start, output.failure!.sourceRange!.end)).toBe('SELECT same'); expect(sent).toEqual(['SELECT same', 'SELECT same']);
     expect(output.mysqlResultSourceRanges).toEqual([{ start: 1, end: 12 }]);
+    expect(output.mysqlResultStatementOrdinals).toEqual([1]);
   });
   it('选区payload只使用自身相对位置，CRLF/emoji按UTF16单元计数不按字节或码点', async () => {
     const selectedPayload = "SELECT '😀';\r\n\tSELECT '失败🧭';\r\nSELECT tail;"; let count = 0; scenario = (_managed, _sql, query) => ++count === 1 ? ok(query) : fail(query);
@@ -53,6 +54,7 @@ describe('失败原始模板UTF16位置由当前调度确认', () => {
     const output = await execute(source, { parameters: [{ name: 'v', type: 'text', value: '秘密值😀' }] }), start = source.lastIndexOf('SELECT :v');
     expect(output.failure?.sourceRange).toEqual({ start, end: start + 9 }); expect(output.failure?.message).toContain('ER_DUP_ENTRY'); expect(JSON.stringify(output.failure)).not.toContain('秘密值'); expect(JSON.stringify(events)).not.toContain('秘密值'); expect(output.results[0].statement).toBe('SELECT :v'); expect(sent).toHaveLength(2); expect(sent[1].length).toBeGreaterThan(9);
     expect(output.mysqlResultSourceRanges).toEqual([{ start: 1, end: 10 }]);
+    expect(output.mysqlResultStatementOrdinals).toEqual([1]);
   });
   it('动态模式后绑定失败在完整template产生后定位，不发送缺参句或tail', async () => {
     const source = 'SET sql_mode=@future;\r\n SELECT :missing;\r\n DELETE FROM tail;'; scenario = (value, _sql, query) => { value.sqlMode = 'NO_BACKSLASH_ESCAPES'; ok(query); };
@@ -88,7 +90,8 @@ describe('失败原始模板UTF16位置由当前调度确认', () => {
   });
   it('完整成功只附实际结果范围，schema.apply仍按旧原语义抛错', async () => {
     scenario = (_value, _sql, query) => ok(query); const output = await execute('SELECT one;SELECT two;');
-    expect(Object.keys(output).sort()).toEqual(['elapsedMs', 'mysqlResultSourceRanges', 'results', 'transactionOpen']);
+    expect(Object.keys(output).sort()).toEqual(['elapsedMs', 'mysqlResultSourceRanges', 'mysqlResultStatementOrdinals', 'results', 'transactionOpen']);
+    expect(output.mysqlResultStatementOrdinals).toEqual([1, 2]);
     expect(output.mysqlResultSourceRanges).toEqual([{ start: 0, end: 10 }, { start: 11, end: 21 }]); expect(output).not.toHaveProperty('failure');
     scenario = (_value, _sql, query) => fail(query); await expect(engine.handle('schema.apply', { connectionId: profile.id, database: 'db', taskId: 'schema', sql: 'ALTER TABLE subject ADD bad UNKNOWN_TYPE' })).rejects.toThrow('预期失败');
   });
@@ -106,5 +109,6 @@ describe('失败原始模板UTF16位置由当前调度确认', () => {
     const output = await execute(source);
     expect(output.results.map(result => result.columns.length)).toEqual([1, 1, 0, 1]);
     expect(output.mysqlResultSourceRanges?.map(range => range && source.slice(range.start, range.end))).toEqual(['CALL p()', 'CALL p()', 'CALL p()', 'SELECT tail']);
+    expect(output.mysqlResultStatementOrdinals).toEqual([1, 1, 1, 2]);
   });
 });

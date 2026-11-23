@@ -177,6 +177,7 @@ interface RunningTask {
   relationTarget?: ReturnType<typeof mysqlQueryRelationTarget>;
   resultOrigins?: MysqlResultOrigins;
   resultSourceRanges?: NonNullable<QueryOutcome['mysqlResultSourceRanges']>;
+  resultStatementOrdinals?: number[];
   sqlFileImport?: SqlFileImportEvidence;
   fileImportConflict?: FileImportConflictEvidence;
   fileImport?: { committing: boolean; finalCommit: boolean; commitAcknowledged: boolean; committedRows: number; result?: { rows: number; errors: string[] }; failure?: Error };
@@ -184,8 +185,11 @@ interface RunningTask {
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
 
 /** 只给实际保留的完整结果分配来源，包含 CALL 的行集和回执，不接纳失败语句的部分流。 */
-function appendScriptResults(task: RunningTask, results: QueryResult[], completed: QueryResult[], range?: QueryFailureSourceRange): void {
-  if (task.resultSourceRanges) for (const _ of completed) task.resultSourceRanges.push(range ?? null);
+function appendScriptResults(task: RunningTask, results: QueryResult[], completed: QueryResult[], ordinal: number, range?: QueryFailureSourceRange): void {
+  for (const _ of completed) {
+    task.resultSourceRanges?.push(range ?? null);
+    task.resultStatementOrdinals?.push(ordinal);
+  }
   results.push(...completed);
 }
 interface IndependentTask { externalAbort?: () => void; commitProtected?: () => boolean; connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; resources?: IndependentTaskResourceLease; resourceCloseFailed?: boolean; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; fileFinalization?: boolean; fileCommitStarted?: boolean; fileCommitted?: boolean; }
@@ -2274,7 +2278,9 @@ export class Engine {
     if (collectStages === true && task.queryStatus)
       task.queryStages = new MysqlQueryStages(task.managed, task.queryStatus.report);
     const ranges: NonNullable<QueryOutcome['mysqlResultSourceRanges']> = [];
+    const ordinals: number[] = [];
     task.resultSourceRanges = ranges;
+    task.resultStatementOrdinals = ordinals;
     let outcome: QueryOutcome;
     try {
       if (task.queryStages) {
@@ -2290,7 +2296,8 @@ export class Engine {
     if (context && origins) this.resultOriginSources.set(task.managed, { executionId: task.id, context, origins });
     return { ...outcome, ...(origins ? { mysqlResultOrigins: origins } : {}),
       ...(task.queryStatus ? { mysqlQueryStatus: task.queryStatus.report } : {}),
-      ...(ranges.length === outcome.results.length && ranges.some(Boolean) ? { mysqlResultSourceRanges: ranges } : {}) };
+      ...(ranges.length === outcome.results.length && ranges.some(Boolean) ? { mysqlResultSourceRanges: ranges } : {}),
+      ...(ordinals.length && ordinals.length === outcome.results.length ? { mysqlResultStatementOrdinals: ordinals } : {}) };
   }
 
   /** 顺序执行脚本并共享结果预算，末尾读取真实事务状态供界面提示。 */
@@ -2306,7 +2313,7 @@ export class Engine {
     try {
       if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw new Error('查询结果上限必须在 1～100000 之间');
       if (failureMode === 'parameterized' && !Array.isArray(parameters)) throw new Error('参数查询必须提供参数列表');
-      for await (const { statement, template, mode } of this.queryStatements(task, sql, parameters, currentStatement, failureMode ? range => { sourceRange = range ? { ...range } : undefined; } : undefined)) {
+      for await (const { statement, template, mode, ordinal } of this.queryStatements(task, sql, parameters, currentStatement, failureMode ? range => { sourceRange = range ? { ...range } : undefined; } : undefined)) {
         relationTarget = failureMode && executed === 0 && task.managed.queryRowContext && task.managed.transactionStateKnown === true &&
           task.managed.serverStatus !== undefined && (task.managed.serverStatus & 1) === 0
           ? mysqlQueryRelationTarget(statement, mode, task.managed.status.dialect) : undefined;
@@ -2322,7 +2329,7 @@ export class Engine {
         try {
           const completed = await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined,
             undefined, failureMode ? error => { driverError = error; } : undefined);
-          appendScriptResults(task, results, completed, sourceRange);
+          appendScriptResults(task, results, completed, ordinal, sourceRange);
           if (relationTarget?.joined) {
             joinedPrimaryKey = await this.confirmMysqlJoinSource(task, relationTarget);
             if (!joinedPrimaryKey) { task.managed.sessionObjects?.invalidate(); relationTarget = undefined; }
@@ -2389,7 +2396,7 @@ export class Engine {
         const physicalId = task.managed.connection.threadId;
         try {
           const accepted = await this.streamQuery(task, item.statement, maxRows, results.length, budget, item.template, currentStatement !== undefined, { driverError: error => { driverError = error; }, commandEnded: () => { commandEnded = true; } });
-          appendScriptResults(task, results, accepted, sourceRange);
+          appendScriptResults(task, results, accepted, ordinal, sourceRange);
           currentCompleted = true; completed++;
         } catch (error) { originalError = error; }
         if (task.cancelled) this.checkCancelled(task);
@@ -2470,7 +2477,7 @@ export class Engine {
         const physicalId = task.managed.connection.threadId;
         try {
           const completed = await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined, { driverError: error => { driverError = error; }, commandEnded: () => { commandEnded = true; } });
-          appendScriptResults(task, results, completed, sourceRange); currentCompleted = true; report.statementsCompleted++;
+          appendScriptResults(task, results, completed, ordinal, sourceRange); currentCompleted = true; report.statementsCompleted++;
           if (warnings) await this.captureQueryWarnings(task, warnings, ordinal, sourceRange, 'completed', commandEnded);
           if (task.managed.broken || task.managed.transactionStateKnown !== true || !Number.isInteger(task.managed.serverStatus) || task.managed.serverStatus! < 0 || task.managed.serverStatus! > 65535 || warnings && !this.queryWarningsSessionKnown(task, physicalId)) { activeOrdinal = undefined; sourceRange = undefined; throw Error('当前语句已执行，但无法确认新的原会话协议状态，已停止后续语句'); }
         } catch (error) {

@@ -76,6 +76,9 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     // 回执之后的尾部只属于完整原语句，不能把目录查找声称为原文全文搜索。
     await search.fill('完整原语句尾部🚢');
     await expect(dialog.getByRole('option')).toHaveCount(0);
+    await search.fill('@42');
+    await expect(dialog.getByRole('option')).toHaveCount(1);
+    await expect(dialog.getByRole('option')).toContainText(text.statement(42));
     await search.fill('月度汇总');
     await expect(dialog.getByRole('option')).toHaveCount(2);
     await search.press('ArrowDown');
@@ -210,6 +213,9 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await search.fill('上月对账基准');
     await expect(dialog.getByRole('option')).toContainText('上月对账基准📌');
     await dialog.screenshot({ path: info.outputPath('按新名称查找固定结果.png') });
+    // 旧快照来自前次第 2 条语句，当前执行只有第 1 条。
+    await search.fill('@2');
+    await expect(dialog.getByRole('option')).toHaveCount(0);
     await search.fill('uniqueoutput');
     await expect(dialog.getByRole('option')).toHaveCount(1);
     await dialog.getByRole('option').click();

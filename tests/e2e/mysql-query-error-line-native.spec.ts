@@ -5,6 +5,7 @@ import { observeQueryFailureSource, observeQueryMarkerText } from './query-failu
 import { queryFailureSourceZh as text } from '../../src/renderer/locales/queryFailureSource.zh-CN';
 import { queryContinueOnErrorZh as continuing } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 import { queryWarningsZh } from '../../src/renderer/locales/queryWarnings.zh-CN';
+import { queryResultNavigatorZh as resultNavText } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
 import { queryPartialOutcomeZh } from '../../src/renderer/locales/queryPartialOutcome.zh-CN';
 import { currentStatementZh } from '../../src/renderer/locales/currentStatement.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
@@ -132,6 +133,27 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     expect(JSON.stringify(entry)).not.toContain('内部合成参数');
     expect(await query.locator('.error-box').innerText()).not.toContain(Buffer.from(sample).toString('hex'));
     await write('SELECT 5;'); await expect(line).toBeDisabled(); await expect.poll(executionMarkers).toEqual([]);
+
+    await observer.query('CREATE PROCEDURE nav_result_groups() BEGIN SELECT 71 AS nav_first; SELECT 72 AS nav_second; END');
+    await (await toggle(continuing.option)).check();
+    await execute('SELECT 70 AS nav_before; SELECT missing_native_field; CALL nav_result_groups(); SELECT 73 AS nav_tail;');
+    await expect(report).toContainText(continuing.counts(4, 3, 1));
+    const beforeResultNavigation = await history();
+    await query.getByRole('button', {name: resultNavText.open, exact: true}).click();
+    const resultDialog = page.getByRole('dialog', {name: resultNavText.open, exact: true});
+    const search = resultDialog.getByRole('combobox', {name: resultNavText.input, exact: true});
+    const matches = resultDialog.getByRole('option');
+    await search.fill('@2'); await expect(matches).toHaveCount(0);
+    await search.fill('@3'); await expect(matches).toHaveCount(3);
+    for (const ordinal of [2, 3, 4]) {
+      const entry = matches.filter({hasText: new RegExp(`^${resultNavText.result(ordinal)}`)});
+      await expect(entry).toContainText(resultNavText.statement(3));
+    }
+    await search.fill('#3'); await expect(matches).toHaveCount(1);
+    await expect(matches).toContainText(resultNavText.statement(3));
+    await search.press('Enter');
+    await expect(query.getByRole('gridcell', {name: '72', exact: true})).toBeVisible();
+    expect(await history()).toEqual(beforeResultNavigation);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

@@ -1058,6 +1058,7 @@ export function PostgresQueryTab({
   const archiveAvailable = !pin && !busy && !!outcome && !outcome.explain && !outcome.analysis
     && results.filter(item => item.columns.length).length > 1;
   const resultSources = outcome?.postgresResultSources;
+  const resultStatementOrdinals = useMemo(() => resultSources?.map(source => source.statementOrdinal), [resultSources]);
   const receiptSource = pin ? undefined : resultSources?.[selected];
   const receiptOrdinal = receiptSource?.statementOrdinal;
   const selectedResultRef = useRef(result);
@@ -2497,6 +2498,7 @@ export function PostgresQueryTab({
                 {results.map((r, i) => <option key={i} value={i}>{text.result(resultSources?.[i]?.statementOrdinal ?? i + 1, r.postgresCommand ?? '', r.rows.length, resultNames[i])}</option>)}
               </select>}
               {(results.length > 1 || pinState.items.length > 0) && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames}
+                statementOrdinals={resultStatementOrdinals}
                 selected={pin ? undefined : selected} pins={pinState.items} selectedPin={pin}
                 disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
               {pin && <PinnedResultRename tabId={tab.id} pin={pin} disabled={locked} isCurrent={pinNavigationCurrent} onRename={renameSelectedPin}/>}

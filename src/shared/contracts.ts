@@ -131,6 +131,8 @@ export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳�
   mysqlQueryInsert?: true;
   /** MySQL／MariaDB 完整结果在本次提交模板内的范围。一次 CALL 的多个结果指向同一语句。 */
   mysqlResultSourceRanges?: (import('./queryFailure').QueryFailureSourceRange | null)[];
+  /** 与本次 MySQL／MariaDB 完整结果逐项对应。一次 CALL 的多个结果共享同一个语句序号。 */
+  mysqlResultStatementOrdinals?: number[];
   /** 与原执行完整结果及列序号对齐，不随固定结果写入快照。 */
   mysqlResultOrigins?: (import('./mysqlResultOrigins').MysqlResultColumnOrigin[] | null)[];
   /** 仅当前执行结果保留的 PostgreSQL 协议列引用，按完整结果及列序号对应。 */

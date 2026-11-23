@@ -1408,6 +1408,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const resultNames = useMemo(() => results.map((item, index) => item.columns.length
     ? (sqlite ? outcome?.resultTitles?.[index] ?? undefined : queryResultTitle(item.statement))
     : undefined), [results, sqlite, outcome?.resultTitles]);
+  const resultStatementOrdinals = useMemo(() => outcome?.results === results
+    ? outcome.sqliteResultReceipts?.map(receipt => receipt.statementOrdinal) ?? outcome.mysqlResultStatementOrdinals
+    : undefined, [outcome, results]);
   const archiveAvailable = !pin && !busy && !queryRunning && !!outcome && !outcome.explain && !outcome.analysis && !outcome.sqliteExplain
     && outcome.results.filter(item => item.columns.length).length > 1;
   const resultOrigins = sqlite && !pin && !busy && !queryRunning && settings.activeTabId === tab.id && !closeRequest
@@ -2936,6 +2939,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           aria-pressed={!pin && resultIndex === index} onClick={() => selectCurrentResult(index)} key={index}>{name ?? ordinal}</button>;
       })}</div>
       {(results.length > 1 || pins.length > 0) && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames}
+        statementOrdinals={resultStatementOrdinals}
         selected={pin ? undefined : resultIndex} pins={pins} selectedPin={pin}
         disabled={busy || queryRunning || resultModal || fileSource.busy}
         isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}

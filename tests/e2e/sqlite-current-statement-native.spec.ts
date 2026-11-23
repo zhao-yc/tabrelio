@@ -7,6 +7,7 @@ import { observeQueryMarkerText } from './query-failure-source-observer';
 import { sqliteSyntaxCheckZh as syntaxText } from '../../src/renderer/locales/sqlSyntaxCheck.zh-CN';
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { queryContinueOnErrorZh as continueText } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
+import { queryResultNavigatorZh as resultNavText } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
 
 // 默认和--list只注册单个跳过项；原生App、NodeSQLite和文件观察均在显式专项内部加载。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -300,7 +301,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     stage = 'trigger体内caret创建整个定义且不执行相邻DML'; const created = await run(trigger); expect(result(created.fact?.reply)).toMatchObject({ results: [{ statement: trigger.selected }] }); const afterTrigger = { ...afterInsert, triggers: [{ name: '当前;?触发🚢', sql: trigger.selected }] }; expect(disk()).toEqual(afterTrigger); expect(emittedSql(await step(audit), created.fact?.request.taskId)).toEqual([trigger.selected]);
     stage = '原普通CtrlEnter执行插入触发两条内部语句'; const normal = await run(ordinary); const afterNormal = { ...afterTrigger, subject: [...afterInsert.subject, { id: '20', note: '普通插入🚢' }], audit: [{ id: '20', note: "触发一;?'中文" }, { id: '20', note: '触发二🚢' }] }; expect(disk()).toEqual(afterNormal); const rwSession = inserted.fact?.request.sessionId; expect(typeof rwSession).toBe('string'); for (const execution of [selected, created, normal]) expect(execution.fact?.request.sessionId).toBe(rwSession);
     const receipt = query().getByRole('group', {name: sqliteZh.queryReceipt, exact: true});
-    expect(normal.outcome.sqliteResultReceipts).toEqual([{producedRows: 0, changedRows: 3, sourceRange: {start: 0, end: ordinarySql.length}}]);
+    expect(normal.outcome.sqliteResultReceipts).toEqual([{statementOrdinal: 1, producedRows: 0, changedRows: 3, sourceRange: {start: 0, end: ordinarySql.length}}]);
     await step(() => expect(receipt).toContainText(sqliteZh.receiptChanges(3)));
     stage = '准确原会话BEGIN当前写与ROLLBACK独立观察'; await step(() => query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click()); await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeEnabled()); const txWritten = await run(transactionInsert, true); expect(txWritten.fact?.request.sessionId).toBe(rwSession); expect(txWritten.outcome.transactionOpen).toBe(true); expect(disk()).toEqual(afterNormal); const txRead = await run(transactionRead); expect(txRead.fact?.request.sessionId).toBe(rwSession); expect(txRead.outcome).toMatchObject({ transactionOpen: true, results: [{ rows: [{ c0: '3' }] }] }); expect(disk()).toEqual(afterNormal);
     await step(() => query().getByRole('button', { name: zh.common.transactionRollback, exact: true }).click()); await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeDisabled()); const transactionFacts = operations(await step(audit), 'query.transaction'); expect(transactionFacts.map(fact => fact.request)).toEqual([{ sessionId: rwSession, action: 'begin' }, { sessionId: rwSession, action: 'rollback' }]); expect(disk()).toEqual(afterNormal);
@@ -383,6 +384,17 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
       await step(() => expect(query().locator('.sql-editor-wrap')).toBeVisible());
       expect((await model()).selections).toEqual([{start, end: start + source.length}]);
     }
+    await step(() => query().getByRole('button', {name: resultNavText.open, exact: true}).click());
+    const resultDialog = page.getByRole('dialog', {name: resultNavText.open, exact: true});
+    const resultSearch = resultDialog.getByRole('combobox', {name: resultNavText.input, exact: true});
+    await step(() => resultSearch.fill('@3'));
+    await step(() => expect(resultDialog.getByRole('option')).toHaveCount(0));
+    await step(() => resultSearch.fill('@4'));
+    await step(() => expect(resultDialog.getByRole('option')).toHaveCount(1));
+    await step(() => expect(resultDialog.getByRole('option')).toContainText(resultNavText.result(2)));
+    await step(() => expect(resultDialog.getByRole('option')).toContainText(resultNavText.statement(4)));
+    await step(() => resultSearch.press('Enter'));
+    await step(() => expect(query().getByRole('gridcell', {name: '后续🚢', exact: true})).toBeVisible());
     expect((await step(audit)).operations).toEqual(continuedFacts.operations);
     expect(await history()).toEqual(continuedHistory);
     expect(continuedHistory.find(entry => entry.sql === continuedSource)?.success).toBe(false);

@@ -189,7 +189,9 @@ export class SqliteQuerySession {
         if (changed > BigInt(Number.MAX_SAFE_INTEGER)) throw Error('SQLite语句已执行，但变更量超过现有结果合同；请核对数据库，不要重复执行');
         if (fact.queryReceipt) {
           const {producedRows, sourceRange} = fact.queryReceipt;
-          receipts.push({...(ordinals ? {statementOrdinal: ordinals[index]} : {}), producedRows, changedRows: Number(changed), sourceRange: {start: base + sourceRange.start, end: base + sourceRange.end}});
+          // 原生顺序执行每条语句只有一份回执。遇错继续有序号空档，沿用调度器的原序号。
+          const statementOrdinal = ordinals ? ordinals[index] : fact.index + 1;
+          receipts.push({statementOrdinal, producedRows, changedRows: Number(changed), sourceRange: {start: base + sourceRange.start, end: base + sourceRange.end}});
         }
         // 编译前后偏移相同。原生回执确认边界后，结果 SQL 始终按用户原模板展示。
         const range = fact.queryReceipt?.sourceRange;

@@ -13,6 +13,7 @@ interface Props {
   tabId: string;
   results: readonly QueryResult[];
   names: readonly (string | undefined)[];
+  statementOrdinals?: readonly (number | undefined)[];
   selected?: number;
   pins: readonly PinnedQueryResult[];
   selectedPin?: PinnedQueryResult;
@@ -22,7 +23,7 @@ interface Props {
   onSelectPin(pin: PinnedQueryResult): void;
 }
 
-type Entry = { kind: 'current'; index: number; name?: string; result: QueryResult } |
+type Entry = { kind: 'current'; index: number; name?: string; statementOrdinal?: number; result: QueryResult } |
   { kind: 'pinned'; pin: PinnedQueryResult; name: string; result: QueryResult };
 type Source = 'all' | Entry['kind'];
 
@@ -75,13 +76,13 @@ export function QueryResultNavigator(props: Props) {
 
   return <>
     <button type="button" disabled={disabled} aria-haspopup="dialog" aria-expanded={opened} onClick={open}>{text.open}</button>
-    {opened && createPortal(<ResultList results={results} names={props.names} selected={props.selected} pins={pins} selectedPin={props.selectedPin}
+    {opened && createPortal(<ResultList results={results} names={props.names} statementOrdinals={props.statementOrdinals} selected={props.selected} pins={pins} selectedPin={props.selectedPin}
       onSelect={select} onClose={() => setOwner(undefined)}/>, document.body)}
   </>;
 }
 
-function ResultList({ results, names, selected, pins, selectedPin, onSelect, onClose }:
-  Pick<Props, 'results' | 'names' | 'selected' | 'pins' | 'selectedPin'> & { onSelect(entry: Entry): void; onClose(): void }) {
+function ResultList({ results, names, statementOrdinals, selected, pins, selectedPin, onSelect, onClose }:
+  Pick<Props, 'results' | 'names' | 'statementOrdinals' | 'selected' | 'pins' | 'selectedPin'> & { onSelect(entry: Entry): void; onClose(): void }) {
   const [query, setQuery] = useState(''), [source, setSource] = useState<Source>('all');
   const [position, setPosition] = useState(() => {
     if (selectedPin) return Math.max(0, pins.indexOf(selectedPin));
@@ -91,14 +92,21 @@ function ResultList({ results, names, selected, pins, selectedPin, onSelect, onC
   const composing = useRef(false);
   const entries = useMemo<Entry[]>(() => [
     ...pins.map((pin): Entry => ({ kind: 'pinned', pin, name: pin.label, result: pin.result })),
-    ...results.map((result, index): Entry => ({ kind: 'current', index, name: names[index], result })),
-  ], [results, names, pins]);
+    ...results.map((result, index): Entry => {
+      // 来源必须与完整结果列表逐项对齐。缺失的语句序号不能由结果序号补造。
+      const ordinal = statementOrdinals?.length === results.length ? statementOrdinals[index] : undefined;
+      return { kind: 'current', index, name: names[index], statementOrdinal: ordinal && ordinal > 0 && Number.isSafeInteger(ordinal) ? ordinal : undefined, result };
+    }),
+  ], [results, names, statementOrdinals, pins]);
   const matches = useMemo(() => {
     const value = query.trim().toLowerCase();
     const ordinal = Number(/^#?(\d+)$/.exec(value)?.[1]);
     const ordinalOnly = value.startsWith('#') && Number.isFinite(ordinal);
+    const statement = /^@(\d+)$/.exec(value);
+    const statementOrdinal = statement ? Number(statement[1]) : undefined;
     return entries.filter(entry => {
       if (source !== 'all' && source !== entry.kind) return false;
+      if (statementOrdinal !== undefined) return entry.kind === 'current' && entry.statementOrdinal === statementOrdinal;
       if (!value || entry.kind === 'current' && entry.index + 1 === ordinal) return true;
       const { result, name } = entry;
       return !ordinalOnly && (name?.toLowerCase().includes(value) ||
@@ -156,6 +164,7 @@ function ResultList({ results, names, selected, pins, selectedPin, onSelect, onC
             <span className="open-tab-search-meta">{[
               item.kind === 'pinned' && text.sources.pinned,
               item.kind === 'pinned' && queryPinsZh.elapsed(result.elapsedMs),
+              item.kind === 'current' && item.statementOrdinal !== undefined && text.statement(item.statementOrdinal),
               result.columns.length ? text.rows(result.rows.length) : result.postgresCommand ?? text.status,
               result.affectedRows !== undefined && text.affected(result.affectedRows),
               result.truncated && text.truncated,

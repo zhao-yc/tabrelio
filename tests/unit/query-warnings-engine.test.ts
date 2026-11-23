@@ -159,6 +159,7 @@ describe('显式警告采集Engine集成', () => {
     const f = engineFixture(), output = await f.run('SELECT one;SELECT two;', { collectWarnings: true });
     expect(output.failure).toBeUndefined(); expect(output.results).toHaveLength(2); expect(output.warnings?.statements.map(item => [item.statementOrdinal, item.status])).toEqual([[1, 'completed'], [2, 'completed']]);
     expect(output.mysqlResultSourceRanges).toEqual([{ start: 0, end: 10 }, { start: 11, end: 21 }]);
+    expect(output.mysqlResultStatementOrdinals).toEqual([1, 2]);
     expect(f.diagnostics).toEqual([queryWarningsCountSql, queryWarningsDetailsSql, queryWarningsCountSql, queryWarningsDetailsSql]);
     expect(f.events.every(event => event.executionSql === undefined)).toBe(true); expect(f.events.filter(event => event.columns)).toHaveLength(2);
   });

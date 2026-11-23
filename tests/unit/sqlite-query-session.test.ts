@@ -294,6 +294,7 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
       {producedRows: 2, changedRows: 0}, {producedRows: 5, changedRows: 5}, {producedRows: 1, changedRows: 0},
     ]);
     expect(outcome.sqliteResultReceipts?.map(({sourceRange: {start, end}}) => script.slice(start, end))).toEqual(statements);
+    expect(outcome.sqliteResultReceipts?.map(receipt => receipt.statementOrdinal)).toEqual(statements.map((_, index) => index + 1));
     const durations = outcome.results.map(result => result.elapsedMs);
     expect(durations.every(duration => Number.isFinite(duration) && duration > 0)).toBe(true);
     expect(durations.reduce((sum, duration) => sum + duration, 0)).toBeLessThanOrEqual(outcome.elapsedMs);
