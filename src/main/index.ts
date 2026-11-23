@@ -1418,7 +1418,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       command === 'postgres.completion' || command === 'postgres.resultOrigins') {
     // 原文档、连接修订和实际会话必须一致，关闭中的会话也不再发布目录。
     const revision = store.connectionRevision();
-    const scoped = (command === 'postgres.completion' || command === 'postgres.resultOrigins') && input.sessionId;
+    const scoped = (command === 'postgres.completion' || command === 'postgres.resultOrigins' || command === 'postgres.structure.queryDefinition') && input.sessionId;
     const binding = scoped ? sessions.get(input.sessionId) : undefined;
     const check = () => {
       columnsMain.assertCapturedOwner(columns);

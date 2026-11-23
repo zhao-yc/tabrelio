@@ -3,6 +3,9 @@ import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
 export const objectDefinitionZh = {
   entry: uiCommandLabels['object-definition'], title: '对象结构',
   hint: '仅查看当前查询所引用对象的完整定义，不执行查询或修改事务。',
+  postgresHint: '按当前会话搜索路径读取光标处的表或视图，查询草稿不会执行。',
+  postgresSchema: '模式',
+  transaction: '原查询会话有活动事务，请在结束事务后重新打开对象结构。',
   loading: '正在解析并读取对象结构…', stopping: '正在等待读取和取消完成…',
   stop: '取消读取', close: '关闭', temporary: '当前会话临时对象', permanent: '数据库对象', schema: '数据库', table: '对象',
   stale: '原查询、会话或连接已变化，请关闭后重新打开。',

@@ -435,6 +435,7 @@ export interface CommandMap {
   'postgres.sequence.targets': { input: import('./postgresSequence').PostgresSequenceTargetsInput; output: import('./postgresSequence').PostgresSequenceTargets };
   'postgres.structure.read': { input: import('./postgresStructure').PostgresStructureInput; output: import('./postgresStructure').PostgresStructureResult };
   'postgres.structure.definition': { input: import('./databaseSearch').PostgresDefinitionReadTarget; output: string };
+  'postgres.structure.queryDefinition': { input: import('./postgresStructure').PostgresQueryObjectDefinitionInput; output: import('./postgresStructure').PostgresQueryObjectDefinition };
   'postgres.structure.dependencies': { input: import('./postgresStructure').PostgresStructureInput; output: import('./postgresDependencies').PostgresDependencies };
   'postgres.routine.read': { input: import('./postgresRoutine').PostgresRoutineReadInput; output: import('./postgresRoutine').PostgresRoutineInfo };
   'postgres.routine.dependencies': { input: import('./postgresRoutine').PostgresRoutineDependencyInput; output: import('./postgresDependencies').PostgresDependencies };

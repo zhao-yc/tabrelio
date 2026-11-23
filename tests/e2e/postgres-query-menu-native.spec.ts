@@ -32,6 +32,7 @@ import { postgresQueryTimeoutsZh as timeoutText } from '../../src/renderer/local
 import { postgresNoticesZh as noticesText } from '../../src/renderer/locales/postgresNotices.zh-CN';
 import { postgresNoticeHiddenMessage } from '../../src/shared/postgresNotices';
 import { localRenameZh } from '../../src/renderer/locales/localRename.zh-CN';
+import { objectDefinitionZh } from '../../src/renderer/locales/objectDefinition.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -2058,6 +2059,97 @@ test('PostgreSQL 语句折叠使用真实会话缓存更新范围', async () => 
     await editor().locator('.codicon-folding-collapsed').click();
   }
   expect(pageErrors).toEqual([]);
+  await quitDesktop();
+});
+
+test('PostgreSQL 查询光标查看对象定义按原搜索路径解析并保留原事务', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query('CREATE SCHEMA editor_definition; CREATE TABLE public.catalog_probe(default_id integer); ' +
+      'CREATE VIEW editor_definition.catalog_probe AS SELECT 31::bigint AS preferred_only;');
+    const query = 'SELECT * FROM catalog_probe;', history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await prepare({id: '', name: '隔离 PostgreSQL 对象定义', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, query);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const identity = (await inspectModel()).identity;
+    const dialog = () => page.getByRole('dialog', {name: objectDefinitionZh.title, exact: true});
+    const close = async () => { await page.keyboard.press('Escape'); await expect(dialog()).not.toBeVisible(); };
+    const nativeOpen = () => command('object-definition');
+    const toolbarOpen = () => tab().getByRole('button', {name: objectDefinitionZh.entry, exact: true}).click();
+    const contextOpen = async () => {
+      await editor().locator('.view-lines').getByText('catalog_probe', {exact: true}).click({button: 'right'});
+      const item = page.locator('.monaco-menu-container:visible').getByRole('menuitem', {name: objectDefinitionZh.entry, exact: true});
+      await item.hover();
+      await expect(item).toBeFocused();
+      await page.keyboard.press('Enter');
+    };
+    const open = async (sql: string, activate = nativeOpen) => {
+      await replaceDraft(sql);
+      await modelSelection(1, sql.lastIndexOf('catalog_probe') + 3);
+      await activate();
+      await expect(dialog()).toBeVisible();
+    };
+    const definition = async (sql: string, schema: string, field: string, activate = nativeOpen) => {
+      const baseline = await history();
+      await open(sql, activate);
+      await expect(dialog().getByRole('status')).toContainText('模式 ' + schema);
+      await expect(dialog().locator('.view-lines')).toContainText(field);
+      if (activate === contextOpen) await page.screenshot({path: info.outputPath('PostgreSQL查询对象只读定义.png'), animations: 'disabled'});
+      await close();
+      expect((await inspectModel()).sql).toBe(sql);
+      expect((await inspectModel()).identity).toEqual(identity);
+      expect(await history()).toEqual(baseline);
+    };
+    await definition(query, 'public', 'default_id', toolbarOpen);
+    await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+    await open('WITH catalog_probe AS (SELECT 1) SELECT * FROM catalog_probe;');
+    await expect(dialog().getByRole('alert')).toContainText(objectDefinitionZh.blocked);
+    await close();
+    expect(await history()).toEqual([]);
+
+    const execute = async (sql: string) => {
+      await replaceDraft(sql);
+      await command('execute-all');
+      await expect.poll(async () => (await history()).some(entry => entry.sql === sql && entry.success)).toBe(true);
+      await expect.poll(() => enabled('object-definition')).toBe(true);
+    };
+    await execute('SET search_path = editor_definition, public');
+    await execute('SELECT 1234 AS preserved_result');
+    const result = tab().getByRole('gridcell', {name: '1234', exact: true});
+    await expect(result).toBeVisible();
+    await definition(query, 'editor_definition', 'preferred_only', contextOpen);
+    await expect(result).toBeVisible();
+    await open('SELECT * FROM nonexistent_catalog_probe.catalog_probe;');
+    await expect(dialog().getByRole('alert')).toBeVisible();
+    await expect(dialog().locator('.view-lines')).toHaveCount(0);
+    await close();
+    await expect(result).toBeVisible();
+
+    await execute('CREATE TEMP TABLE catalog_probe(temporary_only text)');
+    await definition(query, 'pg_temp', 'temporary_only');
+    await definition('SELECT * FROM public.catalog_probe;', 'public', 'default_id');
+    await definition('SELECT * FROM pg_temp.catalog_probe;', 'pg_temp', 'temporary_only');
+
+    await execute('BEGIN');
+    const baseline = await history();
+    await open(query);
+    await expect(dialog().getByRole('alert')).toHaveText(objectDefinitionZh.transaction);
+    await page.screenshot({path: info.outputPath('PostgreSQL事务中的对象定义保护.png'), animations: 'disabled'});
+    await close();
+    expect(await history()).toEqual(baseline);
+    await expect(tab().getByRole('button', {name: postgresZh.rollback, exact: true})).toBeEnabled();
+    await execute('ROLLBACK');
+    await definition(query, 'pg_temp', 'temporary_only');
+    await execute("SELECT current_setting('search_path') AS search_path_probe");
+    await expect(tab().getByRole('gridcell', {name: 'editor_definition, public', exact: true})).toBeVisible();
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
   await quitDesktop();
 });
 

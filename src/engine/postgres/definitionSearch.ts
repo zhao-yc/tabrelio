@@ -3,7 +3,8 @@ import type { DatabaseSearchPattern } from '../../shared/databaseSearchPattern';
 import { definitionTextWithinBudget } from '../../shared/definitionNavigation';
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import { postgresIdentifier } from '../../shared/postgresSql';
-import type { PostgresStructureResult } from '../../shared/postgresStructure';
+import { postgresStructureKind, type PostgresQueryObjectDefinition, type PostgresQueryObjectDefinitionInput,
+  type PostgresStructureResult } from '../../shared/postgresStructure';
 import { definitionNavigationResult, definitionRegexpMarkers } from '../definitionNavigation';
 import type { PostgresConnection } from './connection';
 import { readPostgresStructureFacts } from './relationStructure';
@@ -19,17 +20,18 @@ export async function preparePostgresSearchConnection(connection: PostgresConnec
 }
 
 /** 表文本由已有关系目录生成。只读查看字段和表达式，不从表或所属序列读取数据。 */
-function relationDefinition(output: PostgresStructureResult) {
-  const name = postgresIdentifier(output.schema) + '.' + postgresIdentifier(output.name);
+function relationDefinition(output: PostgresStructureResult, temporary = false) {
+  const name = postgresIdentifier(temporary ? 'pg_temp' : output.schema) + '.' + postgresIdentifier(output.name);
   const comments = output.columns.filter(column => column.comment !== null).map(column =>
     'COMMENT ON COLUMN ' + name + '.' + postgresIdentifier(column.name) + ' IS ' + postgresDdlLiteral(column.comment!) + ';');
   const view = output.kind === 'v' || output.kind === 'm';
   const type = output.kind === 'm' ? 'MATERIALIZED VIEW' : view ? 'VIEW' : output.kind === 'f' ? 'FOREIGN TABLE' : 'TABLE';
+  const createType = temporary ? 'TEMPORARY ' + type : type;
   if (output.comment !== null) comments.push('COMMENT ON ' + type + ' ' + name + ' IS ' + postgresDdlLiteral(output.comment) + ';');
   const indexes = output.indexes.map(index => index.definition + ';');
   if (view) {
     if (!output.viewDefinition) throw Error('PostgreSQL 视图查询定义未完整返回');
-    return [`CREATE ${type} ${name} AS\n${output.viewDefinition}`, ...indexes, ...comments].join('\n\n');
+    return [`CREATE ${createType} ${name} AS\n${output.viewDefinition}`, ...indexes, ...comments].join('\n\n');
   }
   const columns = output.columns.map(column => {
     let text = postgresIdentifier(column.name) + ' ' + column.type;
@@ -42,10 +44,60 @@ function relationDefinition(output: PostgresStructureResult) {
     return text;
   });
   const constraints = output.constraints.map(item => 'CONSTRAINT ' + postgresIdentifier(item.name) + ' ' + item.definition);
-  const declaration = `CREATE ${type} ${name} (\n  ${[...columns, ...constraints].join(',\n  ')}\n)` +
+  const declaration = `CREATE ${createType} ${name} (\n  ${[...columns, ...constraints].join(',\n  ')}\n)` +
     (output.partitionKey ? ' PARTITION BY ' + output.partitionKey : '') + ';';
   const bound = output.partitionBound?.split('\n').map(line => '-- ' + line).join('\n');
   return [declaration, ...(bound ? [bound] : []), ...indexes, ...comments].join('\n\n');
+}
+
+/** 先用原 search_path 和临时 schema 解析 OID，再在本次只读事务内规范目录反编译。 */
+export async function readPostgresQueryObjectDefinition(connection: PostgresConnection, input: PostgresQueryObjectDefinitionInput): Promise<PostgresQueryObjectDefinition> {
+  if (connection.database !== input.database) throw Error('PostgreSQL 定义连接未绑定目标数据库');
+  const original = connection.state();
+  if (!original.transactionKnown || original.transactionOpen) throw Error('对象定义需要已确认的空闲连接');
+  const budget = () => ({ rows: 1, bytes: 8192 });
+  const qualified = (input.schema ? postgresIdentifier(input.schema) + '.' : '') + postgresIdentifier(input.name);
+  try {
+    const began = await connection.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', undefined, budget());
+    if (began.postgresCommand !== 'BEGIN' || !connection.state().transactionOpen) throw Error('对象定义只读事务未确认');
+    await connection.query(`SELECT pg_catalog.set_config('statement_timeout', '5s', true),
+      pg_catalog.set_config('lock_timeout', '1s', true), pg_catalog.set_config('standard_conforming_strings', 'on', true)`, undefined, budget());
+    // 不先按关系权限或类型筛选候选，避免把搜索路径中被遮蔽的同名关系当成原对象。
+    const resolved = await connection.query(`SELECT c.oid::pg_catalog.text, n.nspname::pg_catalog.text, c.relkind::pg_catalog.text,
+      n.oid OPERATOR(pg_catalog.=) pg_catalog.pg_my_temp_schema(), c.relname::pg_catalog.text
+      FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
+      WHERE c.oid OPERATOR(pg_catalog.=) pg_catalog.to_regclass($1::pg_catalog.text)`, [qualified], budget());
+    const row = resolved.rows[0];
+    const kind = postgresStructureKind.safeParse(row?.c2);
+    if (resolved.truncated || !row || typeof row.c0 !== 'string' || typeof row.c1 !== 'string' || !kind.success || row.c4 !== input.name)
+      throw Error('当前搜索路径找不到可读取定义的表或视图');
+    const temporary = row.c3 === 't';
+    if (temporary && !input.sessionId || !temporary && (row.c1.startsWith('pg_') || row.c1 === 'information_schema'))
+      throw Error('当前关系不支持此处的定义查看');
+    if (input.schema && input.schema !== (temporary && input.schema === 'pg_temp' ? 'pg_temp' : row.c1))
+      throw Error('PostgreSQL 定义对象已变化');
+
+    await connection.query('SET LOCAL search_path = pg_catalog, pg_temp', undefined, budget());
+    const { output, oid } = await readPostgresStructureFacts(connection, postgresIdentifier(row.c1) + '.' + postgresIdentifier(input.name), temporary);
+    if (oid !== row.c0 || output.kind !== kind.data) throw Error('PostgreSQL 定义对象已变化');
+    const ddl = relationDefinition(output, temporary);
+    if (!ddl || !definitionTextWithinBudget(ddl)) throw Error('PostgreSQL 目录定义超过 2 MiB 或编码无效');
+    return { status: 'ready', schema: temporary ? 'pg_temp' : output.schema, name: output.name, temporary, ddl };
+  } finally {
+    // 只有事务回到空闲才能交付定义，回滚失去确认时隔离该物理连接。
+    try {
+      if (connection.state().transactionOpen) {
+        const rollback = await connection.query('ROLLBACK', undefined, budget());
+        if (rollback.postgresCommand !== 'ROLLBACK') throw Error('对象定义只读事务未确认结束');
+      }
+      const state = connection.state();
+      if (!state.transactionKnown || state.transactionOpen) throw Error('对象定义只读事务未确认结束');
+    } catch (error) {
+      connection.broken = true;
+      connection.abort();
+      throw error;
+    }
+  }
 }
 
 /** 用目录完整限定名及输入类型签名核对对象，只返回与搜索窗口相同的展示正文。 */

@@ -5,6 +5,9 @@ import { sqlQuotedCopyAction } from '../sqlQuotedCopy';
 import { PostgresSearchRecordEditDialog, type PostgresQueryCellEdit, type PostgresQueryRangeEdit,
   type PostgresQueryRecordIntent } from './PostgresSearchRecordEditDialog';
 import { currentPostgresStatement, postgresIdentifier } from '../../shared/postgresSql';
+import type { PostgresQueryObjectDefinition } from '../../shared/postgresStructure';
+import { analyzePostgresObjectDefinition } from '../postgresCompletionAnalysis';
+import { objectDefinitionZh as definitionText } from '../locales/objectDefinition.zh-CN';
 import type { PostgresResultOrigin } from '../../shared/postgresResultOrigins';
 import { postgresResultOriginsZh as originsText } from '../locales/postgresResultOrigins.zh-CN';
 import { PostgresResultOriginsDialog } from './PostgresResultOriginsDialog';
@@ -225,6 +228,9 @@ export function PostgresQueryTab({
   const layoutRoot = useRef<HTMLDivElement>(null);
   const [layoutWidth, setLayoutWidth] = useState(0), [resultsOnly, setResultsOnly] = useState(false);
   const [formatOptions, setFormatOptions] = useState<QueryFormattingOptions>();
+  const definitionOwner = useRef<string | undefined>(undefined);
+  const [objectDefinition, setObjectDefinition] = useState<{ id: string; current(): boolean; pending?: true; error?: string;
+    result?: Extract<PostgresQueryObjectDefinition, { status: 'ready' }> }>();
   const [editorPreview, setEditorPreview] = useState<number | null>(null), [editorWidthPreview, setEditorWidthPreview] = useState<number | null>(null);
   const preferredPlacement = readQueryResultPlacement(tab.queryResultPlacement);
   const besideAvailable = layoutWidth >= queryResultBesideMinimum;
@@ -1975,6 +1981,41 @@ export function PostgresQueryTab({
       setFormatOptions(captureQueryFormattingOptions(tab.id, () => editor.current, 'postgresql', () => available(true) && !files.isBusy()));
     } catch (reason) { setError(errorMessage(reason)); }
   }
+  /** 只提交解析后的对象名，旧模型、会话、连接或窗口的回包不能替换当前定义。 */
+  async function openObjectDefinition() {
+    const target = commandEditor(), draft = currentTab();
+    const position = target?.instance.getPosition();
+    if (!target || !draft || !position || definitionOwner.current) return;
+    const id = uid(), original = session.current, modelVersion = target.model.getVersionId();
+    const current = () => definitionOwner.current === id && alive.current && available(true) && !files.isBusy() &&
+      currentTab() === draft && session.current === original && editor.current === target.instance &&
+      target.instance.getModel() === target.model && !target.model.isDisposed() && target.model.getVersionId() === modelVersion &&
+      Array.from(document.querySelectorAll(appModalSelector)).every(node => node.querySelector('[data-pg-query-definition]')?.getAttribute('data-pg-query-definition') === id);
+    const relation = analyzePostgresObjectDefinition(target.model.getValue(), target.model.getOffsetAt(position),
+      original && same(original.scope) ? state.standardConformingStrings : undefined);
+    definitionOwner.current = id;
+    if (!relation) { setObjectDefinition({ id, current, error: definitionText.blocked }); return; }
+    setObjectDefinition({ id, current, pending: true });
+    try {
+      const result = await invoke('postgres.structure.queryDefinition', { connectionId: tab.connectionId, database: scope.database,
+        ...(original ? { sessionId: original.id } : {}), ...(relation.schema ? { schema: relation.schema } : {}), name: relation.name });
+      if (current()) setObjectDefinition(result.status === 'ready'
+        ? { id, current, result }
+        : { id, current, error: result.status === 'transaction' ? definitionText.transaction : definitionText.busy });
+    } catch (reason) {
+      if (current()) setObjectDefinition({ id, current, error: errorMessage(reason) });
+      // 元数据事务若失去回滚确认，原会话必须同步真实状态，并保留退出保护。
+      if (!original || !alive.current || session.current !== original || !same(original.scope) || phase.current) return;
+      const next = await invoke('query.sessionState', { sessionId: original.id }).catch(() => undefined);
+      if (!alive.current || session.current !== original || !same(original.scope) || phase.current) return;
+      if (!next?.transactionKnown || next.broken) {
+        parameterState.current = { sessionId: original.id, known: false };
+        parameterReuse.current?.observe();
+        setState({ transactionOpen: next?.transactionOpen ?? false, transactionKnown: false, transactionFailed: next?.transactionFailed === true, broken: true });
+        useWorkspace.getState().setDirty(tab.id, true);
+      }
+    }
+  }
   function openSaveQuery() {
     if (commandEditor()) setSave(true);
   }
@@ -2122,6 +2163,7 @@ export function PostgresQueryTab({
     'execute-current': { enabled: canRun, run: () => run('current') },
     'execute-all': { enabled: canRun, run: () => run('all') },
     'statement-navigation': { enabled: canNavigate, run: () => navigation.open() },
+    'object-definition': { enabled: editable && !objectDefinition, run: openObjectDefinition },
     'select-current-statement': { enabled: canNavigate, run: () => navigation.open('select') },
     'open-current-statement-query': { enabled: canOpenStatementQuery, run: () => navigation.open('duplicate') },
     'previous-statement': { enabled: canNavigate, run: () => navigation.open('previous') },
@@ -2199,8 +2241,13 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.69,
       run: () => { if (active && canOpenStatementQuery) navigation.open('duplicate'); },
     });
-    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); };
-  }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery]);
+    const definition = editorInstance.addAction({
+      id: `dbark-postgres-object-definition:${uid()}`, label: definitionText.entry,
+      precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.8,
+      run: () => { if (active && editor.current === editorInstance && editorInstance.getModel() === menuModel) return openObjectDefinition(); },
+    });
+    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); definition.dispose(); };
+  }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery, state.standardConformingStrings]);
   const renderResultGrid = (target?: GridFindTarget, marks?: ReadonlySet<string>) => result && displayResult ? (
     <ResultsGrid zoomable columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding}
       insertSql={rowSql?.insert} updateSql={rowSql?.update} deleteSql={rowSql?.delete} primaryKeySql={rowSql?.select}
@@ -2239,6 +2286,20 @@ export function PostgresQueryTab({
         handleQueryResultShortcut(event, focused, results.length, selectCurrentResult);
       }}>
       {formatOptions && <QueryFormattingOptionsDialog options={formatOptions} onClose={() => setFormatOptions(undefined)}/>}
+      {objectDefinition && <Modal title={definitionText.title} wide onClose={() => { definitionOwner.current = undefined; setObjectDefinition(undefined); }}>
+        <div className="modal-content" data-pg-query-definition={objectDefinition.id}>
+          <p className="muted small">{definitionText.postgresHint}</p>
+          <p>{profile?.name} · {scope.database}</p>
+          {objectDefinition.current() ? <>
+            {objectDefinition.pending && <Spinner text={definitionText.loading}/>}
+            <ErrorBox message={objectDefinition.error ?? ''}/>
+            {objectDefinition.result && <>
+              <p role="status">{objectDefinition.result.temporary ? definitionText.temporary : definitionText.permanent} · {definitionText.postgresSchema} {objectDefinition.result.schema} · {definitionText.table} {objectDefinition.result.name}</p>
+              <SqlEditor value={objectDefinition.result.ddl} readOnly dialect="postgresql" height={360}/>
+            </>}
+          </> : <ErrorBox message={definitionText.stale}/>}
+        </div>
+      </Modal>}
       <div className="context-bar">
         <strong>{profile?.name}</strong>
         <span>PostgreSQL / {scope.database}</span>
@@ -2263,6 +2324,7 @@ export function PostgresQueryTab({
             <button disabled={!canNavigate} onClick={() => navigation.open()}>
               {navigationText.entry}
             </button>
+            <button disabled={!editable || !!objectDefinition} onClick={() => void openObjectDefinition()}>{definitionText.entry}</button>
             <button disabled={!canPlan} onClick={() => run('explain')}>
               {text.explain}
             </button>

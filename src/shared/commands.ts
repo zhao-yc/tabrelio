@@ -57,6 +57,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.sequence.targets': true,
   'postgres.structure.read': true,
   'postgres.structure.definition': true,
+  'postgres.structure.queryDefinition': true,
   'postgres.structure.dependencies': true,
   'postgres.routine.read': true,
   'postgres.routine.dependencies': true,

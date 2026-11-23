@@ -60,7 +60,7 @@ import { postgresTableManageApplySchema, postgresTableManagePreviewSchema } from
 import { postgresCreateViewPreviewSchema, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema, postgresViewQueryInspectSchema } from './postgresCreateView';
 import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postgresCreateTableSchemasSchema } from './postgresCreateTable';
 import { postgresTableCopyApplySchema, postgresTableCopyPreviewSchema } from './postgresTableCopy';
-import { postgresStructureInputSchema } from './postgresStructure';
+import { postgresQueryObjectDefinitionSchema, postgresStructureInputSchema } from './postgresStructure';
 import { postgresBackupCatalogueSchema, postgresBackupSetSchema, postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportCheckSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema, postgresTableReferenceSchema, postgresRelatedTableSchema, postgresTableValuesSchema, postgresTableStatisticsSchema } from './postgresTable';
 import { postgresTableCalendarSchema, postgresTableHistogramSchema } from './postgresTable';
 import { postgresFilteredUpdateSchema } from './postgresTable';
@@ -377,6 +377,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.sequence.targets': postgresSequenceTargetsSchema,
   'postgres.structure.read': postgresStructureInputSchema,
   'postgres.structure.definition': postgresDefinitionReadSchema,
+  'postgres.structure.queryDefinition': postgresQueryObjectDefinitionSchema,
   'postgres.structure.dependencies': postgresStructureInputSchema,
   'postgres.routine.read': postgresRoutineReadSchema,
   'postgres.routine.dependencies': postgresRoutineDependencySchema,

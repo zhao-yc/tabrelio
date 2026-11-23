@@ -19,7 +19,7 @@ export const postgresReadableStructureSql = `n.nspname <> 'information_schema' A
   AND (${postgresStructureVisibleSql} OR ${postgresTableCanDropSql} OR ${postgresTableCanTruncateSql})`;
 
 // 单条目录查询提供一致的关系、字段、约束和索引快照；绝不读取目标关系的数据行。
-const structureSql = `
+const structureSql = (ownTemporary: boolean) => `
 WITH target AS MATERIALIZED (
   SELECT c.oid, c.relkind, c.relname, c.relispartition, c.relpartbound, c.reloptions,
          c.relrowsecurity, c.relforcerowsecurity, n.nspname,
@@ -38,7 +38,8 @@ WITH target AS MATERIALIZED (
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname::text = $1 AND c.relname::text = $2
     AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-    AND ${postgresReadableStructureSql}
+    AND ${ownTemporary ? `(n.oid = pg_catalog.pg_my_temp_schema() AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
+      AND ${postgresStructureVisibleSql})` : postgresReadableStructureSql}
 )
 SELECT pg_catalog.jsonb_build_object(
   'database', pg_catalog.current_database(),
@@ -202,9 +203,9 @@ export async function readPostgresStructure(connection: PostgresConnection, tabl
 }
 
 /** 在调用者的原事务读取完整目录和关系 OID，生成可复核的结构摘要。 */
-export async function readPostgresStructureFacts(connection: PostgresConnection, table: string) {
+export async function readPostgresStructureFacts(connection: PostgresConnection, table: string, ownTemporary = false) {
   const { schema, name } = postgresRelationName(table);
-  const result = await connection.query(structureSql, [schema, name], { rows: 2, bytes: 4 * 1024 * 1024 });
+  const result = await connection.query(structureSql(ownTemporary), [schema, name], { rows: 2, bytes: 4 * 1024 * 1024 });
   if (result.truncated) throw Error('PostgreSQL结构超过显示预算，无法完整读取');
   if (result.rows.length !== 1 || typeof result.rows[0].c0 !== 'string' || typeof result.rows[0].c1 !== 'string') {
     throw Error('PostgreSQL关系不存在、已改名或没有读取结构的权限');

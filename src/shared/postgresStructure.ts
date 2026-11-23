@@ -10,6 +10,17 @@ export const postgresStructureInputSchema = z.object({
 }).strict();
 export type PostgresStructureInput = z.infer<typeof postgresStructureInputSchema>;
 
+const editorIdentifier = identifier.refine(value => !/[\uD800-\uDFFF]/u.test(value) && new TextEncoder().encode(value).length <= 63);
+/** 查询编辑器只提交已解析的标识符，不发送 SQL 正文。 */
+export const postgresQueryObjectDefinitionSchema = z.object({
+  connectionId: identifier, database: identifier, sessionId: identifier.optional(),
+  schema: editorIdentifier.optional(), name: editorIdentifier,
+}).strict();
+export type PostgresQueryObjectDefinitionInput = z.infer<typeof postgresQueryObjectDefinitionSchema>;
+export type PostgresQueryObjectDefinition = { status: 'busy' | 'transaction' } | {
+  status: 'ready'; schema: string; name: string; temporary: boolean; ddl: string;
+};
+
 export const postgresStructureKind = z.enum(['r', 'p', 'v', 'm', 'f']);
 export const postgresViewOptionsSchema = z.array(z.string().max(512).regex(/^[a-z_][a-z_0-9]*=.+$/)
   .refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value))).max(32);

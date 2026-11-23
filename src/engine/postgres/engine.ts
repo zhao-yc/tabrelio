@@ -89,7 +89,8 @@ import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgre
 import { readPostgresServerMonitor, signalPostgresMonitorTarget, type PostgresMonitorSignalTarget } from './serverMonitor';
 import { StructureSearches } from '../structureSearch';
 import { readPostgresStructureSearchPage } from './structureSearch';
-import { preparePostgresSearchConnection, readPostgresDefinitionText } from './definitionSearch';
+import { preparePostgresSearchConnection, readPostgresDefinitionText, readPostgresQueryObjectDefinition } from './definitionSearch';
+import { postgresQueryObjectDefinitionSchema, type PostgresQueryObjectDefinition } from '../../shared/postgresStructure';
 import { postgresDefinitionReadSchema } from '../../shared/databaseSearch';
 import { dataSearchInputSchema } from '../../shared/dataSearch';
 import { dataSearchCatalogueSchema } from '../../shared/dataSearchCatalogue';
@@ -102,7 +103,7 @@ interface Session {
   connectionId: string;
   managed: PostgresConnection;
   pending?: Promise<unknown>;
-  completion?: Promise<PostgresCompletionResult>;
+  completion?: Promise<unknown>;
   originsReading?: boolean;
   queryRecord?: PostgresQueryRecordSource;
   analysis?: { token: string; sql: string; expiresAt: number };
@@ -321,15 +322,16 @@ export class PostgresEngine {
   }
 
   /** 原会话目录读取只在空闲时进入，失败事务和在途操作保持原样。 */
-  private async completeSession(input: PostgresCompletionInput): Promise<PostgresCompletionResult> {
+  private async readSessionCatalog<T>(input: { sessionId?: string; connectionId: string; database: string },
+    read: (connection: PostgresConnection) => Promise<T>, defer: (reason: 'busy' | 'transaction') => T): Promise<T> {
     const session = this.sessions.get(input.sessionId!);
     if (!session || session.connectionId !== input.connectionId || session.managed.database !== input.database ||
         session.managed.broken || session.closing || this.stopping || this.closing.has(input.connectionId))
-      throw Error('PostgreSQL补全的原会话已变化');
+      throw Error('PostgreSQL目录读取的原会话已变化');
     const state = session.managed.state();
-    if (session.pending || session.completion || !state.transactionKnown) return { items: [], incomplete: false, deferred: 'busy' };
-    if (state.transactionOpen) return { items: [], incomplete: false, deferred: 'transaction' };
-    const pending = Promise.resolve().then(() => readPostgresCompletion(session.managed, input, true));
+    if (session.pending || session.completion || !state.transactionKnown) return defer('busy');
+    if (state.transactionOpen) return defer('transaction');
+    const pending = Promise.resolve().then(() => read(session.managed));
     session.completion = pending;
     try {
       return await pending;
@@ -1363,15 +1365,24 @@ export class PostgresEngine {
           return origins;
         } finally { session.originsReading = false; }
       }
+      case 'postgres.structure.queryDefinition':
       case 'postgres.completion': {
-        if (input.sessionId) return this.completeSession(input as PostgresCompletionInput);
+        const { profile: _, ...request } = input;
+        const definition = command === 'postgres.structure.queryDefinition' ? postgresQueryObjectDefinitionSchema.parse(request) : undefined;
+        const completion = input as PostgresCompletionInput;
+        if (input.sessionId) return definition
+          ? this.readSessionCatalog<PostgresQueryObjectDefinition>(definition, connection => readPostgresQueryObjectDefinition(connection, definition), status => ({ status }))
+          : this.readSessionCatalog<PostgresCompletionResult>(completion, connection => readPostgresCompletion(connection, completion, true),
+              deferred => ({ items: [], incomplete: false, deferred }));
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 补全连接');
         const count = this.completionReads.get(profile.id) ?? 0;
         if (count >= 3) throw Error('该 PostgreSQL 连接的目录读取正忙');
         this.completionReads.set(profile.id, count + 1);
         try {
-          return await this.use(profile, input.database, connection => readPostgresCompletion(connection, input as Parameters<typeof readPostgresCompletion>[1]));
+          return await this.use<PostgresCompletionResult | PostgresQueryObjectDefinition>(profile, input.database, connection => definition
+            ? readPostgresQueryObjectDefinition(connection, definition)
+            : readPostgresCompletion(connection, completion));
         } finally {
           const remaining = (this.completionReads.get(profile.id) ?? 1) - 1;
           if (remaining) this.completionReads.set(profile.id, remaining);

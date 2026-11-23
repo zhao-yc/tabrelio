@@ -4,7 +4,7 @@ import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../src/shared/postgresCompletion';
 import { createPostgresCompletionProvider } from '../../src/renderer/postgresCompletionProvider';
 import { describe, expect, it, vi } from 'vitest';
-import { analyzePostgresCompletion, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
+import { analyzePostgresCompletion, analyzePostgresObjectDefinition, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from '../../src/renderer/postgresNamedParameterReferences';
 
 /** 测试使用竖线表示编辑器光标，其余 SQL 原样进入生产词法。 */
@@ -12,6 +12,22 @@ function at(marked: string) {
   const offset = marked.indexOf('|');
   return analyzePostgresCompletion(marked.slice(0, offset) + marked.slice(offset + 1), offset);
 }
+
+it('对象定义只解析光标所在关系原名，保留限定名称及嵌套作用域', () => {
+  const relation = (marked: string, mode?: boolean) => analyzePostgresObjectDefinition(marked.replace('|', ''), marked.indexOf('|'), mode);
+  expect(relation('SELECT 7; WITH items AS (SELECT * FROM "Case"."Na|me") SELECT * FROM items'))
+    .toMatchObject({ schema: 'Case', name: 'Name' });
+  expect(relation('SELECT [$x] FROM PUBL|IC.Orders o')).toMatchObject({ schema: 'public', name: 'orders' });
+  expect(relation('WITH items AS (SELECT 1) SELECT * FROM it|ems')).toBeUndefined();
+  expect(relation('SELECT t.id FROM things AS |t')).toBeUndefined();
+  expect(relation('SELECT * FROM app.gen|erate(1)')).toBeUndefined();
+  expect(relation('SELECT * FROM "table" WHERE id = \"s|tr\"')).toBeUndefined();
+  expect(relation('WITH target AS (SELECT 1) UPDATE tar|get SET value=1')).toMatchObject({ name: 'target' });
+  expect(relation('MERGE INTO app.t USING app.so|urce s ON t.id = s.id WHEN MATCHED THEN DELETE')).toMatchObject({ schema: 'app', name: 'source' });
+  const ambiguous = "SELECT 'a\\'; SELECT * FROM tab|le_name; -- '";
+  expect(relation(ambiguous, true)).toMatchObject({ name: 'table_name' });
+  expect(relation(ambiguous)).toBeUndefined();
+});
 
 it('参数定位识别最近调用、命名参数、数组和嵌套逗号', () => {
   const signature = (marked: string) => analyzePostgresSignature(marked.replace('|', ''), marked.indexOf('|'));
