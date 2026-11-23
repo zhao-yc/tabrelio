@@ -2513,6 +2513,68 @@ test('PostgreSQL 冲突更新按真实会话的 SELECT 和 UPDATE 列权限补�
   await quitDesktop();
 });
 
+test('PostgreSQL INSERT SELECT 隔离目标列权限和读取来源', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query(`CREATE TABLE public.insert_copy_dst (id int PRIMARY KEY, copy_value text, copy_readonly text DEFAULT '保留');
+      CREATE TABLE public.insert_copy_src (id int, copy_value text);
+      CREATE TABLE public.insert_copy_other (id int, copy_other text);
+      INSERT INTO public.insert_copy_src VALUES (1,'甲');
+      INSERT INTO public.insert_copy_other VALUES (2,'乙');
+      CREATE ROLE insert_copy_role NOLOGIN;
+      GRANT USAGE ON SCHEMA public TO insert_copy_role;
+      GRANT INSERT (id,copy_value), SELECT (copy_readonly) ON public.insert_copy_dst TO insert_copy_role;
+      GRANT SELECT ON public.insert_copy_src, public.insert_copy_other TO insert_copy_role;`);
+    const setRole = 'SET ROLE insert_copy_role';
+    await prepare({id: '', name: '隔离 PostgreSQL INSERT 来源', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, setRole);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await command('execute-all');
+    await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === setRole)).toBe(true);
+    await expect.poll(() => enabled('execute-all')).toBe(true);
+    const baseline = await history(), identity = (await inspectModel()).identity;
+    const accept = async (draft: string, slot: string, prefix: string, name: string) => {
+      await replaceDraft(draft);
+      await modelSelection(1, draft.indexOf(slot) + prefix.length + 1);
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText([name]);
+      await page.keyboard.press('Enter');
+      const completed = draft.replace(slot, postgresIdentifier(name));
+      await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+      expect(await history()).toEqual(baseline);
+      expect((await inspectModel()).identity).toEqual(identity);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+      return completed;
+    };
+    const prefix = 'INSERT INTO public.insert_copy_dst AS dst (id, ';
+    const target = await accept(prefix + 'copy_tail) SELECT src.id, src.copy_value FROM public.insert_copy_src src', 'copy_tail', 'copy_', 'copy_value');
+    const first = await accept(target.replace('src.copy_value', 'copy_tail'), 'copy_tail', 'copy_', 'copy_value');
+    const compound = await accept(first + ' UNION ALL SELECT alt.id, alt.copy_tail FROM public.insert_copy_other alt', 'copy_tail', 'copy_', 'copy_other');
+    const table = await accept(prefix + 'copy_value) TABLE public.insert_copy_src_tail', 'insert_copy_src_tail', 'insert_copy_src', 'insert_copy_src');
+    for (const [sql, rows] of [[compound, [[1,'甲','保留'], [2,'乙','保留']]], [table, [[1,'甲','保留']]]] as const) {
+      await observer.query('BEGIN');
+      try {
+        await observer.query('SET LOCAL ROLE insert_copy_role');
+        expect((await observer.query(sql)).rowCount).toBe(rows.length);
+        await observer.query('RESET ROLE');
+        expect((await observer.query({text: 'SELECT * FROM public.insert_copy_dst ORDER BY id', rowMode: 'array'})).rows).toEqual(rows);
+      } finally { await observer.query('ROLLBACK'); }
+    }
+    expect((await observer.query('SELECT * FROM public.insert_copy_dst')).rows).toEqual([]);
+    await page.screenshot({path: info.outputPath('PostgreSQL-INSERT来源补全.png'), animations: 'disabled'});
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL 字段悬停读取真实目录并区分同名、临时和歧义来源', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

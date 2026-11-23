@@ -59,7 +59,7 @@ const setOperators = new Set(['UNION', 'EXCEPT', 'INTERSECT']);
 const stop = new Set([...entries, ...endsFrom, ...setOperators, 'ON', 'USING', 'CROSS', 'LEFT', 'RIGHT',
   'INNER', 'OUTER', 'FULL', 'NATURAL', 'AS', 'WITH', 'SELECT', 'TABLESAMPLE', 'OVERRIDING',
   'CONFLICT', 'DO', 'NULLS', 'DISTINCT', 'LATERAL', 'ONLY', 'END', 'COLLATE', 'TRUE', 'FALSE', 'NULL']);
-const commands = new Set(['SELECT', 'UPDATE', 'INSERT', 'DELETE', 'VALUES', 'WITH', 'CALL']);
+const commands = new Set(['SELECT', 'UPDATE', 'INSERT', 'DELETE', 'VALUES', 'WITH', 'CALL', 'TABLE']);
 const expressionEntries = new Set(['SELECT', 'WHERE', 'HAVING', 'ON', 'RETURNING', 'VALUES', 'WHEN', 'THEN', 'ELSE',
   'AND', 'OR', 'NOT', 'BY', 'DISTINCT', 'ALL']);
 const expressionOperators = new Set(['(', '[', ',', '=', '+', '-', '*', '/', '%', '<', '>', '|', '&', '^', '~']);
@@ -824,6 +824,22 @@ function readInsertTarget(parts: Part[], trace?: ReferenceTrace): { target: Scop
   return { target, next: index };
 }
 
+/** 括号中的查询属于读取来源，列清单及 OVERRIDING 仍属于 INSERT 自己的头部。 */
+function readInsertSource(parts: Part[], start: number, strict = false): { start: number; columns?: Group } | undefined {
+  const first = parts[start];
+  let columns: Group | undefined;
+  if (first?.kind === 'group' && !startsReferenceQuery(first)) {
+    if (first.closing !== ')' || strict && !identifier(first.parts[0])) return;
+    columns = first;
+    start++;
+  }
+  if (keyword(parts[start]) === 'OVERRIDING') {
+    if (['SYSTEM', 'USER'].includes(keyword(parts[start + 1])) && keyword(parts[start + 2]) === 'VALUE') start += 3;
+    else if (strict) return;
+  }
+  return { start, columns };
+}
+
 /** 来源的 JOIN 条件也可能写作 ON conflict。只有与动作配对的最后一组关键字才是冲突子句。 */
 function readConflictAction(parts: Part[], start: number, end: number): { on: number; action: number } | null | undefined {
   const action = parts.findIndex((_, index) => index >= start && index + 1 < end && mergeKeyword(parts, index) === 'DO' &&
@@ -840,16 +856,9 @@ function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], tra
   const destination = readInsertTarget(parts, trace);
   if (!destination) return;
   const { target } = destination;
-  let index = destination.next;
-  const columns = parts[index];
-  if (columns?.kind === 'group' && !startsReferenceQuery(columns)) {
-    if (columns.closing !== ')' || !identifier(columns.parts[0])) return;
-    index++;
-  }
-  if (keyword(parts[index]) === 'OVERRIDING') {
-    if (!['SYSTEM', 'USER'].includes(keyword(parts[index + 1])) || keyword(parts[index + 2]) !== 'VALUE') return;
-    index += 3;
-  }
+  const header = readInsertSource(parts, destination.next, true);
+  if (!header) return;
+  const { start: index } = header;
   const returning = parts.findIndex((_, position) => position >= index && mergeKeyword(parts, position) === 'RETURNING');
   const end = returning < 0 ? parts.length : returning;
   const conflict = readConflictAction(parts, index, end);
@@ -1688,6 +1697,48 @@ function completeWriteAction(parts: Part[], refs: ScopedRelation[], target: Scop
   }
 }
 
+/** INSERT 的目标列、来源、冲突动作和返回列表拥有不同的可见关系。 */
+function completeInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], context: QueryContext | undefined,
+  returning: number): Parsed | undefined {
+  const destination = readInsertTarget(parts);
+  if (returning >= 0 && (!context || context.offset >= parts[returning].end)) {
+    if (!destination) return { projection: unknown };
+    const { target } = destination;
+    return parseReturning(parts.slice(returning), [target], target, { scope, outer, context, names: new Set() }) ?? { projection: unknown };
+  }
+  if (!context) return { projection: unknown };
+  if (!destination) return;
+  const { target } = destination;
+  const header = readInsertSource(parts, destination.next);
+  if (!header) return;
+  const list = header.columns;
+  if (list && contains(list, context.offset)) {
+    const previous = context.left.at(-1);
+    // 只补全清单项的基础列。复合字段和下标有自己的类型或表达式作用域。
+    const atColumn = punct(previous, '(') && previous?.end === list.start + 1 ||
+      punct(previous, ',') && !!previous && list.parts.includes(previous);
+    const query = atColumn ? columns([{ ...target, columnAccess: 'insert' }], [], context.left) : undefined;
+    return { projection: unknown, query };
+  }
+  const end = returning < 0 ? parts.length : returning;
+  const conflict = readConflictAction(parts, header.start, end);
+  const boundary = parts[end]?.start ?? Infinity;
+  if (conflict && context.offset >= parts[conflict.action].end && context.offset < boundary) {
+    const analysis: MergeAnalysis = { scope, outer, context, names: new Set() };
+    // EXCLUDED 读取目标目录，只有动作表达式可见。写入位置使用独立的 UPDATE 列权限。
+    const current: ScopedRelation = { ...target, columnAccess: 'select' };
+    const pending: ScopedRelation = { ...current, alias: 'excluded', declaration: undefined, qualifiedOnly: true };
+    completeWriteAction(parts.slice(conflict.action + 1, end), [current, pending], { ...target, columnAccess: 'update' }, analysis, boundary);
+    return analysis.active ?? { projection: unknown };
+  }
+  const sourceEnd = conflict?.on ?? end;
+  const first = parts[header.start];
+  if (first && startsReferenceQuery(first) && context.offset >= first.start && context.offset < (parts[sourceEnd]?.start ?? Infinity)) {
+    // 查询来源只继承 WITH 和真实外层，写入目标与冲突动作不参与 SELECT 的名称绑定。
+    return parseQuery(parts.slice(header.start, sourceEnd), scope, outer, context);
+  }
+}
+
 /** WHEN 条件和动作共用分支作用域，CASE 中的 WHEN/THEN 仍属于所在表达式。 */
 function parseMerge(parts: Part[], analysis: MergeAnalysis): Parsed | undefined {
   const { scope, outer, trace, context } = analysis;
@@ -1793,7 +1844,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   }
   const unsupported = (): Parsed => { if (trace) trace.unsupported = true; return { projection: unknown }; };
   const first = keyword(parts[0]);
-  if (parts.length && parts[0].kind !== 'group' && !commands.has(first) && first !== 'MERGE' && !(trace && first === 'TABLE')) return unsupported();
+  if (parts.length && parts[0].kind !== 'group' && !commands.has(first) && first !== 'MERGE') return unsupported();
   let start = 0;
   let scope = inherited;
   if (keyword(parts[0]) === 'WITH') {
@@ -1847,27 +1898,8 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       const projection = traceInsert(main, scope, outer, trace);
       return projection ? { projection } : unsupported();
     }
-    const destination = readInsertTarget(main);
-    if (destination) {
-      const { target } = destination;
-      // INSERT SELECT 的来源和冲突动作都不会向 RETURNING 公开关系。
-      if (returningHere) return parseReturning(main.slice(returning), [target], target,
-        { scope, outer, context, names: new Set() }) ?? { projection: unknown };
-      if (context) {
-        const end = returning < 0 ? main.length : returning;
-        const conflict = readConflictAction(main, destination.next, end);
-        if (conflict && context.offset >= main[conflict.action].end && context.offset < (main[end]?.start ?? Infinity)) {
-          const analysis: MergeAnalysis = { scope, outer, context, names: new Set() };
-          // EXCLUDED 读取目标目录，只有动作表达式可见。写入位置使用独立的 UPDATE 列权限。
-          const current: ScopedRelation = { ...target, columnAccess: 'select' };
-          const pending: ScopedRelation = { ...current, alias: 'excluded', declaration: undefined, qualifiedOnly: true };
-          completeWriteAction(main.slice(conflict.action + 1, end), [current, pending],
-            { ...target, columnAccess: 'update' }, analysis, main[end]?.start ?? Infinity);
-          return analysis.active ?? { projection: unknown };
-        }
-      }
-    }
-    if (returningHere) return { projection: unknown };
+    const completion = completeInsert(main, scope, outer, context, returning);
+    if (completion) return completion;
   }
   if (command === 'MERGE') {
     if (first === 'WITH' && keyword(parts[1]) === 'RECURSIVE') return unsupported();
@@ -1901,7 +1933,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   const joined = readQueryJoinSources(main, scope, outer, context, trace, returningHere);
   if (trace?.unsupported) return unsupported();
   if (joined && 'active' in joined) return joined.active;
-  const tableSource = !!trace && command === 'TABLE';
+  const tableSource = command === 'TABLE';
   if (trace && !write && !['SELECT', 'VALUES', 'TABLE'].includes(command)) return unsupported();
   if (write && command === 'DELETE' && keyword(main[1]) !== 'FROM') return unsupported();
   const where = command === 'DELETE' ? main.findIndex(part => keyword(part) === 'WHERE') : -1;
@@ -2062,7 +2094,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     const joinedResult = outputs ? { outputs, stars: outputs.map(projection => ({ name: '', projection })) } : undefined;
     return parseReturning(main.slice(returning), refs, returningTarget, { scope, outer, context, names: new Set() }, joinedResult) ?? { projection: unknown };
   }
-  const projection = project(main, refs, joined?.outputs.map(projection => ({name: '', projection})));
+  const projection = tableSource && refs[0] ? relationProjection(refs[0]) : project(main, refs, joined?.outputs.map(projection => ({name: '', projection})));
   if (!context || inFunctionMetadata || start > 0 && (main[0]?.start ?? context.start) > context.start) return { projection };
 
   const { left, offset } = context;
@@ -2086,9 +2118,10 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     const position = main.findIndex(part => part === before);
     if (position === 0 && keyword(before) === 'CALL' && (!dotted || qualifier))
       return { projection, routine: { context: 'call', ...(qualifier ? { schema: qualifier } : {}) } };
-    if (position >= 0 && (!dotted || qualifier) && (relationEntry(main, position) || commas.has(position) || position === deleteUsing)) {
+    if (position >= 0 && (!dotted || qualifier) && (tableSource && position === 0 ||
+        relationEntry(main, position) || commas.has(position) || position === deleteUsing)) {
       const ctes = qualifier || writeTarget(main, position) ? [] : [...scope.keys()].slice(0, limits.items);
-      const routine: PostgresRoutineCompletionTarget | undefined = modifier !== 'ONLY' && !writeTarget(main, position)
+      const routine: PostgresRoutineCompletionTarget | undefined = !tableSource && modifier !== 'ONLY' && !writeTarget(main, position)
         ? { context: 'from', ...(qualifier ? { schema: qualifier } : {}) } : undefined;
       return { projection, query: modifier === 'LATERAL' ? undefined :
         { kind: 'relations', ...(qualifier ? { schema: qualifier } : {}), ...(ctes.length ? { ctes } : {}) }, routine };

@@ -271,6 +271,45 @@ it('普通 RETURNING 的 OLD/NEW 使用写入目标，隔离 INSERT 来源和冲
     .toMatchObject({relations: [{name: 'parent', alias: 'old'}]});
 });
 
+it('INSERT SELECT 的各分支只看到自身的来源，并沿用 CTE、连接条件和函数补全', () => {
+  const sql = 'INSERT INTO app.target AS dst (id) OVERRIDING USER VALUE ';
+  const first = ' FROM app.source src UNION ALL SELECT other.id FROM app.secondary other ON CONFLICT (id) DO NOTHING RETURNING id';
+  expect(at(sql + 'SELECT src.|' + first)?.query).toMatchObject({relations: [{name: 'source', schema: 'app', alias: 'src'}]});
+  expect(at(sql + 'SELECT dst.|' + first)?.query).toBeUndefined();
+  expect(at('INSERT INTO app.target AS src SELECT src.| FROM app.source src')?.query)
+    .toMatchObject({relations: [{name: 'source', alias: 'src'}]});
+  expect(at(sql + 'SELECT id FROM app.source src UNION ALL SELECT other.| FROM app.secondary other')?.query)
+    .toMatchObject({relations: [{name: 'secondary', alias: 'other'}]});
+  expect(at(sql + 'SELECT id AS output FROM app.source UNION ALL SELECT id FROM app.secondary ORDER BY out|')?.query)
+    .toMatchObject({relations: [{projection: {names: ['output']}}]});
+  expect(at('WITH seed(id) AS (VALUES (4)) ' + sql + 'WITH seed(label) AS (VALUES (5)) SELECT s.| FROM seed s')?.query)
+    .toMatchObject({relations: [{projection: {names: ['label']}}]});
+  expect(at(sql + '(SELECT src.| FROM app.source src)')?.query).toMatchObject({relations: [{name: 'source'}]});
+  expect(at(sql + 'SELECT 1 FROM outside o, a x JOIN b y ON o.|')?.query).toBeUndefined();
+  expect(at(sql + 'SELECT 1 FROM outside o, a x JOIN b y ON x.|')?.query).toMatchObject({relations: [{name: 'a'}]});
+  expect(at(sql + 'TABLE app.so|')?.query).toEqual({kind: 'relations', schema: 'app'});
+  expect(at(sql + 'TABLE app.source ORDER BY id|')?.query).toMatchObject({relations: [{name: 'source', schema: 'app'}]});
+  expect(at(sql + 'VALUES (dst.|)')?.query).toBeUndefined();
+  expect(at(sql + 'VALUES (app.compute|())')?.routine).toEqual({context: 'expression', schema: 'app'});
+});
+
+it('INSERT 只在目标列表的基础列位置读取 INSERT 权限，并核对完整替换范围', async () => {
+  const insert = 'INSERT INTO app.target AS dst (id, ';
+  const request = vi.fn(async (): Promise<PostgresCompletionResult> => ({incomplete: false,
+    items: [{kind: 'column', reference: 0, name: 'new_value', type: 'text'}]}));
+  const {provider, suggest} = editor(insert + 'new|_tail) OVERRIDING SYS', request, '原会话');
+  try {
+    const item = (await suggest())?.suggestions.find(candidate => candidate.insertText === '"new_value"');
+    expect(item?.range).toMatchObject({startColumn: insert.length + 1, endColumn: insert.length + 'new_tail'.length + 1});
+    expect(request).toHaveBeenCalledExactlyOnceWith({kind: 'columns', prefix: 'new', connectionId: '原连接', database: '原库',
+      sessionId: '原会话', relations: [{schema: 'app', name: 'target', columnAccess: 'insert'}]});
+  } finally { provider.dispose(); }
+  expect(at(insert + '|')?.query).toMatchObject({relations: [{name: 'target', columnAccess: 'insert'}]});
+  for (const sample of [insert + 'array_col[|]) VALUES (1,2)', insert + 'composite.sub|) VALUES (1,2)']) {
+    expect(at(sample)?.query, sample).toBeUndefined();
+  }
+});
+
 it('ON CONFLICT DO UPDATE 区分赋值目标、既有行、EXCLUDED 和条件作用域', () => {
   const insert = 'INSERT INTO app.items AS target SELECT x.id FROM a x JOIN b ON conflict UNION ALL SELECT id FROM c ';
   const update = 'ON CONFLICT (id) WHERE visible DO UPDATE SET ';
@@ -455,7 +494,8 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
     expect(at('SELECT c.| FROM public.A AS C')?.query).toEqual({ kind: 'columns', qualified: true, relations: [{ schema: 'public', name: 'a', alias: 'c' }] });
     expect(at('SELECT s.t.| FROM s.t')?.query).toEqual({ kind: 'columns', qualified: true, relations: [{ schema: 's', name: 't' }] });
     expect(at('SELECT t.| FROM s.t AS r')?.query).toBeUndefined();
-    expect(at('INSERT INTO "甲".t (na|) VALUES (1)')?.query).toEqual({ kind: 'columns', qualified: false, relations: [{ schema: '甲', name: 't' }] });
+    expect(at('INSERT INTO "甲".t (na|) VALUES (1)')?.query).toMatchObject({ kind: 'columns', qualified: false,
+      relations: [{ schema: '甲', name: 't', columnAccess: 'insert' }] });
   });
   it('字符串、嵌套注释、dollar 正文及参数不触发目录，同名别名不猜来源', () => {
     for (const input of ["SELECT 'x|z' FROM t", 'SELECT /* a /* b */ | */ FROM t',
