@@ -992,6 +992,8 @@ PostgreSQL 的 `JOIN USING` 和 `NATURAL JOIN` 合并键在结果里只建议一
 
 在 PostgreSQL 的 `ON CONFLICT` 后按 Ctrl+空格，可选择由普通列组成且无谓词的完整主键或唯一键。括号内已填的列会保留，接受候选会补齐缺项。`ON CONSTRAINT` 后可选用目标表的约束名，写明 `DO NOTHING` 时也可选择排斥约束。列权限和同名表以当前会话为准。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)
 
+在 `ON CONFLICT` 后完整目标的位置，可按索引名或键前缀选择部分唯一索引、表达式唯一索引。接受候选会将完整键组及索引需要的 `WHERE` 谓词写入草稿。已经手写的冲突目标谓词会保留。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)
+
 用 PostgreSQL 的 `INSERT … SELECT` 从查询写入数据时，目标列清单按当前连接的 `INSERT` 权限补全。来源查询按自己的表、CTE 和 `UNION` 分支提供字段，来源 `TABLE` 也可补全表名。目标别名只在可以引用目标的子句中出现。 [PostgreSQL INSERT](https://www.postgresql.org/docs/18/sql-insert.html)
 
 把光标放在 PostgreSQL 的整体 JOIN 别名或 `USING (...) AS alias` 的别名限定符上，可用 F12 跳到声明、Shift+F12 查找引用、F2 整组改名。改名保留内部同名别名和同名连接键。能确认来源的整体 JOIN 列清单也可按 F2 改名。遇到无法确认的裸名称时，编辑器会保留原草稿。 [PostgreSQL SELECT](https://www.postgresql.org/docs/18/sql-select.html)

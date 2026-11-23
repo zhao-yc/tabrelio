@@ -2,6 +2,7 @@ import { postgresCompletionLimits, postgresJoinColumnLimit, postgresRoutineParam
   type PostgresCompletionResult } from '../../shared/postgresCompletion';
 import type { PostgresConnection } from './connection';
 import { postgresIdentifier } from '../../shared/postgresSql';
+import { postgresConflictExpression } from '../../shared/postgresConflictExpression';
 
 const eq = 'OPERATOR(pg_catalog.=)';
 const ne = 'OPERATOR(pg_catalog.<>)';
@@ -274,7 +275,7 @@ async function joinColumns(connection: PostgresConnection, input: Extract<Postgr
   return { items, incomplete: false };
 }
 
-/** 只读取一个已解析目标的约束与键列。目录内的 SQL 表达式不会写入编辑器。 */
+/** 只读取一个已解析目标的约束、键列和经过边界校验的表达式。 */
 async function conflictTargets(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'conflictTargets' }>,
   session: boolean): Promise<PostgresCompletionResult> {
   const { relation, selection, prefix } = input;
@@ -342,7 +343,79 @@ async function conflictTargets(connection: PostgresConnection, input: Extract<Po
     if (Array.isArray(columns) && columns.length > 0 && columns.length <= 32 && new Set(columns).size === columns.length && columns.every(isCatalogName))
       items.push({ kind: 'conflictKey', name: row.c0, columns, primary: row.c1 === 't' });
   }
-  return { items, incomplete: result.truncated || result.rows.length === rowLimit };
+  const incomplete = result.truncated || result.rows.length === rowLimit;
+  if (selection.whole && !incomplete && items.length < postgresCompletionLimits.items) {
+    try {
+      const extra = await complexConflictTargets(connection, target, name, relation.name, prefix, rowLimit - items.length);
+      return { items: [...items, ...extra.items], incomplete: extra.incomplete };
+    } catch {
+      // 附加目录查询失败时仍交付已经核对的普通键，原会话的回滚由外层统一确认。
+      return { items, incomplete: true };
+    }
+  }
+  return { items, incomplete };
+}
+
+/** 复杂候选仅用于可一次替换完整冲突目标的位置。依赖目录用于校验谓词和表达式的列权限。 */
+async function complexConflictTargets(connection: PostgresConnection, target: string, name: string, relation: string, prefix: string,
+  limit: number): Promise<PostgresCompletionResult> {
+  const result = await connection.query(`${target}, deferred AS (
+    SELECT pg_catalog.array_agg(k.attnum ORDER BY k.attnum) AS attnums
+    FROM target t JOIN pg_catalog.pg_index i ON i.indrelid ${eq} t.oid
+    CROSS JOIN LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
+    WHERE i.indisunique AND NOT i.indisexclusion AND NOT i.indimmediate AND i.indisvalid AND i.indisready AND i.indislive
+      AND i.indpred IS NULL AND i.indexprs IS NULL AND k.position OPERATOR(pg_catalog.<=) i.indnkeyatts
+    GROUP BY i.indexrelid
+  )
+  SELECT c.relname::pg_catalog.text, terms.items::pg_catalog.text, pg_catalog.pg_get_expr(i.indpred, i.indrelid, false)
+  FROM target t JOIN pg_catalog.pg_index i ON i.indrelid ${eq} t.oid
+  JOIN pg_catalog.pg_class c ON c.oid ${eq} i.indexrelid
+  CROSS JOIN LATERAL (
+    SELECT pg_catalog.json_agg(CASE WHEN k.attnum ${eq} 0 THEN pg_catalog.json_build_object('expression', body.sql)
+        ELSE pg_catalog.json_build_object('column', a.attname::pg_catalog.text) END ORDER BY k.position) AS items,
+      pg_catalog.array_agg(k.attnum ORDER BY k.attnum) AS attnums,
+      pg_catalog.bool_or(pg_catalog.strpos(pg_catalog.lower(pg_catalog.ltrim(COALESCE(a.attname::pg_catalog.text, body.sql), ' (')),
+        pg_catalog.lower($2::pg_catalog.text)) ${eq} 1) AS matches
+    FROM pg_catalog.unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
+    LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid ${eq} t.oid AND a.attnum ${eq} k.attnum AND NOT a.attisdropped
+    CROSS JOIN LATERAL (SELECT CASE WHEN k.attnum ${eq} 0 THEN pg_catalog.pg_get_indexdef(i.indexrelid, k.position::pg_catalog.int4, false) END AS sql) body
+    WHERE k.position OPERATOR(pg_catalog.<=) i.indnkeyatts
+    HAVING pg_catalog.count(*) ${eq} i.indnkeyatts
+      AND pg_catalog.bool_and(CASE WHEN k.attnum ${eq} 0 THEN body.sql IS NOT NULL
+        ELSE a.attnum OPERATOR(pg_catalog.>) 0 AND pg_catalog.has_column_privilege(t.oid, a.attnum, 'SELECT') END)
+  ) terms
+  WHERE i.indisunique AND i.indimmediate AND NOT i.indisexclusion AND i.indisvalid AND i.indisready AND i.indislive
+    AND i.indnkeyatts BETWEEN 1 AND 32 AND (i.indpred IS NOT NULL OR i.indexprs IS NOT NULL)
+    AND (terms.matches OR pg_catalog.strpos(pg_catalog.lower(c.relname::pg_catalog.text), pg_catalog.lower($2::pg_catalog.text)) ${eq} 1)
+    AND NOT EXISTS (SELECT 1 FROM deferred d WHERE d.attnums ${eq} terms.attnums)
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_depend d WHERE d.classid ${eq} 'pg_catalog.pg_class'::pg_catalog.regclass
+        AND d.objid ${eq} i.indexrelid AND d.refclassid ${eq} 'pg_catalog.pg_class'::pg_catalog.regclass
+        AND d.refobjid ${eq} t.oid AND d.refobjsubid ${ne} 0
+        AND NOT pg_catalog.has_column_privilege(t.oid, d.refobjsubid::pg_catalog.int2, 'SELECT')
+    )
+  ORDER BY c.relname LIMIT $3`, [name, prefix, limit], { rows: limit, bytes: 512 * 1024 });
+  const items: PostgresCompletionItem[] = [];
+  for (const row of result.rows.slice(0, limit - 1)) {
+    if (!isCatalogName(row.c0) || typeof row.c1 !== 'string') continue;
+    let parsed: unknown;
+    try { parsed = JSON.parse(row.c1); } catch { continue; }
+    if (!Array.isArray(parsed) || !parsed.length || parsed.length > 32) continue;
+    const terms: ({ column: string } | { expression: string })[] = [];
+    for (const term of parsed) {
+      if (isCatalogName(term?.column)) terms.push({ column: term.column });
+      else {
+        const expression = postgresConflictExpression(term?.expression, relation);
+        if (!expression) break;
+        terms.push({ expression });
+      }
+    }
+    if (terms.length !== parsed.length) continue;
+    const predicate = row.c2 === null ? undefined : postgresConflictExpression(row.c2, relation);
+    if (row.c2 !== null && !predicate) continue;
+    items.push({ kind: 'conflictIndex', name: row.c0, terms, ...(predicate ? { predicate } : {}) });
+  }
+  return { items, incomplete: result.truncated || result.rows.length === limit };
 }
 
 /** 查实际可执行的重载。原会话由 PostgreSQL 解析 search_path，同名不同签名仍保留。 */

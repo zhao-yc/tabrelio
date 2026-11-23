@@ -2595,10 +2595,11 @@ test('PostgreSQL 冲突目标按原会话补全复合键和可用约束', async 
       CREATE UNIQUE INDEX immediate_slow ON conflict_scope.arbiter_probe (slow_key);
       CREATE UNIQUE INDEX only_some ON conflict_scope.arbiter_probe (partial_key) WHERE payload <> '';
       CREATE UNIQUE INDEX expression_key ON conflict_scope.arbiter_probe (lower(entry_code));
-      INSERT INTO conflict_scope.arbiter_probe VALUES (1,9,'甲','原值',null,1,'[1,3)');
+      CREATE UNIQUE INDEX mixed_target ON conflict_scope.arbiter_probe (realm, lower(partial_key)) WHERE payload IS NOT NULL;
+      INSERT INTO conflict_scope.arbiter_probe VALUES (1,9,'甲','原值','ActIF',1,'[1,3)');
       CREATE ROLE conflict_column_role NOLOGIN;
       GRANT USAGE ON SCHEMA conflict_scope TO conflict_column_role;
-      GRANT INSERT (id,realm,entry_code,payload), SELECT (id) ON conflict_scope.arbiter_probe TO conflict_column_role;
+      GRANT INSERT (id,realm,entry_code,payload), SELECT (id,partial_key) ON conflict_scope.arbiter_probe TO conflict_column_role;
       ${path}`);
     await prepare({id: '', name: '隔离 PostgreSQL 冲突目标', dialect: 'postgresql', group: '', color: '#123456',
       host, port, user, database: user, password, rememberPassword: false}, path);
@@ -2633,13 +2634,27 @@ test('PostgreSQL 冲突目标按原会话补全复合键和可用约束', async 
     const update = ' DO UPDATE SET payload=excluded.payload';
     await show(base + '(key_tail)' + update, 'key_tail', '', ['id', 'realm, entry_code']);
     await show(base + 'ON CONSTRAINT key_tail' + update, 'key_tail', '', ['arbiter_probe_pkey', 'Pair "键"']);
-    const whole = await accept(base + 're_tail' + update, 're_tail', 're', 'realm, entry_code', '("realm", "entry_code")');
+    const whole = await accept(base + 'ent_tail' + update, 'ent_tail', 'ent', 'entry_code, realm', '("entry_code", "realm")');
     const remainder = await accept(base + '(realm, ent_tail)' + update, 'ent_tail', 'ent', 'entry_code', '"entry_code"');
     const named = await accept(base + 'ON CONSTRAINT Pa_tail' + update, 'Pa_tail', 'Pa', 'Pair "键"', postgresIdentifier('Pair "键"'));
     const excluded = await accept("INSERT INTO arbiter_probe (id,realm,entry_code,era) VALUES (3,10,'乙',int4range(2,4)) " +
       'ON CONFLICT ON CONSTRAINT ra_tail DO NOTHING', 'ra_tail', 'ra', 'range_guard', '"range_guard"');
+    const definitions = (await observer.query(`SELECT c.relname, pg_get_indexdef(i.indexrelid, i.indnkeyatts::int, false) AS term,
+      pg_get_expr(i.indpred, i.indrelid, false) AS predicate
+      FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid='conflict_scope.arbiter_probe'::regclass
+        AND c.relname IN ('only_some','expression_key','mixed_target')`)).rows;
+    const partialDefinition = definitions.find(item => item.relname === 'only_some');
+    const expressionDefinition = definitions.find(item => item.relname === 'expression_key');
+    const mixedDefinition = definitions.find(item => item.relname === 'mixed_target');
+    const partial = await accept("INSERT INTO arbiter_probe (id,realm,entry_code,payload,partial_key) VALUES (4,11,'丙','新值','ActIF') " +
+      'ON CONFLICT par_tail' + update, 'par_tail', 'par', 'partial_key', '("partial_key") WHERE (' + partialDefinition.predicate + ')');
+    const expression = await accept("INSERT INTO arbiter_probe (id,realm,entry_code,payload) VALUES (5,12,'甲','新值') ON CONFLICT ex_tail" +
+      update, 'ex_tail', 'ex', expressionDefinition.term, '((' + expressionDefinition.term + '))');
+    const mixed = await accept("INSERT INTO arbiter_probe (id,realm,entry_code,payload,partial_key) VALUES (6,9,'丁','新值','actif') " +
+      'ON CONFLICT mix_tail' + update, 'mix_tail', 'mix', 'realm, ' + mixedDefinition.term,
+      '("realm", (' + mixedDefinition.term + ')) WHERE (' + mixedDefinition.predicate + ')');
     // 每个候选独立执行并回滚，核对真实冲突结果及原行恢复。
-    for (const sql of [whole, remainder, named, excluded]) {
+    for (const sql of [whole, remainder, named, excluded, partial, expression, mixed]) {
       await observer.query('BEGIN');
       try {
         expect((await observer.query(sql)).rowCount).toBe(sql === excluded ? 0 : 1);
@@ -2650,6 +2665,7 @@ test('PostgreSQL 冲突目标按原会话补全复合键和可用约束', async 
     expect((await observer.query({text: 'SELECT id,payload FROM arbiter_probe', rowMode: 'array'})).rows).toEqual([[1,'原值']]);
     await executeSetting('SET ROLE conflict_column_role');
     await show(base + '(key_tail) DO NOTHING', 'key_tail', '', ['id']);
+    await show(base + 'key_tail DO NOTHING', 'key_tail', '', ['id']);
     await show(base + 'ON CONSTRAINT key_tail DO NOTHING', 'key_tail', '', ['arbiter_probe_pkey']);
     await page.screenshot({path: info.outputPath('PostgreSQL冲突目标补全.png'), animations: 'disabled'});
     expect(pageErrors).toEqual([]);

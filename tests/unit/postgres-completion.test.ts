@@ -6,6 +6,7 @@ import { createPostgresCompletionProvider } from '../../src/renderer/postgresCom
 import { describe, expect, it, vi } from 'vitest';
 import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresObjectDefinition, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from '../../src/renderer/postgresNamedParameterReferences';
+import { postgresConflictExpression } from '../../src/shared/postgresConflictExpression';
 
 /** 测试使用竖线表示编辑器光标，其余 SQL 原样进入生产词法。 */
 function at(marked: string) {
@@ -342,7 +343,7 @@ it('ON CONFLICT DO UPDATE 区分赋值目标、既有行、EXCLUDED 和条件作
 it('冲突目标补全区分键组、约束名、动作和读取来源', () => {
   const insert = 'INSERT INTO app.items AS t VALUES (1) ON CONFLICT ';
   expect(at(insert + 're|_tail')?.query).toEqual({kind: 'conflictTarget', relation: {name: 'items', schema: 'app'},
-    selection: {mode: 'key', used: []}, whole: true});
+    selection: {mode: 'key', whole: true, used: []}});
   expect(at(insert + '(re|_tail, "标签") DO UPDATE SET value=excluded.value')?.query)
     .toMatchObject({selection: {mode: 'key', used: ['标签']}});
   expect(at(insert + '("标签", |')?.query).toMatchObject({selection: {mode: 'key', used: ['标签']}});
@@ -380,6 +381,46 @@ it('冲突键补齐其余列并保留后续已填项，约束名使用原引号�
       sessionId: '现有会话', prefix: 're', relation: {name: 'items', schema: 'app'}, selection: {mode: 'key', used: ['id']}});
     expect((await constraints.suggest())?.suggestions.map(item => item.insertText)).toEqual(['"Case""键"']);
   } finally { keys.provider.dispose(); constraints.provider.dispose(); }
+});
+
+it('完整冲突目标可同时插入表达式键、普通键和目录谓词，保留动作及用户手写条件', async () => {
+  const source = 'INSERT INTO app.items VALUES (1) ON CONFLICT ';
+  const request = vi.fn(async (): Promise<PostgresCompletionResult> => ({incomplete: false, items: [
+    {kind: 'conflictIndex', name: 'mixed_index', terms: [{column: 'tenant'}, {expression: 'lower(code)'}], predicate: "state <> '停用'::text"},
+    {kind: 'conflictIndex', name: 'mixed_wrong', terms: [{column: 'tenant'}], predicate: 'true) DO NOTHING; DELETE FROM t; --'},
+  ]}));
+  const whole = editor(source + 'mix|_tail DO UPDATE SET state=excluded.state', request, '原会话');
+  const handwritten = editor(source + '(te|_tail) WHERE enabled DO NOTHING', request, '原会话');
+  try {
+    expect((await whole.suggest())?.suggestions.map(item => item.insertText)).toEqual([
+      `("tenant", (lower(code))) WHERE (state <> '停用'::text)`,
+    ]);
+    expect(request).toHaveBeenCalledExactlyOnceWith({kind: 'conflictTargets', connectionId: '原连接', database: '原库',
+      sessionId: '原会话', prefix: 'mix', relation: {name: 'items', schema: 'app'}, selection: {mode: 'key', whole: true, used: []}});
+    expect((await handwritten.suggest())?.suggestions).toEqual([]);
+    expect(request).toHaveBeenCalledTimes(1);
+  } finally { whole.provider.dispose(); handwritten.provider.dispose(); }
+});
+
+it('目录表达式可以包含引号、嵌套括号和数组，但保持独立边界与绑定', () => {
+  for (const valid of ["lower(code) || 'a; -- b)'", 'qty = ANY (ARRAY[1,2])', "tag = E'a\\\\b'", 'code IS NOT NULL']) {
+    expect(postgresConflictExpression(valid, 'items'), valid).toBe(valid);
+  }
+  for (const invalid of ['a, b', 'x) OR (false', 'x; RESET ROLE', 'x -- 后续子句', '(SELECT 1)', '$1',
+    'hash(items.*)', 'hash("items")', 'items.code', "code = 'a\\'b'"]) {
+    expect(postgresConflictExpression(invalid, 'items'), invalid).toBeUndefined();
+  }
+});
+
+it('附加索引目录失败时保留已经读取的普通冲突键', async () => {
+  const query = vi.fn(async (sql: string) => {
+    if (sql.includes('pg_get_indexdef')) throw Error('表达式目录读取失败');
+    return {truncated: false, rows: sql.includes('FROM keys k') ? [{c0: 'items_pkey', c1: 't', c2: '["id"]'}] : []};
+  });
+  const connection = {database: '原库', query} as unknown as PostgresConnection;
+  expect(await readPostgresCompletion(connection, {kind: 'conflictTargets', connectionId: '原连接', database: '原库', prefix: '',
+    relation: {schema: 'app', name: 'items'}, selection: {mode: 'key', whole: true, used: []}})).toEqual({incomplete: true,
+    items: [{kind: 'conflictKey', name: 'items_pkey', columns: ['id'], primary: true}]});
 });
 
 it('冲突更新目录传实际表和所需列权限，现有标签和完整替换范围保留', async () => {

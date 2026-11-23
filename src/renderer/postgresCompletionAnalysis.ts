@@ -42,7 +42,7 @@ interface RelationSpan { end: number; relation: number; joined?: true; }
 type Scope = ReadonlyMap<string, Projection>;
 type Query = { kind: 'relations'; schema?: string; ctes?: string[]; mergeTarget?: true } |
   { kind: 'columns'; relations: PostgresCompletionRelation[]; qualified: boolean; joinOutput?: PostgresJoinOutput } |
-  { kind: 'conflictTarget'; relation: PostgresCatalogRelation; selection: PostgresConflictSelection; whole?: true } | PostgresUsingColumns;
+  { kind: 'conflictTarget'; relation: PostgresCatalogRelation; selection: PostgresConflictSelection } | PostgresUsingColumns;
 export interface PostgresCompletionAnalysis {
   start: number;
   end: number;
@@ -887,7 +887,7 @@ function completeConflictTarget(parts: Part[], context: QueryContext, target: Sc
     const used = activeColumnList(first, context);
     if (used && used.length <= 31) return { kind: 'conflictTarget', relation, selection: { mode: 'key', used } };
   } else if (nameSlot(parts, afterConflict)) {
-    return { kind: 'conflictTarget', relation, selection: { mode: 'key', used: [] }, whole: true };
+    return { kind: 'conflictTarget', relation, selection: { mode: 'key', whole: true, used: [] } };
   }
 }
 

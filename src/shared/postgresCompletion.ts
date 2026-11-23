@@ -10,8 +10,8 @@ const catalogRelation = z.object({ name: fieldIdentifier, schema: fieldIdentifie
 export type PostgresCatalogRelation = z.infer<typeof catalogRelation>;
 const conflictSelection = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('constraint'), allowExclusion: z.literal(true).optional() }).strict(),
-  z.object({ mode: z.literal('key'), used: z.array(fieldIdentifier).max(31)
-    .refine(items => new Set(items).size === items.length) }).strict(),
+  z.object({ mode: z.literal('key'), whole: z.literal(true).optional(), used: z.array(fieldIdentifier).max(31)
+    .refine(items => new Set(items).size === items.length) }).strict().refine(value => !value.whole || !value.used.length),
 ]);
 export type PostgresConflictSelection = z.infer<typeof conflictSelection>;
 const functionCall = z.object({
@@ -60,6 +60,7 @@ export type PostgresCompletionItem =
   | { kind: 'joinColumns'; reference: number; names: string[] }
   | { kind: 'conflictConstraint'; name: string; constraint: 'primary' | 'unique' | 'exclusion' }
   | { kind: 'conflictKey'; name: string; columns: string[]; primary: boolean }
+  | { kind: 'conflictIndex'; name: string; terms: ({ column: string } | { expression: string })[]; predicate?: string }
   | { kind: 'columnDetail'; reference: number; name: string; schema: string; relation: string; type: string;
     nullable: boolean; expression: string | null; generated: boolean; comment: string | null; temporary: boolean }
   | { kind: 'routine'; schema: string; name: string; arguments: string; returns: string | null; category: 'f' | 'p' | 'a' | 'w';
