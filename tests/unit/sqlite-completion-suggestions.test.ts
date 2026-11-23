@@ -25,6 +25,66 @@ it('真实CTE显式输出列直接补全，既不查永久表也不读取用户�
   const d = directory([]), candidates = await sqliteCompletionSuggestions(result, d);
   expect(d.load).not.toHaveBeenCalled(); expect(candidates.items).toEqual([expect.objectContaining({ label: 'name', kind: 'column', insertText: '"name"' })]);
 });
+it('CTE 与派生表逐层展开星号，实际 SQLite 接受重名后的字段，只读取原始表', async () => {
+  const marked = 'WITH base AS (SELECT s.*, s.label AS label FROM temp.subject s), renamed AS (SELECT base.* FROM base) SELECT d."label:|suffix" FROM (SELECT renamed.* FROM renamed) d';
+  const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE base(wrong); CREATE TABLE renamed(wrong); CREATE TABLE subject(wrong);
+      CREATE TEMP TABLE subject(id INTEGER, label TEXT); INSERT INTO temp.subject VALUES(1,'来源列');`);
+    const directory = { load: vi.fn(async (lookup: SqliteCompletionLookup) => {
+      if (lookup.kind !== 'columns') throw Error('预期准确来源列');
+      const entries = db.prepare('SELECT name,type,hidden FROM pragma_table_xinfo(?,?) ORDER BY cid').all(lookup.table, lookup.schema ?? 'main')
+        .map(row => ({ ...column(String(row.name), lookup.table, lookup.schema ?? 'main'), declaredType: String(row.type), hidden: row.hidden === 1 }));
+      return { entries, incomplete: false, stamp: '1:1' };
+    }) };
+    const result = await sqliteCompletionSuggestions(analysis, directory);
+    expect(result.incomplete).toBe(false);
+    expect(result.items.map(item => item.insertText)).toEqual(['"label:1"']);
+    expect(directory.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'subject', schema: 'temp', prefix: '' });
+    const completed = source.slice(0, analysis.target.start) + result.items[0].insertText + source.slice(analysis.target.end);
+    expect(db.prepare(completed).all()).toEqual([{ 'label:1': '来源列' }]);
+  } finally { db.close(); }
+});
+it('局部星号复用嵌套 JOIN 的合并、重名与隐藏列输出规则', async () => {
+  const marked = "WITH local AS (SELECT j.* FROM (SELECT 1 AS marker) a JOIN (source s JOIN json_each(s.payload) j ON 1) ON 1) SELECT local.| FROM local";
+  const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE source(id INTEGER, payload TEXT); INSERT INTO source VALUES(1,'[7]');`);
+    const directory = { load: vi.fn(async (lookup: SqliteCompletionLookup) => {
+      if (lookup.kind !== 'columns') throw Error('预期准确来源列');
+      const entries = db.prepare('SELECT name,hidden FROM pragma_table_xinfo(?,?) ORDER BY cid').all(lookup.table, lookup.schema ?? 'main')
+        .map(row => ({ ...column(String(row.name), lookup.table), hidden: row.hidden === 1 }));
+      return { entries, incomplete: false, stamp: '1:0' };
+    }) };
+    const result = await sqliteCompletionSuggestions(analysis, directory);
+    const expanded = db.prepare(source.replace('local. FROM', '* FROM')).columns().map(({ name }) => name);
+    expect(result.items.map(item => item.label)).toEqual(expanded);
+    expect(expanded).toContain('id:1');
+    expect(expanded).not.toContain('json');
+    expect(directory.load.mock.calls).toEqual([[{ kind: 'columns', table: 'source', prefix: '' }],
+      [{ kind: 'columns', table: 'json_each', tableFunction: true, prefix: '' }]]);
+  } finally { db.close(); }
+});
+it('局部投影遇到未知表达式保留前序已知列，循环不会触发永久同名目录', async () => {
+  const partial = 'WITH local AS (SELECT *, i+1, 1 AS later FROM src) SELECT local.| FROM local';
+  const cyclic = 'WITH shadow AS (SELECT * FROM shadow) SELECT shadow.| FROM shadow';
+  const d = directory([column('id', 'src')]);
+  const analyze = (marked: string) => {
+    const result = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+    if (result.status !== 'ready') throw Error(result.reason);
+    return result;
+  };
+  const result = await sqliteCompletionSuggestions(analyze(partial), d);
+  expect(result.items.map(item => item.label)).toEqual(['id']);
+  expect(result.incomplete).toBe(true);
+  d.load.mockClear();
+  expect(await sqliteCompletionSuggestions(analyze(cyclic), d)).toEqual({ items: [], incomplete: true });
+  expect(d.load).not.toHaveBeenCalled();
+});
 it('UNION ALL 的右分支只读取自己的物理表目录', async () => {
   const marked = 'SELECT s.name FROM main.first s UNION ALL SELECT s.na|suffix FROM temp.second s';
   const result = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));

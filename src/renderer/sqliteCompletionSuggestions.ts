@@ -1,7 +1,7 @@
 import type { SqliteCompletionAnalysis, SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionColumns, sqliteCompletionLimits, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
-import { sqliteJoinColumnReader, sqliteJoinRowidName, sqliteJoinStarColumns, sqliteQualifiedJoinColumns } from './sqliteJoinColumns';
+import { sqliteJoinColumnReader, sqliteJoinRowidName, sqliteJoinStarColumns, sqliteLocalProjectionColumns, sqliteQualifiedJoinColumns } from './sqliteJoinColumns';
 
 export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
@@ -103,12 +103,23 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   if (analysis.syntax.includes('column')) {
     const selected = bound.filter(matches);
     if (qualifiers.length && selected.length > 1) return { items: [], incomplete: true };
+    const localResults = await sqliteLocalProjectionColumns(analysis.localProjections ?? [], directory);
     for (const relation of selected) {
       const binding = relation.alias ?? relation.name;
       // INSERT列清单由分析器仅投影目标表；已有点限定时只替换最后的字段。
       const insert = (name: string) => qualifiers.length || analysis.unqualifiedColumns ? quote(name) : quote(binding) + '.' + quote(name);
       if (relation.kind === 'local') {
-        for (const name of relation.columns) add({ label: name, kind: 'column', insertText: insert(name), detail: binding + ' · ' + (relation.source === 'cte' ? text.cte : text.derived) });
+        const kind = relation.source === 'cte' ? text.cte : text.derived;
+        if (relation.projection === undefined) {
+          for (const name of relation.columns) add({ label: name, kind: 'column', insertText: insert(name), detail: binding + ' · ' + kind });
+        } else {
+          const projection = localResults[relation.projection];
+          incomplete ||= projection.incomplete;
+          for (const { name, entry } of projection.columns) {
+            const detail = [binding, kind, entry?.declaredType].filter(Boolean).join(' · ');
+            add({ label: name, kind: 'column', insertText: insert(name), detail });
+          }
+        }
       } else {
         const metadata = await directory.load(sqliteCompletionColumns(relation, analysis.target.prefix)); incomplete ||= metadata.incomplete;
         const source = relation.tableFunction ? text.tableFunction : undefined;

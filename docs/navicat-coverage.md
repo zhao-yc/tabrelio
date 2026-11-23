@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite 的 CTE 和派生表现在可通过多层星号投影提供字段补全和悬停，包括确定的重名列。解析沿声明作用域只读真实来源目录，显式列清单仍优先。Q01 继续为部分覆盖。[SQLite WITH](https://www.sqlite.org/lang_with.html)
+
 2026-11-23 源码增量。SQLite 复合查询末尾 `ORDER BY` 可补入嵌套连接通过裸星号或成员限定星号产生的输出列，包括确定的重名后缀。补全按 SQLite 规则省略裸星号中的合并副本，并复用同一来源的列目录。Q01 继续为部分覆盖。[SQLite 复合排序规则](https://www.sqlite.org/lang_select.html#orderby)
 
 2026-11-23 源码增量。SQLite 查询编辑器支持括号连接的组别名及其输出列补全、字段悬停，包括确定的重名列。组别名与成员同名时遵循 SQLite 字段解析顺序，读取范围限定在命中组的成员目录。Q01 继续为部分覆盖。[SQLite 名称解析源码](https://github.com/sqlite/sqlite/blob/version-3.53.0/src/resolve.c#L335)

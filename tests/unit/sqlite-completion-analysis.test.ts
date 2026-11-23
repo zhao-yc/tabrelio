@@ -98,7 +98,7 @@ it('DELETE与RETURNING保单目标，RETURNING不误借其它行别名',()=>{exp
 it('INSERT SELECT来源不会继承INSERT目标表绑定',()=>{const value=ready('INSERT INTO destination SELECT s.| FROM source s');expect(value.relations).toEqual([{kind:'physical',name:'source',alias:'s'}]);expect(value.unqualifiedColumns).toBeUndefined();});
 it('CTE显式列和FROM绑定独立声明，局部名遮蔽永久同名对象',()=>{const value=ready('WITH shadow("本地🚢",n) AS (SELECT x,y FROM real) SELECT c.| FROM shadow AS c');expect(value.relations).toContainEqual({kind:'local',source:'cte',name:'shadow',columns:['本地🚢','n'],alias:'c'});expect(value.relations).toContainEqual({kind:'local',source:'cte',name:'shadow',columns:['本地🚢','n'],declaration:true});expect(value.relations.some(item=>item.kind==='physical'&&item.name==='shadow')).toBe(false);expect(ready('WITH c(x) AS (SELECT 1) SELECT * FROM c|').relations.some(item=>item.kind==='local'&&item.declaration===true)).toBe(true);});
 it('CTE投影alias/简单字段可推导，count(*)内部星号不阻断明确alias',()=>{const value=ready('WITH c AS (SELECT a.id, count(*) AS total, 1 explicit FROM actual a) SELECT c.| FROM c');expect(value.relations.find(item=>item.kind==='local'&&!item.declaration)).toMatchObject({columns:['id','total','explicit']});});
-it.each(['SELECT * FROM real','SELECT x+y FROM real','SELECT a COLLATE nocase FROM real','SELECT x AS duplicate,y AS duplicate FROM real'])('未知/歧义CTE输出%s不退永久同名表',body=>{expect(analyze('WITH shadow AS ('+body+') SELECT shadow.| FROM shadow')).toMatchObject({status:'blocked',reason:'local-output'});});
+it.each(['SELECT x+y FROM real','SELECT a COLLATE nocase FROM real','SELECT x AS duplicate,y AS duplicate FROM real'])('未知/歧义CTE输出%s不退永久同名表',body=>{expect(analyze('WITH shadow AS ('+body+') SELECT shadow.| FROM shadow')).toMatchObject({status:'blocked',reason:'local-output'});});
 it('未知CTE只声明未绑定不泄列，显式main同名物理表可绕局部遮蔽',()=>{const declaration=ready('WITH shadow AS (SELECT * FROM real) SELECT * FROM sh|');expect(declaration.relations).toContainEqual({kind:'local',source:'cte',name:'shadow',columns:[],declaration:true});const explicit=ready('WITH shadow AS (SELECT * FROM real) SELECT p.| FROM main.shadow AS p');expect(explicit.relations).toContainEqual({kind:'physical',schema:'main',name:'shadow',alias:'p'});});
 it('嵌套CTE声明按最近作用域遮蔽，不把外层声明变成本层绑定',()=>{const value=ready('WITH c(outer_col) AS (SELECT 1) SELECT (WITH c(inner_col) AS (SELECT 2) SELECT c.| FROM c) FROM actual a');const local=value.relations.filter(item=>item.kind==='local'&&item.name==='c');expect(local).toHaveLength(2);expect(local.every(item=>item.kind==='local'&&item.columns.join(',')==='inner_col')).toBe(true);});
 it('递归CTE的递归成员可补显式列，锚点不借递归成员中的绑定', () => {
@@ -111,7 +111,36 @@ it('递归CTE的递归成员可补显式列，锚点不借递归成员中的绑�
   expect(analyze('WITH c AS (VALUES(1) UNION ALL SELECT 2 AS later_name) SELECT c.| FROM c'))
     .toMatchObject({ status: 'blocked', reason: 'local-output' });
 });
-it('派生表投影保持本地输出，不为同名别名查询永久元数据',()=>{expect(ready('SELECT d.| FROM (SELECT source.id AS item,1 AS flag FROM source) AS d').relations).toEqual([{kind:'local',source:'derived',name:'d',alias:'d',columns:['item','flag']}]);expect(analyze('SELECT d.| FROM (SELECT * FROM source) AS d')).toMatchObject({status:'blocked',reason:'local-output'});});
+it('派生表显式输出保持离线，星号只携带实际来源的目录引用', () => {
+  expect(ready('SELECT d.| FROM (SELECT source.id AS item,1 AS flag FROM source) AS d').relations)
+    .toEqual([{ kind: 'local', source: 'derived', name: 'd', alias: 'd', columns: ['item', 'flag'] }]);
+  const value = ready('SELECT d.na|me FROM (SELECT t.* FROM main.source t JOIN untouched u ON 1) AS d');
+  expect(value.relations).toEqual([{ kind: 'local', source: 'derived', name: 'd', alias: 'd', columns: [], projection: 0 }]);
+  expect(value.localProjections).toEqual([[{ star: { groups: [], all: [{ operand: { source: { name: 'source', schema: 'main' } } }], sole: true } }]]);
+});
+it('多层 CTE 星号保存声明作用域与顺序，前向引用不读取同名永久表', () => {
+  const value = ready('WITH picked AS (SELECT base.*, 1 AS id FROM base), base AS (SELECT * FROM temp.data), ignored AS (SELECT * FROM unused) SELECT p.i|d FROM picked p');
+  expect(value.localProjections).toEqual([
+    [{ star: { groups: [], all: [{ operand: { source: { name: 'data', schema: 'temp' } } }], sole: true } }],
+    [{ star: { groups: [], all: [{ operand: { projection: 0 } }], sole: true } }, { name: 'id' }],
+  ]);
+  expect(value.relations).toContainEqual({ kind: 'local', source: 'cte', name: 'picked', alias: 'p', columns: [], projection: 1 });
+  const first = ready('WITH RECURSIVE a AS (SELECT * FROM seed UNION ALL SELECT * FROM a) SELECT a.| FROM a');
+  expect(first.localProjections).toEqual([[{ star: { groups: [], all: [{ operand: { source: { name: 'seed' } } }], sole: true } }]]);
+  expect(ready('WITH a(item) AS (SELECT * FROM seed) SELECT a.| FROM a').localProjections).toBeUndefined();
+});
+it('局部循环只保留未知目录，回包拒绝前向引用、越界根和孤立节点', () => {
+  const marked = 'WITH a AS (SELECT * FROM a) SELECT a.| FROM a', { source, offset } = query(marked);
+  const value = ready(marked);
+  expect(value.localProjections).toEqual([[{ star: { groups: [], all: [{ operand: { columns: [] } }], sole: true } }]]);
+  const root = value.relations.find(relation => relation.kind === 'local' && relation.projection !== undefined)!;
+  for (const response of [
+    { ...value, localProjections: [[{ star: { groups: [], all: [{ operand: { projection: 0 } }], sole: true } }]] },
+    { ...value, localProjections: [...value.localProjections!, [{ name: 'detached' }]] },
+    { ...value, relations: [{ ...root, projection: 1 }] },
+    { ...value, relations: [{ ...root, declaration: true }] },
+  ]) expect(() => validateSqliteCompletionAnalysis(response, source, offset)).toThrow();
+});
 it('普通相关子查询可见外层alias，FROM派生体不借外层行，内层同alias优先',()=>{const correlated=ready('SELECT * FROM outer_table o WHERE EXISTS (SELECT o.| FROM inner_table i)');expect(correlated.relations.map(item=>item.alias)).toEqual(['i','o']);const derived=ready('SELECT * FROM outer_table o JOIN (SELECT i.| FROM inner_table i) d ON 1=1');expect(derived.relations).toEqual([{kind:'physical',name:'inner_table',alias:'i'}]);const shadow=ready('SELECT * FROM outer_table t WHERE EXISTS (SELECT t.| FROM inner_table t)');expect(shadow.relations).toEqual([{kind:'physical',name:'inner_table',alias:'t'}]);});
 it('trigger体内分号不伪造独立SELECT；后继statement仍准确隔离',()=>{expect(analyze('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT x.| FROM secret x; END;')).toMatchObject({status:'blocked',reason:'trigger'});expect(ready('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT CASE WHEN 1 THEN 2 END; END; SELECT t.| FROM actual t').relations).toEqual([{kind:'physical',name:'actual',alias:'t'}]);});
 it.each(['SELECT * FROM a INDEXED BY |','WITH c(x) AS(SELECT 1) UPDATE c SET |'])('未知SQLite复杂上下文明确blocked，不伪造物理关系 %#',source=>{expect(analyze(source).status).toBe('blocked');});

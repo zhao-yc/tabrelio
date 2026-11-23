@@ -3,12 +3,12 @@ import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits, sql
 import type { LocalReferenceToken } from './localReferenceIndex';
 import type { PhysicalObjectAnalysis } from './physicalObjectAnalysis';
 
-export type SqliteCompletionRelation = ({ kind: 'physical'; alias?: string; visibleColumnsOnly?: true } & SqliteCompletionSource | { kind: 'local'; source: 'cte' | 'derived' | 'group'; name: string; alias?: string; columns: string[]; declaration?: true }) & { scopeDepth?: number };
+export type SqliteCompletionRelation = ({ kind: 'physical'; alias?: string; visibleColumnsOnly?: true } & SqliteCompletionSource | { kind: 'local'; source: 'cte' | 'derived' | 'group'; name: string; alias?: string; columns: string[]; declaration?: true; projection?: number }) & { scopeDepth?: number };
 export type SqliteAnalysisIntent = 'hover' | 'definition' | 'object';
 export interface SqliteLocalDefinition { start: number; end: number; }
 type OutputSource = SqliteCompletionSource;
 interface OutputProjection { columns: string[]; sources: OutputSource[]; joinStars?: SqliteJoinStars[]; incomplete?: true; }
-export type SqliteJoinOperand = { source: OutputSource } | { columns: string[] } | { group: number };
+export type SqliteJoinOperand = { source: OutputSource } | { columns: string[] } | { group: number } | { projection: number };
 type JoinInput = { operand: SqliteJoinOperand; merged?: true | string[]; binding?: string };
 export interface SqliteJoinGroup { inputs: JoinInput[]; uniqueLeft?: true; }
 type JoinStarInput = JoinInput & { outer?: 'right' | 'full' };
@@ -19,13 +19,15 @@ export interface SqliteJoinStars {
   sole?: true;
   uniqueLeft?: true;
 }
+export type SqliteLocalProjection = ({ name: string } | { star: SqliteJoinStars } | { unknown: true })[];
 interface UsingProjection { left: JoinInput[]; right: SqliteJoinOperand; used: string[]; uniqueLeft?: true; groups?: SqliteJoinGroup[]; starGroupSides?: 'left' | 'right' | 'both'; }
 interface QualifiedJoinGroup { alias: string; groups: SqliteJoinGroup[]; }
-export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; output?: OutputProjection; using?: UsingProjection; joinGroup?: QualifiedJoinGroup; unqualifiedColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
+export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; output?: OutputProjection; using?: UsingProjection; joinGroup?: QualifiedJoinGroup; localProjections?: SqliteLocalProjection[]; unqualifiedColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
 type Token = { kind: 'id' | 'string' | 'number' | 'parameter' | 'symbol'; value: string; start: number; end: number; depth: number; quoted?: boolean; closed?: boolean; pair?: number };
-type Cte = { name: string; columns?: string[]; start: number; end: number; declaration: SqliteLocalDefinition };
+type ProjectionSource = { start: number; end: number; ctes: Map<string, Cte> };
+type Cte = { name: string; columns?: string[]; start: number; end: number; declaration: SqliteLocalDefinition; projectionSource?: ProjectionSource };
 type Binding = { relation: SqliteCompletionRelation; start: number; end: number; aliasIndex?: number; referenceIndex?: number; declaration?: SqliteLocalDefinition; unknown?: boolean; nestedProjection?: true; level?: number;
-  group?: { root: number; groups: SqliteJoinGroup[]; members: Binding[] }; };
+  group?: { root: number; groups: SqliteJoinGroup[]; members: Binding[] }; projectionSource?: ProjectionSource; };
 type JoinStarScope = { inputs: JoinStarInput[]; groups: SqliteJoinGroup[]; owners: Map<Binding, number>; uniqueLeft: boolean };
 type Ready = Extract<SqliteCompletionAnalysis, { status: 'ready' }>;
 const unicode = (value: string) => !value.includes('\0') && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
@@ -224,45 +226,48 @@ export function sqlitePhysicalObjectContext(source: string, offset: number): { s
   } catch (reason) { return { status: 'blocked', reason: reason instanceof Error && /^[a-z-]{1,64}$/.test(reason.message) ? reason.message : 'analysis' }; }
 }
 
-/** CTE 和派生表需要完整的首分支投影。复合排序同时收集已知名称和待展开的星号。 */
-function projectionColumns(tokens: Token[], start: number, end: number, wildcards?: (string | null)[]): string[] | undefined {
+type ProjectionItem = { name?: string; star?: string | null };
+/** 保持首分支投影顺序，星号和显式名字的先后决定 SQLite 的重名后缀。 */
+function projectionItems(tokens: Token[], start: number, end: number): ProjectionItem[] {
   const depth = tokens[start]?.depth ?? 0; let select = -1;
   for (let i = start; i < end; i++) {
     const token = tokens[i];
     if (token.depth !== depth) continue;
-    if (setOperators.some(word => keyword(token, word))) return;
+    if (setOperators.some(word => keyword(token, word))) return [];
     if (keyword(token, 'select')) { select = i; break; }
   }
-  if (select < 0) return; let finish = end;
+  if (select < 0) return []; let finish = end;
   for (let i = select + 1; i < end; i++) if (tokens[i].depth === depth && (fromClause(tokens, i) ||
     ['where', 'group', 'having', 'window', 'order', 'limit', ...setOperators].some(word => keyword(tokens[i], word)))) { finish = i; break; }
   let begin = select + 1; if (keyword(tokens[begin], 'distinct') || keyword(tokens[begin], 'all')) begin++;
   const parts: Token[][] = []; for (let i = begin, last = begin; i <= finish; i++) if (i === finish || tokens[i].depth === depth && tokens[i].value === ',') { parts.push(tokens.slice(last, i)); last = i + 1; }
-  const columns: string[] = [];
-  for (const part of parts) {
+  if (parts.length > limits.entries) fail('budget');
+  return parts.map(part => {
     const last = part.at(-1);
-    if (wildcards && last?.kind === 'symbol' && last.value === '*') {
-      if (part.length === 1) wildcards.push(null);
-      else if (part.length === 3 && part[0].kind === 'id' && part[1].kind === 'symbol' && part[1].value === '.') wildcards.push(part[0].value);
-      continue;
-    }
-    if (!part.length || !wildcards && part.some(token => token.kind === 'symbol' && token.value === '*' && token.depth === depth)) {
-      if (wildcards) continue;
-      return;
+    if (last?.kind === 'symbol' && last.value === '*') {
+      if (part.length === 1) return { star: null };
+      if (part.length === 3 && part[0].kind === 'id' && part[1].kind === 'symbol' && part[1].value === '.') return { star: part[0].value };
+      return {};
     }
     let name: string | undefined, as = -1;
     for (let i = 0; i < part.length; i++) if (part[i].depth === depth && keyword(part[i], 'as')) as = i;
     if (as >= 0) { if (as > 0 && as === part.length - 2 && part[as + 1]?.kind === 'id') name = part[as + 1].value; }
     else if (part.length % 2 === 1 && part.every((token, i) => i % 2 ? token.value === '.' : token.kind === 'id') &&
-      !(wildcards && part.length === 1 && literalNames.some(word => keyword(part[0], word)))) name = part.at(-1)!.value;
+      !(part.length === 1 && literalNames.some(word => keyword(part[0], word)))) name = part.at(-1)!.value;
     else if (part.at(-1)?.kind === 'id' && part.length > 1 && (part.at(-2)?.value === ')' || ['id', 'number', 'string'].includes(part.at(-2)!.kind) && !['collate', 'escape', 'is', 'like', 'glob', 'regexp', 'match', 'over', 'filter'].some(word => keyword(part.at(-2), word))) && !structural.has(fold(part.at(-1)!.value))) name = part.at(-1)!.value;
-    if (!name || !unicode(name) || columns.some(column => fold(column) === fold(name!))) {
-      if (wildcards) continue;
-      return;
-    }
-    columns.push(name); if (columns.length > limits.entries) fail('budget');
+    return name && unicode(name) ? { name } : {};
+  });
+}
+
+/** 显式列清单可离线确定。复合排序另外收集待展开的星号并去重。 */
+function projectionColumns(tokens: Token[], start: number, end: number, wildcards?: (string | null)[]): string[] | undefined {
+  const columns = new Map<string, string>();
+  for (const { name, star } of projectionItems(tokens, start, end)) {
+    if (wildcards && star !== undefined) wildcards.push(star);
+    if (name && !columns.has(fold(name))) columns.set(fold(name), name);
+    else if (!wildcards) return;
   }
-  return columns.length ? columns : undefined;
+  return columns.size ? [...columns.values()] : undefined;
 }
 
 /** 纯分析入口不读取文件、会话、IPC或数据库；预算与未知语法均以固定原因阻断。 */
@@ -279,6 +284,72 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
     if (active.some(token => token.value === '#' || token.value === ']' || token.value === ')' && token.pair === undefined)) fail('syntax');
     if (intent === 'object' && active.some(token => token.closed === false || token.value === '(' && token.pair === undefined)) fail('syntax');
     let relationBudget = 0;
+    const localProjections: SqliteLocalProjection[] = [], sourceIndex = new Map<ProjectionSource, number>();
+    const stagedSources: ProjectionSource[] = [], compiled = new Map<ProjectionSource, number>(), compiling = new Set<ProjectionSource>();
+    const projectionSource = (start: number, end: number, ctes: Map<string, Cte>) =>
+      projectionItems(tokens, start, end).some(item => item.star !== undefined) ? { start, end, ctes } : undefined;
+    function sourceOperand(binding: Binding, localPlan: boolean): SqliteJoinOperand {
+      const { relation, projectionSource } = binding;
+      if (relation.kind === 'physical') return { source: columnSource(relation) };
+      if (!localPlan || !projectionSource) return { columns: relation.columns };
+      let index = sourceIndex.get(projectionSource);
+      if (index === undefined) {
+        index = stagedSources.length;
+        stagedSources.push(projectionSource);
+        sourceIndex.set(projectionSource, index);
+      }
+      return { projection: index };
+    }
+    function saveProjection(descriptor: ProjectionSource, parts: SqliteLocalProjection): number {
+      const index = localProjections.length;
+      if (index >= limits.relations) fail('budget');
+      localProjections.push(parts);
+      compiled.set(descriptor, index);
+      return index;
+    }
+    /** 按实际投影逐层信任可见来源，遇到循环局部名保留未知槽，绝不回退同名永久表。 */
+    function compileProjection(descriptor: ProjectionSource): number | undefined {
+      if (compiled.has(descriptor)) return compiled.get(descriptor);
+      if (compiling.has(descriptor)) return;
+      if (compiling.size >= limits.relations || localProjections.length >= limits.relations) fail('budget');
+      compiling.add(descriptor);
+      const { start, end, ctes } = descriptor;
+      try {
+        const { bindings, joinStarScope } = scope(start, end, ctes, [], compiling.size, true, true);
+        const resolveInput = (input: JoinInput): JoinInput => {
+          if (!('projection' in input.operand)) return input;
+          const index = compileProjection(stagedSources[input.operand.projection]);
+          return { ...input, operand: index === undefined ? { columns: [] } : { projection: index } };
+        };
+        function projectItem(item: ProjectionItem): SqliteLocalProjection[number] {
+          if (item.name) return { name: item.name };
+          if (item.star === undefined || !joinStarScope) return { unknown: true };
+          let star: SqliteJoinStars;
+          if (item.star === null) star = joinStarProjection(joinStarScope, true, []);
+          else {
+            const alias = fold(item.star);
+            const matches = bindings.filter(({ relation }) => fold(relation.alias ?? relation.name) === alias);
+            if (matches.length !== 1) return { unknown: true };
+            const binding = matches[0], group = joinStarScope.owners.get(binding);
+            star = group === undefined ? { groups: [], all: [{ operand: sourceOperand(binding, true) }], sole: true }
+              : joinStarProjection(joinStarScope, false, [{ group, binding: item.star }]);
+          }
+          return { star: { ...star, ...(star.all ? { all: star.all.map(input => ({ ...input, ...resolveInput(input) })) } : {}),
+            groups: star.groups.map(group => ({ ...group, inputs: group.inputs.map(resolveInput) })) } };
+        }
+        const parts: SqliteLocalProjection = [];
+        for (const item of projectionItems(tokens, start, end)) {
+          const part = projectItem(item);
+          parts.push(part);
+          if ('unknown' in part) break;
+        }
+        return saveProjection(descriptor, parts);
+      } catch (error) {
+        if (error instanceof Error && ['alias', 'derived-alias', 'relation', 'relation-group', 'schema', 'table-function', 'using'].includes(error.message))
+          return saveProjection(descriptor, [{ unknown: true }]);
+        throw error;
+      } finally { compiling.delete(descriptor); }
+    }
     /** 收集本层CTE头后再推导输出，前向引用与递归名先遮蔽永久对象。 */
     function withClause(start: number, end: number, inherited: Map<string, Cte>): { head: number; ctes: Map<string, Cte>; declared: Cte[] } {
       const ctes = new Map(inherited), declared: Cte[] = []; let i = start;
@@ -295,18 +366,20 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         if (!keyword(tokens[i++], 'as')) fail('cte');
         if (keyword(tokens[i], 'not')) { i++; if (!keyword(tokens[i++], 'materialized')) fail('cte'); } else if (keyword(tokens[i], 'materialized')) i++;
         if (tokens[i]?.value !== '(') fail('cte'); const open = i++, close = tokens[open].pair ?? end;
-        const cte: Cte = { name: name.value, columns: columns ?? projectionColumns(tokens, i, close), start: i, end: close, declaration: { start: name.start, end: name.end } };
+        const result = columns ?? projectionColumns(tokens, i, close);
+        const cte: Cte = { name: name.value, columns: result, start: i, end: close, declaration: { start: name.start, end: name.end },
+          projectionSource: result ? undefined : projectionSource(i, close, ctes) };
         if (declared.some(value => fold(value.name) === fold(cte.name))) fail('cte');
         if (++relationBudget > limits.relations) fail('budget'); declared.push(cte); ctes.set(fold(cte.name), cte); i = close < end ? close + 1 : end;
         if (tokens[i]?.value !== ',') break; i++;
       }
       return { head: i, ctes, declared };
     }
-    function scope(start: number, end: number, inherited: Map<string, Cte>, outer: Binding[], level: number, projectionOnly = false): { bindings: Binding[]; ctes: Map<string, Cte>; syntax: Ready['syntax']; output?: OutputProjection; using?: UsingProjection; joinStarScope?: JoinStarScope; unqualified?: true } {
+    function scope(start: number, end: number, inherited: Map<string, Cte>, outer: Binding[], level: number, projectionOnly = false, localPlan = false): { bindings: Binding[]; ctes: Map<string, Cte>; syntax: Ready['syntax']; output?: OutputProjection; using?: UsingProjection; joinStarScope?: JoinStarScope; unqualified?: true } {
       if (level > limits.depth) fail('budget');
       const parsed = withClause(start, end, inherited), ctes = parsed.ctes, head = parsed.head, base = tokens[head]?.depth ?? tokens[start]?.depth ?? 0;
-      for (const cte of parsed.declared) if (offset >= (tokens[cte.start]?.start ?? source.length) && offset <= (tokens[cte.end]?.start ?? source.length)) return scope(cte.start, cte.end, ctes, [], level + 1);
-      if (intent && target.start < (tokens[head]?.start ?? source.length)) fail('hover-target');
+      if (!projectionOnly) for (const cte of parsed.declared) if (offset >= (tokens[cte.start]?.start ?? source.length) && offset <= (tokens[cte.end]?.start ?? source.length)) return scope(cte.start, cte.end, ctes, [], level + 1);
+      if (!projectionOnly && intent && target.start < (tokens[head]?.start ?? source.length)) fail('hover-target');
       if (head >= end) return { bindings: [], ctes, syntax: ['keyword'] };
       const command = fold(tokens[head].value);
       if (!['select', 'values', 'update', 'insert', 'replace', 'delete'].includes(command) || tokens[head].quoted) {
@@ -316,6 +389,8 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       const compounds = tokens.map((token, index) => index >= head && index < end && token.depth === base && setOperators.some(word => keyword(token, word)) ? index : -1).filter(index => index >= 0);
       if (compounds.length && (command === 'update' || command === 'delete')) fail('compound');
       if (compounds.length && (command === 'select' || command === 'values')) {
+        // 局部关系的输出名沿用复合查询的首分支，光标在外层时也不能误取后续分支。
+        if (localPlan) return scope(head, compounds[0], ctes, [], level + 1, true, true);
         // 同一层的兄弟分支共享 WITH 和合法外层绑定，各自独立解析 FROM，尾部排序只读投影名称。
         const starts = [head, ...compounds.map(index => index + (keyword(tokens[index], 'union') && keyword(tokens[index + 1], 'all') ? 2 : 1))];
         const lastStart = starts.at(-1)!;
@@ -368,7 +443,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
                 else if (relation.kind === 'physical') {
                   const source = columnSource(relation), key = sqliteCompletionSourceKey(source);
                   if (!sources.has(key)) sources.set(key, source);
-                } else if (unknown) incomplete = true;
+                } else if (unknown || binding.projectionSource) incomplete = true;
                 else for (const name of relation.columns) addColumn(name);
               }
             }
@@ -408,7 +483,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         const inputs: { end: number; join?: ReturnType<Joins['get']>; input: JoinInput }[] = [];
         for (let at = 0; at < bindings.length; at++) {
           const binding = bindings[at], { relation } = binding, group = groupedOperands.get(binding), join = joins.get(binding);
-          const operand: SqliteJoinOperand = group ? { group: group.group } : relation.kind === 'local' ? { columns: relation.columns } : { source: columnSource(relation) };
+          const operand: SqliteJoinOperand = group ? { group: group.group } : sourceOperand(binding, localPlan);
           const merged = join?.natural ? true : join?.merged;
           const name = includeBindings && !group && (relation.alias || relation.kind === 'local' && relation.name);
           inputs.push({ end: group?.end ?? binding.end, join, input: { operand, ...(merged ? { merged } : {}), ...(name ? { binding: name } : {}) } });
@@ -545,16 +620,18 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
           const open = at++, close = tokens[open].pair ?? bound;
           if (target || close > bound) fail('relation-group');
           if (!keyword(tokens[at], 'select') && !keyword(tokens[at], 'with')) return relationGroup(open, close, bound, hasPrefix, parentJoins);
-          derived.push({ start: at, end: close }); const columns = projectionColumns(tokens, at, close); at = close < bound ? close + 1 : bound;
+          derived.push({ start: at, end: close }); const columns = projectionColumns(tokens, at, close);
+          const plan = columns ? undefined : projectionSource(at, close, ctes);
+          at = close < bound ? close + 1 : bound;
           if (keyword(tokens[at], 'as')) at++;
           const alias = tokens[at];
           if (alias?.kind === 'id' && alias.value && (alias.quoted || !structural.has(fold(alias.value)))) {
-            binding = { relation: { kind: 'local', source: 'derived', name: alias.value, alias: alias.value, columns: columns ?? [] }, start: begin, end: at + 1, aliasIndex: at, unknown: !columns }; at++;
+            binding = { relation: { kind: 'local', source: 'derived', name: alias.value, alias: alias.value, columns: columns ?? [] }, start: begin, end: at + 1, aliasIndex: at, unknown: !columns && !plan, projectionSource: plan }; at++;
           } else {
             if (!relationOnly && !parentJoins) { if (offset >= tokens[open].start && offset <= (tokens[close]?.start ?? source.length)) return at; fail('derived-alias'); }
             if (keyword(tokens[at - 1], 'as')) fail('alias');
             // 匿名派生表参与裸星号展开，不参与任何名称限定匹配。
-            binding = { relation: { kind: 'local', source: 'derived', name: '', columns: columns ?? [] }, start: begin, end: at, unknown: !columns };
+            binding = { relation: { kind: 'local', source: 'derived', name: '', columns: columns ?? [] }, start: begin, end: at, unknown: !columns && !plan, projectionSource: plan };
           }
         } else {
           const first = tokens[at]; if (!first || first.kind !== 'id') { if (!first || first.start >= offset) { relationContext = true; return at; } fail('relation'); }
@@ -578,7 +655,8 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
           }
           const relation: SqliteCompletionRelation = local ? { kind: 'local', source: 'cte', name: local.name, columns: local.columns ?? [] }
             : { kind: 'physical', name, ...(schema ? { schema } : {}), ...(tableFunction ? { tableFunction: true } : {}) };
-          binding = { relation, start: begin, end: at, referenceIndex: nameEnd - 1, ...(local ? { declaration: local.declaration } : {}), unknown: !!local && !local.columns };
+          binding = { relation, start: begin, end: at, referenceIndex: nameEnd - 1,
+            ...(local ? { declaration: local.declaration, projectionSource: local.projectionSource } : {}), unknown: !!local && !local.columns && !local.projectionSource };
           if (inArgument) argumentBinding = binding;
           relationContext ||= relevant(begin, nameEnd);
           if (keyword(tokens[at], 'as')) { at++; const alias = tokens[at]; if (!alias || alias.kind !== 'id' || !alias.value) { aliasContext = true; return at; } binding.relation.alias = alias.value; binding.aliasIndex = at; at++; }
@@ -630,10 +708,10 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
           for (const member of own.slice(at, at + group.size)) owners.set(member, group.group);
           at += group.size - 1;
         }
-        const inputs: JoinStarInput[] = owners.size ? joinInputs(own, joins).map(({ input, join }) => ({
+        const inputs: JoinStarInput[] = owners.size || localPlan ? joinInputs(own, joins).map(({ input, join }) => ({
           ...input, ...(join?.rightOrFull ? { outer: join.full ? 'full' : 'right' } : {}),
         })) : [];
-        const joinStarScope = owners.size ? { groups, owners, inputs, uniqueLeft: uniqueJoinLeft(joins, head, end, base) } : undefined;
+        const joinStarScope = inputs.length ? { groups, owners, inputs, uniqueLeft: uniqueJoinLeft(joins, head, end, base) } : undefined;
         return { bindings: own, ctes, syntax: ['column'], ...(joinStarScope ? { joinStarScope } : {}) };
       }
       // 函数实参使用已绑定的输入和相关外层。自身返回列及此后才加入的关系留在调用外。
@@ -740,17 +818,23 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       definitionKind?.(kind);
     }
     const declarations: SqliteCompletionRelation[] = [...parsed.ctes.values()].map(cte => ({ kind: 'local', source: 'cte', name: cte.name, columns: cte.columns ?? [], declaration: true }));
-    const relations = [...parsed.bindings.map(binding => intent === 'hover' ? { ...binding.relation, scopeDepth: binding.level! } : binding.relation), ...declarations];
+    const columnIntent = (!intent || intent === 'hover') && parsed.syntax.includes('column');
+    const alias = columnIntent ? parsed.bindings.find(binding => binding.group && qualifiers.length === 1 && fold(binding.relation.name) === fold(qualifiers[0])) : undefined;
+    const relations = [...parsed.bindings.map(binding => {
+      const { relation, projectionSource } = binding;
+      const projection = columnIntent && !alias && projectionSource && relation.kind === 'local' && (!qualifiers.length ||
+        qualifiers.length === 1 && fold(relation.alias ?? relation.name) === fold(qualifiers[0])) ? compileProjection(projectionSource) : undefined;
+      return { ...relation, ...(intent === 'hover' ? { scopeDepth: binding.level! } : {}), ...(projection === undefined ? {} : { projection }) };
+    }), ...declarations];
     if (relations.filter(relation => relation.kind !== 'local' || relation.source !== 'group').length > limits.relations) fail('budget');
     if (parsed.syntax.includes('relation') && qualifiers.some(name => !['main', 'temp'].includes(fold(name))) || qualifiers.length === 2 && !['main', 'temp'].includes(fold(qualifiers[0]))) fail('schema');
-    const alias = (!intent || intent === 'hover') && parsed.syntax.includes('column')
-      ? parsed.bindings.find(binding => binding.group && qualifiers.length === 1 && fold(binding.relation.name) === fold(qualifiers[0])) : undefined;
     const joinGroup: QualifiedJoinGroup | undefined = alias?.group ? {
       alias: alias.relation.name, groups: compactJoinGroups(alias.group.groups, [{ group: alias.group.root }]).groups,
     } : undefined;
     return { status: 'ready', target, syntax: parsed.syntax, qualifiers, relations,
       ...(parsed.output ? { output: parsed.output } : {}),
       ...(parsed.using ? { using: parsed.using } : {}), ...(joinGroup ? { joinGroup } : {}),
+      ...(localProjections.length ? { localProjections } : {}),
       ...(parsed.unqualified ? { unqualifiedColumns: true } : {}), ...(definition ? { definition } : {}) };
   } catch (reason) { return { status: 'blocked', reason: reason instanceof Error && /^[a-z-]{1,64}$/.test(reason.message) ? reason.message : 'analysis' }; }
 }
@@ -760,16 +844,19 @@ const columnNames = z.array(nameSchema).max(limits.entries).refine(columns => ne
 const outputSource = sqliteCompletionSourceSchema;
 const outputSources = z.array(outputSource)
   .max(limits.relations).refine(sources => new Set(sources.map(sqliteCompletionSourceKey)).size === sources.length);
+const projectionIndex = z.number().int().min(0).max(limits.relations - 1);
 const joinOperand = z.union([z.object({ source: outputSource }).strict(), z.object({ columns: columnNames }).strict(),
-  z.object({ group: z.number().int().min(0).max(limits.relations - 2) }).strict()]);
+  z.object({ group: z.number().int().min(0).max(limits.relations - 2) }).strict(), z.object({ projection: projectionIndex }).strict()]);
 const joinInput = z.object({ operand: joinOperand, merged: z.union([z.literal(true), columnNames]).optional(), binding: nameSchema.optional() }).strict();
-const joinGroups = z.array(z.object({ inputs: z.array(joinInput).min(2).max(limits.relations), uniqueLeft: z.literal(true).optional() }).strict())
-  .min(1).max(limits.relations - 1);
-function validJoinGroups(groups: SqliteJoinGroup[], roots: SqliteJoinOperand[]): boolean {
+const joinGroupList = z.array(z.object({ inputs: z.array(joinInput).min(2).max(limits.relations), uniqueLeft: z.literal(true).optional() }).strict())
+  .max(limits.relations - 1);
+const joinGroups = joinGroupList.min(1);
+function validJoinGroups(groups: SqliteJoinGroup[], roots: SqliteJoinOperand[], projectionBound = 0): boolean {
   const references = new Set<number>();
   let leaves = 0;
   // 每个子组在其父节点之前登记且只被引用一次，最大深度由已验证的组数限制。
   function valid(operand: SqliteJoinOperand, bound: number) {
+    if ('projection' in operand) return operand.projection < projectionBound && ++leaves <= limits.relations;
     if (!('group' in operand)) return ++leaves <= limits.relations;
     if (operand.group >= bound || references.has(operand.group)) return false;
     references.add(operand.group);
@@ -786,10 +873,11 @@ const usingProjection = z.object({ left: z.array(joinInput).min(1).max(limits.re
   return left[0].merged === undefined && left.every(input => !input.binding) && validJoinGroups(groups, [...left.map(({ operand }) => operand), right]);
 });
 const qualifiedGroup = z.object({ alias: nameSchema, groups: joinGroups }).strict().refine(({ groups }) => validJoinGroups(groups, [{ group: groups.length - 1 }]));
-const joinStars = z.object({ groups: joinGroups, all: z.array(joinInput.extend({ outer: z.enum(['right', 'full']).optional() })).min(1).max(limits.relations).optional(),
+const starSchema = z.object({ groups: joinGroupList, all: z.array(joinInput.extend({ outer: z.enum(['right', 'full']).optional() })).min(1).max(limits.relations).optional(),
   members: z.array(z.object({ group: z.number().int().min(0).max(limits.relations - 2), binding: nameSchema }).strict()).min(1).max(limits.relations).optional(),
   sole: z.literal(true).optional(), uniqueLeft: z.literal(true).optional(),
-}).strict().refine(({ groups, all, members = [], sole, uniqueLeft }) => {
+}).strict();
+function validJoinStars({ groups, all, members = [], sole, uniqueLeft }: SqliteJoinStars, projectionBound = 0): boolean {
   if ((!all && !members.length) || (!all && uniqueLeft) || (all && (!!sole !== (all.length === 1) || all[0]?.merged || all[0]?.outer ||
     all.some(input => input.binding || input.outer && !uniqueLeft)))) return false;
   const memberKeys = new Set(members.map(({ group, binding }) => group + '\0' + fold(binding)));
@@ -800,10 +888,25 @@ const joinStars = z.object({ groups: joinGroups, all: z.array(joinInput.extend({
   if (selectedGroups.size !== allGroups.length) return false;
   if (all && members.some(({ group }) => !selectedGroups.has(group))) return false;
   for (const { group } of members) selectedGroups.add(group);
-  if (sole && selectedGroups.size !== 1) return false;
+  if (sole && groups.length && selectedGroups.size !== 1) return false;
   const roots = [...inputs.filter(operand => !('group' in operand)), ...[...selectedGroups].map(group => ({ group }))];
-  return validJoinGroups(groups, roots);
-});
+  return validJoinGroups(groups, roots, projectionBound);
+}
+const joinStars = starSchema.refine(star => star.groups.length > 0 && validJoinStars(star));
+function starOperands(star: SqliteJoinStars): SqliteJoinOperand[] {
+  return [...(star.all ?? []), ...star.groups.flatMap(group => group.inputs)].map(({ operand }) => operand);
+}
+const localProjectionSchema = z.array(z.array(z.union([z.object({ name: nameSchema }).strict(),
+  z.object({ star: starSchema }).strict(), z.object({ unknown: z.literal(true) }).strict()])).min(1).max(limits.entries)).min(1).max(limits.relations)
+  .refine(projections => {
+    const catalog = new Set<string>();
+    return projections.every((parts, index) => parts.every(part => {
+      if (!('star' in part)) return true;
+      if (!validJoinStars(part.star, index)) return false;
+      for (const operand of starOperands(part.star)) if ('source' in operand) catalog.add(sqliteCompletionSourceKey(operand.source));
+      return catalog.size <= limits.relations;
+    }));
+  });
 const outputProjection = z.object({ columns: columnNames, sources: outputSources,
   joinStars: z.array(joinStars).min(1).max(Math.floor(limits.relations / 2)).optional(), incomplete: z.literal(true).optional(),
 }).strict().refine(({ sources, joinStars = [] }) => {
@@ -811,7 +914,7 @@ const outputProjection = z.object({ columns: columnNames, sources: outputSources
   let count = 0;
   for (const star of joinStars) {
     count += star.groups.length;
-    for (const { operand } of [...(star.all ?? []), ...star.groups.flatMap(group => group.inputs)]) {
+    for (const operand of starOperands(star)) {
       if ('source' in operand) catalog.add(sqliteCompletionSourceKey(operand.source));
     }
   }
@@ -819,11 +922,12 @@ const outputProjection = z.object({ columns: columnNames, sources: outputSources
 });
 const relationSchema = z.discriminatedUnion('kind', [
   outputSource.extend({ kind: z.literal('physical'), alias: nameSchema.optional(), visibleColumnsOnly: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }),
-  z.object({ kind: z.literal('local'), source: z.enum(['cte', 'derived', 'group']), name: nameSchema, alias: nameSchema.optional(), columns: columnNames, declaration: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }).strict(),
+  z.object({ kind: z.literal('local'), source: z.enum(['cte', 'derived', 'group']), name: nameSchema, alias: nameSchema.optional(), columns: columnNames,
+    declaration: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional(), projection: projectionIndex.optional() }).strict(),
 ]);
 const resultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('blocked'), reason: z.string().regex(/^[a-z-]{1,64}$/) }).strict(),
-  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.nameUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations * 2 - 1), output: outputProjection.optional(), using: usingProjection.optional(), joinGroup: qualifiedGroup.optional(), unqualifiedColumns: z.literal(true).optional(), definition: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).strict().optional() }).strict(),
+  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.nameUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations * 2 - 1), output: outputProjection.optional(), using: usingProjection.optional(), joinGroup: qualifiedGroup.optional(), localProjections: localProjectionSchema.optional(), unqualifiedColumns: z.literal(true).optional(), definition: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).strict().optional() }).strict(),
 ]);
 /** Client只核有界回包形状与原范围，不在渲染线程重新解析整份用户SQL。 */
 export function validateSqliteCompletionAnalysis(raw: unknown, source: string, offset: number, intent?: SqliteAnalysisIntent): SqliteCompletionAnalysis {
@@ -841,6 +945,22 @@ export function validateSqliteCompletionAnalysis(raw: unknown, source: string, o
   const qualified = value.qualifiers.length === 1 && groupRelations.find(relation => fold(relation.name) === fold(value.qualifiers[0]));
   if (value.joinGroup ? !qualified || value.joinGroup.alias !== qualified.name || intent === 'definition' || intent === 'object' ||
     !value.syntax.includes('column') || value.output || value.using || value.unqualifiedColumns : qualified && (!intent || intent === 'hover') && value.syntax.includes('column')) fail('response');
+  const localProjections = value.localProjections ?? [], visited = new Set<number>();
+  function visit(index: number) {
+    if (index >= localProjections.length) fail('response');
+    if (visited.has(index)) return;
+    visited.add(index);
+    for (const part of localProjections[index]) if ('star' in part) {
+      for (const operand of starOperands(part.star)) if ('projection' in operand) visit(operand.projection);
+    }
+  }
+  for (const relation of value.relations) if (relation.kind === 'local' && relation.projection !== undefined) {
+    if (intent === 'definition' || intent === 'object' || !value.syntax.includes('column') || value.joinGroup || value.using || value.output ||
+      relation.source === 'group' || relation.declaration || relation.columns.length || value.qualifiers.length > 1 ||
+      value.qualifiers.length === 1 && fold(value.qualifiers[0]) !== fold(relation.alias ?? relation.name)) fail('response');
+    visit(relation.projection);
+  }
+  if (visited.size !== localProjections.length) fail('response');
   if (value.relations.some(relation => relation.kind === 'local' && relation.declaration && relation.source !== 'cte')) fail('response');
   if (value.relations.some(relation => intent === 'hover' ? (relation.kind !== 'local' || !relation.declaration) && relation.scopeDepth === undefined : relation.scopeDepth !== undefined)) fail('response');
   const target = value.target;

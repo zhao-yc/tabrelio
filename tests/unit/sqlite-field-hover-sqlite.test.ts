@@ -80,3 +80,14 @@ it('组名和成员同名时按 SQLite 优先悬停成员，合并字段不猜�
     expect(merged.content).toContain(text.unknown);
   } finally { f.db.close(); }
 });
+it('CTE 与派生表星号悬停保留原会话物理来源和声明类型', async () => {
+  const f = fixture();
+  try {
+    f.db.exec("CREATE TEMP TABLE data(field INTEGER); INSERT INTO temp.data VALUES(41); CREATE TABLE c(field TEXT);");
+    const result = await f.hover('WITH c AS (SELECT * FROM temp.data), other AS (SELECT * FROM outer_table) SELECT d.fi|eld FROM (SELECT c.* FROM c) d');
+    expect(f.db.prepare(result.source).get()?.field).toBe(41);
+    expect(result.content).toContain('"temp"."data"');
+    expect(result.content).toContain(text.declaredType + '："INTEGER"');
+    expect(f.requests).toEqual([{ kind: 'columns', table: 'data', schema: 'temp', prefix: '' }]);
+  } finally { f.db.close(); }
+});

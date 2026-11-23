@@ -3,7 +3,7 @@ import { foldSqliteCompletionName as fold, sqliteCompletionColumns, sqliteComple
 import type { SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 import { sqliteFieldHoverZh as text } from './locales/sqliteFieldHover.zh-CN';
 import { sqliteCompletionZh } from './locales/sqliteCompletion.zh-CN';
-import { sqliteQualifiedJoinColumns } from './sqliteJoinColumns';
+import { sqliteLocalProjectionColumns, sqliteQualifiedJoinColumns } from './sqliteJoinColumns';
 
 /** 仅显示代码块纯文本；名称及声明类型不能变成HTML、外链或可执行Monaco命令。 */
 function markdown(lines: string[]): string { return lines.join('\n').split(/\r\n|\r|\n/).map(line => '    ' + line).join('\n'); }
@@ -35,7 +35,8 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   const matches = (relation: SqliteCompletionRelation) => !qualifiers.length || qualifiers.length === 1 && fold(relation.alias ?? relation.name) === fold(qualifiers[0]) || qualifiers.length === 2 && relation.kind === 'physical' && !relation.alias && relation.schema !== undefined && fold(relation.schema) === fold(qualifiers[0]) && fold(relation.name) === fold(qualifiers[1]);
   const selected = bound.filter(matches);
   if (!selected.length || qualifiers.length && selected.length !== 1) return;
-  const candidates: { relation: SqliteCompletionRelation; column: string; entry?: Extract<SqliteCompletionEntry, { kind: 'column' }> }[] = [];
+  const candidates: { relation: SqliteCompletionRelation; column: string; entry?: Extract<SqliteCompletionEntry, { kind: 'column' }>; tableFunction?: true }[] = [];
+  const projections = await sqliteLocalProjectionColumns(analysis.localProjections ?? [], directory);
   let prefix = name.slice(0, sqliteCompletionLimits.prefixUnits);
   if (/[\uD800-\uDBFF]$/.test(prefix)) prefix = prefix.slice(0, -1);
   // 未限定字段按最近查询块逐层找；内层已存在的字段不会被同名外层字段误报为歧义。
@@ -43,7 +44,15 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   for (const depth of depths) {
   for (const relation of selected.filter(relation => (relation.scopeDepth ?? 0) === depth)) {
     if (relation.kind === 'local') {
-      for (const column of relation.columns) if (fold(column) === fold(name)) candidates.push({ relation, column });
+      if (relation.projection === undefined) {
+        for (const column of relation.columns) if (fold(column) === fold(name)) candidates.push({ relation, column });
+      } else {
+        const projection = projections[relation.projection];
+        if (projection.incomplete) return;
+        for (const column of projection.columns) if (fold(column.name) === fold(name)) {
+          candidates.push({ relation, column: column.name, entry: column.entry, tableFunction: column.tableFunction });
+        }
+      }
     } else {
       const result = await directory.load(sqliteCompletionColumns(relation, prefix));
       if (result.incomplete) return;
@@ -53,7 +62,7 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   if (candidates.length) break;
   }
   if (candidates.length !== 1) return;
-  const { relation, column, entry } = candidates[0];
+  const { relation, column, entry, tableFunction } = candidates[0];
   const localSource = relation.kind === 'local' ? relation.source === 'cte' ? text.cte : text.derived : undefined;
-  return fieldHover(relation.alias ?? relation.name, column, entry, relation.kind === 'physical' && relation.tableFunction === true, localSource);
+  return fieldHover(relation.alias ?? relation.name, column, entry, tableFunction === true || relation.kind === 'physical' && relation.tableFunction === true, localSource);
 }

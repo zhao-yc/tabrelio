@@ -1,4 +1,4 @@
-import type { SqliteJoinGroup, SqliteJoinOperand, SqliteJoinStars } from '../shared/sqliteCompletionAnalysis';
+import type { SqliteJoinGroup, SqliteJoinOperand, SqliteJoinStars, SqliteLocalProjection } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, sqliteCompletionColumns, sqliteCompletionLimits, sqliteCompletionSourceKey, type SqliteCompletionEntry, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import type { SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 
@@ -14,6 +14,18 @@ export interface SqliteJoinColumn {
 interface JoinColumns { columns: SqliteJoinColumn[]; incomplete: boolean; ambiguousOrigins?: Set<string>; }
 type JoinGroupInput = { columns: SqliteJoinColumn[]; merged?: true | string[] };
 export const sqliteJoinRowidName = /^(?:rowid|_rowid_|oid)(?::\d+)*:?$/i;
+const duplicateBase = (name: string) => name.replace(/:\d*$/, '');
+
+/** SQLite 在确定的四个数字后缀用尽后转入随机名称。 */
+function projectedName(original: string, occupied: Map<string, SqliteJoinColumn>, onCollision?: (key: string) => void): string | undefined {
+  const base = duplicateBase(original);
+  let name = original, suffix = 0;
+  while (occupied.has(fold(name)) && suffix < 4) {
+    onCollision?.(fold(name));
+    name = base + ':' + ++suffix;
+  }
+  return occupied.has(fold(name)) || name.length > sqliteCompletionLimits.nameUnits ? undefined : name;
+}
 
 /** 计算每次连接实际合并的名称，保留隐藏列对显式 USING 的影响。 */
 function joinNames(inputs: JoinGroupInput[], uniqueLeft: boolean): string[][] | undefined {
@@ -57,17 +69,13 @@ function projectJoinGroup(inputs: JoinGroupInput[], uniqueLeft: boolean): JoinCo
     if (!mergedOrigins.has(origin) && origins.has(origin)) ambiguousOrigins.add(origin);
     origins.add(origin);
     if (merged) mergedOrigins.add(origin);
-    const base = original.replace(/:\d*$/, '');
+    const base = duplicateBase(original);
     if (sqliteJoinRowidName.test(original) || hasBooleanName && /^(?:true|false|column\d+(?::\d+)*)$/i.test(original)) { incomplete = true; continue; }
     // 随机后缀只会影响同一名称族后续列，已经分配的名称仍可使用。
     if (uncertain.has(fold(base))) continue;
-    let name = original, suffix = 0;
     let noStar = column.noStar;
-    while (occupied.has(fold(name)) && suffix < 4) {
-      if (mergedOutputs.has(fold(name))) noStar = true;
-      name = base + ':' + ++suffix;
-    }
-    if (occupied.has(fold(name)) || name.length > sqliteCompletionLimits.nameUnits) {
+    const name = projectedName(original, occupied, key => { if (mergedOutputs.has(key)) noStar = true; });
+    if (name === undefined) {
       uncertain.add(fold(base));
       incomplete = true;
     } else {
@@ -79,11 +87,12 @@ function projectJoinGroup(inputs: JoinGroupInput[], uniqueLeft: boolean): JoinCo
 }
 
 /** 按已验证的来源编号读取。只读成员目录，不请求分组名、原 SQL 或任何实参。 */
-export function sqliteJoinColumnReader(directory: SqliteCompletionDirectory) {
+export function sqliteJoinColumnReader(directory: SqliteCompletionDirectory, localResults: JoinColumns[] = []) {
   const cache = new Map<string, SqliteCompletionOutput>();
   const projectedGroups: JoinColumns[] = [];
   async function readColumns(operand: SqliteJoinOperand, lookupPrefix: string): Promise<JoinColumns> {
     if ('group' in operand) return projectedGroups[operand.group];
+    if ('projection' in operand) return localResults[operand.projection];
     if ('columns' in operand) return { columns: operand.columns.map(name => ({ name, hidden: false })), incomplete: !operand.columns.length };
     const key = sqliteCompletionSourceKey(operand.source);
     const full = cache.get(key + '\0');
@@ -110,6 +119,38 @@ export function sqliteJoinColumnReader(directory: SqliteCompletionDirectory) {
     }
   }
   return { readColumns, projectGroups };
+}
+
+/** 局部投影逐层展开并保留槽位顺序，已有列的名称不受后方未知表达式影响。 */
+export async function sqliteLocalProjectionColumns(projections: SqliteLocalProjection[], directory: SqliteCompletionDirectory): Promise<JoinColumns[]> {
+  const results: JoinColumns[] = [], reader = sqliteJoinColumnReader(directory, results);
+  for (const projection of projections) {
+    const ordered: SqliteJoinColumn[] = [];
+    let incomplete = false;
+    for (const slot of projection) {
+      if ('unknown' in slot) { incomplete = true; break; }
+      if ('name' in slot) ordered.push({ name: slot.name, hidden: false });
+      else {
+        const star = await sqliteJoinStarColumns(slot.star, reader);
+        // 未知槽可能改变后续重名后缀。只交付已确定的前序投影。
+        if (star.incomplete) { incomplete = true; break; }
+        ordered.push(...star.columns);
+      }
+      if (ordered.length > sqliteCompletionLimits.entries) { incomplete = true; break; }
+    }
+    const names = new Map<string, SqliteJoinColumn>(), uncertain = new Set<string>();
+    for (const [index, column] of ordered.slice(0, sqliteCompletionLimits.entries).entries()) {
+      const original = /^(?:true|false)$/i.test(column.name) ? 'column' + (index + 1) : column.name;
+      const family = fold(duplicateBase(original));
+      if (uncertain.has(family)) continue;
+      const name = projectedName(original, names);
+      if (name === undefined) { incomplete = true; uncertain.add(family); continue; }
+      // CTE／派生表成为新来源，外层星号看到的是该投影自己的列名和类型。
+      names.set(fold(name), { name, hidden: false, entry: column.entry, tableFunction: column.tableFunction });
+    }
+    results.push({ columns: [...names.values()], incomplete });
+  }
+  return results;
 }
 
 /** 仅展开实际结果列表。未限定 * 隐藏合并副本，成员.* 仍可输出这些有确定名称的列。 */
