@@ -103,6 +103,24 @@ it.each(['stamp', 'session-revision', 'wrong-table', 'wrong-kind', 'duplicate', 
     return raw;
   }); expect((await f.invoke().promise).suggestions).toEqual([]); await f.provider.dispose();
 });
+it.each(['accepted', 'wrong-schema', 'wrong-table', 'wrong-kind', 'stale-stamp'] as const)('索引回复只允许实际来源和同代目录：%s', async mode => {
+  const f = fixture(true);
+  f.worker.analyze.mockResolvedValueOnce({ status: 'ready', target: { start: 9, end: 9, prefix: '', quoted: false }, syntax: ['index'],
+    qualifiers: [], relations: [], indexSource: { name: 'subject', schema: 'main' } });
+  f.request.mockImplementation(async input => {
+    const reply = f.reply(input);
+    if (input.kind === 'stamp' && mode === 'stale-stamp') return { ...reply, stamp: '2:0' };
+    if (input.kind !== 'indexes') return reply;
+    const schema = mode === 'wrong-schema' ? 'temp' : 'main', table = mode === 'wrong-table' ? 'other' : 'subject';
+    const entry = mode === 'wrong-kind' ? { kind: 'column', schema, table, name: 'idx', declaredType: 'TEXT', generated: false, hidden: false } :
+      { kind: 'index', schema, table, name: 'idx', unique: false, partial: false, origin: 'c' };
+    return { ...reply, entries: [entry] };
+  });
+  const result = await f.invoke().promise;
+  expect(f.request.mock.calls[0][0]).toMatchObject({ kind: 'indexes', schema: 'main', table: 'subject' });
+  expect(result.suggestions.map(item => [item.kind, item.label])).toEqual(mode === 'accepted' ? [['index', 'idx']] : []);
+  await f.provider.dispose();
+});
 it.each(['revision', 'busy', 'broken', 'database', 'dialect'] as const)('完成时%s变化不发布原建议', async field => {
   const f = fixture(true); const changed = { ...f.stateValue, ...(field === 'revision' ? { objectsRevision: 2 } : field === 'database' ? { database: undefined, databaseKnown: false } : field === 'dialect' ? { dialect: 'mysql' as const } : { [field]: true }) }; f.state.mockResolvedValueOnce({ ...f.stateValue }).mockResolvedValueOnce(changed); expect((await f.invoke().promise).suggestions).toEqual([]); await f.provider.dispose();
 });

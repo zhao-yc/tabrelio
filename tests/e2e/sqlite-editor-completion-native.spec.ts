@@ -17,19 +17,23 @@ const scenarios = [
     row: { id: 1, value: '新🚢', virtual_value: '新🚢!' }, output: '新🚢!' },
   { verb: 'DELETE RETURNING', prefix: 'DELETE FROM main.subject AS t WHERE t.id=1 RETURNING subject.',
     typed: 'vir', column: 'virtual_value', trail: '', incoming: false, row: undefined, output: '旧!' },
+  { verb: 'INDEXED BY', prefix: 'EXPLAIN QUERY PLAN SELECT id FROM main.subject INDEXED BY ', typed: 'subject_', column: 'subject_by_value',
+    trail: " WHERE value='旧'", incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'subject_by_value' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
   if (process.env.DBARK_INTEGRATION_ENABLED !== '0' || process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_DEV_URL ||
     !['darwin', 'win32'].includes(process.platform)) throw Error('只允许 Windows 或 macOS 的离线源码验收');
-  const filePath = join(realpathSync(dataDir), 'sqlite-dml-completion.sqlite');
-  const connectionId = 'sqlite-dml-completion';
+  const filePath = join(realpathSync(dataDir), 'sqlite-editor-completion.sqlite');
+  const connectionId = 'sqlite-editor-completion';
+  const lookupKind = scenario.verb === 'INDEXED BY' ? 'indexes' : 'columns';
   const { prefix, trail, typed, column } = scenario;
   const draft = prefix + typed + 'suffix' + trail, accepted = prefix + '"' + column + '"' + trail;
   const db = new DatabaseSync(filePath);
   try {
     db.exec(`CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT,virtual_value TEXT GENERATED ALWAYS AS (value||'!'));
-      CREATE TABLE excluded(other TEXT); CREATE TABLE inbox(id INTEGER PRIMARY KEY,value TEXT);
+      CREATE UNIQUE INDEX subject_by_value ON subject(value);
+      CREATE TABLE excluded(other TEXT); CREATE TABLE inbox(id INTEGER PRIMARY KEY,value TEXT); CREATE INDEX inbox_other ON inbox(value);
       INSERT INTO subject(id,value) VALUES(1,'旧'); INSERT INTO excluded VALUES('不变'); INSERT INTO inbox VALUES(1,'新🚢');`);
   } finally { db.close(); }
   const disk = () => {
@@ -62,7 +66,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
           if ((command === 'query.execute' || command === 'sessions.close') && (!sessionId || input.sessionId !== sessionId)) throw Error('不是本例原查询会话');
           if (command === 'query.execute' && (typeof input.sql !== 'string' || input.sql.replaceAll('\r\n', '\n') !== setup.accepted ||
             facts.some(fact => fact.command === 'query.execute'))) throw Error('SQL 不是本例唯一明确操作');
-          if (command === 'sqlite.completion' && (input.kind === 'columns' && (input.table !== 'subject' || input.schema !== 'main') || 'sql' in input)) throw Error('列目录越出真实目标');
+          if (command === 'sqlite.completion' && (input.kind === setup.lookupKind && (input.table !== 'subject' || input.schema !== 'main') || 'sql' in input)) throw Error('目录越出真实目标');
           const fact: Fact = { command, input }; facts.push(fact);
           const reply = await entry(event, payload);
           fact.reply = reply;
@@ -72,7 +76,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         }
         return entry(event, payload);
       });
-    }, { filePath, connectionId, accepted });
+    }, { filePath, connectionId, accepted, lookupKind });
 
     await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
     await page.evaluate(async ({ id, sql }) => {
@@ -111,8 +115,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     await expect.poll(async () => (await inspect()).sql).toBe(accepted);
     const completion = (await snapshot()).slice(previous).filter(fact => fact.command === 'sqlite.completion');
     const requests = completion.map(fact => sqliteCompletionInputSchema.parse(fact.input));
-    expect(requests.filter(input => input.kind === 'columns')).toEqual([
-      expect.objectContaining({ table: 'subject', schema: 'main', prefix: typed }),
+    expect(requests.filter(input => input.kind !== 'stamp')).toEqual([
+      expect.objectContaining({ kind: lookupKind, table: 'subject', schema: 'main', prefix: typed }),
     ]);
     expect(completion.every(fact => fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true)).toBe(true);
     await page.keyboard.press('ArrowLeft');
@@ -120,6 +124,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     await page.keyboard.press(modifier + '+I');
     const hover = query.locator('.monaco-hover:visible');
     if (scenario.incoming) await expect(hover).toContainText('UPSERT 待插入行');
+    if (lookupKind === 'indexes') await expect(hover).toContainText('SQLite 索引');
     await expect(hover).toContainText('"main"."subject"');
     await page.keyboard.press('Escape');
     expect((await snapshot()).filter(fact => fact.command === 'query.execute' || fact.command === 'sessions.open')).toEqual([]);
@@ -134,7 +139,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     expect(String(executions[0].input.sql).replaceAll('\r\n', '\n')).toBe(accepted);
     expect(facts.filter(fact => fact.command === 'sessions.open')).toHaveLength(1);
     expect(pageErrors).toEqual([]);
-    await info.attach('SQLite 写入编辑器真实验收', { body: JSON.stringify({ verb: scenario.verb, platform: process.platform, before, after: disk(), facts }), contentType: 'application/json' });
+    await info.attach('SQLite 编辑器真实验收', { body: JSON.stringify({ verb: scenario.verb, platform: process.platform, before, after: disk(), facts }), contentType: 'application/json' });
     await confirmOwnedDesktopExit(info);
   } catch (reason) {
     retainOwnedDesktopResources(info);
@@ -144,9 +149,9 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
 
 for (const scenario of scenarios) {
   test.describe(scenario.verb, () => {
-    const enabled = process.env.DBARK_SQLITE_DML_COMPLETION_NATIVE === '1' ||
-      scenario.verb === 'UPSERT' && process.env.DBARK_SQLITE_UPSERT_COMPLETION_NATIVE === '1';
-    test.skip(!enabled || process.argv.includes('--list'), '需要显式启用离线 SQLite 写入编辑器专项');
+    const enabled = scenario.verb === 'INDEXED BY' ? process.env.DBARK_SQLITE_INDEX_COMPLETION_NATIVE === '1' :
+      process.env.DBARK_SQLITE_DML_COMPLETION_NATIVE === '1' || scenario.verb === 'UPSERT' && process.env.DBARK_SQLITE_UPSERT_COMPLETION_NATIVE === '1';
+    test.skip(!enabled || process.argv.includes('--list'), '需要显式启用离线 SQLite 编辑器专项');
     test(`SQLite ${scenario.verb} 补全、悬停和明确提交`, ({}, info) => exercise(scenario, info));
   });
 }

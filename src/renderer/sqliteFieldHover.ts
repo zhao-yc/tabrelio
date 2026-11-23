@@ -1,6 +1,6 @@
 import { sqliteCompletionRelationMatches, type SqliteCompletionAnalysis, type SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
-import { foldSqliteCompletionName as fold, sqliteCompletionLimits, type SqliteCompletionEntry } from '../shared/sqliteCompletion';
-import type { SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
+import { foldSqliteCompletionName as fold, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry } from '../shared/sqliteCompletion';
+import { sqliteIndexDetails, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 import { sqliteFieldHoverZh as text } from './locales/sqliteFieldHover.zh-CN';
 import { sqliteCompletionZh } from './locales/sqliteCompletion.zh-CN';
 import { sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
@@ -22,8 +22,19 @@ function fieldHover(binding: string, column: string, entry: Extract<SqliteComple
 
 /** 精确字段解析须检查全部可见绑定；目录不完整或同名歧义时不猜测某个物理来源。 */
 export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysis, { status: 'ready' }>, directory: SqliteCompletionDirectory): Promise<string | undefined> {
-  if (!analysis.syntax.includes('column') || !analysis.target.prefix) return;
+  if (!analysis.target.prefix) return;
   const name = analysis.target.prefix, qualifiers = analysis.qualifiers;
+  let prefix = name.slice(0, sqliteCompletionLimits.prefixUnits);
+  if (/[\uD800-\uDBFF]$/.test(prefix)) prefix = prefix.slice(0, -1);
+  if (analysis.indexSource) {
+    const result = await directory.load(sqliteCompletionIndexes(analysis.indexSource, prefix));
+    if (result.incomplete) return;
+    const entry = result.entries.find(entry => entry.kind === 'index' && fold(entry.name) === fold(name));
+    if (entry?.kind === 'index') return markdown([sqliteCompletionZh.index, display(entry.name),
+      text.source + '：' + display(entry.schema) + '.' + display(entry.table), ...sqliteIndexDetails(entry)]);
+    return;
+  }
+  if (!analysis.syntax.includes('column')) return;
   const hints = analysis.outputAliases;
   const alias = hints?.names.find(alias => fold(alias) === fold(name));
   const aliasHover = () => alias && fieldHover(alias, alias, undefined, false, sqliteCompletionZh.outputAlias);
@@ -42,8 +53,6 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
     (qualifiers.length || relation.kind !== 'physical' || relation.dmlRole !== 'excluded'));
   if (qualifiers.length && selected.length !== 1) return;
   const candidates: { relation: SqliteCompletionRelation; column: string; entry?: Extract<SqliteCompletionEntry, { kind: 'column' }>; tableFunction?: true }[] = [];
-  let prefix = name.slice(0, sqliteCompletionLimits.prefixUnits);
-  if (/[\uD800-\uDBFF]$/.test(prefix)) prefix = prefix.slice(0, -1);
   // 先查当前查询块的字段，再查该块的输出别名，最后才查相关子查询的外层字段。
   const depths = new Set(selected.map(relation => relation.scopeDepth ?? 0));
   if (hints) depths.add(hints.scopeDepth);

@@ -1,12 +1,16 @@
 import { sqliteCompletionRelationMatches, type SqliteCompletionAnalysis } from '../shared/sqliteCompletionAnalysis';
-import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionLimits, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
+import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
 
-export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; }
+export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'index' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
-const keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'ON', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'WITH', 'AS', 'DISTINCT', 'UNION ALL', 'IS NULL', 'IS NOT NULL', 'RETURNING', 'WINDOW', 'OVER', 'FILTER', 'PARTITION BY', 'ROWS', 'RANGE', 'BETWEEN', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'CURRENT ROW'];
+const keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'ON', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'WITH', 'AS', 'DISTINCT', 'UNION ALL', 'IS NULL', 'IS NOT NULL', 'RETURNING', 'WINDOW', 'OVER', 'FILTER', 'PARTITION BY', 'ROWS', 'RANGE', 'BETWEEN', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'CURRENT ROW', 'EXPLAIN QUERY PLAN'];
 const windowSpecKeywords = ['PARTITION BY', 'ORDER BY', 'ROWS', 'RANGE', 'GROUPS'];
+
+export function sqliteIndexDetails(entry: Extract<SqliteCompletionEntry, { kind: 'index' }>): string[] {
+  return [text.indexOrigin[entry.origin], ...(entry.unique ? [text.uniqueIndex] : []), ...(entry.partial ? [text.partialIndex] : [])];
+}
 
 /** 建议只引用准确目录名；同名字段保留不同别名的限定插入，CTE声明不伪装成FROM绑定。 */
 export async function sqliteCompletionSuggestions(analysis: Extract<SqliteCompletionAnalysis, { status: 'ready' }>, directory: SqliteCompletionDirectory): Promise<{ items: SqliteCompletionItem[]; incomplete: boolean }> {
@@ -19,6 +23,14 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     if (items.length >= sqliteCompletionLimits.suggestions) { incomplete = true; return; }
     seen.add(key); items.push(item);
   };
+  if (analysis.indexSource) {
+    const metadata = await directory.load(sqliteCompletionIndexes(analysis.indexSource, analysis.target.prefix));
+    incomplete = metadata.incomplete;
+    for (const entry of metadata.entries) if (entry.kind === 'index') {
+      add({ label: entry.name, kind: 'index', insertText: quote(entry.name), detail: [text.index, entry.schema + '.' + entry.table, ...sqliteIndexDetails(entry)].join(' · ') });
+    }
+    return { items, incomplete };
+  }
   if (analysis.windowNames) {
     // 窗口名只在当前查询块解析。使用名称时不打开会话或读取表字段。
     for (const { name, quote: delimiter } of analysis.windowNames.names) {
@@ -112,7 +124,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
       const metadata = await directory.load({ kind: 'relations', prefix: analysis.target.prefix, ...(schema ? { schema } : {}) }); incomplete ||= metadata.incomplete;
       const shadowed = new Set(declarations.map(relation => fold(relation.name)));
       for (const entry of metadata.entries) {
-        if (entry.kind === 'column' || !schema && shadowed.has(fold(entry.name))) continue;
+        if (entry.kind !== 'table' && entry.kind !== 'view' || !schema && shadowed.has(fold(entry.name))) continue;
         add({ label: entry.name, kind: entry.kind, insertText: quote(entry.name), detail: (entry.kind === 'view' ? text.view : text.table) + ' · ' + entry.schema + (entry.schema === 'temp' ? ' · ' + text.temporary : '') });
       }
     }

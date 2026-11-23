@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite 支持实际表的 `INDEXED BY` 候选和索引悬停。`EXPLAIN` 和 `EXPLAIN QUERY PLAN` 内的语句沿用原字段、对象和索引作用域。索引目录遵循当前会话的临时对象和显式命名空间。Q01 继续为部分覆盖。 [SQLite INDEXED BY](https://www.sqlite.org/lang_indexedby.html)
+
 2026-11-23 源码增量。SQLite `UPDATE … FROM` 区分可写列组、来源表连接条件及目标过滤；`UPDATE` 和 `DELETE` 的 `RETURNING` 可用实际表名补全和悬停目标列，相关子查询沿用实际作用域。Q01 与 O05 继续为部分覆盖。 [SQLite UPDATE](https://www.sqlite.org/lang_update.html#update_from) · [SQLite RETURNING](https://www.sqlite.org/lang_returning.html)
 
 2026-11-23 源码增量。SQLite 查询编辑器支持 UPSERT 冲突目标、赋值列、`excluded` 待插入行及写入结果的作用域。写入列清单排除生成及隐藏列，INSERT SELECT 输入和 RETURNING 按各自的位置提供候选。Q01 与 O05 继续为部分覆盖。 [SQLite UPSERT](https://www.sqlite.org/lang_upsert.html)

@@ -80,7 +80,12 @@ export function createSqliteCompletionProvider(ports: Ports) {
             const raw = await pending.work; if (!current()) throw stale();
             const result = sqliteCompletionOutputSchema.parse(raw);
             if (new TextEncoder().encode(JSON.stringify(result)).length > sqliteCompletionLimits.outputBytes || result.sessionRevision !== state?.objectsRevision || stamp !== undefined && result.stamp !== stamp) throw stale();
-            if (query.kind === 'stamp' && (result.entries.length || result.incomplete) || query.kind !== 'stamp' && result.entries.some(entry => entry.kind === 'column' ? query.kind !== 'columns' || fold(entry.table) !== fold(query.table) || query.schema !== undefined && entry.schema !== query.schema : query.kind !== 'relations' || query.schema !== undefined && entry.schema !== query.schema)) throw stale();
+            if (query.kind === 'stamp' ? result.entries.length || result.incomplete : result.entries.some(entry => {
+              if (query.schema !== undefined && entry.schema !== query.schema) return true;
+              if (query.kind === 'relations') return entry.kind !== 'table' && entry.kind !== 'view';
+              return (query.kind === 'columns' ? entry.kind !== 'column' : entry.kind !== 'index') ||
+                !('table' in entry) || fold(entry.table) !== fold(query.table);
+            })) throw stale();
             const names = result.entries.map(entry => fold(entry.name)); if (new Set(names).size !== names.length) throw stale();
             stamp ??= result.stamp; return result;
           } finally { if (pending.cancel) await pending.cancel; operation.pending.delete(input.taskId); }

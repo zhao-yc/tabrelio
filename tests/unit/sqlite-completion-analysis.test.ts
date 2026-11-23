@@ -197,7 +197,7 @@ it('局部循环只保留未知目录，回包拒绝前向引用、越界根和�
 });
 it('普通相关子查询可见外层alias，FROM派生体不借外层行，内层同alias优先',()=>{const correlated=ready('SELECT * FROM outer_table o WHERE EXISTS (SELECT o.| FROM inner_table i)');expect(correlated.relations.map(item=>item.alias)).toEqual(['i','o']);const derived=ready('SELECT * FROM outer_table o JOIN (SELECT i.| FROM inner_table i) d ON 1=1');expect(derived.relations).toEqual([{kind:'physical',name:'inner_table',alias:'i'}]);const shadow=ready('SELECT * FROM outer_table t WHERE EXISTS (SELECT t.| FROM inner_table t)');expect(shadow.relations).toEqual([{kind:'physical',name:'inner_table',alias:'t'}]);});
 it('trigger体内分号不伪造独立SELECT；后继statement仍准确隔离',()=>{expect(analyze('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT x.| FROM secret x; END;')).toMatchObject({status:'blocked',reason:'trigger'});expect(ready('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT CASE WHEN 1 THEN 2 END; END; SELECT t.| FROM actual t').relations).toEqual([{kind:'physical',name:'actual',alias:'t'}]);});
-it.each(['SELECT * FROM a INDEXED BY |','WITH c(x) AS(SELECT 1) UPDATE c SET |'])('未知SQLite复杂上下文明确blocked，不伪造物理关系 %#',source=>{expect(analyze(source).status).toBe('blocked');});
+it.each(['SELECT * FROM a NOT INDEXED BY |','WITH c(x) AS(SELECT 1) UPDATE c SET |'])('未知SQLite复杂上下文明确blocked，不伪造物理关系 %#',source=>{expect(analyze(source).status).toBe('blocked');});
 
 it('只交付命中组别名的投影树，成员别名和其他组仍各自绑定', () => {
   const marked = 'SELECT g.va|lue FROM (main.a x JOIN temp.b y USING(id)) AS g JOIN (c JOIN d) n ON 1';

@@ -12,23 +12,32 @@ const base = { connectionId: id, sessionId: id.optional(), taskId: id.refine(val
 export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('relations'), schema: schema.optional() }).strict(),
   z.object({ ...base, kind: z.literal('columns'), schema: schema.optional(), table: name, tableFunction: z.literal(true).optional() }).strict(),
+  z.object({ ...base, kind: z.literal('indexes'), schema: schema.optional(), table: name }).strict(),
   z.object({ ...base, kind: z.literal('stamp') }).strict(),
 ]);
 export const sqliteCompletionEntrySchema = z.discriminatedUnion('kind', [
   z.object({ name, kind: z.enum(['table', 'view']), schema }).strict(),
   z.object({ name, kind: z.literal('column'), schema, table: name, declaredType: z.string().max(4096).refine(value => value.length <= 4096 && unicode(value)), generated: z.boolean(), hidden: z.boolean() }).strict(),
+  z.object({ name, kind: z.literal('index'), schema, table: name, unique: z.boolean(), partial: z.boolean(), origin: z.enum(['c', 'u', 'pk']) }).strict(),
 ]);
 export const sqliteCompletionOutputSchema = z.object({ entries: z.array(sqliteCompletionEntrySchema).max(sqliteCompletionLimits.entries), incomplete: z.boolean(), stamp: z.string().regex(/^-?\d{1,10}:-?\d{1,10}$/), sessionRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional() }).strict().refine(value => new TextEncoder().encode(JSON.stringify(value)).byteLength <= sqliteCompletionLimits.outputBytes, 'SQLite补全目录超过传输预算');
 export type SqliteCompletionInput = z.infer<typeof sqliteCompletionInputSchema>;
 export type SqliteCompletionEntry = z.infer<typeof sqliteCompletionEntrySchema>;
 export type SqliteCompletionOutput = z.infer<typeof sqliteCompletionOutputSchema>;
-export type SqliteCompletionLookup = Omit<Extract<SqliteCompletionInput, { kind: 'relations' }>, 'connectionId' | 'sessionId' | 'taskId'> | Omit<Extract<SqliteCompletionInput, { kind: 'columns' }>, 'connectionId' | 'sessionId' | 'taskId'> | Omit<Extract<SqliteCompletionInput, { kind: 'stamp' }>, 'connectionId' | 'sessionId' | 'taskId'>;
-export const sqliteCompletionSourceSchema = z.object({ name, schema: schema.optional(), tableFunction: z.literal(true).optional() }).strict();
+type Lookup<T> = T extends SqliteCompletionInput ? Omit<T, 'connectionId' | 'sessionId' | 'taskId'> : never;
+export type SqliteCompletionLookup = Lookup<SqliteCompletionInput>;
+export const sqliteCompletionTableSchema = z.object({ name, schema: schema.optional() }).strict();
+export type SqliteCompletionTable = z.infer<typeof sqliteCompletionTableSchema>;
+export const sqliteCompletionSourceSchema = sqliteCompletionTableSchema.extend({ tableFunction: z.literal(true).optional() });
 export type SqliteCompletionSource = z.infer<typeof sqliteCompletionSourceSchema>;
 
 /** 所有列入口带上调用标记，只传来源和前缀。函数参数留在编辑器内。 */
 export function sqliteCompletionColumns({ name, schema, tableFunction }: SqliteCompletionSource, prefix: string): Extract<SqliteCompletionLookup, { kind: 'columns' }> {
   return { kind: 'columns', table: name, prefix, ...(schema ? { schema } : {}), ...(tableFunction ? { tableFunction } : {}) };
+}
+
+export function sqliteCompletionIndexes({ name, schema }: SqliteCompletionTable, prefix: string): Extract<SqliteCompletionLookup, { kind: 'indexes' }> {
+  return { kind: 'indexes', table: name, prefix, ...(schema ? { schema } : {}) };
 }
 
 export function sqliteCompletionSourceKey({ name, schema, tableFunction }: SqliteCompletionSource): string {

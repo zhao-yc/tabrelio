@@ -25,6 +25,15 @@ async function stamp(driver: SqliteDriverSession, control: CompletionControl): P
 /** 前缀用substr与绑定参数作字面比较；百分号、下划线及引号均没有模式或SQL语义。 */
 const prefixSql = 'substr(name,1,length(?)) = ? COLLATE NOCASE';
 const visibleSql = "type IN ('table','view','virtual') AND substr(name,1,7) COLLATE NOCASE <> 'sqlite_'";
+
+function tableIdentity(driver: SqliteDriverSession, input: { schema?: 'main' | 'temp'; table: string }, control: CompletionControl) {
+  // 先定位实际关系再看类型，避免临时视图或虚拟表遮蔽时误读 main 的目录。
+  const scope = input.schema ? 'schema = ?' : "schema IN ('main','temp')";
+  return read(driver, 'SELECT name,schema,type FROM pragma_table_list() WHERE ' + scope + " AND name = ? COLLATE NOCASE ORDER BY schema DESC LIMIT 1", [...(input.schema ? [input.schema] : []), input.table], control, 1);
+}
+
+const flag = (value: SqliteValue): boolean | undefined => value && typeof value === 'object' && value.type === 'integer' &&
+  (value.value === '0' || value.value === '1') ? value.value === '1' : undefined;
 /** 仅暴露main/temp用户关系；table_list的shadow标记不能靠名称猜测，temp命名空间优先遮蔽main。 */
 export async function readSqliteCompletion(driver: SqliteDriverSession, input: SqliteCompletionLookup, control: CompletionControl): Promise<SqliteCompletionOutput> {
   const before = await stamp(driver, control), entries: SqliteCompletionEntry[] = []; let incomplete = false;
@@ -45,8 +54,7 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
     }
   } else if (input.kind === 'columns') {
     // 先按原生命名空间规则定位，排除系统及shadow后才读取xinfo；显式schema永不查另一库。
-    const scope = input.schema ? 'schema = ?' : "schema IN ('main','temp')";
-    const found = await read(driver, 'SELECT name,schema,type FROM pragma_table_list() WHERE ' + scope + " AND name = ? COLLATE NOCASE ORDER BY schema DESC LIMIT 1", [...(input.schema ? [input.schema] : []), input.table], control, 1);
+    const found = await tableIdentity(driver, input, control);
     const target = found.rows[0];
     const table = target ? target[0] : input.table;
     const schema = target ? target[1] : input.schema ?? 'main';
@@ -66,6 +74,22 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
         if (!append({ name: row[0], kind: 'column', schema, table, declaredType: row[1], generated: hidden.value === '2' || hidden.value === '3', hidden: hidden.value === '1' })) break;
       }
     } else if (input.tableFunction) incomplete = true;
+  } else if (input.kind === 'indexes') {
+    const { rows: [target] } = await tableIdentity(driver, input, control);
+    if (target && target[2] === 'table') {
+      const [table, schema] = target;
+      if (typeof table !== 'string' || schema !== 'main' && schema !== 'temp') throw Error('SQLite补全索引所属表无效');
+      if (!/^sqlite_/i.test(table)) {
+        const result = await read(driver, 'SELECT name,"unique",origin,partial FROM pragma_index_list(?,?) WHERE ' + prefixSql + ' ORDER BY name COLLATE NOCASE,name LIMIT 257',
+          [table, schema, input.prefix, input.prefix], control, 257);
+        incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
+        for (const [name, unique, origin, partial] of result.rows.slice(0, sqliteCompletionLimits.entries)) {
+          const isUnique = flag(unique), isPartial = flag(partial);
+          if (typeof name !== 'string' || origin !== 'c' && origin !== 'u' && origin !== 'pk' || isUnique === undefined || isPartial === undefined) throw Error('SQLite补全索引目录无效');
+          if (!append({ kind: 'index', name, schema, table, origin, unique: isUnique, partial: isPartial })) break;
+        }
+      }
+    }
   }
   const after = await stamp(driver, control); control.check();
   if (before !== after) throw Error('SQLite目录在补全读取期间变化，请重新触发');

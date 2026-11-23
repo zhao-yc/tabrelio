@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import type { SqliteProcessExit, SqliteProcessTransport, SqliteWorkerRequest, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
 import type { SqliteConnectionProfile, TaskEvent } from '../../src/shared/contracts';
-import { sqliteCompletionTaskPrefix, type SqliteCompletionInput, type SqliteCompletionOutput } from '../../src/shared/sqliteCompletion';
+import { sqliteCompletionTaskPrefix, type SqliteCompletionInput, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../../src/shared/sqliteCompletion';
 vi.mock('electron', () => ({ utilityProcess: { fork: () => { throw Error('补全测试必须使用真实Node子进程'); } } }));
 import { SqliteRuntime } from '../../src/main/sqliteRuntime';
 
@@ -36,7 +36,8 @@ function transport(observe?: (message: SqliteWorkerResponse, forward: () => void
 /** 只注入真实授权profile与真实transport，事件记录用于证明补全不会冒充查询任务。 */
 function runtime(profiles: SqliteConnectionProfile[], observe?: Parameters<typeof transport>[0]) { const events: TaskEvent[] = []; const app = new SqliteRuntime({ resolveProfile: id => profiles.find(p => p.id === id), createTransport: () => transport(observe), emit: event => events.push(event) }); runtimes.add(app); return { app, events }; }
 /** 每次目录请求用独立命名空间编号，正常调用不传任何用户SQL。 */
-function completion(app: SqliteRuntime, connectionId: string, lookup: { kind: 'relations'; prefix?: string; schema?: 'main' | 'temp' } | { kind: 'columns'; table: string; prefix?: string; schema?: 'main' | 'temp'; tableFunction?: true } | { kind: 'stamp'; prefix?: string }, sessionId?: string, taskId = sqliteCompletionTaskPrefix + ++serial): Promise<SqliteCompletionOutput> { return app.request('sqlite.completion', { ...lookup, prefix: lookup.prefix ?? '', connectionId, taskId, ...(sessionId ? { sessionId } : {}) } as SqliteCompletionInput); }
+type OptionalPrefix<T> = T extends SqliteCompletionLookup ? Omit<T, 'prefix'> & { prefix?: string } : never;
+function completion(app: SqliteRuntime, connectionId: string, lookup: OptionalPrefix<SqliteCompletionLookup>, sessionId?: string, taskId = sqliteCompletionTaskPrefix + ++serial): Promise<SqliteCompletionOutput> { return app.request('sqlite.completion', { ...lookup, prefix: lookup.prefix ?? '', connectionId, taskId, ...(sessionId ? { sessionId } : {}) } as SqliteCompletionInput); }
 /** 仅用于准备原会话事务／临时DDL，真实执行记录不计入目录任务。 */
 function execute(app: SqliteRuntime, sessionId: string, sql: string) { return app.request('query.execute', { sessionId, taskId: 'sql-' + ++serial, sql, maxRows: 100 }); }
 /** 只看真实driver请求中的SQL，不将ACK或close伪装成语句。 */
@@ -58,6 +59,56 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('索引目录只查真实目标并保留字面前缀、唯一和部分属性，实际计划采用候选', async () => {
+    const p = profile('索引测试', `CREATE TABLE subject(id INTEGER PRIMARY KEY,note TEXT UNIQUE); CREATE TABLE other(note TEXT);
+      CREATE UNIQUE INDEX "ix%_""🚢" ON subject(note) WHERE note IS NOT NULL; CREATE INDEX ixother ON other(note);`);
+    const { app, events } = runtime([p]);
+    const found = await completion(app, p.id, { kind: 'indexes', table: 'subject', prefix: 'IX%_' });
+    expect(found.entries).toEqual([{ kind: 'index', name: 'ix%_"🚢', table: 'subject', schema: 'main', unique: true, partial: true, origin: 'c' }]);
+    expect(found.incomplete).toBe(false);
+    expect(events).toEqual([]);
+    expect(statements(processes[0]).filter(sql => sql.includes('pragma_index_list'))).toHaveLength(1);
+    expect(await processes[0].exited).toEqual({ code: 0, signal: null });
+    const db = new DatabaseSync(p.sqlite.filePath!, { readOnly: true });
+    try {
+      const plan = db.prepare('EXPLAIN QUERY PLAN SELECT id FROM main.subject INDEXED BY "ix%_""🚢" WHERE note=\'yes\'').get();
+      expect(plan?.detail).toContain('ix%_"🚢');
+    } finally { db.close(); }
+    const automatic = await completion(app, p.id, { kind: 'indexes', table: 'subject', prefix: 'sqlite_autoindex' });
+    expect(automatic.entries).toEqual([{ kind: 'index', name: 'sqlite_autoindex_subject_1', table: 'subject', schema: 'main', unique: true, partial: false, origin: 'u' }]);
+  });
+
+  it('索引目录沿用原会话的未提交临时索引和遮蔽，原事务与目录代次保持', async () => {
+    const p = profile('会话索引', 'CREATE TABLE subject(id,note); CREATE INDEX ix_main ON subject(note); CREATE TABLE shadowed(id); CREATE INDEX ix_hidden ON shadowed(id);');
+    const { app, events } = runtime([p]), session = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, session.sessionId, 'BEGIN; CREATE TEMP TABLE subject(id,note); CREATE INDEX temp.ix_temp ON subject(id); CREATE TEMP VIEW shadowed AS SELECT 1 AS id');
+    const before = await app.request('query.completionState', session), beforeEvents = events.length;
+    const names = async (lookup: { table: string; schema?: 'main' | 'temp' }) => {
+      const result = await completion(app, p.id, { kind: 'indexes', ...lookup }, session.sessionId);
+      expect(result.sessionRevision).toBe(before.objectsRevision);
+      return result.entries.map(entry => entry.name);
+    };
+    expect(await names({ table: 'subject' })).toEqual(['ix_temp']);
+    expect(await names({ table: 'subject', schema: 'main' })).toEqual(['ix_main']);
+    expect(await names({ table: 'shadowed' })).toEqual([]);
+    expect((await app.request('query.sessionState', session)).transactionOpen).toBe(true);
+    expect(await app.request('query.completionState', session)).toEqual(before);
+    expect(events).toHaveLength(beforeEvents);
+    await execute(app, session.sessionId, 'ROLLBACK');
+    expect((await completion(app, p.id, { kind: 'indexes', table: 'subject' }, session.sessionId)).entries.map(entry => entry.name)).toEqual(['ix_main']);
+  });
+
+  it('实际索引目录按匹配前缀应用 256 条上限并显式标记截断', async () => {
+    const ddl = Array.from({ length: 257 }, (_, i) => `CREATE INDEX idx_${String(i).padStart(3, '0')} ON subject(id);`).join('');
+    const p = profile('索引预算', 'CREATE TABLE subject(id);' + ddl), { app } = runtime([p]);
+    const broad = await completion(app, p.id, { kind: 'indexes', table: 'subject', prefix: 'idx_' });
+    expect(broad.entries).toHaveLength(256);
+    expect(broad.incomplete).toBe(true);
+    const exact = await completion(app, p.id, { kind: 'indexes', table: 'subject', prefix: 'idx_256' });
+    expect(exact.entries.map(entry => entry.name)).toEqual(['idx_256']);
+    expect(exact.incomplete).toBe(false);
+  });
+
   it('无session使用独立只读driver并正常exit，不建历史任务或发送写SQL', async () => {
     const p = profile(), { app, events } = runtime([p]), result = await completion(app, p.id, { kind: 'relations' });
     expect(result.entries).toEqual([{ name: 'subject', kind: 'table', schema: 'main' }, { name: 'subject_view', kind: 'view', schema: 'main' }]); expect(result.incomplete).toBe(false); expect(result.sessionRevision).toBeUndefined(); expect(result.stamp).toMatch(/^\d+:0$/); expect(events).toEqual([]); expect(await processes[0].exited).toEqual({ code: 0, signal: null }); expect(processes[0].kills).toBe(0);

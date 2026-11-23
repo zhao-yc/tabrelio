@@ -4,6 +4,8 @@
 
 SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段、表别名，明确输出列的 CTE／派生表，以及 `main`／`temp` 限定。建议按准确名称使用 SQLite 双引号转义，以普通文本插入；同名字段保留各自别名限定。INSERT 字段清单、UPDATE 赋值左侧及 RETURNING 使用目标表字段。
 
+`EXPLAIN` 和 `EXPLAIN QUERY PLAN` 内的查询或写入语句沿用原补全作用域。`INDEXED BY` 只补全实际表的索引名，悬停显示所属命名空间、表、索引来源及唯一或部分属性。无显式命名空间时使用原会话的临时对象遮蔽规则，唯一约束等生成的索引也可选择。读取只传表名、命名空间和前缀，不准备编辑器内的 SQL。选中部分索引后由 SQLite 检查查询条件是否适用。 [SQLite INDEXED BY](https://www.sqlite.org/lang_indexedby.html) · [SQLite `index_list`](https://www.sqlite.org/pragma.html#pragma_index_list)
+
 SQLite UPSERT 可补全 `ON CONFLICT` 的目标列表和索引谓词、`DO UPDATE SET` 的两侧及其 `WHERE`。赋值左侧支持列组并排除生成列、隐藏列。右侧和过滤条件可分别引用目标旧行和 `excluded` 待插入行，两者共享实际目标表的列目录。候选和悬停明确标注待插入行。实际目标名或别名为 `excluded` 时，沿用 SQLite 的优先级。`INSERT … SELECT` 的输入来源在进入冲突分支后退出作用域，`INSERT … RETURNING` 的限定名使用写入的实际表名。唯一索引匹配以 SQLite 执行结果为准。 [SQLite UPSERT](https://www.sqlite.org/lang_upsert.html)
 
 `UPDATE … FROM` 的赋值右侧和 `WHERE` 可使用目标与来源列，来源表之间的 `ON` 按连接范围解析。单一表值函数的实参可关联更新目标。`UPDATE` 的赋值列组使用可写列候选并排除生成列和隐藏列。`UPDATE` 和 `DELETE` 的过滤表达式支持按实际命名空间限定目标别名。它们的 `RETURNING` 按实际目标表名解析，相关子查询可同时使用其自身来源。 [SQLite UPDATE FROM](https://www.sqlite.org/lang_update.html#update_from) · [SQLite RETURNING](https://www.sqlite.org/lang_returning.html)
@@ -43,6 +45,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-23 索引与执行计划增量。WIN11-TEST 不可达，未派发任务。本机 macOS arm64 在修正首轮类型检查发现的光标范围遮蔽和测试路径类型后，通过严格类型检查、源码构建和 22 份相关套件的 678 项。Electron 编辑器专项 4 项通过。`INDEXED BY` 候选和悬停只读取 `main.subject` 的索引目录，显式执行前数据库、会话和历史保持原状，执行计划显示选定索引。既有补全回归 1 项通过，两次应用正常退出。日志和报告保存在忽略目录 `.cache/sqlite-index-completion/verified/`。Windows 界面及安装包待验。
 
 2026-11-23 UPDATE FROM 与 DELETE RETURNING 增量。WIN11-TEST 不可达，本机 macOS arm64 的严格类型检查、源码构建和 21 份相关套件的 650 项通过。Electron 分别对 UPSERT、UPDATE FROM 和 DELETE RETURNING 验证候选插入、悬停和显式执行。三个用例在显式执行前保持文件及会话原状，执行后确认目标行和返回值。原 SQLite 补全 Electron 回归通过，两次应用均正常退出。通过记录位于忽略目录 `.cache/sqlite-dml-completion/verified/`。Windows 界面和安装包待验。
 
