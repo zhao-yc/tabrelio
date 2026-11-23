@@ -1,4 +1,4 @@
-import type { SqliteCompletionAnalysis, SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
+import { sqliteCompletionRelationMatches, type SqliteCompletionAnalysis, type SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, sqliteCompletionLimits, type SqliteCompletionEntry } from '../shared/sqliteCompletion';
 import type { SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 import { sqliteFieldHoverZh as text } from './locales/sqliteFieldHover.zh-CN';
@@ -9,9 +9,10 @@ import { sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } f
 function markdown(lines: string[]): string { return lines.join('\n').split(/\r\n|\r|\n/).map(line => '    ' + line).join('\n'); }
 const display = (value: string) => JSON.stringify(value);
 
-function fieldHover(binding: string, column: string, entry: Extract<SqliteCompletionEntry, { kind: 'column' }> | undefined, tableFunction: boolean, localSource?: string) {
+function fieldHover(binding: string, column: string, entry: Extract<SqliteCompletionEntry, { kind: 'column' }> | undefined, tableFunction: boolean, localSource?: string, excluded = false) {
   const lines = [text.title, text.column + '：' + display(column), text.binding + '：' + display(binding)];
   if (entry) {
+    if (excluded) lines.push(sqliteCompletionZh.excludedRow);
     const sourceKind = tableFunction ? sqliteCompletionZh.tableFunction : entry.schema === 'temp' ? text.temporary : text.permanent;
     lines.push(text.source + '：' + display(entry.schema) + '.' + display(entry.table), sourceKind,
       text.declaredType + '：' + (entry.declaredType ? display(entry.declaredType) : text.noDeclaredType), text.generated + '：' + (entry.generated ? text.yes : text.no), text.hidden + '：' + (entry.hidden ? text.yes : text.no), text.dynamic);
@@ -37,8 +38,8 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
     return;
   }
   const bound = analysis.relations.filter(relation => relation.kind === 'physical' || !relation.declaration);
-  const matches = (relation: SqliteCompletionRelation) => !qualifiers.length || qualifiers.length === 1 && fold(relation.alias ?? relation.name) === fold(qualifiers[0]) || qualifiers.length === 2 && relation.kind === 'physical' && !relation.alias && relation.schema !== undefined && fold(relation.schema) === fold(qualifiers[0]) && fold(relation.name) === fold(qualifiers[1]);
-  const selected = bound.filter(matches);
+  const selected = bound.filter(relation => sqliteCompletionRelationMatches(relation, qualifiers) &&
+    (qualifiers.length || relation.kind !== 'physical' || relation.insertRole !== 'excluded'));
   if (qualifiers.length && selected.length !== 1) return;
   const candidates: { relation: SqliteCompletionRelation; column: string; entry?: Extract<SqliteCompletionEntry, { kind: 'column' }>; tableFunction?: true }[] = [];
   let prefix = name.slice(0, sqliteCompletionLimits.prefixUnits);
@@ -62,7 +63,9 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
       } else {
         const result = await reader.readColumns({ source: relation }, prefix);
         if (result.incomplete) return;
-        for (const { entry } of result.columns) if (entry && !(relation.visibleColumnsOnly && entry.hidden) && fold(entry.name) === fold(name)) candidates.push({ relation, column: entry.name, entry });
+        for (const { entry } of result.columns) if (entry && !(relation.visibleColumnsOnly && entry.hidden) &&
+          !(analysis.writableColumns && (entry.generated || entry.hidden)) && (qualifiers.length !== 2 || entry.schema === fold(qualifiers[0])) &&
+          fold(entry.name) === fold(name)) candidates.push({ relation, column: entry.name, entry });
       }
     }
     if (depth === hints?.scopeDepth && hints?.sourcesIncomplete) return;
@@ -76,5 +79,6 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   const { relation, column, entry, tableFunction } = candidates[0];
   if (relation.afterOuterJoin) return;
   const localSource = relation.kind === 'local' ? relation.source === 'cte' ? text.cte : text.derived : undefined;
-  return fieldHover(relation.alias ?? relation.name, column, entry, tableFunction === true || relation.kind === 'physical' && relation.tableFunction === true, localSource);
+  return fieldHover(relation.alias ?? relation.name, column, entry, tableFunction === true || relation.kind === 'physical' && relation.tableFunction === true,
+    localSource, relation.kind === 'physical' && relation.insertRole === 'excluded');
 }

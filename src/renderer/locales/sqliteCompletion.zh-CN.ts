@@ -2,6 +2,7 @@
 export const sqliteCompletionZh = {
   outputColumn: '复合查询输出列',
   outputAlias: '查询输出别名',
+  excludedRow: 'UPSERT 待插入行',
   namedWindow: '命名窗口',
   joinColumn: '连接两侧共有列',
   joinGroup: '连接组输出列',

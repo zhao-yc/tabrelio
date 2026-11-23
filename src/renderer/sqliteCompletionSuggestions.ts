@@ -1,4 +1,4 @@
-import type { SqliteCompletionAnalysis, SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
+import { sqliteCompletionRelationMatches, type SqliteCompletionAnalysis } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionLimits, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
@@ -117,10 +117,8 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
       }
     }
   }
-  /** 名称限定采用SQLite的ASCII比较；别名一旦存在，不把旧表名再当别名。 */
-  const matches = (relation: SqliteCompletionRelation) => !qualifiers.length || qualifiers.length === 1 && fold(relation.alias ?? relation.name) === fold(qualifiers[0]) || qualifiers.length === 2 && relation.kind === 'physical' && !relation.alias && relation.schema !== undefined && fold(relation.schema) === fold(qualifiers[0]) && fold(relation.name) === fold(qualifiers[1]);
   if (analysis.syntax.includes('column')) {
-    const selected = bound.filter(matches);
+    const selected = bound.filter(relation => sqliteCompletionRelationMatches(relation, qualifiers));
     if (qualifiers.length && selected.length > 1) return { items: [], incomplete: true };
     const outputAliases = analysis.outputAliases, sourceNames = new Set<string>();
     const addOutputAlias = (name: string) => add({ label: name, kind: 'column', insertText: quote(name), detail: text.outputAlias });
@@ -156,12 +154,16 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
         incomplete ||= metadata.incomplete;
         aliasSourcesIncomplete ||= aliasSource && metadata.incomplete;
         aliasMayResolveToRowid ||= aliasSource;
-        const source = relation.tableFunction ? text.tableFunction : undefined;
-        for (const { entry } of metadata.columns) if (entry && !(relation.visibleColumnsOnly && entry.hidden)) {
+        const source = relation.insertRole === 'excluded' ? text.excludedRow : relation.tableFunction ? text.tableFunction : undefined;
+        for (const { entry } of metadata.columns) if (entry && !(relation.visibleColumnsOnly && entry.hidden) &&
+          !(analysis.writableColumns && (entry.generated || entry.hidden)) && (qualifiers.length !== 2 || entry.schema === fold(qualifiers[0]))) {
           addSourceColumn(entry.name, binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : ''));
         }
       }
-      if (!qualifiers.length && !relation.afterOuterJoin) add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail: relation.kind === 'local' && relation.source === 'group' ? text.joinGroup : text.alias, trigger: true });
+      if (!qualifiers.length && !relation.afterOuterJoin && !analysis.unqualifiedColumns) {
+        const detail = relation.kind === 'physical' && relation.insertRole === 'excluded' ? text.excludedRow : relation.kind === 'local' && relation.source === 'group' ? text.joinGroup : text.alias;
+        add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail, trigger: true });
+      }
     }
     // 当前查询块的来源列优先于输出别名，外层列在输出别名之后。目录无法确认隐式 rowid。
     if (outputAliases && !outputAliases.outputFirst && !aliasSourcesIncomplete) {

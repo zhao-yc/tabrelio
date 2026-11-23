@@ -1,0 +1,132 @@
+import { realpathSync } from 'node:fs';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { zh } from '../../src/renderer/locales/zh-CN';
+import { sqliteCompletionInputSchema } from '../../src/shared/sqliteCompletion';
+import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
+import { navigationMenuItem } from './navigation-menu';
+
+test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
+test.skip(process.env.DBARK_SQLITE_UPSERT_COMPLETION_NATIVE !== '1' || process.argv.includes('--list'), '需要显式启用离线 SQLite UPSERT 编辑器专项');
+
+test('SQLite UPSERT 待插入行补全、悬停和明确提交', async ({}, info) => {
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '0' || process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_DEV_URL ||
+    !['darwin', 'win32'].includes(process.platform)) throw Error('只允许 Windows 或 macOS 的离线源码验收');
+  const filePath = join(realpathSync(dataDir), 'sqlite-upsert-completion.sqlite');
+  const connectionId = 'sqlite-upsert-completion';
+  const prefix = "INSERT INTO main.subject AS t(id,value) VALUES(1,'新🚢')\nON CONFLICT(id) DO UPDATE SET value=concat(t.value,excluded.";
+  const trail = ') WHERE excluded.value<>\'skip\' RETURNING subject.value,subject.virtual_value';
+  const draft = prefix + 'vasuffix' + trail, accepted = prefix + '"value"' + trail;
+  const db = new DatabaseSync(filePath);
+  try {
+    db.exec(`CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT,virtual_value TEXT GENERATED ALWAYS AS (value||'!'));
+      CREATE TABLE excluded(other TEXT); INSERT INTO subject(id,value) VALUES(1,'旧'); INSERT INTO excluded VALUES('不变');`);
+  } finally { db.close(); }
+  const disk = () => {
+    const db = new DatabaseSync(filePath, { readOnly: true });
+    try { return { row: db.prepare('SELECT id,value,virtual_value FROM subject').get(), other: db.prepare('SELECT * FROM excluded').get() }; }
+    finally { db.close(); }
+  };
+  interface Fact { command: string; input: Record<string, unknown>; reply?: unknown; }
+  const snapshot = () => desktop.evaluate(() => (globalThis as typeof globalThis & { __upsertCompletionFacts?: Fact[] }).__upsertCompletionFacts ?? []);
+  try {
+    await desktop.evaluate(({ BrowserWindow, dialog, ipcMain }, setup) => {
+      const window = BrowserWindow.getAllWindows()[0], originalChooser = dialog.showOpenDialog;
+      const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, payload: unknown) => Promise<unknown>> })._invokeHandlers;
+      const entry = handlers?.get('dbark:request');
+      if (!window || !entry) throw Error('原 SQLite 入口不可用');
+      const facts: Fact[] = [];
+      let sessionId: string | undefined;
+      (globalThis as typeof globalThis & { __upsertCompletionFacts?: Fact[] }).__upsertCompletionFacts = facts;
+      dialog.showOpenDialog = (async (...args: unknown[]) => {
+        dialog.showOpenDialog = originalChooser;
+        if (args[0] !== window || !(args.at(-1) as Electron.OpenDialogOptions).filters?.[0]?.extensions.includes('sqlite')) throw Error('本例只授权合成库');
+        return { canceled: false, filePaths: [setup.filePath] };
+      }) as typeof originalChooser;
+      handlers.set('dbark:request', async (event, payload) => {
+        const { command, input } = payload as { command: string; input: Record<string, unknown> };
+        if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || /clipboard/i.test(command)) throw Error('非本例查询文档');
+        if (['query.execute', 'sessions.open', 'sessions.close', 'sqlite.completion'].includes(command)) {
+          if ((command === 'sessions.open' || command === 'sqlite.completion') && input.connectionId !== setup.connectionId) throw Error('连接越出合成库');
+          if ((command === 'query.execute' || command === 'sessions.close') && (!sessionId || input.sessionId !== sessionId)) throw Error('不是本例原查询会话');
+          if (command === 'query.execute' && (typeof input.sql !== 'string' || input.sql.replaceAll('\r\n', '\n') !== setup.accepted ||
+            facts.some(fact => fact.command === 'query.execute'))) throw Error('SQL 不是本例唯一明确操作');
+          if (command === 'sqlite.completion' && (input.kind === 'columns' && (input.table !== 'subject' || input.schema !== 'main') || 'sql' in input)) throw Error('列目录越出真实目标');
+          const fact: Fact = { command, input }; facts.push(fact);
+          const reply = await entry(event, payload);
+          fact.reply = reply;
+          if (command === 'sessions.open' && reply && typeof reply === 'object' && 'ok' in reply && reply.ok === true && 'result' in reply &&
+            reply.result && typeof reply.result === 'object' && 'sessionId' in reply.result && typeof reply.result.sessionId === 'string') sessionId = reply.result.sessionId;
+          return reply;
+        }
+        return entry(event, payload);
+      });
+    }, { filePath, connectionId, accepted });
+
+    await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
+    await page.evaluate(async ({ id, sql }) => {
+      const file = await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
+      if (!file) throw Error('合成库授权失败');
+      const profile = await window.dbark.invoke('connections.save', { id, name: 'UPSERT 编辑器验收', dialect: 'sqlite', group: '', color: '#123456',
+        sqlite: { fileToken: file.token, readOnly: false, busyTimeoutMs: 1000 } });
+      const settings = await window.dbark.invoke('settings.get', {});
+      await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'sqlite-upsert', tabs: [
+        { id: 'sqlite-upsert', title: 'UPSERT 验收', kind: 'query', connectionId: profile.id, database: 'main', sql },
+      ] });
+    }, { id: connectionId, sql: draft });
+    await page.reload();
+    const query = page.locator('.query-tab:visible'), editor = query.locator('.monaco-editor'), textbox = editor.getByRole('textbox');
+    await expect(textbox).toBeVisible();
+    const inspect = () => editor.evaluate(element => {
+      const monaco = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const instance = monaco?.editor.getEditors().find(editor => editor.getContainerDomNode().contains(element));
+      const model = instance?.getModel(), position = instance?.getPosition();
+      if (!model || !position) throw Error('原查询编辑器模型缺失');
+      return { sql: model.getValue().replaceAll('\r\n', '\n'), offset: model.getOffsetAt(position), eol: model.getEOL() };
+    });
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await textbox.focus();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
+    for (const _point of prefix + 'va') await page.keyboard.press('ArrowRight');
+    const original = await inspect();
+    expect(original.sql).toBe(draft);
+    expect(original.offset).toBe((prefix + 'va').replaceAll('\n', original.eol).length);
+    const before = disk(), previous = (await snapshot()).length;
+    await page.keyboard.press('Control+Space');
+    const widget = query.locator('.suggest-widget:visible');
+    await expect(widget.locator('.monaco-list-row .label-name').filter({ hasText: /^value$/ })).toHaveCount(1);
+    await expect(widget.locator('.monaco-list-row.focused .label-name')).toHaveText('value');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => (await inspect()).sql).toBe(accepted);
+    const completion = (await snapshot()).slice(previous).filter(fact => fact.command === 'sqlite.completion');
+    const requests = completion.map(fact => sqliteCompletionInputSchema.parse(fact.input));
+    expect(requests.filter(input => input.kind === 'columns')).toEqual([
+      expect.objectContaining({ table: 'subject', schema: 'main', prefix: 'va' }),
+    ]);
+    expect(completion.every(fact => fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true)).toBe(true);
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press(modifier + '+K');
+    await page.keyboard.press(modifier + '+I');
+    const hover = query.locator('.monaco-hover:visible');
+    await expect(hover).toContainText('UPSERT 待插入行');
+    await expect(hover).toContainText('"main"."subject"');
+    await page.keyboard.press('Escape');
+    expect((await snapshot()).filter(fact => fact.command === 'query.execute' || fact.command === 'sessions.open')).toEqual([]);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+    expect(disk()).toEqual(before);
+    await (await navigationMenuItem(query, { name: zh.query.text011, exact: true })).click();
+    await expect.poll(disk).toEqual({ row: { id: 1, value: '旧新🚢', virtual_value: '旧新🚢!' }, other: before.other });
+    await expect(query.locator('.result-body').getByRole('grid')).toContainText('旧新🚢!');
+    const facts = await snapshot();
+    const executions = facts.filter(fact => fact.command === 'query.execute');
+    expect(executions).toEqual([expect.objectContaining({ reply: expect.objectContaining({ ok: true }) })]);
+    expect(String(executions[0].input.sql).replaceAll('\r\n', '\n')).toBe(accepted);
+    expect(facts.filter(fact => fact.command === 'sessions.open')).toHaveLength(1);
+    expect(pageErrors).toEqual([]);
+    await info.attach('SQLite UPSERT 编辑器真实验收', { body: JSON.stringify({ platform: process.platform, before, after: disk(), facts }), contentType: 'application/json' });
+    await confirmOwnedDesktopExit(info);
+  } catch (reason) {
+    retainOwnedDesktopResources(info);
+    throw reason;
+  }
+});
