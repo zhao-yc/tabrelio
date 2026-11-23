@@ -38,6 +38,11 @@ describe('SQLite字段悬停完整词法与准确目录', () => {
     expect(output.value).toBeUndefined();
     expect(output.port.load).not.toHaveBeenCalled();
   });
+  it('表函数字段悬停读取函数目录并显示实际来源', async () => {
+    const result = await hover("SELECT j.fi|eld_🚢 FROM main.json_tree('[]') j");
+    expect(result.value).toContain('SQLite 表值函数');
+    expect(result.port.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'json_tree', schema: 'main', prefix: 'field_🚢', tableFunction: true });
+  });
   it('进入相关子查询或CTE体后只检查活动层别名，不借外层别名压制内层真实列', async () => {
     for (const sql of ['SELECT 1 AS field_🚢 FROM outer_table WHERE EXISTS(SELECT fi|eld_🚢 FROM subject)', 'WITH c AS (SELECT fi|eld_🚢 FROM subject) SELECT 1 AS field_🚢 FROM c']) {
       const result = await hover(sql); expect(result.value).toContain(text.declaredType); expect(result.port.load.mock.calls[0][0]).toMatchObject({ table: 'subject' });

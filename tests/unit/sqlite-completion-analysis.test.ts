@@ -39,7 +39,27 @@ it('递归CTE的递归成员可补显式列，锚点不借递归成员中的绑�
 it('派生表投影保持本地输出，不为同名别名查询永久元数据',()=>{expect(ready('SELECT d.| FROM (SELECT source.id AS item,1 AS flag FROM source) AS d').relations).toEqual([{kind:'local',source:'derived',name:'d',alias:'d',columns:['item','flag']}]);expect(analyze('SELECT d.| FROM (SELECT * FROM source) AS d')).toMatchObject({status:'blocked',reason:'local-output'});});
 it('普通相关子查询可见外层alias，FROM派生体不借外层行，内层同alias优先',()=>{const correlated=ready('SELECT * FROM outer_table o WHERE EXISTS (SELECT o.| FROM inner_table i)');expect(correlated.relations.map(item=>item.alias)).toEqual(['i','o']);const derived=ready('SELECT * FROM outer_table o JOIN (SELECT i.| FROM inner_table i) d ON 1=1');expect(derived.relations).toEqual([{kind:'physical',name:'inner_table',alias:'i'}]);const shadow=ready('SELECT * FROM outer_table t WHERE EXISTS (SELECT t.| FROM inner_table t)');expect(shadow.relations).toEqual([{kind:'physical',name:'inner_table',alias:'t'}]);});
 it('trigger体内分号不伪造独立SELECT；后继statement仍准确隔离',()=>{expect(analyze('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT x.| FROM secret x; END;')).toMatchObject({status:'blocked',reason:'trigger'});expect(ready('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT CASE WHEN 1 THEN 2 END; END; SELECT t.| FROM actual t').relations).toEqual([{kind:'physical',name:'actual',alias:'t'}]);});
-it.each(['SELECT x.| FROM json_each(\'[]\') x','SELECT x.| FROM (a JOIN b) x','SELECT * FROM a INDEXED BY |','WITH c(x) AS(SELECT 1) UPDATE c SET |'])('未知SQLite复杂上下文明确blocked，不伪造物理关系 %#',source=>{expect(analyze(source).status).toBe('blocked');});
+it.each(['SELECT x.| FROM (a JOIN b) x','SELECT * FROM a INDEXED BY |','WITH c(x) AS(SELECT 1) UPDATE c SET |'])('未知SQLite复杂上下文明确blocked，不伪造物理关系 %#',source=>{expect(analyze(source).status).toBe('blocked');});
+
+it('表值调用保留实际目标、命名空间和绑定，未调用的同名关系沿用普通列目录', () => {
+  expect(ready("SELECT j.va|lue FROM main.json_each('[1,2]') j").relations)
+    .toEqual([{ kind: 'physical', name: 'json_each', schema: 'main', alias: 'j', tableFunction: true }]);
+  expect(ready('SELECT j.| FROM temp.json_each j').relations)
+    .toEqual([{ kind: 'physical', name: 'json_each', schema: 'temp', alias: 'j' }]);
+  expect(analyze("WITH json_each(x) AS (VALUES(1)) SELECT j.| FROM json_each('[]') j"))
+    .toMatchObject({ status: 'blocked', reason: 'table-function' });
+});
+
+it('表值函数实参识别已有表和相关外层，函数返回列沿外层 SELECT 或 UPDATE 作用域使用', () => {
+  expect(ready('SELECT j.value FROM doc d JOIN json_each(d.pa|yload) j ON 1 JOIN later l ON 1').relations)
+    .toEqual([{ kind: 'physical', name: 'doc', alias: 'd' }]);
+  expect(ready('SELECT (SELECT j.value FROM json_each((SELECT d.pa|yload)) j) FROM doc d').relations)
+    .toEqual([{ kind: 'physical', name: 'doc', alias: 'd' }]);
+  expect(ready('SELECT j.value FROM doc d JOIN json_each(d.pa|').relations)
+    .toEqual([{ kind: 'physical', name: 'doc', alias: 'd' }]);
+  expect(ready("UPDATE dst SET code=j.va|lue FROM json_each('[]') j").relations)
+    .toContainEqual({ kind: 'physical', name: 'json_each', alias: 'j', tableFunction: true });
+});
 
 it('USING 只交付当前连接两侧关系，保留原游标范围和前后已填项', () => {
   const value = ready('SELECT * FROM main.a x JOIN temp.b y USING ("已选", na|suffix, [后选]) JOIN json_each(\'[]\') j ON 1');
@@ -132,9 +152,9 @@ it('重复读取同一物理目录仅登记一次，名称歧义的星号保留�
     .toEqual({ columns: ['known'], sources: [], incomplete: true });
 });
 
-it('表函数不会被当作同名表读取，也不阻止同一分支中可解析的星号', () => {
+it('表函数与同名实体目录分开，复合星号保留调用身份', () => {
   const result = ready("SELECT t.*, j.*, 1 IS DISTINCT FROM 2 AS flag FROM main.first t JOIN json_each('[]') j ON 1 UNION ALL SELECT 1 AS id ORDER BY |");
-  expect(result.output).toEqual({ columns: ['flag', 'id'], sources: [{ name: 'first', schema: 'main' }], incomplete: true });
+  expect(result.output).toEqual({ columns: ['flag', 'id'], sources: [{ name: 'first', schema: 'main' }, { name: 'json_each', tableFunction: true }] });
 });
 
 it('复合输出候选回包独立于读取目录、悬停及定义范围', () => {

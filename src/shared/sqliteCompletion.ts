@@ -11,7 +11,7 @@ const schema = z.enum(['main', 'temp']);
 const base = { connectionId: id, sessionId: id.optional(), taskId: id.refine(value => value.startsWith(sqliteCompletionTaskPrefix) && value.length > sqliteCompletionTaskPrefix.length), prefix: z.string().max(sqliteCompletionLimits.prefixUnits).refine(value => value.length <= sqliteCompletionLimits.prefixUnits && unicode(value)) };
 export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('relations'), schema: schema.optional() }).strict(),
-  z.object({ ...base, kind: z.literal('columns'), schema: schema.optional(), table: name }).strict(),
+  z.object({ ...base, kind: z.literal('columns'), schema: schema.optional(), table: name, tableFunction: z.literal(true).optional() }).strict(),
   z.object({ ...base, kind: z.literal('stamp') }).strict(),
 ]);
 export const sqliteCompletionEntrySchema = z.discriminatedUnion('kind', [
@@ -23,6 +23,17 @@ export type SqliteCompletionInput = z.infer<typeof sqliteCompletionInputSchema>;
 export type SqliteCompletionEntry = z.infer<typeof sqliteCompletionEntrySchema>;
 export type SqliteCompletionOutput = z.infer<typeof sqliteCompletionOutputSchema>;
 export type SqliteCompletionLookup = Omit<Extract<SqliteCompletionInput, { kind: 'relations' }>, 'connectionId' | 'sessionId' | 'taskId'> | Omit<Extract<SqliteCompletionInput, { kind: 'columns' }>, 'connectionId' | 'sessionId' | 'taskId'> | Omit<Extract<SqliteCompletionInput, { kind: 'stamp' }>, 'connectionId' | 'sessionId' | 'taskId'>;
+export const sqliteCompletionSourceSchema = z.object({ name, schema: schema.optional(), tableFunction: z.literal(true).optional() }).strict();
+export type SqliteCompletionSource = z.infer<typeof sqliteCompletionSourceSchema>;
+
+/** 所有列入口带上调用标记，只传来源和前缀。函数参数留在编辑器内。 */
+export function sqliteCompletionColumns({ name, schema, tableFunction }: SqliteCompletionSource, prefix: string): Extract<SqliteCompletionLookup, { kind: 'columns' }> {
+  return { kind: 'columns', table: name, prefix, ...(schema ? { schema } : {}), ...(tableFunction ? { tableFunction } : {}) };
+}
+
+export function sqliteCompletionSourceKey({ name, schema, tableFunction }: SqliteCompletionSource): string {
+  return (tableFunction ? 'function' : 'relation') + '\0' + (schema ?? '') + '\0' + foldSqliteCompletionName(name);
+}
 
 /** SQLite名称只折叠ASCII字母；Unicode不借JavaScript区域规则合并成另一标识符。 */
 export function foldSqliteCompletionName(value: string): string { return value.replace(/[A-Z]/g, letter => letter.toLowerCase()); }

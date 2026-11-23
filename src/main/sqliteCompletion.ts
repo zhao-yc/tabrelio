@@ -48,16 +48,24 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
     const scope = input.schema ? 'schema = ?' : "schema IN ('main','temp')";
     const found = await read(driver, 'SELECT name,schema,type FROM pragma_table_list() WHERE ' + scope + " AND name = ? COLLATE NOCASE ORDER BY schema DESC LIMIT 1", [...(input.schema ? [input.schema] : []), input.table], control, 1);
     const target = found.rows[0];
-    if (target && typeof target[0] === 'string' && !/^sqlite_/i.test(target[0]) && ['table', 'view', 'virtual'].includes(target[2] as string)) {
-      const schema = target[1]; if (schema !== 'main' && schema !== 'temp') throw Error('SQLite补全字段所属库无效');
-      const result = await read(driver, 'SELECT name,type,hidden FROM pragma_table_xinfo(?,?) WHERE ' + prefixSql + ' ORDER BY cid LIMIT 257', [target[0], schema, input.prefix, input.prefix], control, 257);
+    const table = target ? target[0] : input.table;
+    const schema = target ? target[1] : input.schema ?? 'main';
+    const allowed = target ? input.tableFunction ? target[2] === 'virtual' : ['table', 'view', 'virtual'].includes(target[2] as string) : input.tableFunction === true;
+    if (allowed && typeof table === 'string' && !/^sqlite_/i.test(table)) {
+      if (schema !== 'main' && schema !== 'temp') throw Error('SQLite补全字段所属库无效');
+      // 自带表值模块通常不在 table_list 内。无同名关系遮蔽时只读 xinfo，不准备或执行原调用。
+      const result = await read(driver, 'SELECT name,type,hidden FROM pragma_table_xinfo(?,?) WHERE ' + prefixSql + ' ORDER BY cid LIMIT 257', [table, schema, input.prefix, input.prefix], control, 257);
       incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
+      if (input.tableFunction && !target && !incomplete && !result.rows.length) {
+        const available = input.prefix && await read(driver, 'SELECT 1 FROM pragma_table_xinfo(?,?) LIMIT 1', [table, schema], control, 1);
+        incomplete = !available || !available.rows.length;
+      }
       for (const row of result.rows.slice(0, sqliteCompletionLimits.entries)) {
         const hidden = row[2];
         if (typeof row[0] !== 'string' || typeof row[1] !== 'string' || !hidden || typeof hidden !== 'object' || hidden.type !== 'integer' || !['0', '1', '2', '3'].includes(hidden.value)) throw Error('SQLite补全字段目录无效');
-        if (!append({ name: row[0], kind: 'column', schema, table: target[0], declaredType: row[1], generated: hidden.value === '2' || hidden.value === '3', hidden: hidden.value === '1' })) break;
+        if (!append({ name: row[0], kind: 'column', schema, table, declaredType: row[1], generated: hidden.value === '2' || hidden.value === '3', hidden: hidden.value === '1' })) break;
       }
-    }
+    } else if (input.tableFunction) incomplete = true;
   }
   const after = await stamp(driver, control); control.check();
   if (before !== after) throw Error('SQLite目录在补全读取期间变化，请重新触发');

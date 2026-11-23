@@ -1,5 +1,5 @@
 import type { SqliteCompletionAnalysis, SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
-import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionLimits, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
+import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionColumns, sqliteCompletionLimits, sqliteCompletionSourceKey, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 
 export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; }
@@ -24,10 +24,10 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
         incomplete ||= !operand.columns.length;
         return operand.columns.map(name => ({ name, hidden: false }));
       }
-      const { name, schema } = operand.source, key = (schema ?? '') + '\0' + fold(name);
+      const key = sqliteCompletionSourceKey(operand.source);
       let metadata = cache.get(key);
       if (!metadata) {
-        metadata = await directory.load({ kind: 'columns', table: name, prefix: analysis.target.prefix, ...(schema ? { schema } : {}) });
+        metadata = await directory.load(sqliteCompletionColumns(operand.source, analysis.target.prefix));
         cache.set(key, metadata);
       }
       incomplete ||= metadata.incomplete;
@@ -59,8 +59,8 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     incomplete = analysis.output.incomplete === true;
     const addOutput = (name: string) => add({ label: name, kind: 'column', insertText: quote(name), detail: text.outputColumn });
     for (const name of analysis.output.columns) addOutput(name);
-    for (const { name, schema } of analysis.output.sources) {
-      const metadata = await directory.load({ kind: 'columns', table: name, prefix: analysis.target.prefix, ...(schema ? { schema } : {}) });
+    for (const source of analysis.output.sources) {
+      const metadata = await directory.load(sqliteCompletionColumns(source, analysis.target.prefix));
       incomplete ||= metadata.incomplete;
       // 星号包含普通列和生成列，虚拟表的隐藏列仅能显式引用。
       for (const entry of metadata.entries) if (entry.kind === 'column' && !entry.hidden) addOutput(entry.name);
@@ -94,8 +94,9 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
       if (relation.kind === 'local') {
         for (const name of relation.columns) add({ label: name, kind: 'column', insertText: insert(name), detail: binding + ' · ' + (relation.source === 'cte' ? text.cte : text.derived) });
       } else {
-        const metadata = await directory.load({ kind: 'columns', table: relation.name, prefix: analysis.target.prefix, ...(relation.schema ? { schema: relation.schema } : {}) }); incomplete ||= metadata.incomplete;
-        for (const entry of metadata.entries) if (entry.kind === 'column') add({ label: entry.name, kind: 'column', insertText: insert(entry.name), detail: binding + ' · ' + entry.schema + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : '') });
+        const metadata = await directory.load(sqliteCompletionColumns(relation, analysis.target.prefix)); incomplete ||= metadata.incomplete;
+        const source = relation.tableFunction ? text.tableFunction : undefined;
+        for (const entry of metadata.entries) if (entry.kind === 'column') add({ label: entry.name, kind: 'column', insertText: insert(entry.name), detail: binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : '') });
       }
       if (!qualifiers.length) add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail: text.alias, trigger: true });
     }

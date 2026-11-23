@@ -146,15 +146,32 @@ it('同层后续 RIGHT JOIN 也启用消歧，但其列不进入当前 USING', a
 });
 
 it('USING 排除其它槽位的列，重复物理关系只读取一次，未知左侧保留部分状态', async () => {
-  const marked = "SELECT * FROM main.subject a JOIN main.SUBJECT b ON 1 JOIN json_each('[]') j ON 1 JOIN temp.subject c USING(ID, |)";
+  const marked = "SELECT * FROM main.subject a JOIN main.SUBJECT b ON 1 JOIN missing_function('[]') j ON 1 JOIN temp.subject c USING(ID, |)";
   const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
   if (analysis.status !== 'ready') throw Error(analysis.reason);
   const d = directory([column('id'), column('shared')]);
+  d.load.mockImplementation(async query => query.kind === 'columns' && query.tableFunction
+    ? { entries: [], incomplete: true, stamp: '1:0' } : { entries: [column('id'), column('shared')], incomplete: false, stamp: '1:0' });
   const result = await sqliteCompletionSuggestions(analysis, d);
   expect(d.load.mock.calls).toEqual([[{ kind: 'columns', table: 'subject', schema: 'main', prefix: '' }],
+    [{ kind: 'columns', table: 'missing_function', tableFunction: true, prefix: '' }],
     [{ kind: 'columns', table: 'subject', schema: 'temp', prefix: '' }]]);
   expect(result.items.map(item => item.label)).toEqual(['shared']);
   expect(result.incomplete).toBe(true);
+});
+
+it('表值函数只发送名称和前缀，接受字段后 SQLite 查询可执行', async () => {
+  const marked = "SELECT j.va|suffix FROM main.json_each('[3,7]') j ORDER BY j.key";
+  const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const d = directory([column('value', 'json_each')]);
+  const { items } = await sqliteCompletionSuggestions(analysis, d);
+  expect(d.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'json_each', schema: 'main', prefix: 'va', tableFunction: true });
+  expect(items).toMatchObject([{ insertText: '"value"', detail: expect.stringContaining('表值函数') }]);
+  const sql = source.slice(0, analysis.target.start) + items[0].insertText + source.slice(analysis.target.end);
+  const db = new DatabaseSync(':memory:');
+  try { expect(db.prepare(sql).all()).toEqual([{ value: 3 }, { value: 7 }]); }
+  finally { db.close(); }
 });
 it('准确别名字段只替最后标识符，Unicode引号和片段语法保持普通文本', async () => {
   const d = directory([column('字段"🚢.${x}')]), result = await sqliteCompletionSuggestions(ready(), d);

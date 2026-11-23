@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits } from './sqliteCompletion';
+import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits, sqliteCompletionSourceKey, sqliteCompletionSourceSchema, type SqliteCompletionSource } from './sqliteCompletion';
 import type { LocalReferenceToken } from './localReferenceIndex';
 import type { PhysicalObjectAnalysis } from './physicalObjectAnalysis';
 
-export type SqliteCompletionRelation = ({ kind: 'physical'; name: string; schema?: 'main' | 'temp'; alias?: string } | { kind: 'local'; source: 'cte' | 'derived'; name: string; alias?: string; columns: string[]; declaration?: true }) & { scopeDepth?: number };
+export type SqliteCompletionRelation = ({ kind: 'physical'; alias?: string } & SqliteCompletionSource | { kind: 'local'; source: 'cte' | 'derived'; name: string; alias?: string; columns: string[]; declaration?: true }) & { scopeDepth?: number };
 export type SqliteAnalysisIntent = 'hover' | 'definition' | 'object';
 export interface SqliteLocalDefinition { start: number; end: number; }
-type OutputSource = { name: string; schema?: 'main' | 'temp' };
+type OutputSource = SqliteCompletionSource;
 interface OutputProjection { columns: string[]; sources: OutputSource[]; incomplete?: true; }
 type JoinOperand = { source: OutputSource } | { columns: string[] };
 interface UsingProjection { left: { operand: JoinOperand; merged?: true | string[] }[]; right: JoinOperand; used: string[]; uniqueLeft?: true; }
@@ -27,6 +27,10 @@ const fromClause = (tokens: Token[], index: number) => keyword(tokens[index], 'f
     (keyword(tokens[index - 2], 'is') || keyword(tokens[index - 2], 'not') && keyword(tokens[index - 3], 'is')));
 const structural = new Set('select from where group having order limit offset returning set values into update delete insert replace join on using as left right full outer inner cross natural union except intersect window indexed not by and or when then else end case'.split(' '));
 const setOperators = ['union', 'intersect', 'except'];
+/** 从绑定取准确目录身份，别名和 SQL 实参不会进入列元数据请求。 */
+function columnSource({ name, schema, tableFunction }: Extract<SqliteCompletionRelation, { kind: 'physical' }>): SqliteCompletionSource {
+  return { name, ...(schema ? { schema } : {}), ...(tableFunction ? { tableFunction } : {}) };
+}
 const literalNames = ['null', 'true', 'false', 'current_date', 'current_time', 'current_timestamp'];
 const joinModifiers = ['natural', 'left', 'right', 'full', 'outer', 'inner', 'cross'];
 
@@ -313,8 +317,8 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
               if (!matches.length || wildcard !== null && matches.length !== 1) { incomplete = true; continue; }
               for (const { relation, unknown } of matches) {
                 if (relation.kind === 'physical') {
-                  const { name, schema } = relation, key = (schema ?? '') + '\0' + fold(name);
-                  if (!sources.has(key)) sources.set(key, { name, ...(schema ? { schema } : {}) });
+                  const source = columnSource(relation), key = sqliteCompletionSourceKey(source);
+                  if (!sources.has(key)) sources.set(key, source);
                 } else if (unknown) incomplete = true;
                 else for (const name of relation.columns) addColumn(name);
               }
@@ -340,7 +344,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       if (usingAt >= 0 && (intent || qualifiers.length)) fail('using');
       const relationEnd = usingAt < 0 ? end : usingAt, relationOnly = projectionOnly || usingAt >= 0;
       const joins = new Map<Binding, { natural: boolean; merged?: string[] }>();
-      const own: Binding[] = [], derived: { start: number; end: number }[] = []; let relationContext = false, aliasContext = false, targetBinding: Binding | undefined, insertList: { start: number; end: number } | undefined;
+      const own: Binding[] = [], derived: { start: number; end: number }[] = []; let relationContext = false, aliasContext = false, targetBinding: Binding | undefined, argumentBinding: Binding | undefined, insertList: { start: number; end: number } | undefined;
       const relevant = (begin: number, finish: number) => offset >= (tokens[begin]?.start ?? source.length) && target.start <= (tokens[finish - 1]?.end ?? source.length);
       function relation(at: number, target = false): number {
         const begin = at; let binding: Binding;
@@ -370,17 +374,19 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
             if (relationOnly && (at > relationEnd || !tokens[at - 1].quoted && structural.has(fold(name)))) fail('relation');
           }
           const nameEnd = at;
-          const tableFunction = tokens[at]?.value === '(' && command === 'select';
-          if (tableFunction) {
-            const close = tokens[at].pair;
-            if (!relationOnly || close === undefined || close >= relationEnd) fail('table-function');
-            at = close + 1;
-          }
+          const tableFunction = !target && tokens[at]?.kind === 'symbol' && tokens[at].value === '(' && ['select', 'update'].includes(command);
           const local = schema === undefined ? ctes.get(fold(name)) : undefined; if (target && local) fail('dml-target');
-          // 表函数保留别名遮蔽，但不能作为同名物理表查目录。
-          const relation: SqliteCompletionRelation = tableFunction ? { kind: 'local', source: 'derived', name, columns: [] }
-            : local ? { kind: 'local', source: 'cte', name: local.name, columns: local.columns ?? [] } : { kind: 'physical', name, ...(schema ? { schema } : {}) };
-          binding = { relation, start: begin, end: at, referenceIndex: nameEnd - 1, ...(local ? { declaration: local.declaration } : {}), unknown: tableFunction || !!local && !local.columns };
+          let inArgument = false;
+          if (tableFunction) {
+            const open = tokens[at], close = open.pair ?? relationEnd;
+            inArgument = offset >= open.end && offset <= (tokens[close]?.start ?? source.length);
+            if (close >= relationEnd && !inArgument || local && !inArgument) fail('table-function');
+            at = close < relationEnd ? close + 1 : close;
+          }
+          const relation: SqliteCompletionRelation = local ? { kind: 'local', source: 'cte', name: local.name, columns: local.columns ?? [] }
+            : { kind: 'physical', name, ...(schema ? { schema } : {}), ...(tableFunction ? { tableFunction: true } : {}) };
+          binding = { relation, start: begin, end: at, referenceIndex: nameEnd - 1, ...(local ? { declaration: local.declaration } : {}), unknown: !!local && !local.columns };
+          if (inArgument) argumentBinding = binding;
           relationContext ||= relevant(begin, nameEnd);
           if (keyword(tokens[at], 'as')) { at++; const alias = tokens[at]; if (!alias || alias.kind !== 'id' || !alias.value) { aliasContext = true; return at; } binding.relation.alias = alias.value; binding.aliasIndex = at; at++; }
           else if (tokens[at]?.kind === 'id' && (tokens[at].quoted || !structural.has(fold(tokens[at].value)))) { binding.relation.alias = tokens[at].value; binding.aliasIndex = at; at++; }
@@ -429,7 +435,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         const uniqueLeft = tokens.some((token, at) => at >= head && at < end && token.depth === base &&
           keyword(token, 'join') && modifiersAtJoin(tokens, at).some(word => word === 'right' || word === 'full'));
         const operand = ({ relation }: Binding): JoinOperand => relation.kind === 'local' ? { columns: relation.columns }
-          : { source: { name: relation.name, ...(relation.schema ? { schema: relation.schema } : {}) } };
+          : { source: columnSource(relation) };
         return { bindings: [], ctes: new Map(), syntax: ['column'], using: {
           left: inputs.map(binding => {
             const prior = joins.get(binding), merged = prior?.natural ? true : prior?.merged;
@@ -442,10 +448,12 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         if (relationContext || aliasContext) fail('relation');
         return { bindings: own, ctes, syntax: ['column'] };
       }
+      // 函数实参使用已绑定的输入和相关外层。自身返回列及此后才加入的关系留在调用外。
+      const visibleOwn = argumentBinding ? own.slice(0, own.indexOf(argumentBinding)).filter(binding => binding !== targetBinding) : own;
       // 子查询只继承真正可相关的外层binding；FROM派生表与CTE体不得看到外层行别名。
       for (let at = head; at < end; at++) if (tokens[at].value === '(' && (keyword(tokens[at + 1], 'select') || keyword(tokens[at + 1], 'with'))) {
         const finish = tokens[at].pair ?? end;
-        if (offset >= (tokens[at + 1]?.start ?? source.length) && offset <= (tokens[finish]?.start ?? source.length)) return scope(at + 1, finish, ctes, derived.some(item => item.start === at + 1) ? [] : [...own, ...outer], level + 1);
+        if (offset >= (tokens[at + 1]?.start ?? source.length) && offset <= (tokens[finish]?.start ?? source.length)) return scope(at + 1, finish, ctes, derived.some(item => item.start === at + 1) ? [] : [...visibleOwn, ...outer], level + 1);
         at = finish;
       }
       // SQLite允许部分子句引用输出别名；未证明其血缘时不显示同名物理列的类型。
@@ -460,8 +468,8 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
           if (alias && fold(alias.value) === fold(target.prefix)) fail('output-alias');
         }
       }
-      const aliases = new Set<string>(); for (const binding of own) { const name = fold(binding.relation.alias ?? binding.relation.name), previous = own.find(item => item !== binding && aliases.has(name) && fold(item.relation.alias ?? item.relation.name) === name); if (previous && !((qualifiers.length === 2 || (intent === 'definition' || intent === 'object') && qualifiers.length === 1 && ['main', 'temp'].includes(fold(qualifiers[0]))) && binding.relation.kind === 'physical' && previous.relation.kind === 'physical' && !binding.relation.alias && !previous.relation.alias && !!binding.relation.schema && !!previous.relation.schema && binding.relation.schema !== previous.relation.schema)) fail('ambiguous'); aliases.add(name); }
-      const bindings = [...own, ...outer.filter(binding => !aliases.has(fold(binding.relation.alias ?? binding.relation.name)))];
+      const aliases = new Set<string>(); for (const binding of visibleOwn) { const name = fold(binding.relation.alias ?? binding.relation.name), previous = visibleOwn.find(item => item !== binding && aliases.has(name) && fold(item.relation.alias ?? item.relation.name) === name); if (previous && !((qualifiers.length === 2 || (intent === 'definition' || intent === 'object') && qualifiers.length === 1 && ['main', 'temp'].includes(fold(qualifiers[0]))) && binding.relation.kind === 'physical' && previous.relation.kind === 'physical' && !binding.relation.alias && !previous.relation.alias && !!binding.relation.schema && !!previous.relation.schema && binding.relation.schema !== previous.relation.schema)) fail('ambiguous'); aliases.add(name); }
+      const bindings = [...visibleOwn, ...outer.filter(binding => !aliases.has(fold(binding.relation.alias ?? binding.relation.name)))];
       if (aliasContext && intent !== 'object') fail('alias');
       let unqualified = false;
       if (insertList && offset >= tokens[insertList.start].end && offset <= (tokens[insertList.end]?.start ?? source.length)) unqualified = true;
@@ -504,7 +512,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         matches = parsed.bindings.filter(({ relation }) => fold(relation.alias ?? relation.name) === fold(target.prefix) && (!qualifiers.length || !relation.alias && relation.kind === 'physical' && relation.schema === fold(qualifiers[0])));
       }
       if (matches.length !== 1) fail('ambiguous');
-      const binding = matches[0]; if (binding.relation.kind !== 'physical' || binding.referenceIndex === undefined) fail('local');
+      const binding = matches[0]; if (binding.relation.kind !== 'physical' || binding.relation.tableFunction || binding.referenceIndex === undefined) fail('local');
       const table = tokens[binding.referenceIndex], database = binding.relation.schema ? tokens[binding.start] : undefined;
       if (table.kind !== 'id' || !table.closed && table.quoted || database && (database.kind !== 'id' || tokens[binding.start + 1]?.value !== '.')) fail('syntax');
       physicalObject?.({ status: 'ready', target: { start: target.start, end: target.end }, object: { table: table.value, tableRange: { start: table.start, end: table.end }, ...(database ? { database: database.value, databaseRange: { start: database.start, end: database.end } } : {}) } });
@@ -538,15 +546,15 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
 
 const nameSchema = z.string().min(1).max(limits.nameUnits).refine(unicode);
 const columnNames = z.array(nameSchema).max(limits.entries).refine(columns => new Set(columns.map(fold)).size === columns.length);
-const outputSource = z.object({ name: nameSchema, schema: z.enum(['main', 'temp']).optional() }).strict();
+const outputSource = sqliteCompletionSourceSchema;
 const outputSources = z.array(outputSource)
-  .max(limits.relations).refine(sources => new Set(sources.map(({ name, schema }) => (schema ?? '') + '\0' + fold(name))).size === sources.length);
+  .max(limits.relations).refine(sources => new Set(sources.map(sqliteCompletionSourceKey)).size === sources.length);
 const joinOperand = z.union([z.object({ source: outputSource }).strict(), z.object({ columns: columnNames }).strict()]);
 const usingProjection = z.object({ left: z.array(z.object({ operand: joinOperand, merged: z.union([z.literal(true), columnNames]).optional() }).strict())
   .min(1).max(limits.relations - 1).refine(left => left[0]?.merged === undefined), right: joinOperand,
   used: columnNames, uniqueLeft: z.literal(true).optional() }).strict();
 const relationSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('physical'), name: nameSchema, schema: z.enum(['main', 'temp']).optional(), alias: nameSchema.optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }).strict(),
+  outputSource.extend({ kind: z.literal('physical'), alias: nameSchema.optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }),
   z.object({ kind: z.literal('local'), source: z.enum(['cte', 'derived']), name: nameSchema, alias: nameSchema.optional(), columns: columnNames, declaration: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }).strict(),
 ]);
 const resultSchema = z.discriminatedUnion('status', [

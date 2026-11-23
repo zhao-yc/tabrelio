@@ -10,6 +10,13 @@ describe('SQLite补全受限跨进程合同', () => {
     expect(sqliteCompletionInputSchema.parse({ ...input, sessionId: 'sqlite:原会话', kind: 'columns', schema: 'temp', table: '引号"🚢' })).toMatchObject({ schema: 'temp', table: '引号"🚢' });
     for (const extra of [{ sql: 'DROP TABLE subject' }, { filePath: 'private.sqlite' }, { profile: {} }, { parameters: [] }]) expect(sqliteCompletionInputSchema.safeParse({ ...input, ...extra }).success).toBe(false);
   });
+  it('表函数标记只允许在列目录请求中携带，禁止调用参数', () => {
+    const functionColumns = { ...input, kind: 'columns', table: 'json_each', tableFunction: true };
+    expect(validateCommand('sqlite.completion', functionColumns)).toEqual(functionColumns);
+    for (const fields of [{ tableFunction: false }, { kind: 'relations' }, { arguments: ['[]'] }]) {
+      expect(sqliteCompletionInputSchema.safeParse({ ...functionColumns, ...fields }).success).toBe(false);
+    }
+  });
   it.each(['temp2', 'aux', 'MAIN', '', null])('拒绝任意schema：%s', schema => { expect(sqliteCompletionInputSchema.safeParse({ ...input, schema }).success).toBe(false); });
   it.each(['目录', sqliteCompletionTaskPrefix, 'mysql:任务', 'x'.repeat(201)])('只允许专属有界task命名空间：%s', taskId => { expect(sqliteCompletionInputSchema.safeParse({ ...input, taskId }).success).toBe(false); });
   it('百分号下划线引号和emoji是字面前缀，NUL／坏Unicode／超长输入拒绝', () => {

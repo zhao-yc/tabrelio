@@ -1,7 +1,8 @@
 import type { SqliteCompletionAnalysis, SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
-import { foldSqliteCompletionName as fold, sqliteCompletionLimits, type SqliteCompletionEntry } from '../shared/sqliteCompletion';
+import { foldSqliteCompletionName as fold, sqliteCompletionColumns, sqliteCompletionLimits, type SqliteCompletionEntry } from '../shared/sqliteCompletion';
 import type { SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 import { sqliteFieldHoverZh as text } from './locales/sqliteFieldHover.zh-CN';
+import { sqliteCompletionZh } from './locales/sqliteCompletion.zh-CN';
 
 /** 仅显示代码块纯文本；名称及声明类型不能变成HTML、外链或可执行Monaco命令。 */
 function markdown(lines: string[]): string { return lines.join('\n').split(/\r\n|\r|\n/).map(line => '    ' + line).join('\n'); }
@@ -25,7 +26,7 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
     if (relation.kind === 'local') {
       for (const column of relation.columns) if (fold(column) === fold(name)) candidates.push({ relation, column });
     } else {
-      const result = await directory.load({ kind: 'columns', table: relation.name, prefix, ...(relation.schema ? { schema: relation.schema } : {}) });
+      const result = await directory.load(sqliteCompletionColumns(relation, prefix));
       if (result.incomplete) return;
       for (const entry of result.entries) if (entry.kind === 'column' && fold(entry.name) === fold(name)) candidates.push({ relation, column: entry.name, entry });
     }
@@ -36,7 +37,8 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   const { relation, column, entry } = candidates[0];
   const lines = [text.title, text.column + '：' + display(column), text.binding + '：' + display(relation.alias ?? relation.name)];
   if (entry) {
-    lines.push(text.source + '：' + display(entry.schema) + '.' + display(entry.table), entry.schema === 'temp' ? text.temporary : text.permanent,
+    const sourceKind = relation.kind === 'physical' && relation.tableFunction ? sqliteCompletionZh.tableFunction : entry.schema === 'temp' ? text.temporary : text.permanent;
+    lines.push(text.source + '：' + display(entry.schema) + '.' + display(entry.table), sourceKind,
       text.declaredType + '：' + (entry.declaredType ? display(entry.declaredType) : text.noDeclaredType), text.generated + '：' + (entry.generated ? text.yes : text.no), text.hidden + '：' + (entry.hidden ? text.yes : text.no), text.dynamic);
   } else if (relation.kind === 'local') lines.push(text.source + '：' + (relation.source === 'cte' ? text.cte : text.derived), text.unknown);
   return markdown(lines);

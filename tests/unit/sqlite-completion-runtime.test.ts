@@ -36,7 +36,7 @@ function transport(observe?: (message: SqliteWorkerResponse, forward: () => void
 /** 只注入真实授权profile与真实transport，事件记录用于证明补全不会冒充查询任务。 */
 function runtime(profiles: SqliteConnectionProfile[], observe?: Parameters<typeof transport>[0]) { const events: TaskEvent[] = []; const app = new SqliteRuntime({ resolveProfile: id => profiles.find(p => p.id === id), createTransport: () => transport(observe), emit: event => events.push(event) }); runtimes.add(app); return { app, events }; }
 /** 每次目录请求用独立命名空间编号，正常调用不传任何用户SQL。 */
-function completion(app: SqliteRuntime, connectionId: string, lookup: { kind: 'relations'; prefix?: string; schema?: 'main' | 'temp' } | { kind: 'columns'; table: string; prefix?: string; schema?: 'main' | 'temp' } | { kind: 'stamp'; prefix?: string }, sessionId?: string, taskId = sqliteCompletionTaskPrefix + ++serial): Promise<SqliteCompletionOutput> { return app.request('sqlite.completion', { ...lookup, prefix: lookup.prefix ?? '', connectionId, taskId, ...(sessionId ? { sessionId } : {}) } as SqliteCompletionInput); }
+function completion(app: SqliteRuntime, connectionId: string, lookup: { kind: 'relations'; prefix?: string; schema?: 'main' | 'temp' } | { kind: 'columns'; table: string; prefix?: string; schema?: 'main' | 'temp'; tableFunction?: true } | { kind: 'stamp'; prefix?: string }, sessionId?: string, taskId = sqliteCompletionTaskPrefix + ++serial): Promise<SqliteCompletionOutput> { return app.request('sqlite.completion', { ...lookup, prefix: lookup.prefix ?? '', connectionId, taskId, ...(sessionId ? { sessionId } : {}) } as SqliteCompletionInput); }
 /** 仅用于准备原会话事务／临时DDL，真实执行记录不计入目录任务。 */
 function execute(app: SqliteRuntime, sessionId: string, sql: string) { return app.request('query.execute', { sessionId, taskId: 'sql-' + ++serial, sql, maxRows: 100 }); }
 /** 只看真实driver请求中的SQL，不将ACK或close伪装成语句。 */
@@ -86,6 +86,34 @@ describe('SQLite补全真实运行时与原会话边界', () => {
     const columns = await completion(app, p.id, { kind: 'columns', table: 'generated' }, session.sessionId); expect(columns.entries).toContainEqual({ name: 'doubled', kind: 'column', schema: 'main', table: 'generated', declaredType: 'INTEGER', generated: true, hidden: false });
     expect((await completion(app, p.id, { kind: 'columns', table: 'search' }, session.sessionId)).entries).toContainEqual({ name: 'rank', kind: 'column', schema: 'main', table: 'search', declaredType: '', generated: false, hidden: true });
     expect((await completion(app, p.id, { kind: 'columns', table: 'search_data' }, session.sessionId)).entries).toEqual([]); expect((await completion(app, p.id, { kind: 'columns', table: 'sqlite_schema' }, session.sessionId)).entries).toEqual([]); await app.close();
+  });
+
+  it('表值函数走原生目录，保留隐藏列及显式库，普通同名表遮蔽且无用户调用执行', async () => {
+    const p = profile('函数目录', 'CREATE VIRTUAL TABLE search USING fts5(body);'), { app, events } = runtime([p]);
+    const session = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, session.sessionId, 'BEGIN; CREATE TEMP TABLE json_each(private_field TEXT)');
+    const eventCount = events.length, firstRequest = processes[0].sent.length;
+    const functionColumns = (table: string, schema?: 'main' | 'temp', prefix = '') =>
+      completion(app, p.id, { kind: 'columns', table, schema, prefix, tableFunction: true }, session.sessionId);
+    expect(await functionColumns('json_each')).toMatchObject({ entries: [], incomplete: true });
+    expect((await completion(app, p.id, { kind: 'columns', table: 'json_each' }, session.sessionId)).entries.map(entry => entry.name)).toEqual(['private_field']);
+    const json = await functionColumns('json_each', 'main');
+    expect(json.entries.filter(entry => entry.kind === 'column' && !entry.hidden).map(entry => entry.name))
+      .toEqual(['key', 'value', 'type', 'atom', 'id', 'parent', 'fullkey', 'path']);
+    expect(json.entries.filter(entry => entry.kind === 'column' && entry.hidden).map(entry => entry.name)).toEqual(['json', 'root']);
+    expect((await functionColumns('jsonb_tree', 'main', 'value')).entries.map(entry => entry.name)).toEqual(['value']);
+    expect(await functionColumns('json_each', 'main', 'unmatched')).toMatchObject({ entries: [], incomplete: false });
+    expect((await functionColumns('pragma_table_info')).entries.map(entry => entry.name)).toContain('dflt_value');
+    expect((await functionColumns('search')).entries.map(entry => entry.name)).toContain('body');
+    expect(await functionColumns('missing_function')).toMatchObject({ entries: [], incomplete: true });
+    expect(await functionColumns('search_data')).toMatchObject({ entries: [], incomplete: true });
+    expect(await app.request('query.sessionState', session)).toMatchObject({ transactionOpen: true, transactionKnown: true });
+    const sql = processes[0].sent.slice(firstRequest).flatMap(message => message.kind === 'execute' ? [message.sql] : []);
+    expect(sql.length).toBeGreaterThan(0);
+    expect(sql.every(value => /^(?:SELECT|PRAGMA (?:main|temp)\.schema_version)/.test(value) && !/json_each|jsonb_tree|pragma_table_info|search_data/.test(value))).toBe(true);
+    expect(events).toHaveLength(eventCount);
+    await app.request('query.transaction', { ...session, action: 'rollback' });
+    await app.close();
   });
 
   it('temp shadow先遮蔽main同名用户表，再过滤不可建议对象，绝不回退main字段', async () => {
