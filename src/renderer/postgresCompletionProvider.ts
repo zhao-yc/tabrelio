@@ -295,9 +295,9 @@ export function createPostgresCompletionProvider(options: {
           for (const [index, ref] of query.relations.entries()) {
             if (isJoinedProjection(ref)) continue;
             const { name, schema, projection, columnAccess } = ref;
-            const directory = projection?.stars ?? [{ name, ...(schema ? { schema } : {}), ...(columnAccess ? { columnAccess } : {}) }];
+            const directory = projection?.stars ?? [{ name, ...(schema ? { schema } : {}) }];
             for (const source of directory) {
-              references.push(source);
+              references.push(columnAccess && !source.functionCall && !source.functionLayout ? { ...source, columnAccess } : source);
               origins.push(index);
             }
             for (const name of projection?.names ?? []) {

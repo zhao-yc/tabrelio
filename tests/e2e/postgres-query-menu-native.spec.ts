@@ -2513,6 +2513,71 @@ test('PostgreSQL 冲突更新按真实会话的 SELECT 和 UPDATE 列权限补�
   await quitDesktop();
 });
 
+test('PostgreSQL 普通 UPDATE 按会话权限补全赋值、元组及下标', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query(`CREATE TABLE public.assignment_items (id int PRIMARY KEY, count_read int, count_write int, amount_write int, vals int[]);
+      CREATE TABLE public.assignment_feed (id int, count_source int, count_hidden int, slot_cursor int);
+      INSERT INTO public.assignment_items VALUES (1,3,0,0,ARRAY[11,12]);
+      INSERT INTO public.assignment_feed VALUES (1,9,30,2);
+      CREATE ROLE assignment_role NOLOGIN;
+      GRANT USAGE ON SCHEMA public TO assignment_role;
+      GRANT SELECT (id,count_read,vals), UPDATE (count_write,amount_write,vals) ON public.assignment_items TO assignment_role;
+      GRANT SELECT (id,count_source,slot_cursor), UPDATE (count_hidden) ON public.assignment_feed TO assignment_role;`);
+    const setRole = 'SET ROLE assignment_role';
+    await prepare({id: '', name: '隔离 PostgreSQL UPDATE 补全', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, setRole);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await command('execute-all');
+    await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === setRole)).toBe(true);
+    await expect.poll(() => enabled('execute-all')).toBe(true);
+    const baseline = await history(), identity = (await inspectModel()).identity;
+    const accept = async (draft: string, slot: string, prefix: string, column: string) => {
+      await replaceDraft(draft);
+      await modelSelection(1, draft.indexOf(slot) + prefix.length + 1);
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText([column]);
+      await page.keyboard.press('Enter');
+      const completed = draft.replace(slot, postgresIdentifier(column));
+      await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+      expect(await history()).toEqual(baseline);
+      expect((await inspectModel()).identity).toEqual(identity);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+      return completed;
+    };
+    const prefix = 'UPDATE ONLY (public.assignment_items) AS d SET ';
+    const suffix = ' FROM public.assignment_feed s WHERE d.id=s.id';
+    const left = await accept(prefix + 'count_tail=s.count_source' + suffix, 'count_tail', 'count_', 'count_write');
+    const scalar = await accept(left.replace('s.count_source', 's.count_tail'), 'count_tail', 'count_', 'count_source');
+    const tupleLeft = await accept(prefix + '(count_write, amount_tail)=(s.count_source, d.count_read)' + suffix,
+      'amount_tail', 'amount_', 'amount_write');
+    const tuple = await accept(tupleLeft.replace('d.count_read', 'd.count_tail'), 'count_tail', 'count_', 'count_read');
+    const array = await accept(prefix + 'vals[s.slot_tail]=s.count_source' + suffix, 'slot_tail', 'slot_', 'slot_cursor');
+    const observe = 'SELECT count_read,count_write,amount_write,vals FROM public.assignment_items';
+    for (const [sql, expected] of [[scalar, [[3,9,0,[11,12]]]], [tuple, [[3,9,3,[11,12]]]], [array, [[3,0,0,[11,9]]]]] as const) {
+      await observer.query('BEGIN');
+      try {
+        await observer.query('SET LOCAL ROLE assignment_role');
+        expect((await observer.query(sql)).rowCount).toBe(1);
+        await observer.query('RESET ROLE');
+        expect((await observer.query({text: observe, rowMode: 'array'})).rows).toEqual(expected);
+      } finally { await observer.query('ROLLBACK'); }
+    }
+    expect((await observer.query({text: observe, rowMode: 'array'})).rows).toEqual([[3,0,0,[11,12]]]);
+    await page.screenshot({path: info.outputPath('PostgreSQL-UPDATE赋值补全.png'), animations: 'disabled'});
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL INSERT SELECT 隔离目标列权限和读取来源', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

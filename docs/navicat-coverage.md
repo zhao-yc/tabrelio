@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 普通 `UPDATE SET` 区分赋值目标和读取表达式，覆盖元组、数组下标、`FROM` 连接输出及相关子查询，目录分别按 UPDATE 和 SELECT 权限筛选。Q01、R01 继续为部分覆盖。 [PostgreSQL UPDATE](https://www.postgresql.org/docs/18/sql-update.html)
+
 2026-11-24 源码增量。PostgreSQL 的完整冲突目标位置可补全部分唯一索引、表达式唯一索引及混合键，读取目标表实际键组和谓词后一次写入草稿。目录按依赖列的 SELECT 权限筛选，手写谓词继续保留。Q01、R01 继续为部分覆盖。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)
 
 2026-11-24 源码增量。PostgreSQL 的 `ON CONFLICT` 可补全无谓词的普通列主键和唯一键、补齐复合键及引用可用约束名。候选遵守原会话的表可见性、SELECT 列权限、可延迟索引及排斥约束的动作限制。Q01、R01 继续为部分覆盖。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)

@@ -439,6 +439,40 @@ it('冲突更新目录传实际表和所需列权限，现有标签和完整替�
   }
 });
 
+it('普通 UPDATE SET 按赋值位置区分目标、读取来源、元组和下标', () => {
+  const sql = 'UPDATE ONLY (app.items) AS d SET ';
+  const from = ' FROM app.feed s WHERE d.id=s.id RETURNING d.id';
+  const write = {qualified: false, relations: [{schema: 'app', name: 'items', alias: 'd', columnAccess: 'update'}]};
+  const read = {qualified: true, relations: [{schema: 'app', name: 'feed', alias: 's', columnAccess: 'select'}]};
+  expect(at(sql + 'w|_tail=s.value' + from)?.query).toMatchObject(write);
+  expect(at(sql + 'first=1, (second, th|ird)=(1,2)' + from)?.query).toMatchObject(write);
+  expect(at(sql + 'second=(SELECT s.|)' + from)?.query).toMatchObject(read);
+  expect(at(sql + 'second[s.|]=1' + from)?.query).toMatchObject(read);
+  expect(at(sql + 'second=d.status IS DISTINCT FROM s.|' + from)?.query).toMatchObject(read);
+  expect(at(sql + 'second=tools.co|nvert(s.status)' + from)?.routine).toEqual({context: 'expression', schema: 'tools'});
+  for (const assignment of ['d.|=1', 's.|=1', 'record.fi|eld=1', 'record.field | =1']) {
+    expect(at(sql + assignment + from)?.query, assignment).toBeUndefined();
+  }
+  expect(at('UPDATE app.items d SET info = k|ey FROM a JOIN b USING (key) AS keys')?.query)
+    .toMatchObject({qualified: false, joinOutput: {source: {kind: 'projection'}}});
+});
+
+it('UPDATE SET 目录按原会话交付目标权限，并把读取权限传给 CTE 星号来源', async () => {
+  const before = 'WITH q AS (SELECT * FROM app.feed) UPDATE app.items AS d SET ';
+  for (const [assignment, name, columnAccess] of [['co|_tail=q.count', 'items', 'update'], ['count=q.co|_tail', 'feed', 'select']] as const) {
+    const request = vi.fn(async (): Promise<PostgresCompletionResult> => ({incomplete: false,
+      items: [{kind: 'column', reference: 0, name: 'count', type: 'integer'}]}));
+    const {provider, suggest} = editor(before + assignment + ' FROM q', request, '原会话');
+    try {
+      const item = (await suggest())?.suggestions.find(candidate => candidate.insertText === '"count"');
+      const start = before.length + assignment.indexOf('co|_tail') + 1;
+      expect(item?.range).toMatchObject({startColumn: start, endColumn: start + 'co_tail'.length});
+      expect(request).toHaveBeenCalledExactlyOnceWith({kind: 'columns', prefix: 'co', connectionId: '原连接', database: '原库',
+        sessionId: '原会话', relations: [{schema: 'app', name, columnAccess}]});
+    } finally { provider.dispose(); }
+  }
+});
+
 it('RETURNING 结果可传给外层查询，暴露 JOIN 输出及显式行别名的星号', () => {
   const cte = 'WITH data(id, label) AS (VALUES (1, \'a\')), meta(id, info) AS (VALUES (1, \'b\')), changed AS (';
   const update = 'UPDATE app.items SET id=1 FROM data JOIN meta USING (id)';
@@ -599,7 +633,7 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
     expect(at('WITH a AS (SELECT 1) SELECT t.| FROM public.a AS t')?.query)
       .toEqual({ kind: 'columns', qualified: true, relations: [{ schema: 'public', name: 'a', alias: 't' }] });
     expect(at('WITH a AS (SELECT 1 AS local_col) UPDATE a SET field = a.|')?.query)
-      .toEqual({ kind: 'columns', qualified: true, relations: [{ name: 'a' }] });
+      .toMatchObject({ kind: 'columns', qualified: true, relations: [{ name: 'a', columnAccess: 'select', physical: true }] });
     expect(at('WITH a AS (SELECT 1 AS outer_col) SELECT (WITH a AS (SELECT 1 AS inner_col) SELECT a.| FROM a)')?.query)
       .toMatchObject({ relations: [{ projection: { names: ['inner_col'] } }] });
   });

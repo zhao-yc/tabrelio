@@ -1707,8 +1707,16 @@ function traceMergeAction(parts: Part[], inserts: boolean, scope: Scope, refs: S
   return !trace.unsupported;
 }
 
+/** 只补全清单项的基础列，避免把表列插入复合字段名或数组下标。 */
+function startsTargetColumn(list: Group, context: QueryContext): boolean {
+  const previous = context.left.at(-1);
+  return !!previous && (punct(previous, '(') && previous.end === list.start + 1 ||
+    punct(previous, ',') && list.parts.includes(previous));
+}
+
 /** 写入列来自目标；赋值右侧、谓词和 VALUES 表达式使用调用方限定的关系。 */
-function completeWriteAction(parts: Part[], refs: ScopedRelation[], target: ScopedRelation, analysis: MergeAnalysis, end: number): void {
+function completeWriteAction(parts: Part[], refs: ScopedRelation[], target: ScopedRelation, analysis: MergeAnalysis, end: number,
+  outputs?: Projection[]): void {
   const { context } = analysis;
   if (!context || analysis.active || context.offset > end) return;
   const targetColumns = () => {
@@ -1717,16 +1725,33 @@ function completeWriteAction(parts: Part[], refs: ScopedRelation[], target: Scop
   if (keyword(parts[0]) === 'UPDATE' && keyword(parts[1]) === 'SET' && context.offset >= parts[1].end) {
     const where = parts.findIndex((_, index) => index > 1 && mergeKeyword(parts, index) === 'WHERE');
     if (where >= 0 && context.offset >= parts[where].start) {
-      mergeExpression(parts.slice(where + 1), refs, analysis, parts[where].end, end);
+      mergeExpression(parts.slice(where + 1), refs, analysis, parts[where].end, end, { outputs });
       return;
     }
-    let equals = -1;
+    let first = 2, equals = -1;
     for (let i = 2; i < parts.length && parts[i].end <= context.start; i++) {
-      if (punct(parts[i], ',')) equals = -1;
+      if (punct(parts[i], ',')) { first = i + 1; equals = -1; }
       if (equals < 0 && punct(parts[i], '=')) equals = i;
     }
-    if (equals < 0) targetColumns();
-    else mergeExpression(parts.slice(equals + 1), refs, analysis, parts[equals].end, end);
+    if (equals >= 0) {
+      mergeExpression(parts.slice(equals + 1), refs, analysis, parts[equals].end, end, { outputs });
+      return;
+    }
+    const tuple = parts[first];
+    if (context.left.at(-1)?.end === parts[first - 1].end ||
+        tuple?.kind === 'group' && tuple.closing === ')' && contains(tuple, context.offset) && startsTargetColumn(tuple, context)) {
+      targetColumns();
+      return;
+    }
+    // 数组下标是读取表达式，既有值和来源字段沿用赋值右侧的可见范围。
+    let group = parts.slice(first).find(part => part.kind === 'group' && contains(part, context.offset));
+    while (group?.kind === 'group') {
+      if (group.closing === ']') {
+        mergeExpression(group.parts, refs, analysis, group.start + 1, group.end - Number(group.closed), { outputs });
+        return;
+      }
+      group = group.parts.find(part => part.kind === 'group' && contains(part, context.offset));
+    }
   } else if (keyword(parts[0]) === 'INSERT') {
     const list = parts[1];
     if (list?.kind === 'group' && list.closing === ')' && contains(list, context.offset)) targetColumns();
@@ -1754,11 +1779,7 @@ function completeInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], 
   if (!header) return;
   const list = header.columns;
   if (list && contains(list, context.offset)) {
-    const previous = context.left.at(-1);
-    // 只补全清单项的基础列。复合字段和下标有自己的类型或表达式作用域。
-    const atColumn = punct(previous, '(') && previous?.end === list.start + 1 ||
-      punct(previous, ',') && !!previous && list.parts.includes(previous);
-    const query = atColumn ? columns([{ ...target, columnAccess: 'insert' }], [], context.left) : undefined;
+    const query = startsTargetColumn(list, context) ? columns([{ ...target, columnAccess: 'insert' }], [], context.left) : undefined;
     return { projection: unknown, query };
   }
   const end = returning < 0 ? parts.length : returning;
@@ -1977,7 +1998,12 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     return { projection: output, query, routine, windows };
   }
 
-  const joined = readQueryJoinSources(main, scope, outer, context, trace, returningHere);
+  const set = command === 'UPDATE' && context && !trace ? main.findIndex((_, index) => mergeKeyword(main, index) === 'SET') : -1;
+  const setEnd = set < 0 ? -1 : main.findIndex((_, index) => index > set &&
+    (['WHERE', 'RETURNING'].includes(mergeKeyword(main, index)) || mergeKeyword(main, index) === 'FROM' && relationEntry(main, index)));
+  const assignmentBoundary = main[setEnd]?.start ?? Infinity;
+  const inAssignments = !!context && set >= 0 && context.offset >= main[set].end && context.offset < assignmentBoundary;
+  const joined = readQueryJoinSources(main, scope, outer, context, trace, returningHere || inAssignments);
   if (trace?.unsupported) return unsupported();
   if (joined && 'active' in joined) return joined.active;
   const tableSource = command === 'TABLE';
@@ -1985,7 +2011,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   if (write && command === 'DELETE' && keyword(main[1]) !== 'FROM') return unsupported();
   const where = command === 'DELETE' ? main.findIndex(part => keyword(part) === 'WHERE') : -1;
   const refs: ScopedRelation[] = [];
-  let returningTarget: ScopedRelation | undefined;
+  let writeRelation: ScopedRelation | undefined;
   const spans = trace ? new Map<number, RelationSpan>() : undefined;
   const commas = new Set<number>();
   let from = false, deleteUsing = -1;
@@ -2011,11 +2037,11 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     if (from && punct(main[i], ',')) commas.add(i);
     if (!usingSource && !(tableSource && i === 0) && !relationEntry(main, i) && !commas.has(i)) continue;
     const target = writeTarget(main, i);
-    if (!trace && write && target && returningHere) {
+    if (!trace && write && target && (returningHere || inAssignments)) {
       const destination = readMergeRelation(main, i + 1, main[i].end, true, [], { scope, outer, names: new Set() });
       if (!destination) return { projection: unknown };
-      returningTarget = destination.relation;
-      refs.push(returningTarget);
+      writeRelation = destination.relation;
+      refs.push(writeRelation);
       i = destination.next - 1;
       continue;
     }
@@ -2108,7 +2134,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       if (alias) trace.declarations.set(part.start, 'alias');
       const relation: ScopedRelation = { name, alias, schema, declaration: alias ? part : cte,
         ...(trace.projected && projection ? { projection } : {}), ...(name && !projection ? { physical: true } : {}) };
-      if (target && write) returningTarget = relation;
+      if (target && write) writeRelation = relation;
       refs.push(relation);
       i = end - 1;
       continue;
@@ -2119,8 +2145,8 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     traceExpressions(returning < 0 ? main : main.slice(0, returning), scope, refs, outer, spans!, trace);
     if (command === 'SELECT' && !trace.field && !trace.physicalRelations) traceNamedWindows(main, trace);
     if (returning >= 0) {
-      if (trace.unsupported || !returningTarget) return unsupported();
-      return parseReturning(main.slice(returning), refs, returningTarget, { scope, outer, trace, names: new Set() }) ?? unsupported();
+      if (trace.unsupported || !writeRelation) return unsupported();
+      return parseReturning(main.slice(returning), refs, writeRelation, { scope, outer, trace, names: new Set() }) ?? unsupported();
     }
     if (!trace.projected) return { projection: unknown };
     const projection = tableSource ? refs[0]?.projection ?? unknown : project(main, refs,
@@ -2136,10 +2162,18 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     return { projection };
   }
   if (returningHere) {
-    if (!returningTarget) return { projection: unknown };
-    const outputs = joined ? [relationProjection(returningTarget), ...joined.outputs] : undefined;
+    if (!writeRelation) return { projection: unknown };
+    const outputs = joined ? [relationProjection(writeRelation), ...joined.outputs] : undefined;
     const joinedResult = outputs ? { outputs, stars: outputs.map(projection => ({ name: '', projection })) } : undefined;
-    return parseReturning(main.slice(returning), refs, returningTarget, { scope, outer, context, names: new Set() }, joinedResult) ?? { projection: unknown };
+    return parseReturning(main.slice(returning), refs, writeRelation, { scope, outer, context, names: new Set() }, joinedResult) ?? { projection: unknown };
+  }
+  if (inAssignments && writeRelation) {
+    const analysis: MergeAnalysis = { scope, outer, context, names: new Set() };
+    const sources = refs.map(ref => ({ ...ref, columnAccess: 'select' as const }));
+    const outputs = joined ? [relationProjection(writeRelation), ...joined.outputs] : undefined;
+    completeWriteAction([main[0], ...main.slice(set, setEnd < 0 ? undefined : setEnd)], sources,
+      { ...writeRelation, columnAccess: 'update' }, analysis, assignmentBoundary, outputs);
+    return analysis.active ?? { projection: unknown };
   }
   const projection = tableSource && refs[0] ? relationProjection(refs[0]) : project(main, refs, joined?.outputs.map(projection => ({name: '', projection})));
   if (!context || inFunctionMetadata || start > 0 && (main[0]?.start ?? context.start) > context.start) return { projection };
