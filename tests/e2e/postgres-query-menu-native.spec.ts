@@ -2594,6 +2594,68 @@ test('PostgreSQL 普通 UPDATE 和 DELETE 按会话权限补全赋值、条件�
   await quitDesktop();
 });
 
+test('PostgreSQL TABLESAMPLE 按原会话补全实际方法并保留字段导航', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query(`CREATE TABLE public.sample_method_rows (id int PRIMARY KEY);
+      INSERT INTO public.sample_method_rows VALUES (1), (2), (3);
+      CREATE SCHEMA sample_extension;
+      CREATE FUNCTION sample_extension."SampleRows"(internal) RETURNS tsm_handler AS 'tsm_system_handler' LANGUAGE internal;
+      CREATE FUNCTION sample_extension."SampleFake"(int) RETURNS int LANGUAGE SQL AS 'SELECT $1';`);
+    const initialPath = 'SET search_path TO pg_catalog, public';
+    const customPath = 'SET search_path TO sample_extension, pg_catalog, public';
+    await prepare({id: '', name: '隔离 PostgreSQL 抽样方法目录', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, initialPath);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const runPath = async (sql: string) => {
+      await command('execute-all');
+      await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === sql)).toBe(true);
+      await expect.poll(() => enabled('execute-all')).toBe(true);
+    };
+    const accept = async (draft: string, prefix: string, name: string) => {
+      await replaceDraft(draft);
+      await modelSelection(1, draft.indexOf(prefix + 'tail') + prefix.length + 1);
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText([name]);
+      await page.keyboard.press('Enter');
+      const completed = draft.replace(prefix + 'tail', name);
+      await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+      return completed;
+    };
+    await runPath(initialPath);
+    const baseline = await history(), identity = (await inspectModel()).identity;
+    const prefix = 'SELECT j.id FROM public.sample_method_rows j TABLESAMPLE ';
+    const suffix = ' (100) REPEATABLE (0.25) WHERE j.id > 0 ORDER BY j.id';
+    const qualified = await accept(prefix + 'sample_extension."Sampletail"' + suffix, 'Sample', 'SampleRows');
+    expect(await history()).toEqual(baseline);
+    await replaceDraft(customPath);
+    await runPath(customPath);
+    const secondBaseline = await history();
+    const visible = await accept(prefix + '"Sampletail"' + suffix, 'Sample', 'SampleRows');
+    await replaceDraft(visible);
+    await modelSelection(1, 'SELECT '.length + 1);
+    await page.keyboard.press('F12');
+    await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 1, column: prefix.indexOf('j TABLESAMPLE') + 1});
+    expect(await history()).toEqual(secondBaseline);
+    expect((await inspectModel()).identity).toEqual(identity);
+    expect((await observer.query(qualified)).rows).toEqual([{id: 1}, {id: 2}, {id: 3}]);
+    await observer.query(customPath);
+    expect((await observer.query(visible)).rows).toEqual([{id: 1}, {id: 2}, {id: 3}]);
+    await page.screenshot({path: info.outputPath('PostgreSQL-TABLESAMPLE目录和导航.png'), animations: 'disabled'});
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL 行锁 OF 补全实际目标并定位分组连接中的别名', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

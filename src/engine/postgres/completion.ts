@@ -418,8 +418,31 @@ async function complexConflictTargets(connection: PostgresConnection, target: st
   return { items, incomplete: result.truncated || result.rows.length === limit };
 }
 
+/** 只读 handler 的目录签名。调用 handler 才能得到真实参数及重复抽样能力，补全不执行该代码。 */
+async function sampleMethods(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'sampleMethods' }>, session: boolean): Promise<PostgresCompletionResult> {
+  const ownTemp = session ? `n.oid ${eq} pg_catalog.pg_my_temp_schema()` : 'false';
+  const result = await connection.query(`
+    SELECT CASE WHEN ${ownTemp} THEN 'pg_temp' ELSE n.nspname::pg_catalog.text END, p.proname::pg_catalog.text
+    FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid ${eq} p.pronamespace
+    WHERE p.prokind ${eq} 'f' AND NOT p.proretset
+      AND p.pronargs ${eq} 1::pg_catalog.int2
+      AND p.proargtypes[0] ${eq} 'pg_catalog.internal'::pg_catalog.regtype::pg_catalog.oid
+      AND p.prorettype ${eq} 'pg_catalog.tsm_handler'::pg_catalog.regtype::pg_catalog.oid
+      AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
+      AND (CASE WHEN $2::pg_catalog.text IS NULL THEN pg_catalog.pg_function_is_visible(p.oid) AND NOT (${ownTemp})
+        ELSE (CASE WHEN ${ownTemp} THEN 'pg_temp' ELSE n.nspname::pg_catalog.text END) ${eq} $2 END)
+      AND pg_catalog.strpos(pg_catalog.lower(p.proname::pg_catalog.text), pg_catalog.lower($1::pg_catalog.text)) ${eq} 1
+    ORDER BY p.proname, n.nspname LIMIT $3
+  `, [input.prefix, input.schema ?? null, rowLimit], { rows: rowLimit, bytes: 128 * 1024 });
+  const items: PostgresCompletionItem[] = [];
+  for (const { c0: schema, c1: name } of result.rows.slice(0, postgresCompletionLimits.items)) {
+    if (isCatalogName(schema) && isCatalogName(name)) items.push({ kind: 'sampleMethod', schema, name });
+  }
+  return { items, incomplete: result.truncated || result.rows.length === rowLimit };
+}
+
 /** 查实际可执行的重载。原会话由 PostgreSQL 解析 search_path，同名不同签名仍保留。 */
-async function routines(connection: PostgresConnection, input: Exclude<PostgresCompletionInput, { kind: 'columnDetails' | 'joinColumns' | 'conflictTargets' }>, session: boolean): Promise<PostgresCompletionResult> {
+async function routines(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'relations' | 'columns' | 'routines' | 'signatures' }>, session: boolean): Promise<PostgresCompletionResult> {
   const target = input.routine!;
   const exact = input.kind === 'signatures';
   const limit = input.kind === 'routines' || exact ? postgresCompletionLimits.items : 40;
@@ -478,6 +501,7 @@ export async function readPostgresCompletion(connection: PostgresConnection, inp
     if (input.kind === 'columnDetails') return columnDetails(connection, input, session);
     if (input.kind === 'joinColumns') return joinColumns(connection, input, session);
     if (input.kind === 'conflictTargets') return conflictTargets(connection, input, session);
+    if (input.kind === 'sampleMethods') return sampleMethods(connection, input, session);
     const base = await (input.kind === 'relations' ? relations(connection, input, session) : columns(connection, input, session));
     if (!input.routine) return base;
     const supplemental = await routines(connection, input, session);

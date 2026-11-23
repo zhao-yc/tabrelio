@@ -189,6 +189,32 @@ export function createPostgresCompletionProvider(options: {
               filterText: quoted ? postgresIdentifier(name) : name, sortText: String(index).padStart(3, '0') }));
           return { suggestions, incomplete: true };
         }
+        if (query?.kind === 'sampleMethods') {
+          let result: PostgresCompletionResult | undefined;
+          if (sessionId) {
+            await debounce(controller.signal, 100);
+            try { result = await request({ ...target, kind: 'sampleMethods', prefix, ...(query.schema ? { schema: query.schema } : {}) }, current); }
+            catch { if (current()) options.status('unavailable'); }
+            if (!current()) return empty;
+          }
+          if (result?.deferred) options.status(result.deferred === 'transaction' ? 'sessionUnknown' : 'unavailable');
+          else if (result?.incomplete) options.status('partial');
+          const catalog = result && !result.deferred ? result.items.filter(item => item.kind === 'sampleMethod') : undefined;
+          const methods = catalog ?? (!query.schema || query.schema === 'pg_catalog' ? ['bernoulli', 'system']
+            .map(name => ({ name, schema: 'pg_catalog' })) : []);
+          const fold = (name: string) => quoted ? name : name.replace(/[A-Z]/g, letter => letter.toLowerCase());
+          const suggestions = methods.filter(method => (!query.schema || method.schema === query.schema) &&
+            fold(method.name).startsWith(fold(prefix))).slice(0, postgresCompletionLimits.items).map(({ name, schema }, index) => {
+              // 离线时用显式 pg_catalog，避免搜索路径遮蔽内置方法。
+              const callee = (!catalog && !query.schema ? postgresIdentifier(schema) + '.' : '') + postgresIdentifier(name);
+              const insert = analysis.existingCall ? { insertText: callee } : {
+                insertText: callee.replace(/[\\$}]/g, value => '\\' + value) + '($0)', insertTextRules: options.snippetRule,
+              };
+              return { range, kind: options.kinds.routine, label: { label: name, description: postgresZh.sampleMethod + ' · ' + schema },
+                filterText: quoted ? postgresIdentifier(name) : name, sortText: String(index).padStart(3, '0'), ...insert };
+            });
+          return { incomplete: true, suggestions };
+        }
         const windows = analysis.windows;
         if (windows) {
           const normalized = (name: string) => quoted ? name : name.replace(/[A-Z]/g, character => character.toLowerCase());
@@ -347,7 +373,7 @@ export function createPostgresCompletionProvider(options: {
             sortText: '0' + String(suggestions.length).padStart(3, '0') });
         }
         for (const item of result.items) {
-          if (item.kind === 'columnDetail' || item.kind === 'joinColumns' || item.kind === 'conflictConstraint' ||
+          if (item.kind === 'columnDetail' || item.kind === 'joinColumns' || item.kind === 'sampleMethod' || item.kind === 'conflictConstraint' ||
               item.kind === 'conflictKey' || item.kind === 'conflictIndex') continue;
           const filterText = quoted ? '"' + item.name.replaceAll('"', '""') : item.name;
           const common = { range, kind: options.kinds[item.kind], filterText, sortText: '0' + String(suggestions.length).padStart(3, '0') };

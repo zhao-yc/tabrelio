@@ -44,6 +44,7 @@ type Query = { kind: 'relations'; schema?: string; ctes?: string[]; mergeTarget?
   { kind: 'columns'; relations: PostgresCompletionRelation[]; qualified: boolean; joinOutput?: PostgresJoinOutput } |
   { kind: 'lockTargets'; names: string[] } |
   { kind: 'lockKeywords'; items: string[] } |
+  { kind: 'sampleMethods'; schema?: string } |
   { kind: 'conflictTarget'; relation: PostgresCatalogRelation; selection: PostgresConflictSelection } | PostgresUsingColumns;
 export interface PostgresCompletionAnalysis {
   start: number;
@@ -71,7 +72,7 @@ const unknown: Projection = { names: [], stars: [], exact: false };
 const joinSources = new WeakMap<Projection, PostgresJoinSource>();
 const joinedOutputs = new WeakSet<Projection>();
 const referenceCommands = new Set(['SELECT', 'WITH', 'VALUES', 'TABLE']);
-const unsupportedReferenceSyntax = new Set(['TABLESAMPLE', 'SEARCH', 'CYCLE']);
+const unsupportedReferenceSyntax = new Set(['SEARCH', 'CYCLE']);
 const declaredTableSyntax = new Set(['JSON_TABLE', 'XMLTABLE']);
 
 /** PostgreSQL 未引用标识符折叠 ASCII 大写字母，引用名称保留原大小写。 */
@@ -1525,6 +1526,26 @@ function completeMergeRelation(parts: Part[], start: number, entryEnd: number, t
   }
 }
 
+/** 方法名属于抽样目录。表达式可关联外层查询，同块来源仍处于不可见的 LATERAL 名称空间。 */
+function readTableSample(parts: Part[], index: number, analysis: MergeAnalysis): number | undefined {
+  const { context, trace } = analysis;
+  const prefix = !trace && context && mergeNamePrefix(context, parts[index].end);
+  if (prefix && !analysis.active) analysis.active = { projection: unknown, query: { kind: 'sampleMethods', ...prefix } };
+  const method = readFunctionCall(parts, index + 1);
+  if (!method || trace && !method.args.closed) return;
+  const expression = { ...analysis, joinConditionsOnly: false };
+  const read = (group: Group) => {
+    mergeExpression(group.parts, [], expression, group.start + 1, group.end - Number(group.closed));
+    analysis.active ??= expression.active;
+  };
+  read(method.args);
+  if (keyword(parts[method.next]) !== 'REPEATABLE') return method.next;
+  const seed = parts[method.next + 1];
+  if (seed?.kind !== 'group' || seed.closing !== ')' || trace && !seed.closed) return;
+  read(seed);
+  return method.next + 2;
+}
+
 /** 目标在外层 MERGE ON 前尚未进入作用域。表函数和 LATERAL 子查询可以看到允许关联的 JOIN 左侧。 */
 function readMergeRelation(parts: Part[], start: number, entryEnd: number, target: boolean, preceding: ScopedRelation[],
   analysis: MergeAnalysis): { relation: ScopedRelation; next: number } | undefined {
@@ -1580,6 +1601,7 @@ function readMergeRelation(parts: Part[], start: number, entryEnd: number, targe
   const renamed = readRelationAlias(parts, next, !target);
   if (!renamed) return;
   const { alias, declaration } = renamed;
+  const sampledRelation = !target && !!name && !projection;
   if (analysis.rowLocks && (alias || name)) {
     const physical = name && !projection ? { name, schema } : undefined;
     const subquery = first?.kind === 'group' && supportsRowLocking(first.parts);
@@ -1595,16 +1617,10 @@ function readMergeRelation(parts: Part[], start: number, entryEnd: number, targe
       renamed.names, trace?.projected ? columns : undefined, trace);
   }
   next = renamed.next;
-  // 抽样只改变输入行。跳过抽样方法和种子，后面的 JOIN 仍使用原表列目录。
-  if (!trace && !target && name && keyword(parts[next]) === 'TABLESAMPLE') {
-    const method = readFunctionCall(parts, next + 1);
-    if (!method) return;
-    next = method.next;
-    if (keyword(parts[next]) === 'REPEATABLE') {
-      const seed = parts[next + 1];
-      if (seed?.kind !== 'group' || seed.closing !== ')') return;
-      next += 2;
-    }
+  if (keyword(parts[next]) === 'TABLESAMPLE') {
+    const afterSample = sampledRelation ? readTableSample(parts, next, analysis) : undefined;
+    if (afterSample === undefined) return;
+    next = afterSample;
   }
   return { relation: { name, schema, alias, projection, declaration: declaration ?? cte,
     ...(name && !projection ? { physical: true as const } : {}) }, next };
@@ -1809,15 +1825,15 @@ function readQueryJoinSources(parts: Part[], scope: Scope, outer: ScopedRelation
   const boundary = parts.findIndex((_, index) => index > start && endsFrom.has(mergeKeyword(parts, index)));
   const end = boundary < 0 ? parts.length : boundary;
   const sources = parts.slice(start + 1, end);
-  function hasMergedOrGroupedJoin(items: Part[], grouped = false): boolean {
-    return items.some((part, index) => ['NATURAL', 'USING'].includes(mergeKeyword(items, index)) ||
+  function hasStructuredSources(items: Part[], grouped = false): boolean {
+    return items.some((part, index) => ['NATURAL', 'USING', 'TABLESAMPLE'].includes(mergeKeyword(items, index)) ||
       grouped && mergeKeyword(items, index) === 'JOIN' || part.kind === 'group' &&
-      part.closing === ')' && !isMergeSourceQuery(part) && hasMergedOrGroupedJoin(part.parts, true));
+      part.closing === ')' && !isMergeSourceQuery(part) && hasStructuredSources(part.parts, true));
   }
   const sourceEnd = parts[end]?.start ?? Infinity;
   const inside = !!context && context.offset >= parts[start].end && context.offset < sourceEnd;
-  // 条件补全解析普通 JOIN；表达式在来源外时，只对会改变输出或作用域的 JOIN 采用树形分析。
-  if (!readRowLocks && (!hasMergedOrGroupedJoin(sources, inside) || !inside && !trace && !writeOutput && command !== 'SELECT')) return;
+  // 条件补全解析普通 JOIN。带抽样或会改变输出与作用域的来源也需要保留各自的结构。
+  if (!readRowLocks && (!hasStructuredSources(sources, inside) || !inside && !trace && !writeOutput && command !== 'SELECT')) return;
   const rowLocks = readRowLocks ? [] : undefined;
   const analysis: MergeAnalysis = { scope, outer, trace, context: inside ? context : undefined, names: new Set(), joinConditionsOnly: true, rowLocks };
   const preceding: ScopedRelation[] = [];
@@ -2845,11 +2861,15 @@ export function analyzePostgresCompletion(source: string, offset: number, standa
   const parsed = query && parseStatementQuery(query, { offset, start, end, left,
     keywordPrefix: !quoted && !punct(previous, '.') ? prefixUpper : undefined });
   if (parsed?.query?.kind === 'using' || parsed?.query?.kind === 'conflictTarget' || parsed?.query?.kind === 'lockTargets' ||
-      parsed?.query?.kind === 'lockKeywords' ||
+      parsed?.query?.kind === 'lockKeywords' || parsed?.query?.kind === 'sampleMethods' ||
       parsed?.query?.kind === 'columns' && parsed.query.joinOutput) {
     // 目录目标和锁子句必须在离线的两种字符串模式下有一致的词法边界。
     if (standardStrings === undefined && source.includes('\\') &&
       JSON.stringify(all) !== JSON.stringify(scanPostgresEditorTokens(source, limits.tokens, false))) return;
+    if (parsed.query.kind === 'sampleMethods') {
+      const next = all.find(token => token !== target && token.start >= end && !(token.kind === 'blocked' && token.text === 'comment'));
+      return { start, end, prefix, quoted, query: parsed.query, existingCall: punct(next, '(') };
+    }
     if (parsed.query.kind !== 'columns') return { start, end, prefix, quoted, query: parsed.query };
   }
   if (parsed?.windows) {

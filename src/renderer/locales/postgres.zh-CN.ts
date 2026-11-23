@@ -6,6 +6,7 @@ export const postgresZh = {
   completionTransaction: '事务进行中，目录补全将在事务结束后恢复',
   namedWindow: '命名窗口',
   rowLockTarget: '行锁目标',
+  sampleMethod: '表抽样方法',
   joinSharedColumn: '两侧共有列',
   joinOutputColumn: '连接输出列',
   conflictPrimary: '主键',

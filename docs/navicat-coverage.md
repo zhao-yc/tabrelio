@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL `TABLESAMPLE` 按原会话搜索路径或显式 schema 建议实际抽样方法，离线提供内置方法。抽样来源保留字段和别名导航，实参及 `REPEATABLE` 种子遵循原查询作用域。Q01、R01 继续为部分覆盖。 [PostgreSQL TABLESAMPLE](https://www.postgresql.org/docs/18/sql-select.html#SQL-FROM)
+
 2026-11-24 源码增量。PostgreSQL 行锁补全覆盖四种锁定模式、`OF`、`NOWAIT` 和 `SKIP LOCKED`，原有短语后缀和注释可保留。等待策略按 `OF` 清单及 `FETCH … WITH TIES` 的语法筛选，离线可用。Q01、R01 继续为部分覆盖。 [PostgreSQL 行锁子句](https://www.postgresql.org/docs/18/sql-select.html#SQL-FOR-UPDATE-SHARE)
 
 2026-11-24 源码增量。PostgreSQL 行锁 `OF` 可离线补全查询块的真实范围表名称，排除 CTE、表函数、连接别名和外连接补空侧。保留目标原文范围、别名导航及整组改名，接受候选只修改草稿。Q01、R01 继续为部分覆盖。 [PostgreSQL 行锁子句](https://www.postgresql.org/docs/18/sql-select.html#SQL-FOR-UPDATE-SHARE)

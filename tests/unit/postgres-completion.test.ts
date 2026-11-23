@@ -15,6 +15,52 @@ function at(marked: string) {
   return analyzePostgresCompletion(marked.slice(0, offset) + marked.slice(offset + 1), offset);
 }
 
+it('TABLESAMPLE 按方法槽和原查询表达式分派，抽样后的别名与物理来源可导航', () => {
+  expect(at('SELECT * FROM app.jobs j TABLESAMPLE |')?.query).toEqual({kind: 'sampleMethods'});
+  expect(at('SELECT * FROM app.jobs AS j(id) TABLESAMPLE "方法"."Ca|se" /* 描述 */ (10)')?.query)
+    .toEqual({kind: 'sampleMethods', schema: '方法'});
+  expect(at('SELECT * FROM app.jobs j TABLESAMPLE sys|tem (10)')?.existingCall).toBe(true);
+  expect(at('WITH q AS (SELECT 1) SELECT * FROM q TABLESAMPLE sys|')?.query?.kind).not.toBe('sampleMethods');
+  expect(at('SELECT * FROM app.jobs j TABLESAMPLE system(j.i|d)')?.query).toBeUndefined();
+  expect(at('SELECT * FROM app.inputs p, app.jobs j TABLESAMPLE system(p.s|eed)')?.query).toBeUndefined();
+  expect(at('SELECT (SELECT count(*) FROM app.jobs j TABLESAMPLE system(10) REPEATABLE (p.i|d)) FROM app.inputs p')?.query)
+    .toMatchObject({kind: 'columns', relations: [{name: 'inputs', schema: 'app', alias: 'p'}]});
+  expect(at('SELECT j.i|d FROM app.jobs j TABLESAMPLE pg_catalog.system(100) REPEATABLE (1)')?.query)
+    .toMatchObject({kind: 'columns', relations: [{name: 'jobs', schema: 'app', alias: 'j'}]});
+  const sql = 'SELECT j.id FROM app.jobs j TABLESAMPLE pg_catalog.system(100) REPEATABLE (2) WHERE j.id > 0';
+  expect(analyzePostgresLocalReferences(sql, sql.indexOf('j.id'))).toMatchObject({status: 'ready',
+    declaration: {start: sql.indexOf('j TABLESAMPLE'), end: sql.indexOf('j TABLESAMPLE') + 1}});
+  expect(analyzePostgresObjectDefinition(sql, sql.indexOf('jobs'))).toMatchObject({name: 'jobs', schema: 'app'});
+  expect(analyzePostgresFieldHover(sql, sql.indexOf('j.id') + 2)).toMatchObject({name: 'id', relations: [{name: 'jobs', schema: 'app', alias: 'j'}]});
+  expect(analyzePostgresObjectDefinition(sql, sql.indexOf('system'))).toBeUndefined();
+});
+
+it('离线抽样补全显式限定内置方法，并保留已经写好的参数括号', async () => {
+  const request = vi.fn(async () => ({items: [], incomplete: false}));
+  const ready = editor('SELECT * FROM jobs TABLESAMPLE sys|tail (100)', request);
+  const bare = editor('SELECT * FROM jobs TABLESAMPLE ber|tail', request);
+  const unknown = editor('SELECT * FROM jobs TABLESAMPLE ext.sys|tail', request);
+  try {
+    expect((await ready.suggest())?.suggestions).toMatchObject([{label: {label: 'system'}, insertText: '"pg_catalog"."system"'}]);
+    expect((await bare.suggest())?.suggestions).toMatchObject([{label: {label: 'bernoulli'}, insertText: '"pg_catalog"."bernoulli"($0)'}]);
+    expect((await unknown.suggest())?.suggestions).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
+  } finally { for (const edit of [ready, bare, unknown]) edit.provider.dispose(); }
+});
+
+it('只向原会话请求抽样目录目标，引用方法不暴露 handler 的伪参数', async () => {
+  const request = vi.fn(async (): Promise<PostgresCompletionResult> => ({items: [
+    {kind: 'sampleMethod', schema: 'custom', name: 'Case$'}, {kind: 'sampleMethod', schema: 'custom', name: 'caseOther'},
+  ], incomplete: false}));
+  const edit = editor('SELECT * FROM jobs TABLESAMPLE custom."Ca|tail"', request, '抽样会话');
+  try {
+    expect((await edit.suggest())?.suggestions).toMatchObject([{label: {label: 'Case$'}, insertText: '"Case\\$"($0)'}]);
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith({kind: 'sampleMethods', schema: 'custom', prefix: 'Ca',
+      connectionId: '原连接', database: '原库', sessionId: '抽样会话'});
+  } finally { edit.provider.dispose(); }
+});
+
 it.each([
   ['SELECT * FROM jobs FOR |', ['UPDATE', 'NO KEY UPDATE', 'SHARE', 'KEY SHARE']],
   ['TABLE jobs FOR UPDATE |', ['NOWAIT', 'OF', 'SKIP LOCKED']],
