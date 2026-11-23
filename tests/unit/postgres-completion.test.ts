@@ -16,6 +16,55 @@ function at(marked: string) {
 }
 
 it.each([
+  ['SELECT * FROM jobs FOR |', ['UPDATE', 'NO KEY UPDATE', 'SHARE', 'KEY SHARE']],
+  ['TABLE jobs FOR UPDATE |', ['NOWAIT', 'OF', 'SKIP LOCKED']],
+  ['SELECT * FROM jobs q FOR UPDATE OF q |', ['NOWAIT', 'SKIP LOCKED']],
+  ['SELECT * FROM jobs q ORDER BY q.id FETCH FIRST 2 ROWS WITH TIES FOR SHARE OF q |', ['NOWAIT']],
+  ['SELECT * FROM jobs FOR UPDATE | LIMIT 2', ['NOWAIT', 'OF', 'SKIP LOCKED']],
+  ['SELECT * FROM jobs FOR UPDATE | NOWAIT', []],
+  ['SELECT * FROM jobs q ORDER BY id FOR UPDATE OF q SK|IP LOCKED FETCH FIRST 2 ROWS WITH TIES', []],
+])('行锁提示由当前子句和已经写好的选项决定：%s', (sql, items) => {
+  expect(at(sql)?.query).toEqual({kind: 'lockKeywords', items});
+});
+
+it.each([
+  ['SELECT * FROM jobs FOR N|suffix', 'NO KEY UPDATE', 'SELECT * FROM jobs FOR NO KEY UPDATE'],
+  ['SELECT * FROM jobs FOR N|O KEY UPDATE', 'NO', 'SELECT * FROM jobs FOR NO KEY UPDATE'],
+  ['SELECT * FROM jobs FOR NO K|tail /* 保留 */ UPDATE OF jobs', 'KEY', 'SELECT * FROM jobs FOR NO KEY /* 保留 */ UPDATE OF jobs'],
+  ['SELECT * FROM jobs FOR K|tail SHARE', 'KEY', 'SELECT * FROM jobs FOR KEY SHARE'],
+  ['SELECT * FROM jobs FOR KEY S|tail', 'SHARE', 'SELECT * FROM jobs FOR KEY SHARE'],
+  ['SELECT * FROM jobs FOR SHARE O|tail jobs', 'OF', 'SELECT * FROM jobs FOR SHARE OF jobs'],
+  ['SELECT * FROM jobs FOR NO KEY UPDATE OF jobs N|tail', 'NOWAIT', 'SELECT * FROM jobs FOR NO KEY UPDATE OF jobs NOWAIT'],
+  ['SELECT * FROM jobs FOR UPDATE OF jobs SK|tail LOCKED', 'SKIP', 'SELECT * FROM jobs FOR UPDATE OF jobs SKIP LOCKED'],
+  ['SELECT * FROM jobs FOR UPDATE OF jobs SKIP L|tail', 'LOCKED', 'SELECT * FROM jobs FOR UPDATE OF jobs SKIP LOCKED'],
+  ['SELECT (SELECT id FROM jobs FOR SHARE SK|tail)', 'SKIP LOCKED', 'SELECT (SELECT id FROM jobs FOR SHARE SKIP LOCKED)'],
+  ['PREPARE p AS WITH a AS (SELECT 1) SELECT * FROM jobs FOR UPDATE NOWAIT FOR SHARE SK|tail', 'SKIP LOCKED',
+    'PREPARE p AS WITH a AS (SELECT 1) SELECT * FROM jobs FOR UPDATE NOWAIT FOR SHARE SKIP LOCKED'],
+  ['INSERT INTO outbox SELECT * FROM jobs FOR SHARE N|tail', 'NOWAIT', 'INSERT INTO outbox SELECT * FROM jobs FOR SHARE NOWAIT'],
+])('按原文范围补齐行锁短语且离线无目录请求：%s', async (marked, label, expected) => {
+  const request = vi.fn(async () => ({items: [], incomplete: false}));
+  const { provider, suggest } = editor(marked, request);
+  try {
+    const item = (await suggest())?.suggestions.find(candidate => candidate.label === label);
+    if (!item || !('startColumn' in item.range)) throw Error('缺少行锁短语与单一替换范围');
+    const source = marked.replace('|', '');
+    expect(source.slice(0, item.range.startColumn - 1) + item.insertText + source.slice(item.range.endColumn - 1)).toBe(expected);
+    expect(request).not.toHaveBeenCalled();
+  } finally { provider.dispose(); }
+});
+
+it.each([
+  'SELECT DISTINCT id FROM jobs FOR U|', 'SELECT id FROM jobs GROUP BY id FOR U|',
+  'SELECT id FROM jobs UNION ALL SELECT id FROM archive FOR U|', 'SELECT id FROM jobs FOR READ O|',
+  'SELECT * FROM jobs q FOR UPDATE OF q, n|', 'SELECT * FROM jobs q FOR UPDATE OF q, | n',
+  'SELECT * FROM jobs q FOR UPDATE OF q."N|"', 'SELECT * FROM jobs FOR UPDATE LIMIT n|',
+  'SELECT * FROM jobs FOR UPDATE | ORDER BY id', 'SELECT substring(label FROM 1 FOR n|) FROM jobs',
+])('行锁短语跳过普通表达式、目标名和不兼容查询：%s', sql => {
+  const query = at(sql)?.query;
+  expect(query?.kind === 'lockKeywords' ? query.items : []).toEqual([]);
+});
+
+it.each([
   ['SELECT * FROM app.job AS "Job" FOR NO KEY UPDATE OF "Jo|b" NOWAIT', ['Job']],
   ['SELECT * FROM a CROSS JOIN b CROSS JOIN c FOR KEY SHARE OF a, |, c SKIP LOCKED', ['b']],
   ['SELECT * FROM a LEFT JOIN b USING (id) AS j FOR UPDATE OF |', ['a']],

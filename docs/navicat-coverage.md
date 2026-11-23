@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 行锁补全覆盖四种锁定模式、`OF`、`NOWAIT` 和 `SKIP LOCKED`，原有短语后缀和注释可保留。等待策略按 `OF` 清单及 `FETCH … WITH TIES` 的语法筛选，离线可用。Q01、R01 继续为部分覆盖。 [PostgreSQL 行锁子句](https://www.postgresql.org/docs/18/sql-select.html#SQL-FOR-UPDATE-SHARE)
+
 2026-11-24 源码增量。PostgreSQL 行锁 `OF` 可离线补全查询块的真实范围表名称，排除 CTE、表函数、连接别名和外连接补空侧。保留目标原文范围、别名导航及整组改名，接受候选只修改草稿。Q01、R01 继续为部分覆盖。 [PostgreSQL 行锁子句](https://www.postgresql.org/docs/18/sql-select.html#SQL-FOR-UPDATE-SHARE)
 
 2026-11-24 源码增量。PostgreSQL 从查询创建表、普通视图、递归视图和物化视图时，语义补全和导航限于查询正文。递归自引用使用声明及锚点列，显式 schema 仍解析物理对象。也覆盖 `EXPLAIN` 中的建表和物化视图查询。Q01、R01 继续为部分覆盖。 [建表](https://www.postgresql.org/docs/18/sql-createtableas.html) · [视图](https://www.postgresql.org/docs/18/sql-createview.html) · [物化视图](https://www.postgresql.org/docs/18/sql-creatematerializedview.html)

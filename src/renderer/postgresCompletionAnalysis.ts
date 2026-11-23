@@ -43,6 +43,7 @@ type Scope = ReadonlyMap<string, Projection>;
 type Query = { kind: 'relations'; schema?: string; ctes?: string[]; mergeTarget?: true } |
   { kind: 'columns'; relations: PostgresCompletionRelation[]; qualified: boolean; joinOutput?: PostgresJoinOutput } |
   { kind: 'lockTargets'; names: string[] } |
+  { kind: 'lockKeywords'; items: string[] } |
   { kind: 'conflictTarget'; relation: PostgresCatalogRelation; selection: PostgresConflictSelection } | PostgresUsingColumns;
 export interface PostgresCompletionAnalysis {
   start: number;
@@ -302,7 +303,9 @@ function writeTarget(parts: Part[], index: number): boolean {
 interface QueryContext {
   offset: number;
   start: number;
+  end: number;
   left: PostgresEditorToken[];
+  keywordPrefix?: string;
 }
 interface Parsed { projection: Projection; query?: Query; routine?: PostgresRoutineCompletionTarget; windows?: PostgresCompletionAnalysis['windows']; }
 
@@ -1847,14 +1850,63 @@ function supportsRowLocking(parts: Part[]): boolean {
 
 interface RowLockList { parts: Part[]; start: number; end: number; }
 
+const rowLockModes = [['UPDATE'], ['NO', 'KEY', 'UPDATE'], ['SHARE'], ['KEY', 'SHARE']] as const;
+const rowLockModeWords = new Set<string>(rowLockModes.flat());
+const rowLockWaitWords = new Set(['OF', 'NOWAIT', 'SKIP', 'LOCKED']);
+const beforeRowLock = new Set(['FROM', 'WHERE', 'GROUP', 'HAVING', 'WINDOW', 'ORDER']);
+
+function isRowLockNameList(parts: Part[]): boolean {
+  return parts.length % 2 === 1 && parts.every((part, index) => index % 2 ? punct(part, ',') : !!identifier(part));
+}
+
+/** 替换当前单词并保留已写在右侧的短语，不重复插入 KEY、UPDATE 或 LOCKED。 */
+function rowLockPhrase(words: readonly string[], prefix: string, following: Part[], phraseWords: ReadonlySet<string>): string | undefined {
+  if (!words[0]?.startsWith(prefix)) return;
+  const next = keyword(following[0]);
+  if (!phraseWords.has(next)) return words.join(' ');
+  const split = words.indexOf(next, 1);
+  if (split < 0 || words.slice(split).some((word, index) => following[index] && keyword(following[index]) !== word)) return;
+  return words.slice(0, split).join(' ');
+}
+
+/** 已明确进入 FOR 子句才提供模式。OF 后必须先有完整裸名称清单，才进入等待策略。 */
+function completeRowLockKeywords(parts: Part[], context: QueryContext): Query | undefined {
+  const { start, end, keywordPrefix } = context;
+  if (keywordPrefix === undefined) return;
+  const before = parts.filter(part => part.end <= start && part.start < start);
+  const anchor = before.map((_, index) => mergeKeyword(before, index)).lastIndexOf('FOR');
+  if (anchor < 0) return;
+  const tail = before.slice(anchor + 1);
+  if (tail.some((_, index) => ['LIMIT', 'OFFSET', 'FETCH'].includes(mergeKeyword(tail, index)))) return;
+  if (parts.some((part, index) => part.start >= before[anchor].end && beforeRowLock.has(mergeKeyword(parts, index)))) return;
+  const following = parts.filter(part => part.start >= end && part.end > start);
+  const mode = rowLockModes.find(words => words.every((word, index) => keyword(tail[index]) === word));
+  if (!mode) {
+    const items = rowLockModes.filter(words => tail.length < words.length && tail.every((part, i) => keyword(part) === words[i]))
+      .flatMap(words => rowLockPhrase(words.slice(tail.length), keywordPrefix, following, rowLockModeWords) ?? []);
+    return { kind: 'lockKeywords', items };
+  }
+
+  const options = tail.slice(mode.length);
+  const of = keyword(options[0]) === 'OF';
+  const names = of ? options.slice(1) : [];
+  const skip = keyword(options.at(-1)) === 'SKIP' && (of ? isRowLockNameList(names.slice(0, -1)) : options.length === 1);
+  if (of && !skip && (!isRowLockNameList(names) || punct(following[0], ',') || punct(following[0], '.'))) return;
+  if (!of && !skip && options.length) return;
+
+  const ties = parts.some((_, index) => mergeKeyword(parts, index) === 'WITH' && keyword(parts[index + 1]) === 'TIES');
+  const choices = skip ? (ties ? [] : [['LOCKED']]) : [['NOWAIT'], ...(of ? [] : [['OF']]), ...(ties ? [] : [['SKIP', 'LOCKED']])];
+  const items = choices.flatMap(words => rowLockPhrase(words, keywordPrefix, following, rowLockWaitWords) ?? []);
+  return { kind: 'lockKeywords', items };
+}
+
 function rowLockLists(parts: Part[]): RowLockList[] {
   const lists: RowLockList[] = [];
   for (let index = 0; index < parts.length; index++) {
     if (mergeKeyword(parts, index) !== 'FOR') continue;
-    const strength = ['NO KEY UPDATE', 'KEY SHARE', 'UPDATE', 'SHARE'].find(mode =>
-      mode.split(' ').every((word, step) => keyword(parts[index + 1 + step]) === word));
+    const strength = rowLockModes.find(mode => mode.every((word, step) => keyword(parts[index + 1 + step]) === word));
     if (!strength) continue;
-    const of = index + strength.split(' ').length + 1;
+    const of = index + strength.length + 1;
     if (keyword(parts[of]) !== 'OF') continue;
     const first = of + 1;
     let end = first;
@@ -1882,7 +1934,7 @@ function rowLockTargets(rows: RowLockRelation[], lists: RowLockList[], active: R
   }
   if (!trace) return;
   for (const list of lists) {
-    if (list.parts.length % 2 !== 1 || !list.parts.every((part, index) => index % 2 ? punct(part, ',') : !!identifier(part))) continue;
+    if (!isRowLockNameList(list.parts)) continue;
     for (let i = 0; i < list.parts.length; i += 2) {
       const token = list.parts[i], row = targets.get(identifier(token)!);
       if (token.kind === 'group' || !row?.allowed) continue;
@@ -2244,6 +2296,10 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   const inPredicate = !trace && !!context && where >= 0 && context.offset >= main[where].end && context.offset < predicateBoundary;
   const completeWrite = returningHere || inAssignments || inPredicate;
   const tableSource = command === 'TABLE';
+  if (!trace && context && (tableSource || command === 'SELECT') && context.left.some(part => keyword(part) === 'FOR') && supportsRowLocking(main)) {
+    const keywords = completeRowLockKeywords(main, context);
+    if (keywords) return { projection: unknown, query: keywords };
+  }
   const lockLists = (context || trace) && (tableSource || command === 'SELECT') ? rowLockLists(main) : [];
   const activeLock = context && lockLists.find(list => list.start <= context.offset && context.offset <= list.end);
   const readLocks = (!!activeLock || !!trace && lockLists.length > 0) && supportsRowLocking(main);
@@ -2786,10 +2842,12 @@ export function analyzePostgresCompletion(source: string, offset: number, standa
     left.some(part => ['FETCH', 'OFFSET'].includes(keyword(part))))
     ? selectClauseKeywords(source, query.parts, { start, end, offset, prefix: prefixUpper }) : undefined;
   if (clause?.continuation) return { start, end, prefix, quoted, keywords: clause.items };
-  const parsed = query && parseStatementQuery(query, { offset, start, left });
+  const parsed = query && parseStatementQuery(query, { offset, start, end, left,
+    keywordPrefix: !quoted && !punct(previous, '.') ? prefixUpper : undefined });
   if (parsed?.query?.kind === 'using' || parsed?.query?.kind === 'conflictTarget' || parsed?.query?.kind === 'lockTargets' ||
+      parsed?.query?.kind === 'lockKeywords' ||
       parsed?.query?.kind === 'columns' && parsed.query.joinOutput) {
-    // 目录目标必须在离线的两种字符串模式下有一致的词法边界。
+    // 目录目标和锁子句必须在离线的两种字符串模式下有一致的词法边界。
     if (standardStrings === undefined && source.includes('\\') &&
       JSON.stringify(all) !== JSON.stringify(scanPostgresEditorTokens(source, limits.tokens, false))) return;
     if (parsed.query.kind !== 'columns') return { start, end, prefix, quoted, query: parsed.query };

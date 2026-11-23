@@ -1000,6 +1000,8 @@ PostgreSQL 的 `JOIN USING` 和 `NATURAL JOIN` 合并键在结果里只建议一
 
 编写 PostgreSQL 的 `FOR UPDATE OF`、`FOR NO KEY UPDATE OF`、`FOR SHARE OF` 或 `FOR KEY SHARE OF` 时，可离线补全当前查询块中的表名或别名。逗号列表会避开本条锁定子句中已选的目标，也会排除 CTE、整个连接的别名和外连接补空的一侧。锁定目标里的别名可用 F12 定位声明，也会随局部别名改名一起更新。实际锁权限由数据库检查。 [PostgreSQL 行锁子句](https://www.postgresql.org/docs/18/sql-select.html#SQL-FOR-UPDATE-SHARE)
 
+在 PostgreSQL 查询的 `FOR` 后可离线补全四种锁定模式。模式后可续写 `OF` 或等待策略，目标列表后也可续写 `NOWAIT`、`SKIP LOCKED`。接受候选时保留现有的后半段和注释。同一查询块使用 `FETCH … WITH TIES` 时，候选只提供兼容的等待策略。 [PostgreSQL 行锁子句](https://www.postgresql.org/docs/18/sql-select.html#SQL-FOR-UPDATE-SHARE)
+
 编写 PostgreSQL 的 `INSERT … ON CONFLICT … DO UPDATE` 时，`SET` 左侧按 `UPDATE` 权限补全目标列。在赋值右侧和动作 `WHERE` 中，可用目标表别名读取既有行，用 `excluded.` 读取待插入行，两者都按 `SELECT` 权限补全。存在已连接会话时，权限及表目录按该会话解析。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)
 
 在 PostgreSQL 的 `ON CONFLICT` 后按 Ctrl+空格，可选择由普通列组成且无谓词的完整主键或唯一键。括号内已填的列会保留，接受候选会补齐缺项。`ON CONSTRAINT` 后可选用目标表的约束名，写明 `DO NOTHING` 时也可选择排斥约束。列权限和同名表以当前会话为准。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)

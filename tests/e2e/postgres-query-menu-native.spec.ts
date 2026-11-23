@@ -2610,17 +2610,23 @@ test('PostgreSQL 行锁 OF 补全实际目标并定位分组连接中的别名',
       INSERT INTO public.lock_claim_jobs VALUES (1), (2);
       INSERT INTO public.lock_claim_notes VALUES (1);`);
     const draft = 'SELECT pair.id FROM (public.lock_claim_jobs "Claim Jobs" ' +
-      'LEFT JOIN public.lock_claim_notes "Claim Notes" USING (id)) pair ORDER BY pair.id FOR UPDATE OF "Cltail" SKIP LOCKED';
+      'LEFT JOIN public.lock_claim_notes "Claim Notes" USING (id)) pair ORDER BY pair.id FOR NO Ktail /* 模式 */ UPDATE OF "Cltail" SKtail LOCKED';
     await prepare({id: '', name: '离线 PostgreSQL 行锁目标', dialect: 'postgresql', group: '', color: '#123456',
       host, port: 1, user: 'offline', database: 'postgres'}, draft);
     await resizeQueryWindow(1280, 920, 0.75);
     const identity = (await inspectModel()).identity;
-    await modelSelection(1, draft.indexOf('Cltail') + 'Cl'.length + 1);
-    await triggerSuggestions();
-    await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText(['Claim Jobs']);
-    await page.keyboard.press('Enter');
-    const sql = draft.replace('Cltail', 'Claim Jobs');
-    await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+    const accept = async (source: string, prefix: string, label: string) => {
+      await modelSelection(1, source.indexOf(prefix + 'tail') + prefix.length + 1);
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText([label]);
+      await page.keyboard.press('Enter');
+      const filled = source.replace(prefix + 'tail', label);
+      await expect.poll(async () => (await inspectModel()).sql).toBe(filled);
+      return filled;
+    };
+    const strength = await accept(draft, 'K', 'KEY');
+    const wait = await accept(strength, 'SK', 'SKIP');
+    const sql = await accept(wait, 'Cl', 'Claim Jobs');
     await modelSelection(1, sql.lastIndexOf('Claim Jobs') + 2);
     await page.keyboard.press('F12');
     await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 1, column: sql.indexOf('"Claim Jobs"') + 1});
@@ -2630,10 +2636,15 @@ test('PostgreSQL 行锁 OF 补全实际目标并定位分组连接中的别名',
     await rename.fill('Claim Rows');
     await rename.press('Enter');
     await expect.poll(async () => (await inspectModel()).sql).toBe(sql.replaceAll('Claim Jobs', 'Claim Rows'));
+    for (const expected of [sql, wait, strength, draft]) {
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(expected);
+    }
+    const noWaitDraft = sql.replace('SKIP LOCKED', 'Ntail');
+    await replaceDraft(noWaitDraft);
+    const noWait = await accept(noWaitDraft, 'N', 'NOWAIT');
     await page.keyboard.press('ControlOrMeta+Z');
-    await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
-    await page.keyboard.press('ControlOrMeta+Z');
-    await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+    await expect.poll(async () => (await inspectModel()).sql).toBe(noWaitDraft);
     expect((await inspectModel()).identity).toEqual(identity);
     await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
@@ -2643,7 +2654,7 @@ test('PostgreSQL 行锁 OF 补全实际目标并定位分组连接中的别名',
       await blocker.query('SELECT id FROM public.lock_claim_jobs WHERE id=1 FOR UPDATE');
       await observer.query("SET statement_timeout='3s'");
       expect((await observer.query(sql)).rows).toEqual([{id: 2}]);
-      await expect(observer.query(sql.replace('SKIP LOCKED', 'NOWAIT'))).rejects.toMatchObject({code: '55P03'});
+      await expect(observer.query(noWait)).rejects.toMatchObject({code: '55P03'});
     } finally { await blocker.query('ROLLBACK'); }
     expect((await observer.query(sql)).rows).toEqual([{id: 1}, {id: 2}]);
     await page.screenshot({path: info.outputPath('PostgreSQL-行锁目标导航.png'), animations: 'disabled'});
