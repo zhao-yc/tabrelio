@@ -230,6 +230,19 @@ it.each([false, true])('真实只读collation_list及TVF可用，赋值始终拒
   expect((await collect(session, 'SELECT count(*) FROM subject')).rows).toEqual([[{ type: 'integer', value: '0' }]]); await session.close(); expect(session.isClosed).toBe(true);
 });
 
+it.each([false, true])('PRAGMA 补全目录和带参数 table_list 可读，其余写入保护保持（readonly=%s）', async readOnly => {
+  const { path } = fixture(), session = await open(path, readOnly);
+  const directory = await collect(session, 'PRAGMA pragma_list');
+  expect(directory.rows).toContainEqual(['table_xinfo']);
+  const tables = await collect(session, "PRAGMA main.table_list('subject')");
+  expect(tables.rows.map(row => row.slice(0, 3))).toEqual([['main', 'subject', 'table']]);
+  for (const sql of ['PRAGMA pragma_list=1', 'PRAGMA journal_mode=WAL', 'EXPLAIN PRAGMA foreign_keys=OFF']) {
+    await expect(session.execute(sql)).rejects.toMatchObject({ completedStatements: 0, sessionClosed: false });
+  }
+  expect((await collect(session, 'PRAGMA foreign_keys')).rows).toEqual([[{ type: 'integer', value: '1' }]]);
+  await session.close();
+});
+
 /** CHECK只新增实际状态读取；prepare阶段任何赋值/括号形式都必须仍拒绝。 */
 it.each([false, true])('CHECK实际开启状态可读但全部setter仍零statement拒绝（readonly=%s）', async readOnly => {
   const { path } = fixture(), session = await open(path, readOnly), header = vi.fn();

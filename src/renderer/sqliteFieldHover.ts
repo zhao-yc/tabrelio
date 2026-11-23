@@ -31,6 +31,25 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   if (body) directory = body.directory;
   const fallbackRow = () => analysis.triggerBody?.fallback && !sqliteRowidName.test(name) ?
     sqliteFieldHover({ ...analysis, triggerBody: undefined, trigger: analysis.triggerBody.fallback }, directory) : undefined;
+  if (analysis.pragma) {
+    const context = analysis.pragma, labels = sqliteCompletionZh.pragma, normalized = fold(name);
+    if (context.kind === 'object') {
+      const result = await directory.load({ kind: 'pragma-objects', pragma: context.pragma, prefix: '', exact: name, ...(context.schema ? { schema: context.schema } : {}) });
+      if (result.incomplete) return;
+      const lines: string[] = [];
+      for (const entry of result.entries) if (entry.kind === 'pragma-object' && fold(entry.name) === normalized) {
+        lines.push(sqliteCompletionZh[entry.object] + ' · ' + display(entry.schema) + '.' + display(entry.name));
+        if (entry.owner) lines.push(sqliteCompletionZh.maintenance.owner + '：' + display(entry.owner));
+      }
+      if (lines.length) return markdown([labels.title + ' ' + context.pragma, ...lines]);
+      return;
+    }
+    if (normalized.length > sqliteCompletionLimits.prefixUnits) return;
+    const result = await directory.load({ kind: 'pragmas', prefix: normalized });
+    if (result.incomplete || !result.entries.some(entry => entry.kind === 'pragma' && entry.name === normalized)) return;
+    const description = labels.description[normalized];
+    return markdown([labels.title + ' ' + normalized, ...(description ? [description] : [])]);
+  }
   if (analysis.maintenanceTarget) {
     const { operation, schema } = analysis.maintenanceTarget, normalized = fold(name), labels = sqliteCompletionZh.maintenance;
     if (operation === 'analyze' && !schema && (normalized === 'main' || normalized === 'temp')) {

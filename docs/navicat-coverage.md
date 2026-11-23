@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite 查询编辑器支持只读 `PRAGMA` 名称、库限定以及表、索引、外键与完整性检查的对象参数补全和悬停。目录遵循各命令的库内查找与同名规则。Q01 继续为部分覆盖。 [SQLite PRAGMA](https://www.sqlite.org/pragma.html)
+
 2026-11-23 源码增量。SQLite `ANALYZE` 和 `REINDEX` 提供维护目标的补全与悬停。具体对象带库限定插入，当前语句的裸名称按 SQLite 对数据库、排序规则、表或索引的查找顺序解析。Q01 继续为部分覆盖。 [SQLite ANALYZE](https://www.sqlite.org/lang_analyze.html) · [SQLite REINDEX](https://www.sqlite.org/lang_reindex.html)
 
 2026-11-23 源码增量。SQLite 的表、视图、索引及触发器删除语句支持对象候选、悬停和完整只读定义。目录按原语句类型、显式库及当前会话的同名对象查找规则解析。Q01、O05 继续为部分覆盖。 [SQLite 对象查找规则](https://www.sqlite.org/lang_naming.html)

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits, sqliteCompletionSourceKey, sqliteCompletionSourceSchema, sqliteCompletionTableSchema, sqliteForeignKeySelectionSchema, sqliteMaintenanceOperation, sqliteSchemaObjectKind, sqliteTriggerTargetMode, type SqliteCompletionSource, type SqliteCompletionTable } from './sqliteCompletion';
+import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits, sqliteCompletionSourceKey, sqliteCompletionSourceSchema, sqliteCompletionTableSchema, sqliteForeignKeySelectionSchema, sqliteMaintenanceOperation, sqlitePragmaObject, sqliteSchemaObjectKind, sqliteTriggerTargetMode, type SqliteCompletionSource, type SqliteCompletionTable } from './sqliteCompletion';
 import type { LocalReferenceToken } from './localReferenceIndex';
 import type { PhysicalObjectAnalysis, PhysicalObjectTokenContext } from './physicalObjectValidation';
 import type { SqliteDefinitionTriggerScope } from './objectDefinition';
@@ -34,6 +34,11 @@ const indexTargetContext = z.object({ schema: z.enum(['main', 'temp']).optional(
 type IndexTargetContext = z.infer<typeof indexTargetContext>;
 const dropTargetContext = z.object({ object: sqliteSchemaObjectKind, schema: z.enum(['main', 'temp']).optional() }).strict();
 const maintenanceTargetContext = indexTargetContext.extend({ operation: sqliteMaintenanceOperation }).strict();
+const pragmaContext = z.discriminatedUnion('kind', [
+  indexTargetContext.extend({ kind: z.literal('name'), withArgument: z.literal(true).optional() }),
+  indexTargetContext.extend({ kind: z.literal('object'), pragma: sqlitePragmaObject }),
+]);
+type PragmaContext = z.infer<typeof pragmaContext>;
 const columnTypeContext = z.union([z.object({ strict: z.boolean() }).strict(), z.object({ source: sqliteCompletionTableSchema }).strict()]);
 type ColumnTypeContext = z.infer<typeof columnTypeContext>;
 const foreignName = sqliteCompletionTableSchema.shape.name;
@@ -61,7 +66,7 @@ const triggerBodyContext = z.object({
   fallback: z.object({ kind: z.literal('row'), row: triggerRow, source: sqliteCompletionTableSchema }).strict().optional(),
 }).strict();
 export type SqliteTriggerBodyContext = z.infer<typeof triggerBodyContext>;
-export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword' | 'index' | 'collation' | 'query-start' | 'column-type' | 'foreign-key' | 'trigger' | 'drop' | 'maintenance')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; viewSchema?: 'main'; indexTarget?: IndexTargetContext; dropTarget?: z.infer<typeof dropTargetContext>; maintenanceTarget?: z.infer<typeof maintenanceTargetContext>; alterTable?: true; columnType?: ColumnTypeContext; foreignKey?: SqliteForeignKeyContext; trigger?: SqliteTriggerContext; triggerBody?: SqliteTriggerBodyContext; indexSource?: SqliteCompletionTable; functions?: FunctionContext; output?: OutputProjection; outputAliases?: OutputAliasHints; windowNames?: SqliteWindowNames; using?: UsingProjection; joinGroup?: QualifiedJoinGroup; localProjections?: SqliteLocalProjection[]; unqualifiedColumns?: true; writableColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
+export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword' | 'index' | 'collation' | 'query-start' | 'column-type' | 'foreign-key' | 'trigger' | 'drop' | 'maintenance' | 'pragma')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; viewSchema?: 'main'; indexTarget?: IndexTargetContext; dropTarget?: z.infer<typeof dropTargetContext>; maintenanceTarget?: z.infer<typeof maintenanceTargetContext>; pragma?: PragmaContext; alterTable?: true; columnType?: ColumnTypeContext; foreignKey?: SqliteForeignKeyContext; trigger?: SqliteTriggerContext; triggerBody?: SqliteTriggerBodyContext; indexSource?: SqliteCompletionTable; functions?: FunctionContext; output?: OutputProjection; outputAliases?: OutputAliasHints; windowNames?: SqliteWindowNames; using?: UsingProjection; joinGroup?: QualifiedJoinGroup; localProjections?: SqliteLocalProjection[]; unqualifiedColumns?: true; writableColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
 type Token = { kind: 'id' | 'string' | 'number' | 'parameter' | 'symbol'; value: string; start: number; end: number; depth: number; quoted?: boolean; closed?: boolean; pair?: number };
 type ProjectionSource = { start: number; end: number; ctes: Map<string, Cte> };
 type Cte = { name: string; columns?: string[]; start: number; end: number; declaration: SqliteLocalDefinition; projectionSource?: ProjectionSource };
@@ -167,6 +172,60 @@ function qualifiedTarget(tokens: Token[], first: number, end: number) {
   }
   if (nameIndex > end || nameIndex + 1 < end || nameIndex < end && tokens[nameIndex].kind !== 'id') return;
   return { nameIndex, schema };
+}
+
+/** 库限定在 PRAGMA 名称上，括号或等号后只接受单个参数。 */
+function pragmaHeader(tokens: Token[], head: number, end: number) {
+  if (!keyword(tokens[head], 'pragma')) return;
+  let nameIndex = head + 1, schema: 'main' | 'temp' | undefined;
+  if (nameIndex + 1 < end && tokens[nameIndex + 1].kind === 'symbol' && tokens[nameIndex + 1].value === '.') {
+    const token = tokens[nameIndex], value = fold(token.value);
+    if (token.kind !== 'id' && token.kind !== 'string' || token.closed === false || value !== 'main' && value !== 'temp') return;
+    schema = value;
+    nameIndex += 2;
+  }
+  return { nameIndex, schema };
+}
+
+function pragmaArgument(token: Token | undefined, schema?: 'main' | 'temp'): PragmaContext | undefined {
+  if (!token || token.kind !== 'id' && token.kind !== 'string' || token.closed === false) return;
+  const name = fold(token.value), object = sqlitePragmaObject.safeParse(name);
+  const scope = schema ? { schema } : {};
+  if (object.success) return { kind: 'object', pragma: object.data, ...scope };
+}
+
+/** 单引号只在当前 PRAGMA 名称和已识别参数位置当作标识符，普通 SQL 字符串继续隔离。 */
+function pragmaQuotedName(tokens: Token[], offset: number): boolean {
+  const statement = statementAt(tokens, offset);
+  const header = pragmaHeader(tokens, explainedHead(tokens, statement.start), statement.end);
+  if (!header) return false;
+  const { nameIndex, schema } = header;
+  if (nameIndex === statement.end) return true;
+  const separator = tokens[nameIndex + 1];
+  return nameIndex + 2 === statement.end && separator?.kind === 'symbol' &&
+    (separator.value === '(' || separator.value === '=') && !!pragmaArgument(tokens[nameIndex], schema);
+}
+
+function analyzePragma(source: string, tokens: Token[], head: number, end: number, offset: number, intent?: SqliteAnalysisIntent): Ready {
+  const header = pragmaHeader(tokens, head, end);
+  if (!header || intent === 'object' || intent === 'definition') fail('pragma');
+  const { schema, nameIndex } = header, name = nameIndex < end ? tokens[nameIndex] : undefined;
+  if (name && name.kind !== 'id' && name.kind !== 'string') fail('pragma');
+  const target = targetAt(source, tokens, offset, intent, true);
+  const qualifiers = schema ? [tokens[head + 1].value] : [];
+  const ready = (pragma: PragmaContext): Ready => ({ status: 'ready', target, syntax: ['pragma'], qualifiers, relations: [], pragma });
+  const at = (index: number, bound: number) => index < bound ?
+    tokens[index].start === target.start && tokens[index].end === target.end :
+    !intent && target.start === target.end && target.start >= tokens[index - 1].end && target.end <= (tokens[index]?.start ?? source.length);
+  const separator = nameIndex + 1 < end ? tokens[nameIndex + 1] : undefined;
+  if (separator && (separator.kind !== 'symbol' || separator.value !== '(' && separator.value !== '=')) fail('pragma');
+  if (at(nameIndex, end)) return ready({ kind: 'name', ...(schema ? { schema } : {}), ...(separator ? { withArgument: true } : {}) });
+  const argument = pragmaArgument(name, schema);
+  if (!separator || !argument) fail('pragma');
+  const finish = separator.pair ?? end, valueIndex = nameIndex + 2;
+  if (separator.pair !== undefined && finish !== end - 1 || finish > valueIndex + 1 || !at(valueIndex, finish) ||
+    valueIndex < finish && tokens[valueIndex].kind !== 'id') fail('pragma');
+  return ready(argument);
 }
 
 const triggerSteps = ['insert', 'replace', 'update', 'delete', 'select', 'values'];
@@ -418,8 +477,9 @@ function lex(source: string, offset: number, complete = false, collationNames = 
         const point = source.codePointAt(i)!; value += String.fromCodePoint(point); i += point > 65535 ? 2 : 1;
       }
       // SQLite 在 COLLATE 后也接受单引号名称。仅把当前目标当标识符，普通字符串仍不进入补全。
-      const collationName = collationNames && offset >= start && offset <= i && keyword(tokens.at(-1), 'collate');
-      const kind = character === "'" && !collationName ? 'string' : 'id';
+      const completionName = collationNames && offset >= start && offset <= i &&
+        (keyword(tokens.at(-1), 'collate') || character === "'" && pragmaQuotedName(tokens, offset));
+      const kind = character === "'" && !completionName ? 'string' : 'id';
       if (kind === 'string' && inSpan(start, i, !closed)) fail('string');
       if (kind === 'id' && value.length > limits.nameUnits) fail('budget');
       push({ kind, value, start, end: i, depth, quoted: kind === 'id', closed }); continue;
@@ -456,12 +516,12 @@ export function sqliteDefinitionTokens(source: string, allowParameters = false):
 }
 
 /** 全引号范围替换；prefix只解码光标之前的原文，UTF16坐标不转换成码点下标。 */
-function targetAt(source: string, tokens: Token[], offset: number, intent?: SqliteAnalysisIntent): Ready['target'] {
+function targetAt(source: string, tokens: Token[], offset: number, intent?: SqliteAnalysisIntent, allowStructural = false): Ready['target'] {
   const token = tokens.find(item => item.kind === 'id' && item.start <= offset && offset <= item.end);
   // 悬停解析完整名称，调用名由表达式作用域识别，不能回退成同名字段。
   if (intent) {
     const index = token ? tokens.indexOf(token) : -1;
-    if (!token || token.quoted && !token.closed || !token.quoted && structural.has(fold(token.value)) || intent !== 'object' && (intent === 'definition' && tokens[index + 1]?.value === '(' ||
+    if (!token || token.quoted && !token.closed || !allowStructural && !token.quoted && structural.has(fold(token.value)) || intent !== 'object' && (intent === 'definition' && tokens[index + 1]?.value === '(' ||
       ['as', 'window'].some(word => keyword(tokens[index - 1], word)) || intent === 'definition' && keyword(tokens[index - 1], 'collate') ||
       intent === 'hover' && keyword(tokens[index - 1], 'over'))) fail('hover-target');
     return { start: token.start, end: token.end, prefix: token.value, quoted: !!token.quoted };
@@ -811,7 +871,10 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
     if (typeof source !== 'string' || source.length > limits.sourceUnits) fail('budget');
     if (!unicode(source) || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || !boundary(source, offset)) fail('input');
     if (intent !== undefined && intent !== 'hover' && intent !== 'definition' && intent !== 'object') fail('input');
-    const tokens = lex(source, offset, intent === 'object', !intent || intent === 'hover'), target = targetAt(source, tokens, offset, intent), statement = statementAt(tokens, offset), beforeTarget = tokens.filter(token => token.end <= target.start), qualifiers: string[] = [];
+    const tokens = lex(source, offset, intent === 'object', !intent || intent === 'hover'), statement = statementAt(tokens, offset);
+    const statementHead = explainedHead(tokens, statement.start);
+    if (keyword(tokens[statementHead], 'pragma')) return analyzePragma(source, tokens, statementHead, statement.end, offset, intent);
+    const target = targetAt(source, tokens, offset, intent), beforeTarget = tokens.filter(token => token.end <= target.start), qualifiers: string[] = [];
     let q = beforeTarget.length - 1;
     while (q >= 1 && beforeTarget[q].value === '.' && beforeTarget[q - 1].kind === 'id') { qualifiers.unshift(beforeTarget[q - 1].value); q -= 2; }
     if (qualifiers.length > 2) fail('qualifier');
@@ -820,7 +883,6 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
     const existingCall = targetIndex >= 0 && tokens[targetIndex + 1]?.kind === 'symbol' && tokens[targetIndex + 1].value === '(';
     const collationTarget = keyword(tokens[priorIndex], 'collate');
     const collationScope = () => ({ bindings: [], ctes: new Map<string, Cte>(), syntax: ['collation'] as Ready['syntax'] });
-    const statementHead = explainedHead(tokens, statement.start);
     if (statementHead > statement.start && target.start < (tokens[statementHead - 1]?.end ?? 0)) fail('statement');
     const created = createQueryBody(tokens, statementHead, statement.end), indexDraft = createIndexTarget(tokens, statementHead, statement.end);
     const queryBody = created && target.start >= created.afterAs ? created : undefined;
@@ -1958,7 +2020,7 @@ const relationSchema = z.discriminatedUnion('kind', [
 ]);
 const resultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('blocked'), reason: z.string().regex(/^[a-z-]{1,64}$/) }).strict(),
-  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.nameUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword', 'index', 'collation', 'query-start', 'column-type', 'foreign-key', 'trigger', 'drop', 'maintenance'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations * 2 - 1), viewSchema: z.literal('main').optional(), indexTarget: indexTargetContext.optional(), dropTarget: dropTargetContext.optional(), maintenanceTarget: maintenanceTargetContext.optional(), alterTable: z.literal(true).optional(), columnType: columnTypeContext.optional(), foreignKey: foreignKeyContext.optional(), trigger: triggerContext.optional(), triggerBody: triggerBodyContext.optional(), indexSource: sqliteCompletionTableSchema.optional(), functions: functionContext.optional(), output: outputProjection.optional(), outputAliases: outputAliasSchema.optional(), windowNames: windowNameSchema.optional(), using: usingProjection.optional(), joinGroup: qualifiedGroup.optional(), localProjections: localProjectionSchema.optional(), unqualifiedColumns: z.literal(true).optional(), writableColumns: z.literal(true).optional(), definition: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).strict().optional() }).strict(),
+  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.nameUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword', 'index', 'collation', 'query-start', 'column-type', 'foreign-key', 'trigger', 'drop', 'maintenance', 'pragma'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations * 2 - 1), viewSchema: z.literal('main').optional(), indexTarget: indexTargetContext.optional(), dropTarget: dropTargetContext.optional(), maintenanceTarget: maintenanceTargetContext.optional(), pragma: pragmaContext.optional(), alterTable: z.literal(true).optional(), columnType: columnTypeContext.optional(), foreignKey: foreignKeyContext.optional(), trigger: triggerContext.optional(), triggerBody: triggerBodyContext.optional(), indexSource: sqliteCompletionTableSchema.optional(), functions: functionContext.optional(), output: outputProjection.optional(), outputAliases: outputAliasSchema.optional(), windowNames: windowNameSchema.optional(), using: usingProjection.optional(), joinGroup: qualifiedGroup.optional(), localProjections: localProjectionSchema.optional(), unqualifiedColumns: z.literal(true).optional(), writableColumns: z.literal(true).optional(), definition: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).strict().optional() }).strict(),
 ]);
 /** Client只核有界回包形状与原范围，不在渲染线程重新解析整份用户SQL。 */
 export function validateSqliteCompletionAnalysis(raw: unknown, source: string, offset: number, intent?: SqliteAnalysisIntent): SqliteCompletionAnalysis {
@@ -1971,16 +2033,16 @@ export function validateSqliteCompletionAnalysis(raw: unknown, source: string, o
   const foreignKey = value.syntax.includes('foreign-key');
   const trigger = value.syntax.includes('trigger');
   const drop = value.syntax.includes('drop');
-  const maintenance = value.syntax.includes('maintenance');
+  const maintenance = value.syntax.includes('maintenance'), pragma = value.syntax.includes('pragma');
   if (!!value.columnType !== columnType || !!value.foreignKey !== foreignKey || !!value.trigger !== trigger || !!value.dropTarget !== drop ||
-    !!value.maintenanceTarget !== maintenance) fail('response');
-  if ((collation || queryStart || columnType || foreignKey || trigger || drop || maintenance) && (intent === 'object' || intent === 'definition' || value.syntax.length !== 1 ||
-    !trigger && !drop && !maintenance && value.qualifiers.length || value.relations.length || value.viewSchema ||
+    !!value.maintenanceTarget !== maintenance || !!value.pragma !== pragma) fail('response');
+  if ((collation || queryStart || columnType || foreignKey || trigger || drop || maintenance || pragma) && (intent === 'object' || intent === 'definition' || value.syntax.length !== 1 ||
+    !trigger && !drop && !maintenance && !pragma && value.qualifiers.length || value.relations.length || value.viewSchema ||
     value.indexTarget || value.alterTable || value.indexSource || value.functions || value.output || value.outputAliases || value.windowNames || value.using || value.joinGroup ||
     value.localProjections || value.unqualifiedColumns || value.writableColumns || value.definition)) fail('response');
   if (value.dropTarget && (value.qualifiers.length > 1 || value.qualifiers.length === 1 && fold(value.qualifiers[0]) !== value.dropTarget.schema)) fail('response');
-  if (value.maintenanceTarget) {
-    const { schema } = value.maintenanceTarget;
+  if (value.maintenanceTarget || value.pragma) {
+    const schema = value.maintenanceTarget?.schema ?? value.pragma?.schema;
     if (value.qualifiers.length !== (schema ? 1 : 0) || schema && fold(value.qualifiers[0]) !== schema) fail('response');
   }
   if (value.trigger) {
@@ -1992,7 +2054,7 @@ export function validateSqliteCompletionAnalysis(raw: unknown, source: string, o
   if (value.triggerBody) {
     const { writeTarget, rows, fallback } = value.triggerBody;
     if (intent === 'object' || intent === 'definition' || value.trigger || value.viewSchema || value.indexTarget || value.alterTable ||
-      columnType || foreignKey || queryStart || collation || drop || maintenance || writeTarget && (intent || !value.syntax.includes('relation') || value.qualifiers.length) ||
+      columnType || foreignKey || queryStart || collation || drop || maintenance || pragma || writeTarget && (intent || !value.syntax.includes('relation') || value.qualifiers.length) ||
       rows && (intent || !value.syntax.includes('column') || value.qualifiers.length || value.unqualifiedColumns) ||
       fallback && (!value.syntax.includes('column') || value.unqualifiedColumns || value.qualifiers.length !== 1 ||
         fold(value.qualifiers[0]) !== fallback.row)) fail('response');
@@ -2091,7 +2153,7 @@ export function validateSqliteCompletionAnalysis(raw: unknown, source: string, o
   })) fail('response');
   const target = value.target;
   if (target.start > offset || target.end < offset || target.end > source.length || !boundary(source, target.start) || !boundary(source, target.end) || !boundary(source, offset)) fail('response');
-  const rawName = source.slice(target.start, target.end), quote = rawName[0], quoted = ['"', '\u0060', '['].includes(quote ?? '') || collation && quote === "'";
+  const rawName = source.slice(target.start, target.end), quote = rawName[0], quoted = ['"', '\u0060', '['].includes(quote ?? '') || (collation || pragma) && quote === "'";
   if (target.quoted !== quoted || rawName.length > limits.nameUnits * 2 + 2) fail('response');
   const end = intent ? target.end : offset;
   let prefix = source.slice(target.start + (quoted ? 1 : 0), end);

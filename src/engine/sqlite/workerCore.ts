@@ -10,6 +10,7 @@ import { queryParameterLimits } from '../../shared/queryParameters';
 import { sqliteNamedParameterNames } from './parameters';
 import { createSqliteNativeInvoke, resolveSqliteNativeResource, sqliteNativeFunction } from './nativeRuntime';
 import { SqliteRawStatement, type SqliteRawInvoke } from './rawStatement';
+import { readableSqlitePragma } from '../../shared/sqlitePragmaAccess';
 import { validSqliteStatementTimeout } from '../../shared/sqliteStatementTimeout';
 import { checkSqliteSyntax } from './syntaxCheck';
 import { consumeSqliteRawFrames } from './rawFrames';
@@ -29,15 +30,6 @@ const unicode = (value: string) => !value.includes('\0') && validUnicode(value);
 const integer = (value: unknown, minimum: number, maximum: number): value is number => Number.isSafeInteger(value) && Number(value) >= minimum && Number(value) <= maximum;
 const identifier = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 200 && unicode(value);
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-
-/** PRAGMA可能在prepare阶段执行；首版只放行明确只读项，不能等结果header后再确认副作用。 */
-function readablePragma(first: string | null, second: string | null): boolean {
-  const name = first?.toLowerCase();
-  if (!name) return false;
-  if (['table_info', 'table_xinfo', 'index_list', 'index_info', 'index_xinfo', 'foreign_key_list', 'integrity_check', 'quick_check', 'foreign_key_check'].includes(name)) return true;
-  // FTS5的data_version和ALTER保护模式均只允许无赋值读取，不扩大任何PRAGMA写授权。
-  return second === null && ['database_list', 'table_list', 'collation_list', 'function_list', 'compile_options', 'foreign_keys', 'query_only', 'legacy_alter_table', 'ignore_check_constraints', 'schema_version', 'data_version', 'user_version', 'page_count', 'page_size', 'freelist_count', 'encoding', 'journal_mode'].includes(name);
-}
 
 /** 仅跳过SQLite明确的空白、分号和注释；语句边界始终由原生prepare/sourceSQL决定。 */
 function skipTrivia(sql: string, offset = 0, afterDelimiter?: (offset: number) => void): number {
@@ -270,7 +262,7 @@ export class SqliteWorkerCore {
         if (action === constants.SQLITE_ATTACH || action === constants.SQLITE_DETACH) return constants.SQLITE_DENY;
         if (action === constants.SQLITE_PRAGMA) {
           const restoring = this.restoringRebuildFlags && rebuild && source === null && (first === 'foreign_keys' && second === 'ON' || first === 'legacy_alter_table' && second === 'OFF');
-          return restoring || readablePragma(first, second) ? constants.SQLITE_OK : constants.SQLITE_DENY;
+          return restoring || readableSqlitePragma(first, second) ? constants.SQLITE_OK : constants.SQLITE_DENY;
         }
         if (database === sqliteCopySourceSchema && action !== constants.SQLITE_READ) return constants.SQLITE_DENY;
         if (options.readOnly && ![constants.SQLITE_READ, constants.SQLITE_SELECT, constants.SQLITE_FUNCTION, constants.SQLITE_RECURSIVE, constants.SQLITE_TRANSACTION, constants.SQLITE_SAVEPOINT].includes(action)) return constants.SQLITE_DENY;

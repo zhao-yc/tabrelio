@@ -59,6 +59,51 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('PRAGMA 名称来自原生只读目录，对象参数按各命令的同名规则解析', async () => {
+    const p = profile('PRAGMA目录', `
+      CREATE TABLE subject(id INTEGER UNIQUE,value TEXT);
+      CREATE INDEX by_value ON subject(value);
+      CREATE TABLE keys_only(k INTEGER PRIMARY KEY) WITHOUT ROWID;
+      CREATE TABLE hidden_relation(c INTEGER);
+      CREATE VIRTUAL TABLE search_subject USING fts5(value);
+    `);
+    const { app, events } = runtime([p]);
+    const names = await completion(app, p.id, { kind: 'pragmas', prefix: 'Table_' });
+    expect(names.entries).toEqual(['table_info', 'table_list', 'table_xinfo'].map(name => ({ kind: 'pragma', name })));
+    expect(statements(processes[0]).filter(sql => sql === 'PRAGMA pragma_list')).toHaveLength(1);
+    expect(await processes[0].exited).toEqual({ code: 0, signal: null });
+    expect((await completion(app, p.id, { kind: 'pragmas', prefix: 'writable_schema' })).entries).toEqual([]);
+    expect((await completion(app, p.id, { kind: 'pragmas', prefix: 'journal_mode' })).entries).toEqual([{ kind: 'pragma', name: 'journal_mode' }]);
+    expect((await completion(app, p.id, { kind: 'pragmas', prefix: 'journal_mode', withArgument: true })).entries).toEqual([]);
+    const session = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, session.sessionId, `BEGIN; CREATE TEMP TABLE subject(other INTEGER);
+      CREATE INDEX temp.by_value ON subject(other);
+      CREATE TEMP TABLE keys_only(later INTEGER);
+      CREATE TEMP VIEW hidden_relation AS SELECT 1;`);
+    const state = await app.request('query.completionState', session), count = events.length;
+    const read = async (pragma: Extract<SqliteCompletionLookup, { kind: 'pragma-objects' }>['pragma'], name: string, schema?: 'main' | 'temp') =>
+      (await completion(app, p.id, { kind: 'pragma-objects', pragma, exact: name, ...(schema ? { schema } : {}) }, session.sessionId)).entries;
+    const item = (name: string, schema: 'main' | 'temp', object = 'table') => ({ kind: 'pragma-object', schema, object, name });
+    expect(await read('table_info', 'SUBJECT')).toEqual([item('subject', 'temp')]);
+    expect(await read('table_xinfo', 'subject', 'main')).toEqual([item('subject', 'main')]);
+    expect(await read('table_list', 'subject')).toEqual([item('subject', 'temp'), item('subject', 'main')]);
+    expect(await read('table_info', 'hidden_relation')).toEqual([item('hidden_relation', 'temp', 'view')]);
+    expect(await read('foreign_key_list', 'hidden_relation')).toEqual([]);
+    expect(await read('table_xinfo', 'search_subject')).toEqual([item('search_subject', 'main')]);
+    expect(await read('table_list', 'search_subject_data')).toEqual([]);
+    expect(await read('integrity_check', 'subject')).toEqual([item('subject', 'temp')]);
+    expect(await read('quick_check', 'subject', 'main')).toEqual([item('subject', 'main')]);
+    expect(await read('index_info', 'by_value')).toEqual([{ ...item('by_value', 'temp', 'index'), owner: 'subject' }]);
+    expect(await read('index_xinfo', 'sqlite_autoindex_subject_1')).toEqual([{ ...item('sqlite_autoindex_subject_1', 'main', 'index'), owner: 'subject' }]);
+    expect(await read('index_xinfo', 'keys_only')).toEqual([]);
+    expect(await read('index_info', 'keys_only', 'main')).toEqual([item('keys_only', 'main')]);
+    expect(await app.request('query.completionState', session)).toEqual(state);
+    expect(await app.request('query.sessionState', session)).toMatchObject({ transactionOpen: true });
+    expect(events).toHaveLength(count);
+    expect(statements(processes.at(-1)!).some(sql => /^\s*PRAGMA\s+(table_info|index_info|foreign_key_list)\b/i.test(sql))).toBe(false);
+    await execute(app, session.sessionId, 'ROLLBACK');
+  });
+
   it('维护目录区分 ANALYZE 与 REINDEX 的实际目标，保留自动索引及原会话事务', async () => {
     const p = profile('维护目标', `
       CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT UNIQUE);

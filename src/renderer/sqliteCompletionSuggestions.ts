@@ -117,6 +117,33 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   const body = triggerBody ? await resolveSqliteTriggerBody(triggerBody, directory) : undefined;
   if (body?.status === 'unavailable') return { items, incomplete: body.incomplete };
   if (body) directory = body.directory;
+  if (analysis.pragma) {
+    const context = analysis.pragma, labels = text.pragma;
+    if (context.kind === 'name') {
+      const result = await directory.load({ kind: 'pragmas', prefix: analysis.target.prefix, ...(context.withArgument ? { withArgument: true } : {}) });
+      if (!context.schema) for (const namespace of ['main', 'temp']) {
+        add({ label: namespace, kind: 'database', insertText: quote(namespace) + '.', detail: text.schema, trigger: true });
+      }
+      for (const entry of result.entries) if (entry.kind === 'pragma') add({
+        label: entry.name, kind: 'keyword', insertText: analysis.target.quoted ? quote(entry.name) : entry.name,
+        detail: labels.description[entry.name] ?? labels.title,
+      });
+      return { items, incomplete: incomplete || result.incomplete };
+    }
+    const result = await directory.load({ kind: 'pragma-objects', pragma: context.pragma, prefix: analysis.target.prefix, ...(context.schema ? { schema: context.schema } : {}) });
+    const objects = new Map<string, Extract<SqliteCompletionEntry, { kind: 'pragma-object' }>[]>();
+    for (const entry of result.entries) if (entry.kind === 'pragma-object') {
+      const key = fold(entry.name), group = objects.get(key);
+      if (group) group.push(entry);
+      else objects.set(key, [entry]);
+    }
+    // table_list 的同一个参数可返回多库同名对象，插入一次参数，提示全部匹配。
+    for (const [entry, ...others] of objects.values()) {
+      const detail = [entry, ...others].map(object => [object.schema, text[object.object], ...(object.owner ? [text.maintenance.owner + ' ' + object.owner] : [])].join(' · '));
+      add({ label: entry.name, kind: entry.object, insertText: quote(entry.name), detail: detail.join(' / ') });
+    }
+    return { items, incomplete: incomplete || result.incomplete };
+  }
   if (analysis.maintenanceTarget) {
     const { operation, schema } = analysis.maintenanceTarget;
     if (!schema) for (const namespace of ['main', 'temp']) {

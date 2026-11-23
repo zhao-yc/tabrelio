@@ -2,6 +2,7 @@ import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
 import { foldSqliteCompletionName as fold, sqliteCompletionLimits, sqliteCompletionOutputSchema, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput, type SqliteForeignKeySelection } from '../shared/sqliteCompletion';
 import { inspectSqliteTableColumnCollations, sqliteTableRebuildPlanLimits } from '../shared/sqliteTableRebuildPlan';
+import { readableSqlitePragma } from '../shared/sqlitePragmaAccess';
 import { sqliteDropObjectQuery } from './sqliteDropObjects';
 
 interface CompletionControl { check(): void; sessionRevision?: number; }
@@ -191,6 +192,35 @@ async function maintenanceObjects(driver: SqliteDriverSession, input: Extract<Sq
   return { entries: entries.slice(0, limit), incomplete: incomplete || result.truncated || entries.length > limit };
 }
 
+/** 仅读目录。先按原生规则解析同名对象，再筛除无关类型和内部对象，以免误提示被遮蔽的主库对象。 */
+function pragmaObjects(driver: SqliteDriverSession, input: Extract<SqliteCompletionLookup, { kind: 'pragma-objects' }>, control: CompletionControl) {
+  const { pragma, schema, prefix, exact } = input;
+  const indexDetails = pragma === 'index_info' || pragma === 'index_xinfo';
+  const includesViews = ['table_info', 'table_xinfo', 'table_list'].includes(pragma);
+  const match = exact === undefined ? prefixSql : 'name = ? COLLATE NOCASE';
+  const namespacePartition = pragma === 'table_list' ? ',schema' : '';
+  const types = indexDetails ? "(type = 'index' OR type = 'table' AND wr = 1)" :
+    includesViews ? "type IN ('table','view','virtual')" : "type = 'table'";
+  // index_xinfo/index_info 按索引优先，找不到时才解释为 WITHOUT ROWID 表名。
+  const indexes = indexDetails ? `UNION ALL
+    SELECT i.name,p.schema,'index',p.name,0,p.type FROM relations p CROSS JOIN pragma_index_list(p.name,p.schema) i
+    WHERE p.type IN ('table','shadow')` : '';
+  return read(driver, `WITH relations AS MATERIALIZED (
+      SELECT name,schema,type,wr FROM pragma_table_list() WHERE schema IN ('main','temp') AND (? IS NULL OR schema = ?)
+    ), objects(name,schema,type,owner,wr,owner_type) AS (
+      SELECT name,schema,type,NULL,wr,NULL FROM relations
+      ${indexes}
+    ), resolved AS (
+      SELECT *,row_number() OVER (PARTITION BY name COLLATE NOCASE${namespacePartition}
+        ORDER BY (type = 'index') DESC,schema DESC) AS rank
+      FROM objects WHERE ${match}
+    )
+    SELECT name,schema,CASE WHEN type = 'virtual' THEN 'table' ELSE type END,owner FROM resolved
+    WHERE rank = 1 AND ${types} AND substr(coalesce(owner,name),1,7) COLLATE NOCASE <> 'sqlite_'
+      AND coalesce(owner_type,'table') <> 'shadow'
+    ORDER BY name COLLATE NOCASE,schema DESC LIMIT 257`, [schema ?? null, schema ?? null, ...(exact === undefined ? [prefix, prefix] : [exact])], control, 257);
+}
+
 /** 仅暴露main/temp用户关系；table_list的shadow标记不能靠名称猜测，temp命名空间优先遮蔽main。 */
 export async function readSqliteCompletion(driver: SqliteDriverSession, input: SqliteCompletionLookup, control: CompletionControl): Promise<SqliteCompletionOutput> {
   const before = await stamp(driver, control), entries: SqliteCompletionEntry[] = []; let incomplete = false;
@@ -294,6 +324,22 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
     const result = await maintenanceObjects(driver, input, control);
     incomplete = result.incomplete;
     for (const entry of result.entries) if (!append(entry)) break;
+  } else if (input.kind === 'pragmas') {
+    // 只读取 SQLite 编译后支持的名称。即使 PRAGMA 在准备时就可能生效，也不会尝试准备候选语句。
+    const result = await read(driver, 'PRAGMA pragma_list', [], control, 257), prefix = fold(input.prefix);
+    incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
+    for (const [name] of result.rows.slice(0, sqliteCompletionLimits.entries)) {
+      if (typeof name !== 'string') throw Error('SQLite PRAGMA 目录无效');
+      if (name.startsWith(prefix) && readableSqlitePragma(name, input.withArgument ? '' : null) && !append({ kind: 'pragma', name })) break;
+    }
+  } else if (input.kind === 'pragma-objects') {
+    const result = await pragmaObjects(driver, input, control);
+    incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
+    for (const [name, schema, object, owner] of result.rows.slice(0, sqliteCompletionLimits.entries)) {
+      if (typeof name !== 'string' || schema !== 'main' && schema !== 'temp' ||
+        object !== 'table' && object !== 'view' && object !== 'index' || owner !== null && typeof owner !== 'string') throw Error('SQLite PRAGMA 对象目录无效');
+      if (!append({ kind: 'pragma-object', name, schema, object, ...(owner === null ? {} : { owner }) })) break;
+    }
   } else if (input.kind === 'trigger-owner') {
     // 先按原会话定位，再核对触发目标类型。同名临时对象遮蔽时不回退到主库。
     const { rows: [target] } = await tableIdentity(driver, input, control);

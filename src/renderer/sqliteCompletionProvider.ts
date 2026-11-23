@@ -1,6 +1,7 @@
 import type { CompletionSessionState } from '../shared/sqlCompletion';
 import { sqliteCompletionInputSchema, sqliteCompletionOutputSchema, sqliteCompletionLimits, foldSqliteCompletionName as fold, type SqliteCompletionInput, type SqliteCompletionLookup } from '../shared/sqliteCompletion';
 import type { SqliteCompletionAnalysis } from '../shared/sqliteCompletionAnalysis';
+import { readableSqlitePragma } from '../shared/sqlitePragmaAccess';
 import { sameCompletionState } from './completionContext';
 import { sqliteCompletionSuggestions, type SqliteCompletionItem } from './sqliteCompletionSuggestions';
 import { sqliteFieldHover } from './sqliteFieldHover';
@@ -91,7 +92,17 @@ export function createSqliteCompletionProvider(ports: Ports) {
                 return entry.kind === 'maintenance-object' ? query.schema !== undefined && entry.schema !== query.schema :
                   query.operation !== 'reindex' || query.schema !== undefined || entry.kind !== 'maintenance-option' && entry.kind !== 'collation';
               }
-              if (entry.kind === 'function' || entry.kind === 'collation' || entry.kind === 'maintenance-option' || entry.kind === 'maintenance-object') return true;
+              if (query.kind === 'pragmas') return entry.kind !== 'pragma' || !fold(entry.name).startsWith(fold(query.prefix)) ||
+                !readableSqlitePragma(entry.name, query.withArgument ? '' : null);
+              if (query.kind === 'pragma-objects') {
+                if (entry.kind !== 'pragma-object' || query.schema !== undefined && entry.schema !== query.schema) return true;
+                if (entry.object === 'index' && query.pragma !== 'index_info' && query.pragma !== 'index_xinfo' ||
+                  entry.object === 'view' && !['table_info', 'table_xinfo', 'table_list'].includes(query.pragma)) return true;
+                const name = fold(entry.name);
+                return query.exact === undefined ? !name.startsWith(fold(query.prefix)) : name !== fold(query.exact);
+              }
+              if (entry.kind === 'function' || entry.kind === 'collation' || entry.kind === 'maintenance-option' || entry.kind === 'maintenance-object' ||
+                entry.kind === 'pragma' || entry.kind === 'pragma-object') return true;
               if (query.kind === 'trigger-owner') return entry.kind !== query.triggerTarget || fold(entry.name) !== fold(query.table);
               if (query.schema !== undefined && entry.schema !== query.schema) return true;
               if (query.kind === 'drop-objects') return entry.kind !== 'drop-object' || entry.object !== query.object ||
@@ -102,8 +113,11 @@ export function createSqliteCompletionProvider(ports: Ports) {
               return (query.kind === 'columns' ? entry.kind !== 'column' : entry.kind !== 'index') ||
                 !('table' in entry) || fold(entry.table) !== fold(query.table);
             })) throw stale();
-            const names = result.entries.map(entry => query.kind !== 'maintenance-objects' ? fold(entry.name) :
-              (entry.kind === 'maintenance-object' ? entry.object + '\0' + entry.schema : entry.kind) + '\0' + fold(entry.name));
+            const names = result.entries.map(entry => {
+              if (query.kind === 'maintenance-objects') return (entry.kind === 'maintenance-object' ? entry.object + '\0' + entry.schema : entry.kind) + '\0' + fold(entry.name);
+              if (query.kind === 'pragma-objects' && query.pragma === 'table_list' && entry.kind === 'pragma-object') return entry.schema + '\0' + fold(entry.name);
+              return fold(entry.name);
+            });
             if (new Set(names).size !== names.length) throw stale();
             stamp ??= result.stamp; return result;
           } finally { if (pending.cancel) await pending.cancel; operation.pending.delete(input.taskId); }
