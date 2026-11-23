@@ -41,6 +41,39 @@ it('PostgreSQL窗口函数和聚合筛选关键字可从编辑器补全', async 
   }
 });
 
+it.each([
+  ['SELECT 1 ORDER BY 1 NU|', 'NULLS LAST', 'SELECT 1 ORDER BY 1 NULLS LAST'],
+  ['SELECT 1 ORDER BY 1 NULLS F|suffix', 'FIRST', 'SELECT 1 ORDER BY 1 NULLS FIRST'],
+  ['SELECT 1 ORDER BY 1 NU|LLS LAST', 'NULLS', 'SELECT 1 ORDER BY 1 NULLS LAST'],
+  ['SELECT 1 ORDER BY 1 NULLS LAST OFFSET 2 ROWS FE|', 'FETCH FIRST', 'SELECT 1 ORDER BY 1 NULLS LAST OFFSET 2 ROWS FETCH FIRST'],
+  ['SELECT 1 FETCH N|suffix 2 ROWS ONLY', 'NEXT', 'SELECT 1 FETCH NEXT 2 ROWS ONLY'],
+  ['SELECT 1 FET|CH FIRST 2 ROWS ONLY', 'FETCH', 'SELECT 1 FETCH FIRST 2 ROWS ONLY'],
+  ['SELECT (SELECT 1 ORDER BY 1 NULLS L|)', 'LAST', 'SELECT (SELECT 1 ORDER BY 1 NULLS LAST)'],
+  ['WITH c AS (SELECT 1 AS id) SELECT id FROM c ORDER BY id DESC NULLS |', 'LAST', 'WITH c AS (SELECT 1 AS id) SELECT id FROM c ORDER BY id DESC NULLS LAST'],
+  ['SELECT 1 ORDER BY 1 NULLS LAST, 2 NU|', 'NULLS FIRST', 'SELECT 1 ORDER BY 1 NULLS LAST, 2 NULLS FIRST'],
+  ['SELECT 1 UNION ALL SELECT 2 ORDER BY 1 NULLS F|', 'FIRST', 'SELECT 1 UNION ALL SELECT 2 ORDER BY 1 NULLS FIRST'],
+])('排序与分页短语按真实光标范围插入：%s', async (marked, label, expected) => {
+  const request = vi.fn(async () => ({ items: [], incomplete: false }));
+  const { provider, suggest } = editor(marked, request);
+  try {
+    const item = (await suggest())?.suggestions.find(candidate => candidate.label === label);
+    expect(item).toBeDefined();
+    if (!item || !('startColumn' in item.range)) throw Error('缺少单一替换范围');
+    const source = marked.replace('|', '');
+    expect(source.slice(0, item.range.startColumn - 1) + item.insertText + source.slice(item.range.endColumn - 1)).toBe(expected);
+    if (!label.includes(' ') && label !== 'NULLS' && label !== 'FETCH') expect(request).not.toHaveBeenCalled();
+  } finally { provider.dispose(); }
+});
+
+it.each([
+  'SELECT NU|', 'SELECT a FROM t WHERE a = NU|', 'SELECT a ORDER BY NU|',
+  'SELECT a ORDER BY a, NU|', 'SELECT t.fet| FROM t', 'SELECT a LIMIT 1 FE|',
+  'SELECT a ORDER BY a "NU|"', "SELECT 'NULLS F|'", 'SELECT 1; SELECT NULLS F|',
+  'SELECT a ORDER BY a NULLS LAST NU|', 'SELECT a ORDER BY a OFFSET 2 NULLS F|',
+])('无对应子句时不生成排序或分页短语：%s', marked => {
+  expect(at(marked)?.keywords).toBeUndefined();
+});
+
 describe('PostgreSQL 补全词法和关系作用域', () => {
   it('关系位置读取 schema，引用前缀和后半个词使用完整替换范围', () => {
     expect(at('SELECT * FROM /* 说明 */ "业.务"."品|名"')).toMatchObject({ prefix: '品', quoted: true,

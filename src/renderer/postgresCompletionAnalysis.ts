@@ -26,6 +26,7 @@ export interface PostgresCompletionAnalysis {
   query?: Query;
   routine?: PostgresRoutineCompletionTarget;
   existingCall?: boolean;
+  keywords?: readonly string[];
 }
 const entries = new Set(['FROM', 'JOIN', 'UPDATE', 'INTO']);
 const endsFrom = new Set(['WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'FETCH', 'RETURNING',
@@ -1486,6 +1487,49 @@ export function analyzePostgresLocalRename(source: string, offset: number, stand
   });
 }
 
+const nullPlacement = ['FIRST', 'LAST'] as const;
+const fetchDirection = ['FIRST', 'NEXT'] as const;
+const unfinishedClause = new Set([...stop, ...expressionEntries, 'IS', 'IN', 'LIKE', 'ILIKE', 'BETWEEN', 'NULLS']
+  .filter(word => !['NULL', 'TRUE', 'FALSE'].includes(word)));
+
+/** 按当前查询块判断排序和分页短语。集中处理两个词的插入范围，已写好的另一半留在原处。 */
+function selectClauseKeywords(parts: Part[], position: { start: number; end: number; offset: number; prefix: string }):
+  { items: readonly string[]; continuation: boolean } | undefined {
+  const { start, end, offset, prefix } = position;
+  const nested = parts.find((part): part is Group => part.kind === 'group' && contains(part, offset));
+  if (nested) return selectClauseKeywords(nested.parts, position);
+
+  const before = parts.filter(part => part.end <= start && part.start < start);
+  const command = keyword(before[0]);
+  if (command !== 'SELECT' && command !== 'WITH' && !(before[0]?.kind === 'group' && before.some(part => setOperators.has(keyword(part))))) return;
+  const branch = before.map(part => setOperators.has(keyword(part))).lastIndexOf(true);
+  const query = before.slice(branch + 1);
+  const previous = keyword(query.at(-1));
+  const continuation = previous === 'NULLS' || previous === 'FETCH';
+  const head = continuation ? previous : ['NULLS', 'FETCH'].find(word => word.startsWith(prefix));
+  if (!head) return;
+  if (continuation) query.pop();
+  const last = query.at(-1);
+  const lastWord = keyword(last);
+  // 编辑器词法把数字按单字符记为标点，数字仍可结束排序表达式或偏移量。
+  if (!last || last.kind === 'punct' && !/^[0-9]$/.test(last.text) || unfinishedClause.has(lastWord)) return;
+  if (command === 'WITH' && !query.some(part => keyword(part) === 'SELECT') && branch < 0) return;
+
+  if (head === 'NULLS') {
+    const order = query.map((part, index) => keyword(part) === 'ORDER' && keyword(query[index + 1]) === 'BY').lastIndexOf(true);
+    if (order < 0) return;
+    const tail = query.slice(order + 2);
+    const sortItem = tail.slice(tail.map(part => punct(part, ',')).lastIndexOf(true) + 1);
+    if (!sortItem.length || tail.some(part => endsFrom.has(keyword(part))) || sortItem.some(part => keyword(part) === 'NULLS')) return;
+  } else if (query.some(part => ['LIMIT', 'FETCH', 'FOR'].includes(keyword(part)))) return;
+
+  const endings = head === 'NULLS' ? nullPlacement : fetchDirection;
+  const next = keyword(parts.find(part => part.start >= end));
+  const items = continuation ? endings.filter(word => word.startsWith(prefix))
+    : endings.some(word => word === next) ? [head] : endings.map(word => head + ' ' + word);
+  return items.length ? { items, continuation } : undefined;
+}
+
 /** 定位当前标识符，屏蔽注释、字符串和参数，再解析当前语句的查询作用域。 */
 export function analyzePostgresCompletion(source: string, offset: number): PostgresCompletionAnalysis | undefined {
   if (source.length > limits.source || offset < 0 || offset > source.length || source.includes('\0')) return;
@@ -1499,12 +1543,18 @@ export function analyzePostgresCompletion(source: string, offset: number): Postg
   if (prefix.length > limits.name) return;
   const parts = groupStatement(all, offset, source.length);
   const left = all.filter(token => token !== target && token.end <= start && !(token.kind === 'blocked' && token.text === 'comment'));
+  const previous = left.at(-1);
+  const prefixUpper = prefix.toUpperCase();
+  const clause = parts && !quoted && !punct(previous, '.') && (['NULLS', 'FETCH'].includes(keyword(previous)) ||
+    prefix && ['NULLS', 'FETCH'].some(word => word.startsWith(prefixUpper)))
+    ? selectClauseKeywords(parts, { start, end, offset, prefix: prefixUpper }) : undefined;
+  if (clause?.continuation) return { start, end, prefix, quoted, keywords: clause.items };
   const parsed = parts && parseQuery(parts, new Map(), [], { offset, start, left });
   const next = parsed?.routine && all.find(token => token !== target && token.start >= end && !(token.kind === 'blocked' && token.text === 'comment'));
   const existingCall = punct(next, '(');
   const declaredTable = existingCall && declaredTableSyntax.has(keyword(target)) && !punct(left.at(-1), '.');
   const routine = !declaredTable && parsed?.routine && (prefix || parsed.routine.schema) ? parsed.routine : undefined;
-  return { start, end, prefix, quoted, ...(!declaredTable && parsed?.query ? { query: parsed.query } : {}),
+  return { start, end, prefix, quoted, ...(clause ? { keywords: clause.items } : {}), ...(!declaredTable && parsed?.query ? { query: parsed.query } : {}),
     ...(routine ? { routine, existingCall } : {}) };
 }
 

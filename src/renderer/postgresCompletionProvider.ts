@@ -185,6 +185,9 @@ export function createPostgresCompletionProvider(options: {
           }
         }
         const hasDot = source.slice(0, analysis.start).trimEnd().endsWith('.');
+        for (const label of analysis.keywords ?? []) {
+          suggestions.unshift({ label, kind: options.kinds.keyword, insertText: label, range, sortText: '0 ' + label });
+        }
         if (!quoted && !hasDot && query?.kind !== 'relations' && routine?.context !== 'call' && routine?.context !== 'from') {
           for (const label of keywords.filter(word => word.startsWith(prefix.toUpperCase()))) {
             suggestions.push({ label, kind: options.kinds.keyword, insertText: label, range, sortText: '9' + label });
