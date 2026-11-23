@@ -39,7 +39,7 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   }
   const bound = analysis.relations.filter(relation => relation.kind === 'physical' || !relation.declaration);
   const selected = bound.filter(relation => sqliteCompletionRelationMatches(relation, qualifiers) &&
-    (qualifiers.length || relation.kind !== 'physical' || relation.insertRole !== 'excluded'));
+    (qualifiers.length || relation.kind !== 'physical' || relation.dmlRole !== 'excluded'));
   if (qualifiers.length && selected.length !== 1) return;
   const candidates: { relation: SqliteCompletionRelation; column: string; entry?: Extract<SqliteCompletionEntry, { kind: 'column' }>; tableFunction?: true }[] = [];
   let prefix = name.slice(0, sqliteCompletionLimits.prefixUnits);
@@ -80,5 +80,5 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   if (relation.afterOuterJoin) return;
   const localSource = relation.kind === 'local' ? relation.source === 'cte' ? text.cte : text.derived : undefined;
   return fieldHover(relation.alias ?? relation.name, column, entry, tableFunction === true || relation.kind === 'physical' && relation.tableFunction === true,
-    localSource, relation.kind === 'physical' && relation.insertRole === 'excluded');
+    localSource, relation.kind === 'physical' && relation.dmlRole === 'excluded');
 }

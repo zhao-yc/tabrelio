@@ -3,8 +3,8 @@ import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits, sql
 import type { LocalReferenceToken } from './localReferenceIndex';
 import type { PhysicalObjectAnalysis } from './physicalObjectAnalysis';
 
-type InsertRole = 'upsert-target' | 'excluded' | 'insert-returning';
-export type SqliteCompletionRelation = ({ kind: 'physical'; alias?: string; visibleColumnsOnly?: true; insertRole?: InsertRole } & SqliteCompletionSource | { kind: 'local'; source: 'cte' | 'derived' | 'group'; name: string; alias?: string; columns: string[]; declaration?: true; projection?: number }) & { scopeDepth?: number; afterOuterJoin?: true };
+type DmlRole = 'mutation-target' | 'excluded' | 'returning-target';
+export type SqliteCompletionRelation = ({ kind: 'physical'; alias?: string; visibleColumnsOnly?: true; dmlRole?: DmlRole } & SqliteCompletionSource | { kind: 'local'; source: 'cte' | 'derived' | 'group'; name: string; alias?: string; columns: string[]; declaration?: true; projection?: number }) & { scopeDepth?: number; afterOuterJoin?: true };
 export type SqliteAnalysisIntent = 'hover' | 'definition' | 'object';
 export interface SqliteLocalDefinition { start: number; end: number; }
 type OutputSource = SqliteCompletionSource;
@@ -52,15 +52,15 @@ function columnSource({ name, schema, tableFunction }: Extract<SqliteCompletionR
   return { name, ...(schema ? { schema } : {}), ...(tableFunction ? { tableFunction } : {}) };
 }
 
-/** UPSERT 允许 schema.目标别名。未显式指定 schema 时，目录仍按原 INSERT 的目标解析。 */
+/** 写入表达式允许 schema.目标别名。未显式指定 schema 时，目录仍按原语句的目标解析。 */
 export function sqliteCompletionRelationMatches(relation: SqliteCompletionRelation, qualifiers: string[]): boolean {
   if (!qualifiers.length) return true;
   const binding = fold(relation.alias ?? relation.name);
   if (qualifiers.length === 1) return binding === fold(qualifiers[0]);
   if (qualifiers.length !== 2 || relation.kind !== 'physical' || binding !== fold(qualifiers[1])) return false;
   const schema = fold(qualifiers[0]);
-  if (relation.insertRole === 'upsert-target') return relation.schema === undefined || relation.schema === schema;
-  return !relation.insertRole && !relation.alias && relation.schema === schema;
+  if (relation.dmlRole === 'mutation-target') return relation.schema === undefined || relation.schema === schema;
+  return !relation.dmlRole && !relation.alias && relation.schema === schema;
 }
 
 /** 只交付可达子树，避免为同一查询块内无关的分组读取目录。 */
@@ -133,6 +133,18 @@ function subqueryAt(tokens: Token[], start: number, end: number, offset: number,
     if (offset >= (tokens[at + 1]?.start ?? sourceEnd) && offset <= (tokens[finish]?.start ?? sourceEnd)) return { start: at + 1, end: finish };
     at = finish;
   }
+}
+
+/** SET 的逗号和等号只在当前语句层分隔赋值，列组与右侧表达式各自保留括号。 */
+function assignmentTargetAt(tokens: Token[], start: number, end: number, depth: number, position: number): boolean {
+  let right = false;
+  for (let at = start; at < end && tokens[at].start < position; at++) {
+    const token = tokens[at];
+    if (token.depth !== depth || token.kind !== 'symbol') continue;
+    if (token.value === ',') right = false;
+    else if (token.value === '=') right = true;
+  }
+  return !right;
 }
 
 interface JoinCondition { on: number; end: number; outer: boolean; }
@@ -681,6 +693,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       if (head >= end) return { bindings: [], ctes, syntax: ['keyword'] };
       const command = fold(tokens[head].value);
       const insert = command === 'insert' || command === 'replace';
+      const update = command === 'update', deleting = command === 'delete';
       if (!['select', 'values', 'update', 'insert', 'replace', 'delete'].includes(command) || tokens[head].quoted) {
         if (head === start && tokens.length === 1 && tokens[0].kind === 'id') return { bindings: [], ctes, syntax: ['keyword'] };
         fail('statement');
@@ -780,7 +793,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       const own: Binding[] = [], derived: { start: number; end: number }[] = []; let relationContext = false, aliasContext = false, targetBinding: Binding | undefined, argumentBinding: Binding | undefined;
       let groupScope: Binding[] | undefined, groupUsing: UsingProjection | undefined, groupUsingIsolated = false, activeOn: JoinCondition | undefined;
       function noteCondition(join: number | undefined, on: number, bound: number) {
-        if (command === 'select' && !projectionOnly && join !== undefined) activeOn = joinCondition(tokens, join, on, bound, target) ?? activeOn;
+        if ((command === 'select' || update) && !projectionOnly && join !== undefined) activeOn = joinCondition(tokens, join, on, bound, target) ?? activeOn;
       }
       const relevant = (begin: number, finish: number) => offset >= (tokens[begin]?.start ?? source.length) && target.start <= (tokens[finish - 1]?.end ?? source.length);
       const hasRightOrFull = (start: number, end: number, depth: number) => tokens.some((token, at) => at >= start && at < end && token.depth === depth &&
@@ -976,44 +989,54 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         if (++relationBudget > limits.relations) fail('budget'); binding.level = level; own.push(binding); return at;
       }
       let index = head + 1;
-      if (command === 'update' || insert) {
+      if (update || insert || deleting && keyword(tokens[index], 'from')) {
         if (keyword(tokens[index], 'or')) index += 2;
-        if (keyword(tokens[index], 'into')) index++;
+        if (keyword(tokens[index], 'into') || deleting) index++;
         index = relation(index, true); targetBinding = own[0];
       }
+      const returning = (insert || update || deleting) ? tokens.findIndex((token, at) => at >= index && at < end && token.depth === base && keyword(token, 'returning')) : -1;
+      const beforeReturning = returning < 0 ? end : returning;
+      const columns = (bindings: Binding[], unqualified: boolean, writable = false) => {
+        if (unqualified && qualifiers.length) fail('qualified-target');
+        return { bindings, ctes: new Map<string, Cte>(), syntax: ['column'] as Ready['syntax'],
+          ...(unqualified ? { unqualified: true as const } : {}), ...(writable ? { writable: true as const } : {}) };
+      };
+      const inside = (begin: number, finish: number, bindings: Binding[]) => {
+        const nested = subqueryAt(tokens, begin, finish, offset, source.length);
+        if (nested) return scope(nested.start, nested.end, ctes, bindings, level + 1);
+      };
+      if (returning >= 0 && target.start >= tokens[returning].end && targetBinding?.relation.kind === 'physical') {
+        // RETURNING 只继承实际目标表；写入时的目标别名和 UPDATE FROM 来源均不在返回命名空间中。
+        const { alias: _alias, ...physical } = targetBinding.relation;
+        const result: Binding = { ...targetBinding, relation: { ...physical, dmlRole: 'returning-target' }, aliasIndex: undefined };
+        return inside(returning + 1, end, [result]) ?? columns([result], !qualifiers.length);
+      }
+      if (update && targetBinding?.relation.kind === 'physical') {
+        const set = tokens.findIndex((token, at) => at >= index && at < beforeReturning && token.depth === base && keyword(token, 'set'));
+        if (set >= 0 && target.start >= tokens[set].end) {
+          const boundary = tokens.findIndex((token, at) => at > set && at < beforeReturning && token.depth === base &&
+            (fromClause(tokens, at) || ['where', 'order', 'limit'].some(word => keyword(token, word))));
+          const finish = boundary < 0 ? beforeReturning : boundary;
+          if (target.end <= (tokens[finish]?.start ?? source.length) && assignmentTargetAt(tokens, set + 1, finish, base, target.start)) return columns([targetBinding], true, true);
+        }
+      }
+      if ((update || deleting) && targetBinding?.relation.kind === 'physical') targetBinding.relation.dmlRole = 'mutation-target';
       if (insert && targetBinding?.relation.kind === 'physical' && !relationContext && !aliasContext) {
         const binding = targetBinding, physical = targetBinding.relation;
-        const columns = (bindings: Binding[], unqualified: boolean, writable = false) => {
-          if (unqualified && qualifiers.length) fail('qualified-target');
-          return { bindings, ctes: new Map<string, Cte>(), syntax: ['column'] as Ready['syntax'],
-            ...(unqualified ? { unqualified: true as const } : {}), ...(writable ? { writable: true as const } : {}) };
-        };
         let data = index;
         if (tokens[data]?.kind === 'symbol' && tokens[data].value === '(') {
           const close = tokens[data].pair ?? end;
           if (target.start >= tokens[data].end && target.end <= (tokens[close]?.start ?? source.length)) return columns([binding], true, true);
           data = close + 1;
         }
-        const returning = tokens.findIndex((token, at) => at >= data && at < end && token.depth === base && keyword(token, 'returning'));
-        const beforeReturning = returning < 0 ? end : returning;
         const selectSource = keyword(tokens[data], 'select') || keyword(tokens[data], 'with');
         const arms = selectSource || keyword(tokens[data], 'values') ? insertConflictArms(tokens, data, beforeReturning, base, selectSource) : [];
         const inputEnd = arms[0]?.start ?? beforeReturning;
-        const inside = (begin: number, finish: number, bindings: Binding[]) => {
-          const nested = subqueryAt(tokens, begin, finish, offset, source.length);
-          if (nested) return scope(nested.start, nested.end, ctes, bindings, level + 1);
-        };
-        if (returning >= 0 && target.start >= tokens[returning].end) {
-          // RETURNING 的目标使用实际表名，INSERT 的 AS 别名及 excluded 均不在该命名空间。
-          const { alias: _alias, ...returnTarget } = physical;
-          const result: Binding = { ...binding, relation: { ...returnTarget, insertRole: 'insert-returning' }, aliasIndex: undefined };
-          return inside(returning + 1, end, [result]) ?? columns([result], !qualifiers.length);
-        }
         const armIndex = arms.findIndex((arm, at) => target.start >= tokens[arm.start + 1].end &&
           target.end <= (tokens[arms[at + 1]?.start ?? beforeReturning]?.start ?? source.length));
         if (armIndex >= 0) {
           const arm = arms[armIndex], finish = arms[armIndex + 1]?.start ?? beforeReturning;
-          const current: Binding = { ...binding, relation: { ...physical, insertRole: 'upsert-target' } };
+          const current: Binding = { ...binding, relation: { ...physical, dmlRole: 'mutation-target' } };
           const { targetClose, action } = arm;
           const inTarget = targetClose !== undefined && target.start >= tokens[arm.start + 2].end && target.end <= (tokens[targetClose]?.start ?? source.length);
           const predicate = targetClose !== undefined ? tokens[targetClose + 1] : undefined;
@@ -1024,20 +1047,12 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
           }
           const set = tokens[action + 2];
           if (action >= finish || !keyword(tokens[action + 1], 'update') || !keyword(set, 'set') || target.start < set.end) fail('upsert-action');
-          let assignment = action + 3, equals = -1;
-          for (let at = assignment; at < finish; at++) {
-            const token = tokens[at];
-            if (token.depth !== base) continue;
-            if (keyword(token, 'where')) break;
-            if (token.value === ',' && token.end <= target.start && token.kind === 'symbol') { assignment = at + 1; equals = -1; }
-            if (at >= assignment && equals < 0 && token.kind === 'symbol' && token.value === '=') equals = at;
-          }
           const where = tokens.findIndex((token, at) => at >= action + 3 && at < finish && token.depth === base && keyword(token, 'where'));
-          if ((where < 0 || target.start < tokens[where].end) && (equals < 0 || target.start <= tokens[equals].start)) return columns([current], true, true);
+          if ((where < 0 || target.end <= tokens[where].start) && assignmentTargetAt(tokens, action + 3, where < 0 ? finish : where, base, target.start)) return columns([current], true, true);
           const bindings = [current];
           // 真实目标叫 excluded 时，SQLite 优先解析该目标的旧行。
           if (fold(physical.alias ?? physical.name) !== 'excluded') {
-            bindings.push({ start: binding.start, end: binding.end, level, relation: { ...physical, alias: 'excluded', insertRole: 'excluded' } });
+            bindings.push({ start: binding.start, end: binding.end, level, relation: { ...physical, alias: 'excluded', dmlRole: 'excluded' } });
           }
           return inside(action + 3, finish, bindings) ?? columns(bindings, false);
         }
@@ -1050,14 +1065,13 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       }
       let inFrom = false, lastJoin: number | undefined;
       const collectRootJoins = usingAt >= 0 || projectionOnly;
-      for (let at = command === 'select' || command === 'delete' ? head + 1 : index; at < relationEnd; at++) {
+      for (let at = index; at < relationEnd; at++) {
         const token = tokens[at]; if (token.depth !== base) continue;
         const joined = keyword(token, 'join') || token.kind === 'symbol' && token.value === ',';
         if (fromClause(tokens, at) || joined && (inFrom || usingAt < 0 && keyword(token, 'join'))) {
-          const before = own.length, next = relation(at + 1, command === 'delete' && !targetBinding, relationEnd, joined, collectRootJoins ? joins : undefined);
+          const before = own.length, next = relation(at + 1, false, relationEnd, joined, collectRootJoins ? joins : undefined);
           if (collectRootJoins && joined) recordJoin(joins, before, at);
           lastJoin = inFrom && joined && own.length > before ? at : undefined;
-          if (command === 'delete' && !targetBinding) targetBinding = own[0];
           inFrom = true;
           if (next > at + 1) at = next - 1;
           continue;
@@ -1092,9 +1106,11 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         const joinStarScope = inputs.length ? { groups, owners, inputs, uniqueLeft: uniqueJoinLeft(joins, head, end, base) } : undefined;
         return { bindings: own, ctes, syntax: ['column'], ...(joinStarScope ? { joinStarScope } : {}) };
       }
-      // 函数实参使用已绑定的输入和相关外层。自身返回列及此后才加入的关系留在调用外。
+      // 多来源 UPDATE FROM 的连接条件独立于更新目标。单一表值函数则在目标行上取实参。
       const scoped = groupScope ?? own;
-      const visibleOwn = argumentBinding ? scoped.slice(0, scoped.indexOf(argumentBinding)).filter(binding => binding !== targetBinding) : [...scoped];
+      const singleUpdateFunction = update && targetBinding && argumentBinding && own.length === 2 && own[1] === argumentBinding;
+      const visibleOwn = singleUpdateFunction && targetBinding ? [targetBinding] : argumentBinding ? scoped.slice(0, scoped.indexOf(argumentBinding)).filter(binding => binding !== targetBinding) :
+        scoped.filter(binding => !update || !activeOn || binding !== targetBinding);
       const sourceCount = visibleOwn.length;
       for (let at = 0; at < sourceCount; at++) {
         const group = groupedOperands.get(visibleOwn[at]);
@@ -1144,22 +1160,6 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       const lexicalBindings = [...visibleOwn.filter(binding => binding.relation.name), ...outer.filter(binding => !aliases.has(fold(binding.relation.alias ?? binding.relation.name)))];
       let bindings = lexicalBindings.filter(binding => !binding.afterOuterJoin || intent === 'hover' && !qualifiers.length);
       if (aliasContext && intent !== 'object') fail('alias');
-      let unqualified = false;
-      const returning = tokens.findIndex((token, at) => at >= head && at < end && token.depth === base && keyword(token, 'returning'));
-      if (returning >= 0 && offset >= tokens[returning].end && targetBinding) unqualified = true;
-      if (command === 'update') {
-        const set = tokens.findIndex((token, at) => at >= head && at < end && token.depth === base && keyword(token, 'set'));
-        if (set >= 0 && offset >= tokens[set].end) {
-          let last = set + 1, stop = end;
-          for (let at = set + 1; at < end; at++) if (tokens[at].depth === base && ['where', 'from', 'returning', 'order', 'limit'].some(word => keyword(tokens[at], word))) { stop = at; break; }
-          if (offset <= (tokens[stop]?.start ?? source.length)) {
-            for (let at = set + 1; at < stop; at++) if (tokens[at].depth === base && tokens[at].value === ',' && tokens[at].end <= target.start) last = at + 1;
-            const equals = tokens.findIndex((token, at) => at >= last && at < stop && token.depth === base && token.value === '=');
-            if (equals < 0 || target.start <= tokens[equals].start) unqualified = true;
-          }
-        }
-      }
-      if (unqualified) { if (qualifiers.length) fail('qualified-target'); return { bindings: targetBinding ? [targetBinding] : [], ctes, syntax: ['column'], unqualified: true }; }
       for (let at = head; at < end; at++) if (keyword(tokens[at], 'using') && tokens[at + 1]?.value === '(' && offset >= tokens[at + 1].end && offset <= (tokens[tokens[at + 1].pair ?? end]?.start ?? source.length)) fail('using');
       const priorTokens = tokens.filter((token, at) => at >= head && at < end && token.end <= target.start);
       if (keyword(priorTokens.at(-1), 'by') && keyword(priorTokens.at(-2), 'indexed')) fail('index');
@@ -1348,7 +1348,7 @@ const windowNameSchema = z.object({ names: z.array(z.object({ name: nameSchema, 
   new Set(names.map(({ name, quote }) => (quote ?? '') + '\0' + fold(name))).size === names.length,
 );
 const relationSchema = z.discriminatedUnion('kind', [
-  outputSource.extend({ kind: z.literal('physical'), alias: nameSchema.optional(), visibleColumnsOnly: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional(), afterOuterJoin: z.literal(true).optional(), insertRole: z.enum(['upsert-target', 'excluded', 'insert-returning']).optional() }),
+  outputSource.extend({ kind: z.literal('physical'), alias: nameSchema.optional(), visibleColumnsOnly: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional(), afterOuterJoin: z.literal(true).optional(), dmlRole: z.enum(['mutation-target', 'excluded', 'returning-target']).optional() }),
   z.object({ kind: z.literal('local'), source: z.enum(['cte', 'derived', 'group']), name: nameSchema, alias: nameSchema.optional(), columns: columnNames,
     declaration: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional(), projection: projectionIndex.optional(), afterOuterJoin: z.literal(true).optional() }).strict(),
 ]);
@@ -1371,15 +1371,15 @@ export function validateSqliteCompletionAnalysis(raw: unknown, source: string, o
   if (value.windowNames && (intent || value.qualifiers.length || value.relations.length || value.output || value.outputAliases || value.using ||
     value.joinGroup || value.unqualifiedColumns || value.localProjections || value.syntax.length !== 1 || value.syntax[0] !== 'keyword' ||
     value.windowNames.names.some(({ name }) => !fold(name).startsWith(fold(value.target.prefix))))) fail('response');
-  const writeBindings = value.relations.filter((relation): relation is Extract<SqliteCompletionRelation, { kind: 'physical' }> => relation.kind === 'physical' && relation.insertRole !== undefined);
-  const incoming = writeBindings.filter(relation => relation.insertRole === 'excluded');
-  const targets = writeBindings.filter(relation => relation.insertRole !== 'excluded');
+  const writeBindings = value.relations.filter((relation): relation is Extract<SqliteCompletionRelation, { kind: 'physical' }> => relation.kind === 'physical' && relation.dmlRole !== undefined);
+  const incoming = writeBindings.filter(relation => relation.dmlRole === 'excluded');
+  const targets = writeBindings.filter(relation => relation.dmlRole !== 'excluded');
   if (incoming.length > 1 || targets.length > 1 || writeBindings.some(relation => relation.tableFunction || relation.afterOuterJoin ||
-    relation.insertRole === 'excluded' && relation.alias !== 'excluded' || relation.insertRole === 'insert-returning' && relation.alias !== undefined) ||
-    incoming.length && targets.some(relation => relation.insertRole !== 'upsert-target' || fold(relation.alias ?? relation.name) === 'excluded' ||
+    relation.dmlRole === 'excluded' && relation.alias !== 'excluded' || relation.dmlRole === 'returning-target' && relation.alias !== undefined) ||
+    incoming.length && targets.some(relation => relation.dmlRole !== 'mutation-target' || fold(relation.alias ?? relation.name) === 'excluded' ||
       sqliteCompletionSourceKey(relation) !== sqliteCompletionSourceKey(incoming[0]))) fail('response');
   if (value.writableColumns && (!value.unqualifiedColumns || value.relations.length !== 1 || value.relations[0].kind !== 'physical' ||
-    value.relations[0].tableFunction || value.relations[0].insertRole === 'excluded' || value.relations[0].insertRole === 'insert-returning' ||
+    value.relations[0].tableFunction || value.relations[0].dmlRole === 'excluded' || value.relations[0].dmlRole === 'returning-target' ||
     value.syntax.length !== 1 || value.syntax[0] !== 'column' || value.output || value.using || value.windowNames)) fail('response');
   const groupRelations = value.relations.filter((relation): relation is Extract<SqliteCompletionRelation, { kind: 'local' }> =>
     relation.kind === 'local' && relation.source === 'group');

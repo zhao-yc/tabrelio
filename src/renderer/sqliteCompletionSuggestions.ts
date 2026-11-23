@@ -154,14 +154,14 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
         incomplete ||= metadata.incomplete;
         aliasSourcesIncomplete ||= aliasSource && metadata.incomplete;
         aliasMayResolveToRowid ||= aliasSource;
-        const source = relation.insertRole === 'excluded' ? text.excludedRow : relation.tableFunction ? text.tableFunction : undefined;
+        const source = relation.dmlRole === 'excluded' ? text.excludedRow : relation.tableFunction ? text.tableFunction : undefined;
         for (const { entry } of metadata.columns) if (entry && !(relation.visibleColumnsOnly && entry.hidden) &&
           !(analysis.writableColumns && (entry.generated || entry.hidden)) && (qualifiers.length !== 2 || entry.schema === fold(qualifiers[0]))) {
           addSourceColumn(entry.name, binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : ''));
         }
       }
       if (!qualifiers.length && !relation.afterOuterJoin && !analysis.unqualifiedColumns) {
-        const detail = relation.kind === 'physical' && relation.insertRole === 'excluded' ? text.excludedRow : relation.kind === 'local' && relation.source === 'group' ? text.joinGroup : text.alias;
+        const detail = relation.kind === 'physical' && relation.dmlRole === 'excluded' ? text.excludedRow : relation.kind === 'local' && relation.source === 'group' ? text.joinGroup : text.alias;
         add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail, trigger: true });
       }
     }

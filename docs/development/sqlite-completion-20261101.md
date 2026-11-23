@@ -6,6 +6,8 @@ SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段
 
 SQLite UPSERT 可补全 `ON CONFLICT` 的目标列表和索引谓词、`DO UPDATE SET` 的两侧及其 `WHERE`。赋值左侧支持列组并排除生成列、隐藏列。右侧和过滤条件可分别引用目标旧行和 `excluded` 待插入行，两者共享实际目标表的列目录。候选和悬停明确标注待插入行。实际目标名或别名为 `excluded` 时，沿用 SQLite 的优先级。`INSERT … SELECT` 的输入来源在进入冲突分支后退出作用域，`INSERT … RETURNING` 的限定名使用写入的实际表名。唯一索引匹配以 SQLite 执行结果为准。 [SQLite UPSERT](https://www.sqlite.org/lang_upsert.html)
 
+`UPDATE … FROM` 的赋值右侧和 `WHERE` 可使用目标与来源列，来源表之间的 `ON` 按连接范围解析。单一表值函数的实参可关联更新目标。`UPDATE` 的赋值列组使用可写列候选并排除生成列和隐藏列。`UPDATE` 和 `DELETE` 的过滤表达式支持按实际命名空间限定目标别名。它们的 `RETURNING` 按实际目标表名解析，相关子查询可同时使用其自身来源。 [SQLite UPDATE FROM](https://www.sqlite.org/lang_update.html#update_from) · [SQLite RETURNING](https://www.sqlite.org/lang_returning.html)
+
 普通 `SELECT` 的 `ORDER BY`、`GROUP BY`、`HAVING` 和 `WHERE` 可补全及悬停当前查询块的输出别名。独立排序名称优先解析为输出别名。排序表达式、分组和过滤依次查当前查询块的来源列、输出别名和相关外层列。别名悬停显示来源说明，表达式类型标为未知。聚合、窗口函数及无法确认的函数按所在位置判断可用性。需先确认来源列时，目录缺失或无法判定隐式行号会限制别名候选。[SQLite SELECT](https://www.sqlite.org/lang_select.html#orderby) · [SQLite 名称解析源码](https://github.com/sqlite/sqlite/blob/version-3.53.0/src/resolve.c#L628)
 
 `OVER 名称`、`OVER (名称 …)` 和 `WINDOW` 定义的继承位置可补全当前查询块的命名窗口。候选沿用声明的原始引号种类。SQLite 将未引用、双引号、反引号和方括号形式视为不同的窗口名。裸 `OVER` 可用带帧窗口，括号继承依据 `PARTITION BY`、`ORDER BY` 和帧限制筛选。窗口定义中的继承候选来自此前声明。窗口内部的分区和排序表达式仍可补全来源字段。[SQLite 窗口继承](https://www.sqlite.org/windowfunctions.html#window_chaining)
@@ -41,6 +43,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-23 UPDATE FROM 与 DELETE RETURNING 增量。WIN11-TEST 不可达，本机 macOS arm64 的严格类型检查、源码构建和 21 份相关套件的 650 项通过。Electron 分别对 UPSERT、UPDATE FROM 和 DELETE RETURNING 验证候选插入、悬停和显式执行。三个用例在显式执行前保持文件及会话原状，执行后确认目标行和返回值。原 SQLite 补全 Electron 回归通过，两次应用均正常退出。通过记录位于忽略目录 `.cache/sqlite-dml-completion/verified/`。Windows 界面和安装包待验。
 
 2026-11-23 UPSERT 增量。WIN11-TEST 不可达，本机 macOS arm64 严格类型、源码构建和 21 份相关套件的 645 项通过。Electron 专项用独立合成库验证 `excluded` 补全只读一次实际目标列目录，悬停标注待插入行，显式执行前保持会话和数据库原状。执行后返回拼接值和生成列值，普通同名表保持原值。原 SQLite 补全 Electron 专项串行回归通过。日志及报告位于忽略目录 `.cache/sqlite-upsert-completion/accepted/`。Windows 界面和安装包待验。
 

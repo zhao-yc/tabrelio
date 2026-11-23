@@ -1,34 +1,45 @@
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteCompletionInputSchema } from '../../src/shared/sqliteCompletion';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
-test.skip(process.env.DBARK_SQLITE_UPSERT_COMPLETION_NATIVE !== '1' || process.argv.includes('--list'), '需要显式启用离线 SQLite UPSERT 编辑器专项');
+const scenarios = [
+  { verb: 'UPSERT', prefix: "INSERT INTO main.subject AS t(id,value) VALUES(1,'新🚢')\nON CONFLICT(id) DO UPDATE SET value=concat(t.value,excluded.",
+    typed: 'va', column: 'value', trail: ") WHERE excluded.value<>'skip' RETURNING subject.value,subject.virtual_value", incoming: true,
+    row: { id: 1, value: '旧新🚢', virtual_value: '旧新🚢!' }, output: '旧新🚢!' },
+  { verb: 'UPDATE FROM', prefix: 'UPDATE main.subject AS t SET (id,value)=(src.id,src.value)\nFROM inbox src WHERE t.id=src.id RETURNING subject.',
+    typed: 'vir', column: 'virtual_value', trail: '', incoming: false,
+    row: { id: 1, value: '新🚢', virtual_value: '新🚢!' }, output: '新🚢!' },
+  { verb: 'DELETE RETURNING', prefix: 'DELETE FROM main.subject AS t WHERE t.id=1 RETURNING subject.',
+    typed: 'vir', column: 'virtual_value', trail: '', incoming: false, row: undefined, output: '旧!' },
+] as const;
 
-test('SQLite UPSERT 待插入行补全、悬停和明确提交', async ({}, info) => {
+async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
   if (process.env.DBARK_INTEGRATION_ENABLED !== '0' || process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_DEV_URL ||
     !['darwin', 'win32'].includes(process.platform)) throw Error('只允许 Windows 或 macOS 的离线源码验收');
-  const filePath = join(realpathSync(dataDir), 'sqlite-upsert-completion.sqlite');
-  const connectionId = 'sqlite-upsert-completion';
-  const prefix = "INSERT INTO main.subject AS t(id,value) VALUES(1,'新🚢')\nON CONFLICT(id) DO UPDATE SET value=concat(t.value,excluded.";
-  const trail = ') WHERE excluded.value<>\'skip\' RETURNING subject.value,subject.virtual_value';
-  const draft = prefix + 'vasuffix' + trail, accepted = prefix + '"value"' + trail;
+  const filePath = join(realpathSync(dataDir), 'sqlite-dml-completion.sqlite');
+  const connectionId = 'sqlite-dml-completion';
+  const { prefix, trail, typed, column } = scenario;
+  const draft = prefix + typed + 'suffix' + trail, accepted = prefix + '"' + column + '"' + trail;
   const db = new DatabaseSync(filePath);
   try {
     db.exec(`CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT,virtual_value TEXT GENERATED ALWAYS AS (value||'!'));
-      CREATE TABLE excluded(other TEXT); INSERT INTO subject(id,value) VALUES(1,'旧'); INSERT INTO excluded VALUES('不变');`);
+      CREATE TABLE excluded(other TEXT); CREATE TABLE inbox(id INTEGER PRIMARY KEY,value TEXT);
+      INSERT INTO subject(id,value) VALUES(1,'旧'); INSERT INTO excluded VALUES('不变'); INSERT INTO inbox VALUES(1,'新🚢');`);
   } finally { db.close(); }
   const disk = () => {
     const db = new DatabaseSync(filePath, { readOnly: true });
-    try { return { row: db.prepare('SELECT id,value,virtual_value FROM subject').get(), other: db.prepare('SELECT * FROM excluded').get() }; }
+    try { return { row: db.prepare('SELECT id,value,virtual_value FROM subject').get(),
+      other: db.prepare('SELECT * FROM excluded').get(), inbox: db.prepare('SELECT * FROM inbox').get() }; }
     finally { db.close(); }
   };
   interface Fact { command: string; input: Record<string, unknown>; reply?: unknown; }
-  const snapshot = () => desktop.evaluate(() => (globalThis as typeof globalThis & { __upsertCompletionFacts?: Fact[] }).__upsertCompletionFacts ?? []);
+  const snapshot = () => desktop.evaluate(() => (globalThis as typeof globalThis & { __dmlCompletionFacts?: Fact[] }).__dmlCompletionFacts ?? []);
   try {
     await desktop.evaluate(({ BrowserWindow, dialog, ipcMain }, setup) => {
       const window = BrowserWindow.getAllWindows()[0], originalChooser = dialog.showOpenDialog;
@@ -37,7 +48,7 @@ test('SQLite UPSERT 待插入行补全、悬停和明确提交', async ({}, info
       if (!window || !entry) throw Error('原 SQLite 入口不可用');
       const facts: Fact[] = [];
       let sessionId: string | undefined;
-      (globalThis as typeof globalThis & { __upsertCompletionFacts?: Fact[] }).__upsertCompletionFacts = facts;
+      (globalThis as typeof globalThis & { __dmlCompletionFacts?: Fact[] }).__dmlCompletionFacts = facts;
       dialog.showOpenDialog = (async (...args: unknown[]) => {
         dialog.showOpenDialog = originalChooser;
         if (args[0] !== window || !(args.at(-1) as Electron.OpenDialogOptions).filters?.[0]?.extensions.includes('sqlite')) throw Error('本例只授权合成库');
@@ -67,11 +78,11 @@ test('SQLite UPSERT 待插入行补全、悬停和明确提交', async ({}, info
     await page.evaluate(async ({ id, sql }) => {
       const file = await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
       if (!file) throw Error('合成库授权失败');
-      const profile = await window.dbark.invoke('connections.save', { id, name: 'UPSERT 编辑器验收', dialect: 'sqlite', group: '', color: '#123456',
+      const profile = await window.dbark.invoke('connections.save', { id, name: 'SQLite 写入编辑器验收', dialect: 'sqlite', group: '', color: '#123456',
         sqlite: { fileToken: file.token, readOnly: false, busyTimeoutMs: 1000 } });
       const settings = await window.dbark.invoke('settings.get', {});
-      await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'sqlite-upsert', tabs: [
-        { id: 'sqlite-upsert', title: 'UPSERT 验收', kind: 'query', connectionId: profile.id, database: 'main', sql },
+      await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'sqlite-dml', tabs: [
+        { id: 'sqlite-dml', title: 'SQLite 写入验收', kind: 'query', connectionId: profile.id, database: 'main', sql },
       ] });
     }, { id: connectionId, sql: draft });
     await page.reload();
@@ -87,46 +98,55 @@ test('SQLite UPSERT 待插入行补全、悬停和明确提交', async ({}, info
     const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
     await textbox.focus();
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
-    for (const _point of prefix + 'va') await page.keyboard.press('ArrowRight');
+    for (const _point of prefix + typed) await page.keyboard.press('ArrowRight');
     const original = await inspect();
     expect(original.sql).toBe(draft);
-    expect(original.offset).toBe((prefix + 'va').replaceAll('\n', original.eol).length);
+    expect(original.offset).toBe((prefix + typed).replaceAll('\n', original.eol).length);
     const before = disk(), previous = (await snapshot()).length;
     await page.keyboard.press('Control+Space');
     const widget = query.locator('.suggest-widget:visible');
-    await expect(widget.locator('.monaco-list-row .label-name').filter({ hasText: /^value$/ })).toHaveCount(1);
-    await expect(widget.locator('.monaco-list-row.focused .label-name')).toHaveText('value');
+    await expect(widget.locator('.monaco-list-row .label-name').filter({ hasText: new RegExp('^' + column + '$') })).toHaveCount(1);
+    await expect(widget.locator('.monaco-list-row.focused .label-name')).toHaveText(column);
     await page.keyboard.press('Enter');
     await expect.poll(async () => (await inspect()).sql).toBe(accepted);
     const completion = (await snapshot()).slice(previous).filter(fact => fact.command === 'sqlite.completion');
     const requests = completion.map(fact => sqliteCompletionInputSchema.parse(fact.input));
     expect(requests.filter(input => input.kind === 'columns')).toEqual([
-      expect.objectContaining({ table: 'subject', schema: 'main', prefix: 'va' }),
+      expect.objectContaining({ table: 'subject', schema: 'main', prefix: typed }),
     ]);
     expect(completion.every(fact => fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true)).toBe(true);
     await page.keyboard.press('ArrowLeft');
     await page.keyboard.press(modifier + '+K');
     await page.keyboard.press(modifier + '+I');
     const hover = query.locator('.monaco-hover:visible');
-    await expect(hover).toContainText('UPSERT 待插入行');
+    if (scenario.incoming) await expect(hover).toContainText('UPSERT 待插入行');
     await expect(hover).toContainText('"main"."subject"');
     await page.keyboard.press('Escape');
     expect((await snapshot()).filter(fact => fact.command === 'query.execute' || fact.command === 'sessions.open')).toEqual([]);
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(disk()).toEqual(before);
     await (await navigationMenuItem(query, { name: zh.query.text011, exact: true })).click();
-    await expect.poll(disk).toEqual({ row: { id: 1, value: '旧新🚢', virtual_value: '旧新🚢!' }, other: before.other });
-    await expect(query.locator('.result-body').getByRole('grid')).toContainText('旧新🚢!');
+    await expect.poll(disk).toEqual({ ...before, row: scenario.row });
+    await expect(query.locator('.result-body').getByRole('grid')).toContainText(scenario.output);
     const facts = await snapshot();
     const executions = facts.filter(fact => fact.command === 'query.execute');
     expect(executions).toEqual([expect.objectContaining({ reply: expect.objectContaining({ ok: true }) })]);
     expect(String(executions[0].input.sql).replaceAll('\r\n', '\n')).toBe(accepted);
     expect(facts.filter(fact => fact.command === 'sessions.open')).toHaveLength(1);
     expect(pageErrors).toEqual([]);
-    await info.attach('SQLite UPSERT 编辑器真实验收', { body: JSON.stringify({ platform: process.platform, before, after: disk(), facts }), contentType: 'application/json' });
+    await info.attach('SQLite 写入编辑器真实验收', { body: JSON.stringify({ verb: scenario.verb, platform: process.platform, before, after: disk(), facts }), contentType: 'application/json' });
     await confirmOwnedDesktopExit(info);
   } catch (reason) {
     retainOwnedDesktopResources(info);
     throw reason;
   }
-});
+}
+
+for (const scenario of scenarios) {
+  test.describe(scenario.verb, () => {
+    const enabled = process.env.DBARK_SQLITE_DML_COMPLETION_NATIVE === '1' ||
+      scenario.verb === 'UPSERT' && process.env.DBARK_SQLITE_UPSERT_COMPLETION_NATIVE === '1';
+    test.skip(!enabled || process.argv.includes('--list'), '需要显式启用离线 SQLite 写入编辑器专项');
+    test(`SQLite ${scenario.verb} 补全、悬停和明确提交`, ({}, info) => exercise(scenario, info));
+  });
+}
