@@ -129,7 +129,7 @@ export function sqliteFunctionDetails(entry: Extract<SqliteCompletionEntry, { ki
   const arities = [...new Set(signatures.map(({ arity }) => Math.max(-1, arity)))].sort((a, b) => a - b);
   const details = [kind, text.functionArity + '：' + arities.map(arity => arity < 0 ? text.variadicFunction : String(arity)).join(' / ')];
   if (deterministicOnly && conditionalDateTime.has(entry.name)) details.push(text.indexDateTime);
-  return { windowOnly, needsArguments: arities.some(arity => arity !== 0), details };
+  return { windowOnly, signatures, needsArguments: arities.some(arity => arity !== 0), details };
 }
 
 /** 建议只引用准确目录名；同名字段保留不同别名的限定插入，CTE声明不伪装成FROM绑定。 */

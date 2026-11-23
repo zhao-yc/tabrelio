@@ -388,6 +388,27 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
       await expect(grid.getByRole('row').nth(1).getByText('a', { exact: true })).toBeVisible();
       await expect(grid.getByRole('row').nth(2).getByText('Z', { exact: true })).toBeVisible();
     }
+    if (scenario.verb === '函数') {
+      const beforeHint = await snapshot(), history = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+      const originalSession = beforeHint.find(fact => fact.command === 'query.execute')?.input.sessionId;
+      expect(typeof originalSession).toBe('string');
+      await textbox.focus();
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowLeft' : 'Home');
+      const secondArgument = prefix.length + column.length + 1 + scenario.args.indexOf(',') + 2;
+      for (let index = 0; index < secondArgument; index++) await page.keyboard.press('ArrowRight');
+      const original = await inspect();
+      expect(original).toMatchObject({ sql: accepted, offset: secondArgument });
+      await page.keyboard.press(modifier + '+Shift+Space');
+      const hint = query.locator('.parameter-hints-widget:visible');
+      await expect(hint.locator('.signature .code')).toHaveText('JSON_EXTRACT(JSON, 路径, …)');
+      await expect(hint.locator('.signature .parameter.active')).toHaveText('路径');
+      await page.keyboard.press('Escape');
+      expect(await inspect()).toEqual(original);
+      expect((await snapshot()).slice(beforeHint.length).map(({ command, input }) => [command, input.kind, input.prefix, input.sessionId]))
+        .toEqual([['sqlite.completion', 'functions', 'json_extract', originalSession], ['sqlite.completion', 'stamp', '', originalSession]]);
+      expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(history);
+      expect(disk()).toEqual(before);
+    }
     const facts = await snapshot();
     const executions = facts.filter(fact => fact.command === 'query.execute');
     expect(executions).toEqual([expect.objectContaining({ reply: expect.objectContaining({ ok: true }) })]);

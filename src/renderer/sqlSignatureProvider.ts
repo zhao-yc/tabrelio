@@ -1,12 +1,16 @@
-import type { editor, languages } from 'monaco-editor';
+import type { editor, languages, CancellationToken } from 'monaco-editor';
 import type { CompletionSessionState } from '../shared/sqlCompletion';
 import { completionLimits } from '../shared/sqlCompletion';
 import { resolveCompletionContext, sameCompletionState, sameCompletionScope, type SqlCompletionScope } from './completionContext';
-import { analyzeSqlSignature } from './sqlSignatureAnalysis';
-import { sqlSignaturesZh as text } from './locales/sqlSignatures.zh-CN';
+import { locateSqlSignatureCall, localSqlSignature, type SqlSignatureCall } from './sqlSignatureAnalysis';
+import { sqlFunctionSignatures, sqlSignaturesZh as text } from './locales/sqlSignatures.zh-CN';
 
-interface Ports { model(): editor.ITextModel | null; current(): boolean; dialect: 'mysql' | 'mariadb' | 'sqlite'; scope?: SqlCompletionScope; state(sessionId: string): Promise<CompletionSessionState>; }
-/** 参数提示仅使用本地资料；已存在MySQL会话时前后只读模式缓存，不建连、不读目录、不执行SQL。 */
+interface Ports {
+  model(): editor.ITextModel | null; current(): boolean; dialect: 'mysql' | 'mariadb' | 'sqlite'; scope?: SqlCompletionScope;
+  state(sessionId: string): Promise<CompletionSessionState>;
+  sqliteNative?(model: editor.ITextModel, call: SqlSignatureCall, token: CancellationToken): Promise<languages.SignatureHelp | null>;
+}
+/** 优先使用离线文案。SQLite 已打开的会话可补充其余内置函数签名，沿用补全目录。 */
 export function createSqlSignatureProvider(ports: Ports) {
   let generation = 0, disposed = false, checking = false;
   const dialect = ports.dialect, scope = ports.scope ? { ...ports.scope } : undefined; let scopeAlive = true;
@@ -31,7 +35,13 @@ export function createSqlSignatureProvider(ports: Ports) {
         const sessionId = dialect !== 'sqlite' ? scope?.sessionId : undefined;
         const raw = sessionId ? await ports.state(sessionId) : undefined, state = raw ? { ...raw } : undefined; if (!current() || state?.dialect === 'sqlite') return null;
         const context = resolveCompletionContext(scope?.database, state, scope?.databaseUnknown); if (!context.available) return null;
-        const result = analyzeSqlSignature(source, offset, dialect, context.mode); if (!current() || !result) return null;
+        const call = locateSqlSignatureCall(source, offset, dialect, context.mode); if (!current() || !call) return null;
+        const result = localSqlSignature(call, dialect);
+        if (!result) {
+          if (dialect !== 'sqlite' || !scope?.sessionId || !ports.sqliteNative || sqlFunctionSignatures(call.name, dialect)) return null;
+          const value = await ports.sqliteNative(model, call, token);
+          return current() && value ? { value, dispose: stop } : null;
+        }
         if (sessionId) { const latest = await ports.state(sessionId); if (!current() || !sameCompletionState(state!, latest)) return null; }
         const signatures = result.signatures.map(value => {
           let label = result.name + '(' + (value.distinct ? 'DISTINCT ' : '');

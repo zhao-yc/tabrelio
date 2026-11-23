@@ -318,9 +318,9 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const registration = monaco.languages.registerRenameProvider(languageSelector, rename.provider);
     return () => { registration.dispose(); void rename.dispose().catch(() => {}); };
   }, [dialect, readOnly, contentReady, languageSelector, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
-  /** 内置函数参数提示只分析当前模型；模式缓存之外没有数据库入口，与补全／声明线程独立。 */
+  /** MySQL/MariaDB 及没有补全来源的 SQLite 编辑器沿用本地内置函数文案。 */
   useEffect(() => {
-    if (readOnly || !contentReady || !dialect || dialect !== 'sqlite' && !completion) return;
+    if (readOnly || !contentReady || !dialect || (dialect === 'sqlite' ? !!completion : !completion)) return;
     const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector(appModalSelector) && (!completion || sameCompletionScope(completionRef.current, completion));
     const signatures = createSqlSignatureProvider({ model: () => editorRef.current?.getModel() ?? null, current, dialect, scope: completion, state: sessionId => invoke('query.completionState', { sessionId }) });
     const registration = monaco.languages.registerSignatureHelpProvider(languageSelector, signatures.provider);
@@ -497,12 +497,16 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     // SQLite使用自己的词法和目录，不能将其正文、临时对象或标识符预算交给MySQL分析器。
     if (dialect === 'sqlite') {
       const worker = new SqliteCompletionWorkerClient(() => new SqliteCompletionWorker());
+      const model = () => editorRef.current?.getModel() ?? null;
+      const current = () => aliveRef.current && !propsRef.current.readOnly && !suggestionsBlocked() && sameCompletionScope(completionRef.current, completion) && contentRef.current?.ready === true && !document.querySelector(appModalSelector);
+      const state = (sessionId: string) => invoke('query.completionState', { sessionId });
       const provider = createSqliteCompletionProvider({ connectionId: completion.connectionId, sessionId: completion.sessionId,
-        model: () => editorRef.current?.getModel() ?? null,
-        current: () => aliveRef.current && !propsRef.current.readOnly && !suggestionsBlocked() && sameCompletionScope(completionRef.current, completion) && contentRef.current?.ready === true && !document.querySelector(appModalSelector),
+        model, current,
         worker, request: input => invoke('sqlite.completion', input), cancel: taskId => invoke('query.cancel', { taskId }),
-        state: sessionId => invoke('query.completionState', { sessionId }), id: () => sqliteCompletionTaskPrefix + uid(), status: status => statusRef.current?.(status),
+        state, id: () => sqliteCompletionTaskPrefix + uid(), status: status => statusRef.current?.(status),
       });
+      const signatures = createSqlSignatureProvider({ model, current: () => current() && editorRef.current?.hasTextFocus() === true,
+        dialect, scope: completion, state, sqliteNative: provider.provideSignatureHelp });
       const registration = monaco.languages.registerCompletionItemProvider(sqliteEditorLanguage, { triggerCharacters: provider.triggerCharacters,
         provideCompletionItems: async (model, position, context, token) => {
           const result = await provider.provideCompletionItems(model, position, context, token);
@@ -513,7 +517,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         },
       });
       const hoverRegistration = monaco.languages.registerHoverProvider(sqliteEditorLanguage, { provideHover: (model, position, token) => provider.provideHover(model, position, token) });
-      return () => { hoverRegistration.dispose(); registration.dispose(); void provider.dispose().catch(() => {}); };
+      const signatureRegistration = monaco.languages.registerSignatureHelpProvider(sqliteEditorLanguage, signatures.provider);
+      return () => { signatureRegistration.dispose(); signatures.dispose(); hoverRegistration.dispose(); registration.dispose(); void provider.dispose().catch(() => {}); };
     }
     const worker=new CompletionWorkerClient(()=>new CompletionWorker()),directory=new CompletionDirectory(completion.connectionId,completion.connectionVersion,{request:input=>invoke('metadata.completion',input),cancel:taskId=>invoke('query.cancel',{taskId}),id:uid});
     let active:AbortController|undefined,disposed=false;

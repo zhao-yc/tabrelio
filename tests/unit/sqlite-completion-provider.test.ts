@@ -3,6 +3,7 @@ import type { CompletionSessionState } from '../../src/shared/sqlCompletion';
 import type { SqliteCompletionInput, SqliteCompletionOutput } from '../../src/shared/sqliteCompletion';
 import { analyzeSqliteCompletion, validateSqliteCompletionAnalysis, type SqliteCompletionAnalysis } from '../../src/shared/sqliteCompletionAnalysis';
 import { createSqliteCompletionProvider, type SqliteCompletionModel } from '../../src/renderer/sqliteCompletionProvider';
+import { locateSqlSignatureCall } from '../../src/renderer/sqlSignatureAnalysis';
 
 const analysis = (): SqliteCompletionAnalysis => ({ status: 'ready', target: { start: 9, end: 9, prefix: '', quoted: false }, syntax: ['column'], qualifiers: ['s'], relations: [{ kind: 'physical', name: 'subject', alias: 's' }] });
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -26,6 +27,74 @@ function hoverFixture(session = false) {
   f.worker.analyze.mockImplementation(async (source, offset, _signal, intent) => analyzeSqliteCompletion(source, offset, intent));
   return { ...f, hover(t = f.token()) { return { token: t, promise: f.provider.provideHover(f.model, { lineNumber: 1, column: 10 }, t.value) }; } };
 }
+
+/** 工作者按真实 SQLite 作用域解析，模拟目录只返回指定函数的固定重载。 */
+function signatureFixture(marked: string, arities: number[], type: 'scalar' | 'aggregate' | 'window' = 'scalar', session = true) {
+  const f = fixture(session), offset = marked.indexOf('§'), source = marked.replace('§', '');
+  const call = locateSqlSignatureCall(source, offset, 'sqlite');
+  if (!call) throw Error('缺少本例实参位置');
+  vi.mocked(f.model.getValue).mockReturnValue(source);
+  vi.mocked(f.model.getValueLength).mockReturnValue(source.length);
+  vi.spyOn(f.model, 'getOffsetAt').mockImplementation(position => position.column - 1);
+  f.worker.analyze.mockImplementation(async (sql, offset, _signal, intent) => validateSqliteCompletionAnalysis(analyzeSqliteCompletion(sql, offset, intent), sql, offset, intent));
+  const reply = (input: SqliteCompletionInput) => ({ ...f.reply(input), entries: input.kind === 'functions' ? [
+    { kind: 'function', name: call.name.toLowerCase(), signatures: arities.map(arity => ({ arity, type })) },
+  ] : [] });
+  f.request.mockImplementation(async input => reply(input));
+  return { ...f, reply, signature: () => f.provider.provideSignatureHelp(f.model, call, f.token().value) };
+}
+
+it.each([
+  ["SELECT JSON_VALID('{\"x\":1}', §1)", [1, 2], 'scalar', 'JSON_VALID(JSON, 校验标志)', 1],
+  ["SELECT [json_valid]('{\"x\":1}', §1)", [1, 2], 'scalar', 'JSON_VALID(JSON, 校验标志)', 1],
+  ["SELECT JSON_EXTRACT('[0,1]', §'$[1]')", [-1], 'scalar', 'JSON_EXTRACT(JSON, 路径, …)', 1],
+  ['SELECT CONCAT_WS(1, 2, §3)', [-4], 'scalar', 'CONCAT_WS(参数 1, 参数 2, …)', 1],
+  ['SELECT ROW_NUMBER(§) OVER ()', [0], 'window', 'ROW_NUMBER()', 0],
+  ['WITH c AS (SELECT 1) VALUES (QUOTE(§1))', [1], 'scalar', 'QUOTE(参数 1)', 0],
+] as const)('实参提示按会话目录展示重载及当前位置 %s', async (source, arities, type, label, parameter) => {
+  const f = signatureFixture(source, [...arities], type);
+  try {
+    const result = await f.signature();
+    expect(result).toMatchObject({ activeSignature: 0, activeParameter: parameter, signatures: [{ label }] });
+    expect(f.request.mock.calls.map(([input]) => input.kind)).toEqual(['functions', 'stamp']);
+    expect(f.request.mock.calls[0][0]).toMatchObject({ kind: 'functions', sessionId: 'sqlite:s', connectionId: 'c' });
+    expect(JSON.stringify(f.request.mock.calls)).not.toContain('SELECT');
+    expect(f.state.mock.calls).toEqual([['sqlite:s'], ['sqlite:s']]);
+    expect(f.status).not.toHaveBeenCalled();
+  } finally { await f.provider.dispose(); }
+});
+
+it('悬停不会抢占签名读取，显式补全则等待取消的签名目录终态', async () => {
+  const f = signatureFixture('SELECT json_valid(§1)', [1, 2]);
+  const pending = deferred<unknown>();
+  f.request.mockReturnValueOnce(pending.promise);
+  const signature = f.signature();
+  await flush();
+  const original = f.request.mock.calls[0][0];
+  expect(await f.provider.provideHover(f.model, { lineNumber: 1, column: 10 }, f.token().value)).toBeNull();
+  expect(f.cancel).not.toHaveBeenCalled();
+  const completion = f.invoke();
+  await flush();
+  expect(f.cancel).toHaveBeenCalledExactlyOnceWith(original.taskId);
+  expect(f.worker.analyze).toHaveBeenCalledOnce();
+  pending.resolve(f.reply(original));
+  expect(await signature).toBeNull();
+  await completion.promise;
+  expect(f.worker.analyze).toHaveBeenCalledTimes(2);
+  await f.provider.dispose();
+});
+
+it.each(['no-session', 'stale', 'non-expression', 'wrong-name', 'excess-argument'] as const)('实参提示拒绝无效来源或参数 %s', async condition => {
+  const source = condition === 'non-expression' ? 'SELECT * FROM json_valid(§)' : condition === 'excess-argument' ? 'SELECT json_valid(1, 2, §3)' : 'SELECT json_valid(§1)';
+  const f = signatureFixture(source, [1, 2], 'scalar', condition !== 'no-session');
+  if (condition === 'stale') f.state.mockResolvedValueOnce({ ...f.stateValue }).mockResolvedValueOnce({ ...f.stateValue, objectsRevision: 2 });
+  if (condition === 'wrong-name') f.request.mockImplementation(async input => ({ ...f.reply(input), entries: input.kind === 'functions' ? [{ kind: 'function', name: 'json_validx', signatures: [{ arity: 1, type: 'scalar' }] }] : [] }));
+  try {
+    expect(await f.signature()).toBeNull();
+    if (condition === 'no-session' || condition === 'non-expression') expect(f.request).not.toHaveBeenCalled();
+    if (condition === 'no-session') { expect(f.worker.analyze).not.toHaveBeenCalled(); expect(f.state).not.toHaveBeenCalled(); }
+  } finally { await f.provider.dispose(); }
+});
 it.each([false, true])('悬停%s会话精确字段及纯文本range，只有字段/stamp请求、不传SQL', async session => {
   const f = hoverFixture(session), run = f.hover(), result = await run.promise;
   expect(result).toMatchObject({ range: { startLineNumber: 1, startColumn: 10, endLineNumber: 1, endColumn: 18 }, contents: [{ isTrusted: false, supportHtml: false }] });

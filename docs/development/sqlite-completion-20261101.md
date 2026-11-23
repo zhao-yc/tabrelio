@@ -36,6 +36,8 @@ SQLite 建表和加列时，`REFERENCES` 提供子表所在库的普通父表及
 
 输入内置函数名的一部分即可在常见表达式位置补全。候选读取实际 SQLite 运行时的 `function_list`，显示固定或可变参数个数。接受候选自动插入括号并进入参数位置，已有括号时只替换函数名。`HAVING` 可建议聚合，必须带 `OVER` 的内置窗口函数仅在普通 `SELECT` 输出和排序表达式中提供模板。悬停已写出的调用可查看目录签名。`VALUES` 中的函数补全独立于写入目标的列目录。 [SQLite 函数目录](https://www.sqlite.org/pragma.html#pragma_function_list) · [SQLite 窗口函数](https://www.sqlite.org/windowfunctions.html)
 
+输入左括号、实参分隔逗号，或使用参数提示快捷键，可查看当前函数签名和所在参数。常用离线签名可直接查看文案。已打开 SQLite 查询会话时，其余可用内置函数可从原会话的 `function_list` 获取固定重载、变参和零参数形式。提示沿用表达式作用域，编辑器正文与参数值保留在编辑器内。 [SQLite 函数目录](https://www.sqlite.org/pragma.html#pragma_function_list)
+
 `EXPLAIN` 和 `EXPLAIN QUERY PLAN` 内的查询或写入语句沿用原补全作用域。`INDEXED BY` 只补全实际表的索引名，悬停显示所属命名空间、表、索引来源及唯一或部分属性。无显式命名空间时使用原会话的临时对象遮蔽规则，唯一约束等生成的索引也可选择。读取只传表名、命名空间和前缀，不准备编辑器内的 SQL。选中部分索引后由 SQLite 检查查询条件是否适用。 [SQLite INDEXED BY](https://www.sqlite.org/lang_indexedby.html) · [SQLite `index_list`](https://www.sqlite.org/pragma.html#pragma_index_list)
 
 SQLite UPSERT 可补全 `ON CONFLICT` 的目标列表和索引谓词、`DO UPDATE SET` 的两侧及其 `WHERE`。赋值左侧支持列组并排除生成列、隐藏列。右侧和过滤条件可分别引用目标旧行和 `excluded` 待插入行，两者共享实际目标表的列目录。候选和悬停明确标注待插入行。实际目标名或别名为 `excluded` 时，沿用 SQLite 的优先级。`INSERT … SELECT` 的输入来源在进入冲突分支后退出作用域，`INSERT … RETURNING` 的限定名使用写入的实际表名。唯一索引匹配以 SQLite 执行结果为准。 [SQLite UPSERT](https://www.sqlite.org/lang_upsert.html)
@@ -77,6 +79,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-24 函数实参提示增量。WIN11-TEST 不可达，未派发任务。本机 macOS arm64 通过原生运行时检查、严格类型检查、源码构建、49 份套件的 1,309 项单测及 29 项 Electron 验收。打开原查询会话后，`json_extract` 在第二个参数处显示“路径”，只请求同一会话的函数目录和目录版本，原编辑器正文、查询历史及合成库保持一致。三方言离线提示仍通过零数据库请求验收。日志位于 `.cache/sqlite-native-signature/final/`。Windows 和安装包待验。
 
 2026-11-24 SQLite VALUES 输出增量。WIN11-TEST 不可达，本机 macOS arm64 使用 Node.js 24.17.0，通过原生运行时、严格类型检查、源码构建和 47 份套件的 1,245 项测试。原生 SQLite 对照覆盖递归种子、显式列名、星号传递、`USING`、相关列和匿名来源的同名歧义。Electron 编辑器 27 项通过，两条新增用例分别补入 CTE 和匿名 VALUES 的 `column2`，以本地解析提供悬停，显式执行返回预期值。原会话完整回归 1 项通过，耗时 113.7 秒，两次应用正常退出。报告位于 `.cache/sqlite-values-completion/final/`。Windows 界面及安装包待验。
 
