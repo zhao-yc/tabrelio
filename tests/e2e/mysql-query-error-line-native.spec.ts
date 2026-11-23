@@ -84,6 +84,10 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     await execute(failed + '\nSELECT 9 AS tail;'); await locate(line, firstLine);
     const executionMarkers = () => page.evaluate(observeQueryMarkerText, text.markerSource);
     await expect.poll(executionMarkers).toEqual([firstLine]);
+    await page.keyboard.press('ArrowLeft');
+    expect((await state()).selections?.[0]?.text).toBe('');
+    await page.keyboard.press('Alt+F8');
+    await expect.poll(async () => (await state()).selections?.[0]?.text).toBe(firstLine);
     const from = failed.indexOf("SELECT '同句");
     for (const target of [currentStatementZh.action, currentStatementZh.selectionOnly]) {
       const before = (await history()).length;
@@ -106,7 +110,11 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     const navigator = report.getByRole('group', {name: continuing.navigation, exact: true});
     await locate(navigator.getByRole('button', {name: continuing.next, exact: true}), firstLine);
     await expect(navigator).toContainText(continuing.located(2, 1, 2));
-    await locate(navigator.getByRole('button', {name: continuing.previous, exact: true}), secondLine);
+    const beforeKey = await history();
+    await page.keyboard.press('Alt+Shift+F8');
+    await expect.poll(async () => (await state()).selections?.[0]?.text).toBe(secondLine);
+    await expect(navigator).toContainText(continuing.located(3, 2, 2));
+    expect(await history()).toEqual(beforeKey);
     await page.screenshot({path: info.outputPath('原查询报错行.png'), animations: 'disabled'});
     await (await toggle(continuing.option)).uncheck();
 

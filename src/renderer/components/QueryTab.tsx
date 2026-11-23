@@ -112,7 +112,7 @@ import { QueryAnalyzeIntent, type QueryAnalyzeScope } from '../queryAnalyzeInten
 import { queryAnalyzeCapability } from '../../shared/queryAnalyze';
 import { queryAnalyzeZh } from '../locales/queryAnalyze.zh-CN';
 import { QueryPartialOutcomeNotice } from './QueryPartialOutcomeNotice';
-import { QueryContinueOnErrorNotice, confirmedQueryContinueRange } from './QueryContinueOnErrorNotice';
+import { QueryContinueOnErrorNotice, confirmedQueryContinueRange, useQueryFailureNavigation } from './QueryContinueOnErrorNotice';
 import { MysqlQueryStatus } from './MysqlQueryStatus';
 import type { MysqlQueryStatusReport } from '../../shared/mysqlQueryStatus';
 import { mysqlQueryStatusZh } from '../locales/mysqlQueryStatus.zh-CN';
@@ -2765,6 +2765,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const canExecuteSelection = hasSingleSelection && !resultsOnly && !busy && !!connection && !closeRequest && !fileSource.busy;
   const canCompactSql = !!searchEditor && !resultsOnly && !busy && !closeRequest && !fileSource.busy;
   const canNavigateFromCursor = !!searchEditor && !!connection && !resultsOnly && !busy && !closeRequest && !fileSource.busy && !navigationView?.busy;
+  const belongsToExecution = (failure: QueryFailure) => outcome?.scriptReport ? scriptFailureRanges.current.has(failure) : outcome?.failure === failure;
+  const failureNavigation = useQueryFailureNavigation(outcome, {
+    locateAvailable: failure => belongsToExecution(failure) && !!failureLocator?.canLocateRange(failure.sourceRange, false),
+    onLocate: locateScriptFailure,
+    positionAvailable: failure => belongsToExecution(failure) && !!failureLocator?.canLocateError(failure, false),
+    onLocatePosition: failure => locateScriptFailure(failure, true),
+  });
   useUiCommandScope(`tab:${tab.id}`, {
     execute: { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void execute(); } },
     'execute-selection': { enabled: canExecuteSelection, run: () => { void execute('selection-only'); } },
@@ -2788,6 +2795,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'open-current-statement-query': { enabled: canNavigateFromCursor && canDuplicateQuery, run: () => openStatementNavigation(editor.current, 'duplicate') },
     'previous-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'previous') },
     'next-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'next') },
+    'previous-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(-1) },
+    'next-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(1) },
     'syntax-check': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !syntaxView?.busy, run: () => openSyntaxCheck() },
     'object-definition': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !objectDefinition, run: () => openObjectStructure() },
     replace: { enabled: (!!searchEditor || canReplaceResult) && !closeRequest && !fileSource.busy,
@@ -2995,10 +3004,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 
     </div>}/>{pins.length > 0 && <div className="pinned-results" role="group" aria-label={zh.query.pinSection}><span>{zh.query.pinSection}</span><button className={`current-results ${!pin ? 'selected' : ''}`} aria-pressed={!pin} onClick={() => selectPinnedResult()}>{zh.query.currentResults}</button>{pins.map(item => <div key={item.id} className={`pinned-result ${pin?.id === item.id ? 'selected' : ''}`}><button aria-pressed={pin?.id === item.id} title={pinnedResultTooltip(item)} onClick={() => selectPinnedResult(item)}><Pin size={11}/>{item.label}</button><button aria-label={formatText(zh.query.releasePin, item.label)} onClick={() => releasePin(item.id)}><X size={11}/></button></div>)}</div>}<ErrorBox message={error}/>{!queryRunning && (outcome?.mysqlQueryStatus || interruptedStatus?.taskId === task.current && interruptedStatus.report) &&
         <MysqlQueryStatus key={task.current} report={outcome?.mysqlQueryStatus ?? interruptedStatus!.report}/>}
-      {outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length} locateAvailable={failure => scriptFailureRanges.current.has(failure) && !!failureLocator?.available()} onLocate={locateScriptFailure}
-        positionAvailable={failure => scriptFailureRanges.current.has(failure) && !!failureLocator?.canLocateError(failure)}
-        positionLabel={sqlite ? undefined : sourceLocationText.locateLineFor}
-        onLocatePosition={failure => locateScriptFailure(failure, true)}/>}
+      {outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length}
+        navigation={failureNavigation} positionLabel={sqlite ? undefined : sourceLocationText.locateLineFor}/>}
       {outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length}
         locateAvailable={!!failureLocator?.available()} onLocate={() => { failureLocator?.locate(); }}
         positionAvailable={!!outcome.failure.errorRange && !!failureLocator?.canLocateError(outcome.failure)}

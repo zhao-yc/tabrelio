@@ -74,14 +74,17 @@ export function useUiCommandRuntime(): void {
       if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229 || !event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'g') return;
       if (openFocusedGridRowJump()) { event.preventDefault(); event.stopPropagation(); }
     };
-    /** 进入渲染层的组合键沿用当前窗口命令，先于编辑器处理 Tab 或括号。 */
-    const tabShortcut = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229 || event.altKey ||
-          !event.metaKey && !event.ctrlKey) return;
+    /** 渲染层收到组合键时也走同一命令代次，优先于编辑器自带的标签和错误跳转。 */
+    const workspaceShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229) return;
       const mac = globalThis.navigator?.platform?.startsWith('Mac');
       let id: UiCommandId;
       const primary = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
-      if (primary && event.shiftKey && event.key === 'F6') {
+      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === 'F8') {
+        id = event.shiftKey ? 'previous-query-error' : 'next-query-error';
+      } else if (event.altKey || !event.metaKey && !event.ctrlKey) {
+        return;
+      } else if (primary && event.shiftKey && event.key === 'F6') {
         id = 'last-used-tab';
       } else if (mac && event.metaKey && event.shiftKey && !event.ctrlKey) {
         if (event.key === '}' || event.key === ']') id = 'next-tab';
@@ -97,7 +100,7 @@ export function useUiCommandRuntime(): void {
       void uiCommands.execute({ id, revision: snapshot.revision }).catch(reason => useWorkspace.getState().notify(errorMessage(reason), true));
     };
     document.addEventListener('keydown', gridShortcut, true);
-    document.addEventListener('keydown', tabShortcut, true);
+    document.addEventListener('keydown', workspaceShortcut, true);
     let previous = useWorkspace.getState();
     const offStore = useWorkspace.subscribe(next => {
       const changed = next.settings.activeTabId !== previous.settings.activeTabId || next.connections !== previous.connections
@@ -105,6 +108,6 @@ export function useUiCommandRuntime(): void {
         || next.recentTabRefs[1]?.token !== previous.recentTabRefs[1]?.token;
       previous = next; if (changed) uiCommands.invalidate();
     });
-    return () => { alive = false; document.removeEventListener('keydown', gridShortcut, true); document.removeEventListener('keydown', tabShortcut, true); observer.disconnect(); off(); offNative?.(); offInternal?.(); offStore(); uiCommands.setBlocked(true); };
+    return () => { alive = false; document.removeEventListener('keydown', gridShortcut, true); document.removeEventListener('keydown', workspaceShortcut, true); observer.disconnect(); off(); offNative?.(); offInternal?.(); offStore(); uiCommands.setBlocked(true); };
   }, []);
 }

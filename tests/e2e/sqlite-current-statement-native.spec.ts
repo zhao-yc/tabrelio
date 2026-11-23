@@ -365,8 +365,9 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     await step(() => page.getByRole('menuitem', {name: queryLayoutZh.results, exact: true}).click());
     await step(() => expect(query().locator('.sql-editor-wrap')).toBeHidden());
     const navigator = query().getByRole('group', {name: continueText.navigation, exact: true});
-    await step(() => navigator.getByRole('button', {name: continueText.previous, exact: true}).click());
+    await step(() => page.keyboard.press('Alt+Shift+F8'));
     const secondError = continuedSource.indexOf('BAD SELECT');
+    await step(() => expect(query().locator('.sql-editor-wrap')).toBeVisible());
     expect((await model()).selections).toEqual([{start: secondError, end: secondError + 1}]);
     await step(() => expect(navigator).toContainText(continueText.located(3, 2, 2)));
     await step(() => navigator.getByRole('button', {name: continueText.next, exact: true}).click());

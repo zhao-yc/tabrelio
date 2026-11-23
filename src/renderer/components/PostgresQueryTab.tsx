@@ -115,7 +115,7 @@ import { useQueryFailureMarkers } from '../useQueryFailureMarkers';
 import { QueryPartialOutcomeNotice } from './QueryPartialOutcomeNotice';
 import { PostgresNoticesPanel } from './PostgresNoticesPanel';
 import type { PostgresNoticeEntry } from '../../shared/postgresNotices';
-import { QueryContinueOnErrorNotice, confirmedQueryContinueRange } from './QueryContinueOnErrorNotice';
+import { QueryContinueOnErrorNotice, confirmedQueryContinueRange, useQueryFailureNavigation } from './QueryContinueOnErrorNotice';
 import { queryContinueOnErrorZh as continueText } from '../locales/queryContinueOnError.zh-CN';
 import type { QueryFailure } from '../../shared/queryFailure';
 import { QueryParameterReuseOwner, type QueryParameterReuseOwnerInput } from '../queryParameterReuseOwner';
@@ -2181,6 +2181,13 @@ export function PostgresQueryTab({
   }, standardStrings);
   const canNavigate = editable && !navigation.busy;
   const canOpenStatementQuery = canNavigate && canDuplicateQuery && !resultsOnly;
+  const availableFailure = (failure: QueryFailure) => !pin && scriptFailureRanges.current.has(failure);
+  const failureNavigation = useQueryFailureNavigation(outcome, {
+    locateAvailable: failure => availableFailure(failure) && !!failureSource.current?.canLocateRange(failure.sourceRange, false),
+    onLocate: locateFailure,
+    positionAvailable: failure => availableFailure(failure) && !!failureSource.current?.canLocateError(failure, false),
+    onLocatePosition: locateFailurePosition,
+  });
   const commands: Partial<Record<UiCommandId, UiCommandHandler>> = {
     execute: { enabled: canRun, run: () => run() },
     'execute-selection': { enabled: canRun && editorSelection.single, run: () => run('selection') },
@@ -2193,6 +2200,8 @@ export function PostgresQueryTab({
     'open-current-statement-query': { enabled: canOpenStatementQuery, run: () => navigation.open('duplicate') },
     'previous-statement': { enabled: canNavigate, run: () => navigation.open('previous') },
     'next-statement': { enabled: canNavigate, run: () => navigation.open('next') },
+    'previous-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(-1) },
+    'next-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(1) },
     stop: { enabled: canStop, run: stop },
     explain: { enabled: canPlan, run: () => run('explain') },
     analyze: { enabled: canPlan, run: () => run('analyzePreview') },
@@ -2408,8 +2417,7 @@ export function PostgresQueryTab({
       <ErrorBox message={error} />
       {continueOnError && <p className="muted small" role="note">{text.continueHint}</p>}
       {outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length}
-        locateAvailable={failure => !pin && scriptFailureRanges.current.has(failure) && !!failureSource.current?.available()}
-        onLocate={locateFailure} positionAvailable={canLocateFailurePosition} onLocatePosition={locateFailurePosition} />}
+        navigation={failureNavigation} />}
       {outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length}
         locateAvailable={!pin && scriptFailureRanges.current.has(outcome.failure) && !!failureSource.current?.available()}
         onLocate={() => locateFailure(outcome.failure)} positionAvailable={canLocateFailurePosition(outcome.failure)} onLocatePosition={locateFailurePosition} />}

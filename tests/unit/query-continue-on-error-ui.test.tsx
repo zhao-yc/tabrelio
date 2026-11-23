@@ -7,7 +7,7 @@ import ts from 'typescript';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import type { QueryOutcome } from '../../src/shared/contracts';
 import type { QueryFailure } from '../../src/shared/queryFailure';
-import { QueryContinueOnErrorNotice, confirmedQueryContinueRange } from '../../src/renderer/components/QueryContinueOnErrorNotice';
+import { QueryContinueOnErrorNotice as Notice, confirmedQueryContinueRange, useQueryFailureNavigation } from '../../src/renderer/components/QueryContinueOnErrorNotice';
 import { queryContinueOnErrorZh as t } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 import { appDialogSelector } from '../../src/renderer/modalSelectors';
@@ -56,6 +56,13 @@ async function mount(element: ReactNode) { const host = document.createElement('
 function button(label: string) { const node = document.querySelectorAll('button').find(value => value.textContent === label); expect(node, label).toBeDefined(); return node!; }
 const failure = (ordinal: number, message = '数据库错误'): QueryFailure & { kind: 'server' } => ({ statementOrdinal: ordinal, statementsCompleted: ordinal - 1, message, kind: 'server', sourceRange: { start: ordinal - 1, end: ordinal } });
 function report(errors = [failure(2), failure(4)]): NonNullable<QueryOutcome['scriptReport']> { return { mode: 'continue-on-error', statementsAttempted: 5, statementsCompleted: 3, reachedEnd: true, errors }; }
+
+function QueryContinueOnErrorNotice({report, completedResults, ...location}: Parameters<typeof useQueryFailureNavigation>[1] & {
+  report: NonNullable<QueryOutcome['scriptReport']>; completedResults: number;
+}) {
+  const navigation = useQueryFailureNavigation({scriptReport: report, results: [], elapsedMs: 0}, location);
+  return <Notice report={report} completedResults={completedResults} navigation={navigation}/>;
+}
 
 it('正式选项默认未勾选，运行与参数表单期间锁定，并显示诊断与写入提示', async () => {
   const port = { busy: false, parameters: false }, context: any = createContext({ ...queryDialectVm(),  exports: {}, useState, port, queryContinueOnErrorZh: t, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('控件端口禁止额外依赖'); } });
@@ -122,6 +129,15 @@ it('错误导航循环、跳过无原文范围的回执，并沿用逐条定位�
   expect(document.body.textContent).toContain(t.navigable(2));
   await click(t.previous);
   expect(locate).toHaveBeenLastCalledWith(last);
+  const preciseCount = exact.mock.calls.length, wholeCount = locate.mock.calls.length;
+  await act(async () => {
+    const next = button(t.next);
+    next.dispatchEvent(new MemoryEvent('click'));
+    next.dispatchEvent(new MemoryEvent('click'));
+  });
+  expect(exact).toHaveBeenCalledTimes(preciseCount + 1);
+  expect(locate).toHaveBeenCalledTimes(wholeCount + 1);
+  expect(document.body.textContent).toContain(t.located(4, 2, 2));
   await act(async () => root!.render(render(value, false)));
   expect(button(t.previous).disabled).toBe(true); expect(button(t.next).disabled).toBe(true);
   expect(document.body.textContent).toContain(t.navigable(0));

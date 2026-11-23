@@ -558,7 +558,7 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await expect.poll(inspectModel).toMatchObject({selected: 'm', position: {lineNumber: 2, column: 9}});
     await expect(report().getByRole('button', {name: failureText.locatePositionFor(4), exact: true})).toHaveCount(0);
     const navigator = report().getByRole('group', {name: continueText.navigation, exact: true});
-    await navigator.getByRole('button', {name: continueText.next, exact: true}).click();
+    await command('next-query-error');
     await expect.poll(inspectModel).toMatchObject({selected: 'SELECT 1/0'});
     await expect(navigator).toContainText(continueText.located(4, 2, 2));
     await navigator.getByRole('button', {name: continueText.next, exact: true}).click();
@@ -568,7 +568,9 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await page.screenshot({path: info.outputPath('PostgreSQL遇错继续摘要.png')});
 
     const transactional = 'BEGIN;\nINSERT INTO public.continue_sentinel VALUES (4);\nSELECT missing_column;\nINSERT INTO public.continue_sentinel VALUES (5);\nROLLBACK;\nINSERT INTO public.continue_sentinel VALUES (6);';
-    await replaceDraft(transactional); await expect.poll(executionMarkers).toEqual([]); await command('execute-all');
+    await replaceDraft(transactional); await expect.poll(executionMarkers).toEqual([]);
+    await expect.poll(() => enabled('next-query-error')).toBe(false);
+    await command('execute-all');
     await expect(report()).toContainText(continueText.counts(6, 4, 2)); await expect(report()).toContainText(continueText.reachedEnd);
     expect(await records()).toEqual([1, 2, 3, 6]); expect(await sessions()).toEqual(original);
     await expect(report()).toContainText('current transaction is aborted');

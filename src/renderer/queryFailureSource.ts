@@ -107,8 +107,8 @@ export class QueryFailureSourceLease {
   }
 
   /** 成功结果的临时目标不覆盖首错按钮已绑定的范围。 */
-  canLocateRange(value: unknown): boolean {
-    try { if (!this.active()) return false; this.checkedRange(value); return true; } catch { return false; }
+  canLocateRange(value: unknown, checkModal = true): boolean {
+    try { if (!this.active(checkModal)) return false; this.checkedRange(value); return true; } catch { return false; }
   }
 
   locateRange(value: unknown): boolean {
@@ -124,8 +124,8 @@ export class QueryFailureSourceLease {
     return error;
   }
 
-  canLocateError(failure: QueryFailure): boolean {
-    try { if (!this.active()) return false; this.checkedErrorRange(failure); return true; } catch { return false; }
+  canLocateError(failure: QueryFailure, checkModal = true): boolean {
+    try { if (!this.active(checkModal)) return false; this.checkedErrorRange(failure); return true; } catch { return false; }
   }
 
   locateError(failure: QueryFailure): boolean {
