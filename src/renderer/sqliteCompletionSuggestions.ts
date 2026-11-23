@@ -1,7 +1,7 @@
 import type { SqliteCompletionAnalysis, SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionColumns, sqliteCompletionLimits, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
-import { sqliteJoinColumnReader, sqliteJoinRowidName, sqliteQualifiedJoinColumns } from './sqliteJoinColumns';
+import { sqliteJoinColumnReader, sqliteJoinRowidName, sqliteJoinStarColumns, sqliteQualifiedJoinColumns } from './sqliteJoinColumns';
 
 export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
@@ -69,11 +69,17 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     incomplete = analysis.output.incomplete === true;
     const addOutput = (name: string) => add({ label: name, kind: 'column', insertText: quote(name), detail: text.outputColumn });
     for (const name of analysis.output.columns) addOutput(name);
+    const reader = sqliteJoinColumnReader(directory);
+    for (const star of analysis.output.joinStars ?? []) {
+      const result = await sqliteJoinStarColumns(star, reader);
+      incomplete ||= result.incomplete;
+      for (const column of result.columns) addOutput(column.name);
+    }
     for (const source of analysis.output.sources) {
-      const metadata = await directory.load(sqliteCompletionColumns(source, analysis.target.prefix));
+      const metadata = await reader.readColumns({ source }, analysis.target.prefix);
       incomplete ||= metadata.incomplete;
       // 星号包含普通列和生成列，虚拟表的隐藏列仅能显式引用。
-      for (const entry of metadata.entries) if (entry.kind === 'column' && !entry.hidden) addOutput(entry.name);
+      for (const entry of metadata.columns) if (!entry.hidden) addOutput(entry.name);
     }
     return { items, incomplete };
   }

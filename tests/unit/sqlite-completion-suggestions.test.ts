@@ -86,6 +86,78 @@ it('复合排序排除隐藏列并按 SQLite 名称去重，保留目录不完�
   expect(result.incomplete).toBe(true);
 });
 
+it.each([
+  ['SELECT * FROM anchor z JOIN (a x JOIN b y USING(id)) ON 1', ['a', 'b', 'anchor']],
+  ['SELECT y.* FROM anchor z JOIN (a x JOIN b y USING(id)) ON 1', ['a', 'b']],
+  ['SELECT x.* FROM anchor z JOIN (a x JOIN b y USING(id)) AS g ON 1', ['a', 'b']],
+  ['SELECT * FROM outer_keys r NATURAL JOIN (a x JOIN b y USING(id)) AS g', ['a', 'b', 'outer_keys']],
+  ['SELECT * FROM outer_keys r JOIN (a x JOIN b y USING(id)) AS g USING ("k:2")', ['a', 'b', 'outer_keys']],
+  ['SELECT * FROM outer_keys r RIGHT JOIN (a x JOIN b y USING(id)) AS g USING ("k:2")', ['a', 'b', 'outer_keys']],
+  ['SELECT * FROM (a x JOIN anchor z ON 1) AS g', ['a', 'anchor']],
+  ['SELECT z.* FROM (a x JOIN anchor z ON 1) AS g', ['a', 'anchor']],
+  ['SELECT y.* FROM anchor z JOIN ((a x JOIN b y USING(id)) AS mid JOIN extra e ON 1) AS g ON 1', ['a', 'b', 'extra']],
+] as const)('复合排序按原生 SQLite 的嵌套星号结果给出可执行列名：%s', async (branch, expectedReads) => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE a(id,k,"k:1",av); CREATE TABLE b(id,k,bv); CREATE TABLE anchor(ck,cv);
+      CREATE TABLE outer_keys(id,"k:2",rv); CREATE TABLE extra(e);
+      INSERT INTO a VALUES(1,10,20,30); INSERT INTO b VALUES(1,40,50); INSERT INTO anchor VALUES(0,60);
+      INSERT INTO outer_keys VALUES(1,40,70); INSERT INTO extra VALUES(1);`);
+    const native = db.prepare(branch).columns();
+    const marked = `${branch} UNION ALL SELECT ${native.map(() => '0').join(',')} ORDER BY |`;
+    const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+    if (analysis.status !== 'ready') throw Error(analysis.reason);
+    const directory = { load: vi.fn(async (lookup: SqliteCompletionLookup) => {
+      if (lookup.kind !== 'columns') throw Error('预期准确来源列');
+      const entries = db.prepare('SELECT name,hidden FROM pragma_table_xinfo(?,?) ORDER BY cid').all(lookup.table, lookup.schema ?? 'main')
+        .map(row => ({ ...column(String(row.name), lookup.table), hidden: row.hidden === 1 }));
+      return { entries, incomplete: false, stamp: '1:0' };
+    }) };
+    const result = await sqliteCompletionSuggestions(analysis, directory);
+    expect(result.incomplete).toBe(false);
+    expect(result.items.map(item => item.label)).toEqual([...new Set(native.map(({ name }) => name))]);
+    for (const item of result.items) expect(db.prepare(marked.replace('|', item.insertText)).all()).toHaveLength(2);
+    expect(directory.load.mock.calls.map(([lookup]) => lookup.kind === 'columns' && [lookup.table, lookup.prefix]))
+      .toEqual(expectedReads.map(table => [table, '']));
+  } finally { db.close(); }
+});
+
+it('分支复用嵌套组全列缓存，命中重复列前缀时保留上一分支的明确别名', async () => {
+  const marked = 'SELECT 0 AS "id:custom", y.* FROM anchor JOIN (a x JOIN b y USING(id)) UNION ALL SELECT 0, y.* FROM other JOIN (a x JOIN b y USING(id)) ORDER BY "id:|suffix"';
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const d = directory([column('id')]);
+  const result = await sqliteCompletionSuggestions(analysis, d);
+  expect(result.items.map(item => item.insertText)).toEqual(['"id:custom"', '"id:2"']);
+  expect(d.load.mock.calls).toEqual([[{ kind: 'columns', table: 'a', prefix: '' }], [{ kind: 'columns', table: 'b', prefix: '' }]]);
+});
+
+it('单一嵌套来源的非法重复项只标记部分结果，不把组别名猜作表', async () => {
+  const marked = 'SELECT y.* FROM (a x JOIN b y USING(id)) g UNION ALL SELECT 0 AS known ORDER BY |';
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const d = directory([column('id')]);
+  const result = await sqliteCompletionSuggestions(analysis, d);
+  expect(result.incomplete).toBe(true);
+  expect(result.items.map(item => item.label)).toEqual(['known']);
+});
+
+it('外层 FULL JOIN 的星号触发组内重名歧义时保留已知投影并标记部分结果', async () => {
+  const branch = 'SELECT * FROM (a x JOIN b y USING(id)) g FULL JOIN keys USING(k)';
+  const marked = `${branch} UNION ALL SELECT 0 AS known ORDER BY |`;
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE a(id,k);CREATE TABLE b(id,k);CREATE TABLE keys(id,k)');
+    expect(() => db.prepare(branch)).toThrow(/ambiguous/i);
+    const d = directory([column('id'), column('k')]);
+    const result = await sqliteCompletionSuggestions(analysis, d);
+    expect(result.incomplete).toBe(true);
+    expect(result.items.map(item => item.label)).toEqual(['known']);
+  } finally { db.close(); }
+});
+
 it('USING 只补全两侧共有的未选列，按原范围插入后 SQLite 可执行复合连接', async () => {
   const marked = 'SELECT a.tag, b.note FROM main.a JOIN temp.b USING (id, "Na|suffix")';
   const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));

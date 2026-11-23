@@ -1,4 +1,4 @@
-import type { SqliteJoinGroup, SqliteJoinOperand } from '../shared/sqliteCompletionAnalysis';
+import type { SqliteJoinGroup, SqliteJoinOperand, SqliteJoinStars } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, sqliteCompletionColumns, sqliteCompletionLimits, sqliteCompletionSourceKey, type SqliteCompletionEntry, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import type { SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 
@@ -9,33 +9,47 @@ export interface SqliteJoinColumn {
   originBinding?: string;
   entry?: Extract<SqliteCompletionEntry, { kind: 'column' }>;
   tableFunction?: true;
+  noStar?: true;
 }
 interface JoinColumns { columns: SqliteJoinColumn[]; incomplete: boolean; ambiguousOrigins?: Set<string>; }
 type JoinGroupInput = { columns: SqliteJoinColumn[]; merged?: true | string[] };
 export const sqliteJoinRowidName = /^(?:rowid|_rowid_|oid)(?::\d+)*:?$/i;
 
-/** 用实际目录推导嵌套 JOIN 的列名。显式引用也可以使用被普通星号省略的分组列。 */
-function projectJoinGroup(inputs: JoinGroupInput[], uniqueLeft: boolean): JoinColumns {
+/** 计算每次连接实际合并的名称，保留隐藏列对显式 USING 的影响。 */
+function joinNames(inputs: JoinGroupInput[], uniqueLeft: boolean): string[][] | undefined {
   const names = new Map<string, { count: number; visible: boolean }>();
   const mergedNames: string[][] = [];
   for (const input of inputs) {
     const merged = input.merged === true ? input.columns.filter(({ name, hidden }) => !hidden && names.get(fold(name))?.visible).map(({ name }) => name) : input.merged ?? [];
     const matching = new Set(merged.map(fold));
     const right = new Set(input.columns.map(({ name }) => fold(name)));
-    if ([...matching].some(key => !names.has(key) || !right.has(key) || uniqueLeft && names.get(key)?.count !== 1)) return { columns: [], incomplete: true };
+    if ([...matching].some(key => !names.has(key) || !right.has(key) || uniqueLeft && names.get(key)?.count !== 1)) return;
     mergedNames.push(merged);
     for (const { name, hidden } of input.columns) {
       const key = fold(name), known = names.get(key) ?? { count: 0, visible: false };
       names.set(key, { count: known.count + Number(!matching.has(key)), visible: known.visible || !hidden });
     }
   }
+  return mergedNames;
+}
+
+/** 用实际目录推导嵌套 JOIN 的列名。显式引用也可以使用被普通星号省略的分组列。 */
+function projectJoinGroup(inputs: JoinGroupInput[], uniqueLeft: boolean): JoinColumns {
+  const mergedNames = joinNames(inputs, uniqueLeft);
+  if (!mergedNames) return { columns: [], incomplete: true };
   // SQLite 在左侧来源前放入合并值，然后为重名列分配 :1、:2 等后缀。合并值可能有多条血缘。
-  const projected = inputs.flatMap(({ columns }, index) => [
-    ...(mergedNames[index + 1] ?? []).map(name => ({ column: { name, hidden: false } as SqliteJoinColumn, merged: true })),
-    ...columns.filter(column => !column.hidden).map(column => ({ column, merged: false })),
-  ]);
+  const projected = inputs.flatMap(({ columns }, index) => {
+    const following = mergedNames[index + 1] ?? [];
+    const suppress = new Set([...mergedNames[index], ...following].map(fold));
+    return [
+      ...following.map(name => ({ column: { name, hidden: false } as SqliteJoinColumn, merged: true })),
+      ...columns.filter(column => !column.hidden).map(column => ({
+        column: suppress.has(fold(column.name)) ? { ...column, noStar: true as const } : column, merged: false,
+      })),
+    ];
+  });
   const occupied = new Map<string, SqliteJoinColumn>(), uncertain = new Set<string>();
-  const origins = new Set<string>(), mergedOrigins = new Set<string>(), ambiguousOrigins = new Set<string>();
+  const origins = new Set<string>(), mergedOrigins = new Set<string>(), ambiguousOrigins = new Set<string>(), mergedOutputs = new Set<string>();
   const hasBooleanName = projected.some(({ column }) => /^(?:true|false)$/i.test(column.name));
   let incomplete = hasBooleanName;
   for (const { column, merged } of projected) {
@@ -48,11 +62,18 @@ function projectJoinGroup(inputs: JoinGroupInput[], uniqueLeft: boolean): JoinCo
     // 随机后缀只会影响同一名称族后续列，已经分配的名称仍可使用。
     if (uncertain.has(fold(base))) continue;
     let name = original, suffix = 0;
-    while (occupied.has(fold(name)) && suffix < 4) name = base + ':' + ++suffix;
+    let noStar = column.noStar;
+    while (occupied.has(fold(name)) && suffix < 4) {
+      if (mergedOutputs.has(fold(name))) noStar = true;
+      name = base + ':' + ++suffix;
+    }
     if (occupied.has(fold(name)) || name.length > sqliteCompletionLimits.nameUnits) {
       uncertain.add(fold(base));
       incomplete = true;
-    } else occupied.set(fold(name), { ...column, name, originName });
+    } else {
+      occupied.set(fold(name), { ...column, name, originName, ...(noStar ? { noStar } : {}) });
+      if (merged) mergedOutputs.add(fold(name));
+    }
   }
   return { columns: [...occupied.values()], incomplete, ambiguousOrigins };
 }
@@ -75,6 +96,7 @@ export function sqliteJoinColumnReader(directory: SqliteCompletionDirectory) {
     return { columns: metadata.entries.filter(entry => entry.kind === 'column').map(entry => ({ name: entry.name, hidden: entry.hidden, entry, tableFunction })), incomplete: metadata.incomplete };
   }
   async function projectGroups(groups: SqliteJoinGroup[]) {
+    projectedGroups.length = 0;
     for (const group of groups) {
       const inputs: JoinGroupInput[] = [];
       for (const { operand, merged, binding } of group.inputs) {
@@ -88,6 +110,50 @@ export function sqliteJoinColumnReader(directory: SqliteCompletionDirectory) {
     }
   }
   return { readColumns, projectGroups };
+}
+
+/** 仅展开实际结果列表。未限定 * 隐藏合并副本，成员.* 仍可输出这些有确定名称的列。 */
+export async function sqliteJoinStarColumns(star: SqliteJoinStars, reader: ReturnType<typeof sqliteJoinColumnReader>): Promise<JoinColumns> {
+  await reader.projectGroups(star.groups);
+  let incomplete = false;
+  const columns: SqliteJoinColumn[] = [];
+  const acceptsSole = (selected: SqliteJoinColumn[], result: JoinColumns) => !star.sole || selected.every(column =>
+    fold(column.name) === fold(column.originName ?? column.name) && !result.ambiguousOrigins?.has(fold(column.name)));
+  if (star.all) {
+    const all = star.all;
+    const inputs: JoinGroupInput[] = [];
+    const resolved: JoinColumns[] = [];
+    for (const { operand, merged } of all) {
+      const result = await reader.readColumns(operand, '');
+      incomplete ||= result.incomplete;
+      resolved.push(result);
+      inputs.push({ columns: result.columns, merged });
+    }
+    const mergedNames = joinNames(inputs, star.uniqueLeft === true);
+    // RIGHT/FULL 可让星号把合并项作为未限定名称解析，组内原始重名会引发歧义。
+    const ambiguous = star.uniqueLeft && mergedNames?.some((names, index) => {
+      if (!names.length) return false;
+      const later = all.slice(index + 1).some(input => input.outer);
+      const left = all[index].outer === 'full' || later, right = !!all[index].outer || later;
+      return resolved.some((result, member) => (member < index && left || member === index && right) &&
+        names.some(name => result.ambiguousOrigins?.has(fold(name))));
+    });
+    if (!mergedNames || ambiguous) incomplete = true;
+    else for (const [index, result] of resolved.entries()) {
+      const suppressed = new Set(mergedNames[index].map(fold));
+      const visible = result.columns.filter(column => !column.hidden && !column.noStar && !suppressed.has(fold(column.name)));
+      if (acceptsSole(visible, result)) columns.push(...visible);
+      else incomplete = true;
+    }
+  }
+  for (const { group, binding } of star.members ?? []) {
+    const result = await reader.readColumns({ group }, '');
+    const visible = result.columns.filter(column => column.originBinding && fold(column.originBinding) === fold(binding));
+    incomplete ||= result.incomplete;
+    if (visible.length && acceptsSole(visible, result)) columns.push(...visible);
+    else incomplete = true;
+  }
+  return { columns, incomplete };
 }
 
 /** 组别名与成员同名时，SQLite 优先按照成员的原始字段名解析，再查组输出名。 */

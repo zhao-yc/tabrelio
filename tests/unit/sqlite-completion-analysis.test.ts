@@ -52,11 +52,36 @@ it('括号内 USING 与复合星号通过原目录身份映射物理表和表值
   expect(ready('SELECT * FROM (a JOIN b USING(i|d)) FULL JOIN c USING(id)').using?.uniqueLeft).toBe(true);
   expect(ready('SELECT * FROM a FULL JOIN (b JOIN c USING(i|d)) ON 1').using?.uniqueLeft).toBeUndefined();
 });
-it('嵌套为内置查询的组外字段仅含投影列，复合排序保留已知输出并提示不完整', () => {
+it('嵌套为内置查询的组外字段仅含投影列，复合排序只交付实际命中成员的分组树', () => {
   const value = ready("SELECT j.va|lue FROM doc d JOIN (payload p JOIN json_each(p.body) j ON 1) ON 1");
   expect(value.relations).toContainEqual({ kind: 'physical', name: 'json_each', alias: 'j', tableFunction: true, visibleColumnsOnly: true });
   expect(ready('SELECT 1 AS known UNION ALL SELECT y.* FROM a JOIN (b x JOIN c y USING(id)) ON 1 ORDER BY |').output)
-    .toEqual({ columns: ['known'], sources: [], incomplete: true });
+    .toEqual({ columns: ['known'], sources: [], joinStars: [{ groups: [{ inputs: [
+      { operand: { source: { name: 'b' } }, binding: 'x' }, { operand: { source: { name: 'c' } }, binding: 'y', merged: ['id'] },
+    ] }], members: [{ group: 0, binding: 'y' }] }] });
+});
+it('复合排序的裸星号保留外层 JOIN 约束，共用树的多个星号不会重复登记同一组', () => {
+  const value = ready('SELECT *, y.* FROM outside o JOIN (a x JOIN b y USING(id)) USING(id) UNION ALL SELECT 1 AS known ORDER BY i|d');
+  expect(value.output).toEqual({ columns: ['known'], sources: [], joinStars: [{
+    groups: [{ inputs: [{ operand: { source: { name: 'a' } }, binding: 'x' },
+      { operand: { source: { name: 'b' } }, binding: 'y', merged: ['id'] }] }],
+    all: [{ operand: { source: { name: 'outside' } } }, { operand: { group: 0 }, merged: ['id'] }], members: [{ group: 0, binding: 'y' }],
+  }] });
+  const invalid = ready('SELECT g.* FROM (a x JOIN b y) AS g UNION ALL SELECT 1 AS known ORDER BY |');
+  expect(invalid.output).toEqual({ columns: ['known'], sources: [], incomplete: true });
+});
+it('复合排序分组树回包拒绝错误组号、重复成员和多余投影', () => {
+  const { source, offset } = query('SELECT y.* FROM outside JOIN (a x JOIN b y) UNION ALL SELECT 1 ORDER BY |');
+  const value = ready('SELECT y.* FROM outside JOIN (a x JOIN b y) UNION ALL SELECT 1 ORDER BY |');
+  const star = value.output!.joinStars![0];
+  for (const invalid of [{ ...star, members: [{ group: 1, binding: 'y' }] }, { ...star, members: [...star.members!, ...star.members!] },
+    { ...star, groups: [...star.groups, ...star.groups] }, { ...star, members: undefined }]) {
+    expect(() => validateSqliteCompletionAnalysis({ ...value, output: { ...value.output, joinStars: [invalid] } }, source, offset)).toThrow();
+  }
+  const branch = (prefix: string) => ({ members: star.members, groups: [{ inputs: Array.from({ length: 9 }, (_, index) => ({
+    operand: { source: { name: prefix + index } }, binding: 'y',
+  })) }] });
+  expect(() => validateSqliteCompletionAnalysis({ ...value, output: { ...value.output, joinStars: [branch('a'), branch('b')] } }, source, offset)).toThrow();
 });
 it('当前statement之外的前后物理表不会进入补全',()=>{expect(ready('SELECT a. FROM prior a; SELECT b.| FROM actual b; SELECT c. FROM later c').relations).toEqual([{kind:'physical',name:'actual',alias:'b'}]);});
 it('UTF16、CRLF与双引号重复转义保完整替换范围和准确prefix',()=>{const marked='SELECT\r\n t."co""l|umn🚢" FROM "表🚢" t',input=query(marked),value=ready(marked);expect(value.target).toEqual({start:input.source.indexOf('"co'),end:input.source.indexOf('" FROM')+1,prefix:'co"l',quoted:true});expect(input.source.slice(value.target.start,value.target.end)).toBe('"co""lumn🚢"');expect(value.qualifiers).toEqual(['t']);});

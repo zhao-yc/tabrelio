@@ -26,7 +26,8 @@ const bootstrapSql = "CREATE TEMP TABLE subject(temp_marker TEXT,id INTEGER); IN
 const transactionalSql = 'CREATE TABLE main.uncommitted_completion_only(uncommitted_marker TEXT);';
 const secondSessionSql = 'SELECT main_marker,id FROM main.subject ORDER BY id;';
 const functionSql = `SELECT j."value", g."value" AS grouped_value FROM (SELECT id AS "id:1" FROM json_each('["TVF_FIRST","TVF_SECOND"]')) a JOIN (main.subject s JOIN json_each('["TVF_FIRST","TVF_SECOND"]') j ON s.id=1) AS g USING ("id:1") ORDER BY j.key`;
-const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql, functionSql];
+const compoundSql = `SELECT j.* FROM (SELECT 1 AS marker) a JOIN (main.subject s JOIN json_each('["COMPOUND_FIRST","COMPOUND_SECOND"]') j ON s.id=1) ON 1 UNION ALL SELECT 5,'COMPOUND_LAST','text','COMPOUND_LAST',999,NULL,'','' ORDER BY "id:1" DESC`;
+const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql, functionSql, compoundSql];
 let completed: { directory: string; database: string; firstPid?: number; secondPid?: number; platform: string } | undefined;
 let observeFailure: (() => Record<string, unknown>) | undefined;
 /** 任何失败保留准确窗口、profile及合成库，不自动重启/重试/强停/清理。 */
@@ -301,6 +302,20 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     ]);
     await execute(functionSql, 4, true);
     expect(result(operations(await step(audit), 'query.execute').at(-1)!.reply)).toMatchObject({ results: [{ rows: [{ c0: 'TVF_FIRST', c1: 'TVF_FIRST' }, { c0: 'TVF_SECOND', c1: 'TVF_SECOND' }] }] });
+    stage = '复合排序接受嵌套成员星号合成的 id:1，显式执行后按该列排序';
+    const beforeCompound = { tasks: await tasks(), history: await history(), executions: 4, sessions: 2 };
+    const beforeCompoundReads = completionFacts(await step(audit)).length;
+    await choose(compoundSql.replace('"id:1" DESC', '"id:|suffix" DESC'), 'id:1', compoundSql, 'id');
+    await settleMetadata(); await metadataReadOnly(baseline, beforeCompound);
+    const compoundReads = completionFacts(await step(audit)).slice(beforeCompoundReads).filter(fact => succeeded(fact) && fact.request.kind === 'columns' && fact.request.prefix === '');
+    expect(compoundReads.map(fact => fact.request)).toEqual([
+      expect.objectContaining({ table: 'subject', schema: 'main', prefix: '', sessionId: sessionA }),
+      expect.objectContaining({ table: 'json_each', tableFunction: true, prefix: '', sessionId: sessionA }),
+    ]);
+    await execute(compoundSql, 5, true);
+    expect(result(operations(await step(audit), 'query.execute').at(-1)!.reply)).toMatchObject({ results: [{ rows: [
+      { c1: 'COMPOUND_LAST' }, { c1: 'COMPOUND_SECOND' }, { c1: 'COMPOUND_FIRST' },
+    ] }] });
     const transactions = operations(await step(audit), 'query.transaction'); expect(transactions.map(fact => fact.request.action)).toEqual(['begin', 'rollback']); const firstTasks = await tasks(), firstHistory = await history(); expect(firstTasks.filter(task => task.kind === 'query.execute')).toHaveLength(explicitSql.length); expect(firstHistory.map(record => record.sql).sort()).toEqual([...explicitSql].sort()); expect(disk()).toEqual(baseline);
     stage = '保留一个无session新草稿，明确关闭原A/B释放真实会话及所有SQLite worker';
     const tabC = await createQuery(), retainedDraft = '-- SQLITE_COMPLETION_RETAINED_DRAFT\nSELECT main_marker FROM main.subject;'; await write(retainedDraft); await closeQuery(tabA); await closeQuery(tabB); await switchTab(tabC); await expectSql(retainedDraft); await settleMetadata(); await step(() => expect.poll(async () => { const facts = await audit(); return facts.pending === 0 && facts.workers.every(worker => worker.exit === 0); }).toBe(true));
