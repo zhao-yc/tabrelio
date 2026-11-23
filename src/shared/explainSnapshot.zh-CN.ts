@@ -22,9 +22,20 @@ export const explainSnapshotZh = {
   sqliteCompareUnsupported: '请选择两个 SQLite 执行计划快照。',
   compareBaseline: '与基准快照对比', compareCurrent: '当前计划',
   sqliteCompareBaselineRequired: '请选择 SQLite 执行计划快照作为基准。',
+  mysqlCompareTitle: 'MySQL 计划比较', mariadbCompareTitle: 'MariaDB 计划比较',
+  mysqlCompareUnsupported: '请选择同一种数据库和同一种计划的快照，估算与实测分别比较。',
+  treeCompareHint: '按树中同级位置对齐。节点重排会在对应位置显示差异。',
+  compareDescription: '节点说明', compareNeverExecuted: '未执行', compareYes: '是',
   compareLeft: '基准快照', compareRight: '对比快照', compareField: '变化字段',
   compareSame: '节点与所比较的字段一致', compareShowAll: '显示未变化节点',
   compareCount: (different: number, total: number) => `${different} / ${total} 个路径存在变化`,
   compareMore: (count: number) => `还有 ${count} 项差异，请查看两个快照的原始输出。`,
   compareStatuses: { added: '新增', removed: '移除', changed: '变化', same: '一致' },
+} as const;
+
+export const planComparisonTitles = {
+  sqlite: explainSnapshotZh.sqliteCompareTitle,
+  postgresql: explainSnapshotZh.compareTitle,
+  mysql: explainSnapshotZh.mysqlCompareTitle,
+  mariadb: explainSnapshotZh.mariadbCompareTitle,
 } as const;

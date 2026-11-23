@@ -79,7 +79,7 @@ function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, fileActions = fals
   return <section className="query-analyze-view" aria-label={t.view}>
     <div className="query-analyze-toolbar" role="group" aria-label={t.view}>
       <button aria-pressed={view === 'tree'} onClick={() => { if (alive.current) setView('tree'); }}>{t.tree}</button><button aria-pressed={view === 'raw'} onClick={() => { if (alive.current) setView('raw'); }}>{t.raw}</button>
-      {fileActions && (outcome && outcome.analysis === plan ? (postgres && plan.format === 'json' && !fileSnapshot && !saveAs ?
+      {fileActions && (outcome && outcome.analysis === plan ? (!fileSnapshot && !saveAs ?
         <LivePlanFileActions outcome={outcome} complete={!!plan.nodes.length && !plan.rawTruncated && !!result && !result.truncated}
           busy={busy} isCurrent={() => alive.current && (isFileCurrent?.() ?? true)} onFileBusyChange={onFileBusyChange}/> :
         <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={busy} saveAs={saveAs} isCurrent={isFileCurrent} onFileBusyChange={onFileBusyChange}/>) :

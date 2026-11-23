@@ -1,5 +1,6 @@
 /** 执行计划仅保存优化器估计值；数字保留原始十进制文本，不转成浮点数。 */
 export const explainLimits = { jsonBytes: 192 * 1024, depth: 64, tokens: 16000, nodes: 300, label: 160, path: 2048, detail: 16000, textRows: 1000, property: 2048, propertyItems: 32 } as const;
+export const explainNodeLimitWarning = '树形展示达到 300 个节点上限，其余内容请查看原始输出';
 export type ExplainDialect = 'mysql' | 'mariadb';
 export const explainQueryArrayKinds = ['query_specifications', 'subqueries', 'attached_subqueries', 'optimized_away_subqueries', 'having_subqueries', 'select_list_subqueries'] as const;
 export interface ExplainArrayEntry { container: (typeof explainQueryArrayKinds)[number]; index: number; }
@@ -145,22 +146,28 @@ export function parseExplainPlan(raw: string, dialect: ExplainDialect, version: 
       }
     };
     visit('plan', document, '', undefined, originalDocument);
-    if (limited) plan.warnings.push('树形展示达到 300 个节点上限，其余内容请查看原始输出');
+    if (limited) plan.warnings.push(explainNodeLimitWarning);
     if (plan.nodes.some(node => node.unknown)) plan.warnings.push('存在未知计划节点，已保留其名称、位置和原始数据');
     if (plan.nodes.some(node => node.pathTruncated)) plan.warnings.push('部分节点路径超过 2048 字符，已限制路径展示，详情请查看原始输出');
   } catch (error) { plan.nodes = []; plan.warnings.push(error instanceof Error ? error.message : '计划 JSON 解析失败'); }
   return plan;
 }
 
+/** JSON Pointer 只读自有数据字段，__proto__ 等原始键不触及原型。 */
+export function planValueAtPath(document: unknown, path: string): unknown {
+  let value = document;
+  for (const segment of path.split('/').slice(1)) {
+    if (!value || typeof value !== 'object') return;
+    value = Object.getOwnPropertyDescriptor(value, segment.replaceAll('~1', '/').replaceAll('~0', '~'))?.value;
+  }
+  return value;
+}
+
 /** 详情只读取自身属性，原型同名键也按真实 JSON 处理；截断仅作用于展示。 */
 export function explainNodeDetail(raw: string, path: string): string {
   try {
-    let value = readExplainJson(raw);
-    for (const segment of path.split('/').slice(1)) {
-      const key = segment.replaceAll('~1', '/').replaceAll('~0', '~');
-      if (!value || typeof value !== 'object' || !Object.hasOwn(value, key)) return '';
-      value = (value as Record<string, unknown>)[key];
-    }
+    const value = planValueAtPath(readExplainJson(raw), path);
+    if (value === undefined) return '';
     const text = JSON.stringify(value, null, 2);
     return text.length > explainLimits.detail ? text.slice(0, explainLimits.detail) + '\n…详情展示已截断，请查看原始输出' : text;
   } catch { return ''; }

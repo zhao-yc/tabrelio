@@ -2,9 +2,8 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { QueryOutcome } from '../../shared/contracts';
 import { parsePlanSnapshot } from '../../shared/explainSnapshot';
-import { explainSnapshotZh as text } from '../../shared/explainSnapshot.zh-CN';
-import { compareCurrentSqlitePlan } from '../../shared/sqlitePlanComparison';
-import { compareCurrentPostgresPlan } from '../../shared/postgresPlanComparison';
+import { explainSnapshotZh as text, planComparisonTitles } from '../../shared/explainSnapshot.zh-CN';
+import { compareCurrentPlan } from '../../shared/planSnapshotComparison';
 import type { PlanComparison } from '../../shared/planComparison';
 import { errorMessage, invoke } from '../lib';
 import { ExplainSnapshotSaveButton } from './ExplainSnapshotSaveButton';
@@ -21,10 +20,9 @@ export function LivePlanFileActions({ outcome, complete, busy, isCurrent, onFile
   const operation = useRef<'save' | object | null>(null), alive = useRef(false);
   const latest = useRef({ busy, isCurrent }); latest.current = { busy, isCurrent };
   useLayoutEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  const sqlite = outcome.sqliteExplain;
-  const plan = sqlite ?? outcome.analysis ?? outcome.explain;
-  const dialect = sqlite ? 'sqlite' : 'postgresql';
-  const title = sqlite ? text.sqliteCompareTitle : text.compareTitle;
+  const plan = outcome.sqliteExplain ?? outcome.analysis ?? outcome.explain;
+  const dialect = plan?.dialect ?? 'postgresql';
+  const title = planComparisonTitles[dialect];
 
   /** 外层查询在文件交互期间也锁定；只能由原请求通知释放。 */
   function claim(token: 'save' | object, action: 'save' | 'compare') {
@@ -56,7 +54,7 @@ export function LivePlanFileActions({ outcome, complete, busy, isCurrent, onFile
       const selected = await invoke('explainFiles.open', {});
       if (!selected || !current()) return;
       const baseline = parsePlanSnapshot(selected.snapshot);
-      const value = sqlite ? compareCurrentSqlitePlan(baseline, sqlite) : compareCurrentPostgresPlan(baseline, outcome);
+      const value = compareCurrentPlan(baseline, outcome);
       setComparison({ left: `${selected.name} · ${baseline.serverVersion}`, right: plan.version, value });
     } catch (reason) { if (current()) setError(errorMessage(reason)); }
     finally { release(token); }
@@ -68,7 +66,7 @@ export function LivePlanFileActions({ outcome, complete, busy, isCurrent, onFile
       onClick={() => void compare()}>{fileAction === 'compare' ? text.opening : text.compareBaseline}</button>
     <ErrorBox message={error}/>
     {comparison && createPortal(<Modal title={title} onClose={() => setComparison(undefined)} wide>
-      <div className="explain-snapshot-dialog"><PlanComparisonView comparison={comparison.value} dialect={dialect}
+      <div className="explain-snapshot-dialog"><PlanComparisonView comparison={comparison.value} dialect={dialect} tree={outcome.analysis?.format === 'tree'}
         left={comparison.left} right={comparison.right} rightLabel={text.compareCurrent}/></div>
     </Modal>, document.body)}
   </>;

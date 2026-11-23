@@ -28,7 +28,7 @@ function fixture() {
   const source = readFileSync(new URL('../../src/renderer/components/QueryTab.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('QueryTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const functions: string[] = []; let body = '';
   function visit(node: ts.Node) {
-    if (ts.isFunctionDeclaration(node) && node.name && ['saveQuery', 'runQuery', 'clearFailureSource', 'invalidateResultSelection', 'selectActiveDetailRow', 'rowDetailAllowed', 'resultViewCurrent', 'travelResultHistory'].includes(node.name.text)) functions.push(node.getText(file));
+    if (ts.isFunctionDeclaration(node) && node.name && ['saveQuery', 'runQuery', 'clearFailureSource', 'invalidateResultSelection', 'selectActiveDetailRow', 'rowDetailAllowed', 'resultViewCurrent', 'travelResultHistory', 'queryMenuCurrent', 'queryOwnerCurrent'].includes(node.name.text)) functions.push(node.getText(file));
     if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(file) === 'className' && attribute.initializer && ts.isStringLiteral(attribute.initializer) && attribute.initializer.text === 'result-body')) body = node.getText(file);
     ts.forEachChild(node, visit);
   }

@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import type { PlanComparison } from '../../shared/planComparison';
-import { explainSnapshotZh as text } from '../../shared/explainSnapshot.zh-CN';
+import type { PlanSnapshotDocument } from '../../shared/explainSnapshot';
+import { explainSnapshotZh as text, planComparisonTitles } from '../../shared/explainSnapshot.zh-CN';
 
-/** 两列都读取已经打开的文件。变化节点与字段在本地选择，不再访问数据库。 */
-export function PlanComparisonView({ comparison, dialect, left, right, rightLabel = text.compareRight }: {
+/** 两列读取已返回的计划。节点与字段在本地选择，不再访问数据库。 */
+export function PlanComparisonView({ comparison, dialect, tree, left, right, rightLabel = text.compareRight }: {
   comparison: PlanComparison;
-  dialect: 'postgresql' | 'sqlite';
+  dialect: PlanSnapshotDocument['dialect'];
+  tree?: boolean;
   left: string;
   right: string;
   rightLabel?: string;
@@ -14,12 +16,11 @@ export function PlanComparisonView({ comparison, dialect, left, right, rightLabe
   const [selected, setSelected] = useState<string>();
   const visible = showAll ? comparison.nodes : comparison.nodes.filter(node => node.status !== 'same');
   const current = visible.find(node => node.path === selected) ?? visible[0];
-  const sqlite = dialect === 'sqlite';
-  return <section className="explain-comparison" aria-label={sqlite ? text.sqliteCompareTitle : text.compareTitle}>
+  return <section className="explain-comparison" aria-label={planComparisonTitles[dialect]}>
     <div className="explain-comparison-sources">
       <span>{text.compareLeft}　{left}</span><span>{rightLabel}　{right}</span>
     </div>
-    <p className="muted small">{sqlite ? text.sqliteCompareHint : text.compareHint}</p>
+    <p className="muted small">{dialect === 'sqlite' ? text.sqliteCompareHint : tree ? text.treeCompareHint : text.compareHint}</p>
     <div className="explain-comparison-summary">
       <strong role="status">{text.compareCount(comparison.different, comparison.nodes.length)}</strong>
       <label><input type="checkbox" checked={showAll} onChange={event => setShowAll(event.currentTarget.checked)} /> {text.compareShowAll}</label>

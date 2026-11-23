@@ -1,4 +1,4 @@
-import { parseExplainPlan, readExplainJson } from './explain';
+import { parseExplainPlan, planValueAtPath, readExplainJson } from './explain';
 
 /** 实测计划只保留有界原文和展示节点；指标保留服务器十进制文本，不求和或转浮点数。 */
 export const queryAnalyzeLimits = { rawBytes: 192 * 1024, nodes: 300, depth: 64, label: 1024, path: 2048, metrics: 32, metricValue: 80 } as const;
@@ -133,16 +133,6 @@ function mysqlTree(plan: QueryAnalyzePlan): void {
   else if (!plan.nodes.some(node => node.neverExecuted || node.metrics.some(item => item.kind === 'actual'))) warning(plan, '当前TREE输出未提供可识别的实测指标，未将估算值当作实际耗时。');
 }
 
-/** JSON Pointer逐段只读自身字段，__proto__等真实键不落到原型。 */
-function ownPath(document: unknown, path: string): unknown {
-  let value = document;
-  for (const segment of path.split('/').slice(1)) {
-    if (!value || typeof value !== 'object') return;
-    value = Object.getOwnPropertyDescriptor(value, segment.replaceAll('~1', '/').replaceAll('~0', '~'))?.value;
-  }
-  return value;
-}
-
 /** MariaDB保留JSON包含关系；r_total_time_ms含子节点，不与其他时间叠加。 */
 function mariaJson(plan: QueryAnalyzePlan): void {
   const document = readExplainJson(plan.raw), estimated = parseExplainPlan(plan.raw, 'mariadb', plan.version);
@@ -154,7 +144,7 @@ function mariaJson(plan: QueryAnalyzePlan): void {
     for (const [source, metric, unit] of [['rows', item.rows, 'rows'], ['filtered', item.filtered, 'percent']] as const) if (metric) addMetric(node, source, metric.value, 'estimate', unit, plan);
     for (const metric of item.costs) addMetric(node, metric.source, metric.value, 'estimate', 'cost', plan);
     // 已截断路径不能被误用于另一个同名前缀节点；原估算指标来自原记录，不受此查找影响。
-    const record = item.pathTruncated ? undefined : ownPath(document, item.path);
+    const record = item.pathTruncated ? undefined : planValueAtPath(document, item.path);
     if (record && typeof record === 'object' && !Array.isArray(record)) {
       for (const [source, unit] of [['r_total_time_ms', 'ms'], ['r_table_time_ms', 'ms'], ['r_other_time_ms', 'ms'], ['r_rows', 'rows'], ['r_loops', 'loops'], ['r_filtered', 'percent'], ['pages_read_time_ms', 'ms']] as const) {
         addMetric(node, source, Object.getOwnPropertyDescriptor(record, source)?.value, 'actual', unit, plan);
