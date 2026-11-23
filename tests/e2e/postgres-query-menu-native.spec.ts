@@ -547,6 +547,9 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
       await report().getByRole('button', {name: continueText.locate(ordinal), exact: true}).click();
       await expect.poll(async () => (await inspectModel()).selected).toBe(statement);
     }
+    await report().getByRole('button', {name: failureText.locatePositionFor(2), exact: true}).click();
+    await expect.poll(inspectModel).toMatchObject({selected: 'm', position: {lineNumber: 2, column: 9}});
+    await expect(report().getByRole('button', {name: failureText.locatePositionFor(4), exact: true})).toHaveCount(0);
     expect(await history()).toEqual(beforeLocate); expect(await records()).toEqual([1, 2, 3]);
     expect(beforeLocate[0].success).toBe(false);
     await page.screenshot({path: info.outputPath('PostgreSQL遇错继续摘要.png')});
@@ -664,6 +667,7 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
   const sql = "/* 已完成😀 */ INSERT INTO public.failure_sentinel VALUES (1) RETURNING id;\r\n/* 未完成🧭 */ SELECT missing_column FROM public.failure_sentinel;\r\nINSERT INTO public.failure_sentinel VALUES (2);";
   const notice = () => tab().getByRole('status', {name: partialText.title, exact: true});
   const locate = () => notice().getByRole('button', {name: failureText.locate, exact: true});
+  const precise = () => notice().getByRole('button', {name: failureText.locatePosition, exact: true});
   const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
   const records = async () => (await observer.query('SELECT id FROM public.failure_sentinel ORDER BY id')).rows;
   const select = async (start: number, end = start) => editor().evaluate((element, offsets) => {
@@ -686,6 +690,14 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     }), {message: '失败语句正文起点应完整显示在编辑区内'}).toContain('"visible":true');
     expect(await history()).toEqual(before); expect(await records()).toEqual([{id: 1}]);
   };
+  const preciseLocate = async (start: number, expected: string) => {
+    const before = await history(), model = await inspectModel();
+    const lines = model.sql.slice(0, start + expected.length).split(/\r\n|\n/);
+    await expect(precise()).toBeEnabled(); await precise().click();
+    await expect.poll(inspectModel).toMatchObject({sql: model.sql, identity: model.identity, selected: expected,
+      position: {lineNumber: lines.length, column: lines.at(-1)!.length + 1}});
+    expect(await history()).toEqual(before); expect(await records()).toEqual([{id: 1}]);
+  };
   try {
     await observer.query('CREATE TABLE public.failure_sentinel (id int PRIMARY KEY)');
     await prepare({id: '', name: '隔离 PostgreSQL 失败定位', dialect: 'postgresql', group: '', color: '#123456',
@@ -694,16 +706,19 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     await command('execute-all'); await expect(notice()).toContainText(partialText.position(2, 1));
     await expect(tab().locator('.postgres-results .rdg')).toContainText('id');
     await tab().getByLabel(queryLayoutZh.placement, {exact: true}).selectOption('results');
+    await expect(editor()).toBeHidden(); await preciseLocate(actual.indexOf('missing_column'), 'm');
     await unchangedLocate(actual.slice(actual.indexOf('SELECT missing_column'), secondEnd)); await expect(editor()).toBeVisible();
     await page.screenshot({path: info.outputPath('PostgreSQL未完成语句定位.png')});
     await editor().getByRole('textbox').focus(); await page.keyboard.press('ControlOrMeta+End'); await page.keyboard.insertText(' '); await page.keyboard.press('ControlOrMeta+Z');
     await expect.poll(async () => (await inspectModel()).sql).toBe(actual); await expect(locate()).toBeDisabled();
+    await expect(precise()).toBeDisabled();
 
     const selectedScript = "INSERT INTO public.failure_sentinel VALUES (3);\r\nSELECT '选区🧭' AS selected_ok;\r\nSELECT missing_column FROM public.failure_sentinel;\r\nINSERT INTO public.failure_sentinel VALUES (4);";
     await replaceDraft(selectedScript);
     const start = selectedScript.indexOf('SELECT'), failedStart = selectedScript.indexOf(';', start) + 1, end = selectedScript.indexOf(';', failedStart);
     await select(start, end + 1); await command('execute-selection');
     await expect(notice()).toContainText(partialText.position(2, 1));
+    await preciseLocate(selectedScript.indexOf('missing_column'), 'm');
     await unchangedLocate(selectedScript.slice(failedStart, end).trimStart());
     await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click();
     await select(selectedScript.indexOf('missing_column')); await command('execute-current');
@@ -711,6 +726,7 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     await expect(tab().locator('.tab-status')).toContainText(postgresZh.failedTransaction);
     const sessions = async () => (await observer.query("SELECT pid,state FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
     const failedSession = await sessions(); expect(failedSession).toHaveLength(1); expect(failedSession[0].state).toBe('idle in transaction (aborted)');
+    await preciseLocate(selectedScript.indexOf('missing_column'), 'm');
     await unchangedLocate(selectedScript.slice(failedStart, end).trimStart()); expect(await sessions()).toEqual(failedSession);
     await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click(); await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
 
@@ -720,10 +736,29 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     await form.getByLabel(parameterZh.value + ' bad', {exact: true}).fill(secret);
     await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
     await expect(notice()).toContainText(partialText.position(1, 0)); await expect(tab()).toContainText('SQLSTATE 22P02');
+    await expect(precise()).toHaveCount(0);
     await unchangedLocate(parameterSql.slice(0, -1));
     expect(JSON.stringify(await history())).not.toContain(secret);
     expect(JSON.stringify(await page.evaluate(() => window.dbark.invoke('tasks.list', {})))).not.toContain(secret);
     expect(JSON.stringify(await page.evaluate(() => window.dbark.invoke('settings.get', {})))).not.toContain(secret);
+
+    const named = "SELECT '前导😀', [$diagnostic_long_name]::text, missing_column;";
+    await replaceDraft(named); await tab().getByRole('button', {name: postgresZh.parameters, exact: true}).click();
+    await form.getByLabel(parameterZh.value + ' diagnostic_long_name', {exact: true}).fill(secret);
+    await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
+    await expect(tab()).toContainText('SQLSTATE 42703'); await preciseLocate(named.indexOf('missing_column'), 'm');
+    expect(JSON.stringify(await history())).not.toContain(secret);
+
+    const internal = 'DO $$ BEGIN PERFORM internal_missing; END $$;';
+    await replaceDraft(internal); await command('execute-all');
+    await expect(tab()).toContainText('column "internal_missing" does not exist');
+    await expect(precise()).toHaveCount(0);
+    await unchangedLocate(internal.slice(0, -1));
+
+    const unexpectedEnd = 'SELECT 1 +;';
+    await replaceDraft(unexpectedEnd); await command('execute-all');
+    await expect(tab()).toContainText('syntax error at end of input');
+    await preciseLocate(unexpectedEnd.length - 1, '');
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
   await quitDesktop();

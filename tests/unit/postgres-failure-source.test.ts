@@ -5,7 +5,7 @@ import { DatabaseError } from 'pg';
 import type { QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 import type { QueryParameter } from '../../src/shared/queryParameters';
 import { queryScriptReportSchema } from '../../src/shared/queryContinueOnError';
-import { canContinuePostgresQueryError } from '../../src/engine/postgres/queryContinue';
+import { canContinuePostgresQueryError, postgresErrorSourceRange } from '../../src/engine/postgres/queryContinue';
 import { postgresNoticeReportSchema } from '../../src/shared/postgresNotices';
 
 let engine: PostgresEngine, sent: string[], protocols: unknown[], events: TaskEvent[], next: number;
@@ -37,10 +37,15 @@ describe('PostgreSQL 失败范围沿用实际执行的原文偏移', () => {
   it('真实连接错误重复脱敏保持 SQLSTATE，不泄露密码或读取状态访问器', () => {
     const connection = new PostgresConnection({id: 'c', name: '仅错误转换', group: '', color: '', dialect: 'postgresql',
       host: 'invalid', port: 1, user: 'unit', password: '受保护密码'});
-    const reason = Object.assign(new DatabaseError('不能转换受保护密码', 0, 'error'), {severity: 'ERROR', code: '22P02'});
+    const reason = Object.assign(new DatabaseError('不能转换受保护密码', 0, 'error'),
+      {severity: 'ERROR', code: '22P02', position: '32', internalPosition: '48', internalQuery: '受保护密码'});
     const first = connection.error(reason), second = connection.error(first);
     expect(first).toHaveProperty('postgresSqlState', '22P02'); expect(second).toHaveProperty('postgresSqlState', '22P02');
     expect(second.message).not.toContain('受保护密码');
+    expect(second).toHaveProperty('postgresQueryPosition', 32);
+    expect(second).not.toHaveProperty('internalQuery');
+    Object.assign(reason, {position: undefined});
+    expect(connection.error(reason)).not.toHaveProperty('postgresQueryPosition');
     const getter = vi.fn(() => '22P02'), unknown = Error('未知状态'); Object.defineProperty(unknown, 'postgresSqlState', {get: getter});
     expect(connection.error(unknown)).not.toHaveProperty('postgresSqlState'); expect(getter).not.toHaveBeenCalled();
   });
@@ -155,6 +160,32 @@ describe('PostgreSQL 失败范围沿用实际执行的原文偏移', () => {
 });
 
 const serverError = (code = '42703', message = '预期服务端错误') => Object.assign(Error(message), {postgresSqlState: code});
+const positioned = (sql: string, offset: number) => Object.assign(serverError(), {postgresQueryPosition: [...sql.slice(0, offset)].length + 1});
+
+it('服务器字符位置按编辑器 UTF-16 换算，CRLF、代理对和语句末尾各保留完整边界', () => {
+  const sql = 'SELECT\r\n 🧭';
+  const get = (offset: number) => postgresErrorSourceRange(positioned(sql, offset), sql, 10, {start: 10, end: 10 + sql.length});
+  expect(get(sql.indexOf('\n'))).toEqual({start: 16, end: 18});
+  expect(get(sql.indexOf('🧭'))).toEqual({start: 19, end: 21});
+  expect(get(sql.length)).toEqual({start: 21, end: 21});
+  const outside = Object.assign(serverError(), {postgresQueryPosition: sql.length + 1});
+  expect(postgresErrorSourceRange(outside, sql, 0, {start: 0, end: sql.length})).toBeUndefined();
+});
+
+it('多语句精确位置映射为实际原模板，包括重复参数本身和替换之后的字符', async () => {
+  const sql = "SELECT 1;\r\n/* 🧭 */ SELECT [$long_name]::text, [$long_name] IS NULL;\r\nSELECT [$long_name]::text, missing;";
+  scenario = async statement => {
+    if (statement.includes('IS NULL')) throw positioned(statement, statement.lastIndexOf('$1'));
+    if (statement.includes('missing')) throw positioned(statement, statement.indexOf('missing'));
+    return ok(statement);
+  };
+  const output = await execute(sql, {parameters: [{name: 'long_name', type: 'text', value: '不展示原值'}], continueOnError: true});
+  const report = queryScriptReportSchema.parse(output.scriptReport);
+  expect(report.errors.map(({errorRange}) => sql.slice(errorRange!.start, errorRange!.end))).toEqual(['[$long_name]', 'm']);
+  expect(report.errors[0].errorRange?.start).toBe(sql.indexOf('[$long_name] IS NULL'));
+  expect(output.failure?.errorRange).toEqual(report.errors[0].errorRange);
+  expect(JSON.stringify(output)).not.toContain('不展示原值');
+});
 it('消息沿实际发送语句的范围，首错前收到的消息保留但不进入任务事件', async () => {
   const sql = 'SELECT 1;\r\n/* 前导😀 */ SELECT missing;\r\nSELECT tail;';
   scenario = async (statement, _values, notice) => {
@@ -223,11 +254,12 @@ describe('PostgreSQL 显式遇错继续仍使用原协议事务', () => {
     expect(output.scriptReport?.errors[0].message).toContain('22P02'); expect(JSON.stringify(output)).not.toContain('秘密参数'); expect(JSON.stringify(events)).not.toContain('秘密参数');
   });
   it('词法失败只加停止项，不沿用前一个错误范围', async () => {
-    scenario = async () => { throw serverError(); };
+    scenario = async statement => { throw positioned(statement, statement.indexOf('missing')); };
     const output = await execute("SELECT missing; SELECT '未闭合", {continueOnError: true});
     const report = queryScriptReportSchema.parse(output.scriptReport);
     expect(report).toMatchObject({statementsAttempted: 1, statementsCompleted: 0, reachedEnd: false});
     expect(report.errors.map(error => error.kind)).toEqual(['server', 'stopped']); expect(report.errors[1]).not.toHaveProperty('sourceRange'); expect(sent).toHaveLength(1);
+    expect(report.errors[0].errorRange).toEqual({start: 7, end: 8}); expect(report.errors[1]).not.toHaveProperty('errorRange');
   });
   it('100项错误到限即停，不发送第101句', async () => {
     scenario = async () => { throw serverError(); };

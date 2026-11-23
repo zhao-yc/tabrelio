@@ -70,6 +70,20 @@ it('读取原结果范围保留完整选区正文，旧模型换代后停止读�
   f.emit('content');
   expect(lease.readRange(range)).toBeUndefined();
 });
+it('精确位置接受原选区内的字符和语句末尾，编辑后不能复用', () => {
+  const f = fixture('SELECT 1;\r\nSELECT 🧭;'), base = f.source.lastIndexOf('SELECT');
+  f.select(base, f.source.length);
+  const lease = f.create(f.source.slice(base))!;
+  const failure = {statementOrdinal: 1, statementsCompleted: 0, message: '失败', sourceRange: {start: 0, end: 9}, errorRange: {start: 7, end: 9}};
+  expect(lease.locateError({...failure, errorRange: {start: 8, end: 9}})).toBe(false);
+  expect(lease.canLocateError({...failure, errorRange: {start: 7, end: 7}})).toBe(false);
+  expect(lease.locateError(failure)).toBe(true);
+  expect(f.editor.setSelection).toHaveBeenLastCalledWith({startLineNumber: 2, startColumn: 8, endLineNumber: 2, endColumn: 10});
+  expect(lease.locateError({...failure, errorRange: {start: 9, end: 9}})).toBe(true);
+  expect(f.editor.setSelection).toHaveBeenLastCalledWith({startLineNumber: 2, startColumn: 10, endLineNumber: 2, endColumn: 10});
+  f.emit('content');
+  expect(lease.canLocateError(failure)).toBe(false);
+});
 it('完整原范围超过结果预览长度时仍逐字读回，忙态或模态期间不重新取文', () => {
   const sql = "SELECT 1 /* " + 'x'.repeat(70000) + '尾部🚢 */;';
   const f = fixture(sql), lease = f.create()!, range = { start: 0, end: sql.length };

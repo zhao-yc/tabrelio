@@ -1,6 +1,11 @@
 import { queryParameterLimits } from './queryParameters';
 import { currentPostgresStatement, splitPostgresParameterSql, type PostgresStatement } from './postgresSql';
 
+/** 保持协议参数与相邻文字的词法边界，错误位置换算也使用相同替换长度。 */
+function wireParameter(position: number): string {
+  return ' $' + position + ' ';
+}
+
 /** 每条命名语句独立编号，跨工作表的同名值共用一次输入。 */
 export function postgresParameterPlan(source: readonly PostgresStatement[]) {
   if (!source.length) throw Error('PostgreSQL 参数执行需要至少一条语句');
@@ -29,13 +34,29 @@ export function postgresParameterPlan(source: readonly PostgresStatement[]) {
         names.add(token.name);
         if (names.size > queryParameterLimits.names) throw Error('PostgreSQL 参数不能超过 200 个');
       }
-      // 两侧留空格，防止参数编号与相邻数字或标识符连成一个词法单元。
-      sql += statement.sql.slice(from, token.start) + ' $' + position + ' ';
+      sql += statement.sql.slice(from, token.start) + wireParameter(position);
       from = token.end;
     }
     return { statement, sql: sql + statement.sql.slice(from), names: [...positions.keys()] };
   });
   return { statements, names: [...names] };
+}
+
+/** 用原词法标记回推协议区间，命中生成参数时选中完整模板。无需保留绑定值或第二份偏移表。 */
+export function postgresParameterErrorRange(plan: ReturnType<typeof postgresParameterPlan>['statements'][number],
+  range: {start: number; end: number}): {start: number; end: number} {
+  const {namedParameters} = plan.statement;
+  if (!namedParameters?.length) return range;
+  const positions = new Map(plan.names.map((name, index) => [name, index + 1]));
+  let delta = 0;
+  for (const token of namedParameters) {
+    const start = token.start + delta;
+    if (range.start < start) break;
+    const length = wireParameter(positions.get(token.name)!).length;
+    if (range.start < start + length) return {start: token.start, end: token.end};
+    delta += length - (token.end - token.start);
+  }
+  return {start: range.start - delta, end: range.end - delta};
 }
 
 /** 参数表单和执行共用原会话词法，保留完整脚本或光标处原语句的 UTF-16 范围。 */

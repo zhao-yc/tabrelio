@@ -1,5 +1,10 @@
 export interface QueryFailureSourceRange { start: number; end: number; }
-export interface QueryFailure { statementOrdinal: number; statementsCompleted: number; message: string; sourceRange?: QueryFailureSourceRange; }
+export interface QueryFailure {
+  statementOrdinal: number; statementsCompleted: number; message: string;
+  sourceRange?: QueryFailureSourceRange;
+  /** 原模板 UTF-16 区间。仅语句末尾的错误用零宽光标位置。 */
+  errorRange?: QueryFailureSourceRange;
+}
 export const queryFailureMessageLimit = 32 * 1024;
 
 /** 先固定执行事实，再有界保留错误详情；截断不能拆开UTF16代理对或抹去首错停止事实。 */

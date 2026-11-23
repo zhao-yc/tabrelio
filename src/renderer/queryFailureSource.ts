@@ -1,4 +1,5 @@
 import type * as monaco from 'monaco-editor';
+import type { QueryFailure } from '../shared/queryFailure';
 
 export interface QueryFailureSourceScope {
   tabId: string; connectionId: string; connectionVersion: number; draft: string | undefined;
@@ -75,12 +76,12 @@ export class QueryFailureSourceLease {
     } catch { this.dispose(); return false; }
   }
 
-  private checkedRange(value: unknown): {start: number; end: number} {
+  private checkedRange(value: unknown, allowCaret = false): {start: number; end: number} {
     if (!value || typeof value !== 'object' || Array.isArray(value) || Reflect.ownKeys(value).length !== 2) throw Error('范围不可用');
     const descriptors = Object.getOwnPropertyDescriptors(value), start = descriptors.start, end = descriptors.end;
     if (!start || !end || !('value' in start) || !('value' in end) || typeof start.value !== 'number' || typeof end.value !== 'number') throw Error('范围不可用');
     const from = start.value, to = end.value;
-    if (from >= to || !boundary(this.capture.source, from) || !boundary(this.capture.source, to) ||
+    if (from > to || !allowCaret && from === to || !boundary(this.capture.source, from) || !boundary(this.capture.source, to) ||
         !boundary(this.full, this.base + from) || !boundary(this.full, this.base + to)) throw Error('范围不可用');
     return { start: this.base + from, end: this.base + to };
   }
@@ -107,6 +108,23 @@ export class QueryFailureSourceLease {
 
   locateRange(value: unknown): boolean {
     try { return this.active() && this.select(this.checkedRange(value)); } catch { return false; }
+  }
+
+  /** 精确位置必须落在同一失败语句内，只允许在该语句末尾放置零宽光标。 */
+  private checkedErrorRange(failure: QueryFailure): {start: number; end: number} {
+    const statement = this.checkedRange(failure.sourceRange);
+    const error = this.checkedRange(failure.errorRange, true);
+    if (error.start < statement.start || error.end > statement.end || error.start === error.end && error.end !== statement.end)
+      throw Error('错误位置不在原语句内');
+    return error;
+  }
+
+  canLocateError(failure: QueryFailure): boolean {
+    try { if (!this.active()) return false; this.checkedErrorRange(failure); return true; } catch { return false; }
+  }
+
+  locateError(failure: QueryFailure): boolean {
+    try { return this.active() && this.select(this.checkedErrorRange(failure)); } catch { return false; }
   }
 
   /** 读取与定位共用同一原模型租约，取完整正文且不移动光标。 */

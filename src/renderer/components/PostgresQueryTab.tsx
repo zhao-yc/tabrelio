@@ -387,6 +387,18 @@ export function PostgresQueryTab({
     flushSync(() => setResultsOnly(false));
     editor.current?.layout(); locator.locate();
   }
+  function canLocateFailurePosition(failure: QueryFailure): boolean {
+    return !!failure.errorRange && !pinStateRef.current.selected && scriptFailureRanges.current.has(failure) &&
+      !!failureSource.current?.canLocateError(failure);
+  }
+  /** 保留整句按钮的范围，独立跳到同一回执的准确字符或原参数模板。 */
+  function locateFailurePosition(failure: QueryFailure): void {
+    if (!canLocateFailurePosition(failure)) return;
+    const locator = failureSource.current;
+    flushSync(() => setResultsOnly(false));
+    if (failureSource.current !== locator || !canLocateFailurePosition(failure)) return;
+    editor.current?.layout(); locator?.locateError(failure);
+  }
   /** 暂存只读取本标签原模型及已确认的物理会话；不把参数值写入工作区或来源键。 */
   function parameterReuseInput(): QueryParameterReuseOwnerInput | null {
     const now = useWorkspace.getState(), current = currentTab(), owned = session.current;
@@ -2394,10 +2406,10 @@ export function PostgresQueryTab({
       {continueOnError && <p className="muted small" role="note">{text.continueHint}</p>}
       {outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length}
         locateAvailable={failure => !pin && scriptFailureRanges.current.has(failure) && !!failureSource.current?.available()}
-        onLocate={locateFailure} />}
+        onLocate={locateFailure} positionAvailable={canLocateFailurePosition} onLocatePosition={locateFailurePosition} />}
       {outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length}
         locateAvailable={!pin && scriptFailureRanges.current.has(outcome.failure) && !!failureSource.current?.available()}
-        onLocate={() => locateFailure(outcome.failure)} />}
+        onLocate={() => locateFailure(outcome.failure)} positionAvailable={canLocateFailurePosition(outcome.failure)} onLocatePosition={locateFailurePosition} />}
       {!pin && outcome?.postgresNotices && <PostgresNoticesPanel report={outcome.postgresNotices}
         locateAvailable={entry => noticeRanges.current.has(entry) && !!failureSource.current?.available()} onLocate={locateNotice} />}
       {!busy && completionStatus !== 'idle' && <p className="muted small" role="status">{completionStatus === 'limited'

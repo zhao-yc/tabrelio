@@ -72,7 +72,10 @@ const message = z.string().min(1).max(queryContinueOnErrorLimits.errorMessageUni
 const errorSchema = z.object({
   kind: z.enum(['server', 'stopped']), statementOrdinal: integer.refine(value => value > 0, '失败语句序号必须为正整数'), statementsCompleted: integer,
   message, sourceRange: z.object({ start: integer, end: integer }).strict().refine(value => value.end >= value.start, '失败语句范围无效').optional(),
-}).strict();
+  errorRange: z.object({start: integer, end: integer}).strict().optional(),
+}).strict().refine(({sourceRange, errorRange}) => !errorRange || !!sourceRange &&
+  errorRange.start >= sourceRange.start && errorRange.end <= sourceRange.end &&
+  (errorRange.start < errorRange.end || errorRange.start === sourceRange.end && errorRange.end === sourceRange.end), '错误位置必须位于失败语句内');
 /** 先拒绝超量数组，避免Zod先遍历任意多的失败记录才报告max限制。 */
 const errorsSchema = z.preprocess((value, context) => {
   if (!Array.isArray(value) || value.length > queryContinueOnErrorLimits.errors) { context.addIssue({ code: 'custom', message: '脚本错误记录必须为至多100项的数组' }); return z.NEVER; }

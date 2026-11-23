@@ -122,8 +122,13 @@ export class PostgresConnection {
     const previous = reason instanceof Error ? Object.getOwnPropertyDescriptor(reason, 'postgresSqlState') : undefined;
     const code = reason instanceof DatabaseError && reason.severity === 'ERROR' ? reason.code
       : previous && 'value' in previous ? previous.value : undefined;
-    return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)
-      ? Object.assign(safe, { postgresSqlState: code }) : safe;
+    if (typeof code !== 'string' || !/^[0-9A-Z]{5}$/.test(code)) return safe;
+    const previousPosition = reason instanceof Error ? Object.getOwnPropertyDescriptor(reason, 'postgresQueryPosition') : undefined;
+    const position = reason instanceof DatabaseError && reason.severity === 'ERROR' && /^[1-9][0-9]{0,7}$/.test(reason.position ?? '')
+      ? Number(reason.position) : previousPosition && 'value' in previousPosition ? previousPosition.value : undefined;
+    // 只保留原 SQL 的 P 字段。内部命令的 p、q 以及原始错误对象不会跨进程传递。
+    return Object.assign(safe, {postgresSqlState: code}, typeof position === 'number' && Number.isSafeInteger(position) && position > 0
+      ? {postgresQueryPosition: position} : {});
   }
   private check() {
     if (this.stopped) throw Error('PostgreSQL连接已取消');

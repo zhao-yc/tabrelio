@@ -27,7 +27,7 @@ import { PostgresNoticeCollector } from './notices';
 import { readPostgresTransactionSettings, applyPostgresTransactionSettings } from './transactionSettings';
 import { readPostgresSearchPath, applyPostgresSearchPath } from './searchPath';
 import { readPostgresQueryTimeouts, applyPostgresQueryTimeouts } from './queryTimeouts';
-import { canContinuePostgresQueryError, postgresQueryErrorMessage } from './queryContinue';
+import { canContinuePostgresQueryError, postgresErrorSourceRange, postgresQueryErrorMessage } from './queryContinue';
 import { queryContinueOnErrorLimits, queryScriptReportSummary, truncateQueryScriptMessage, type QueryScriptReport } from '../../shared/queryContinueOnError';
 import {
   firstPostgresStatement,
@@ -1051,6 +1051,7 @@ export class PostgresEngine {
       parameterFailure: string | undefined,
       failure: QueryOutcome['failure'],
       sourceRange: NonNullable<QueryOutcome['failure']>['sourceRange'],
+      errorRange: NonNullable<QueryOutcome['failure']>['errorRange'],
       explain: QueryOutcome['explain'],
       analysis: QueryOutcome['analysis'];
     this.emit({ taskId: task.id, status: 'running', progress: 0, message: analysisSql ? '正在实际执行分析'
@@ -1104,6 +1105,7 @@ export class PostgresEngine {
       while (!estimate && !analysisSql) {
         // 每次扫描先撤旧范围；尾部词法失败不能误指向上一条已完成语句。
         sourceRange = undefined;
+        errorRange = undefined;
         activeOrdinal = undefined;
         if (task.cancelled) throw Error('PostgreSQL任务已取消，已执行语句未重放');
         const parameterPlan = program?.statements[count];
@@ -1165,10 +1167,12 @@ export class PostgresEngine {
           }
         } catch (reason) {
           const detail = session.managed.error(reason);
+          if (!task.cancelled && sourceRange)
+            errorRange = postgresErrorSourceRange(detail, boundSql ?? part.sql, statementOffset + part.start, sourceRange, parameterPlan);
           if (!report || !canContinuePostgresQueryError(detail, session.managed.state(), task.cancelled)) throw reason;
           report.errors.push({kind: 'server', statementOrdinal: count, statementsCompleted: report.statementsCompleted,
             message: truncateQueryScriptMessage(postgresQueryErrorMessage(detail, !!input.parameters)),
-            ...(sourceRange ? {sourceRange: {...sourceRange}} : {})});
+            ...(sourceRange ? {sourceRange: {...sourceRange}} : {}), ...(errorRange ? {errorRange} : {})});
           if (report.errors.length >= queryContinueOnErrorLimits.errors) {
             report.stopReason = '错误记录已达到100条上限，已停止后续语句'; break;
           }
@@ -1218,13 +1222,15 @@ export class PostgresEngine {
       if (report) {
         const stopReason = truncateQueryScriptMessage(message);
         report.errors.push({kind: 'stopped', statementOrdinal: activeOrdinal ?? report.statementsAttempted + 1,
-          statementsCompleted: report.statementsCompleted, message: stopReason, ...(sourceRange ? {sourceRange: {...sourceRange}} : {})});
+          statementsCompleted: report.statementsCompleted, message: stopReason, ...(sourceRange ? {sourceRange: {...sourceRange}} : {}),
+          ...(errorRange ? {errorRange} : {})});
         report.stopReason = stopReason;
       } else failure = {
         statementOrdinal: results.length + 1,
         statementsCompleted: results.length,
         message: queryFailureMessage(results.length, message),
         ...(sourceRange ? { sourceRange } : {}),
+        ...(errorRange ? {errorRange} : {}),
       };
     } finally {
       task.terminal = true;
@@ -1241,7 +1247,8 @@ export class PostgresEngine {
     if (report?.errors.length) {
       const first = report.errors[0];
       failure = {statementOrdinal: first.statementOrdinal, statementsCompleted: first.statementsCompleted,
-        message: queryScriptReportSummary(report), ...(first.sourceRange ? {sourceRange: {...first.sourceRange}} : {})};
+        message: queryScriptReportSummary(report), ...(first.sourceRange ? {sourceRange: {...first.sourceRange}} : {}),
+        ...(first.errorRange ? {errorRange: first.errorRange} : {})};
     }
     const postgresNotices = notices.report();
     this.emit({
