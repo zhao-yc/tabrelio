@@ -107,6 +107,7 @@ test('SQLite 数据格和字段编辑预览 HTML，外部资源零请求且提�
     await (await memo()).click({button: 'right'});
     await menu().getByRole('menuitem', {name: valueText.open, exact: true}).click();
     await expect(valuePanel('memo')).toBeVisible();
+    await info.attach('完整值面板文本', {body: await valuePanel('memo').innerText(), contentType: 'text/plain'});
     await valuePanel('memo').getByRole('button', {name: web.open, exact: true}).click();
     await assertFrame('账单摘要');
     await valuePanel('memo').getByRole('button', {name: valueText.close, exact: true}).click();
