@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 的 UPDATE 和 DELETE 条件按 SELECT 权限补全目标和连接来源，支持相关子查询并区分 `CURRENT OF` 游标位置。写入语句的返回列、新旧行别名及 CTE 星号继承读取权限。Q01、R01 继续为部分覆盖。 [PostgreSQL UPDATE](https://www.postgresql.org/docs/18/sql-update.html) · [PostgreSQL DELETE](https://www.postgresql.org/docs/18/sql-delete.html)
+
 2026-11-24 源码增量。PostgreSQL 普通 `UPDATE SET` 区分赋值目标和读取表达式，覆盖元组、数组下标、`FROM` 连接输出及相关子查询，目录分别按 UPDATE 和 SELECT 权限筛选。Q01、R01 继续为部分覆盖。 [PostgreSQL UPDATE](https://www.postgresql.org/docs/18/sql-update.html)
 
 2026-11-24 源码增量。PostgreSQL 的完整冲突目标位置可补全部分唯一索引、表达式唯一索引及混合键，读取目标表实际键组和谓词后一次写入草稿。目录按依赖列的 SELECT 权限筛选，手写谓词继续保留。Q01、R01 继续为部分覆盖。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)

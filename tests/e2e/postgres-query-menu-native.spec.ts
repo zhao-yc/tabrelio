@@ -2513,7 +2513,7 @@ test('PostgreSQL 冲突更新按真实会话的 SELECT 和 UPDATE 列权限补�
   await quitDesktop();
 });
 
-test('PostgreSQL 普通 UPDATE 按会话权限补全赋值、元组及下标', async ({}, info) => {
+test('PostgreSQL 普通 UPDATE 和 DELETE 按会话权限补全赋值、条件及返回列', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
   const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
@@ -2529,6 +2529,7 @@ test('PostgreSQL 普通 UPDATE 按会话权限补全赋值、元组及下标', a
       CREATE ROLE assignment_role NOLOGIN;
       GRANT USAGE ON SCHEMA public TO assignment_role;
       GRANT SELECT (id,count_read,vals), UPDATE (count_write,amount_write,vals) ON public.assignment_items TO assignment_role;
+      GRANT DELETE ON public.assignment_items TO assignment_role;
       GRANT SELECT (id,count_source,slot_cursor), UPDATE (count_hidden) ON public.assignment_feed TO assignment_role;`);
     const setRole = 'SET ROLE assignment_role';
     await prepare({id: '', name: '隔离 PostgreSQL UPDATE 补全', dialect: 'postgresql', group: '', color: '#123456',
@@ -2561,12 +2562,26 @@ test('PostgreSQL 普通 UPDATE 按会话权限补全赋值、元组及下标', a
       'amount_tail', 'amount_', 'amount_write');
     const tuple = await accept(tupleLeft.replace('d.count_read', 'd.count_tail'), 'count_tail', 'count_', 'count_read');
     const array = await accept(prefix + 'vals[s.slot_tail]=s.count_source' + suffix, 'slot_tail', 'slot_', 'slot_cursor');
+    const update = await accept(scalar + ' AND d.count_tail=3 RETURNING new.count_read', 'count_tail', 'count_', 'count_read');
+    const deletion = await accept('DELETE FROM ONLY (public.assignment_items) AS d USING public.assignment_feed s ' +
+      'WHERE d.id=s.id AND EXISTS (SELECT 1 WHERE s.count_tail=9) RETURNING WITH (OLD AS before) before.count_tail',
+      'count_tail', 'count_', 'count_source');
+    const removed = await accept(deletion, 'count_tail', 'count_', 'count_read');
     const observe = 'SELECT count_read,count_write,amount_write,vals FROM public.assignment_items';
     for (const [sql, expected] of [[scalar, [[3,9,0,[11,12]]]], [tuple, [[3,9,3,[11,12]]]], [array, [[3,0,0,[11,9]]]]] as const) {
       await observer.query('BEGIN');
       try {
         await observer.query('SET LOCAL ROLE assignment_role');
         expect((await observer.query(sql)).rowCount).toBe(1);
+        await observer.query('RESET ROLE');
+        expect((await observer.query({text: observe, rowMode: 'array'})).rows).toEqual(expected);
+      } finally { await observer.query('ROLLBACK'); }
+    }
+    for (const [sql, expected] of [[update, [[3,9,0,[11,12]]]], [removed, []]] as const) {
+      await observer.query('BEGIN');
+      try {
+        await observer.query('SET LOCAL ROLE assignment_role');
+        expect((await observer.query({text: sql, rowMode: 'array'})).rows).toEqual([[3]]);
         await observer.query('RESET ROLE');
         expect((await observer.query({text: observe, rowMode: 'array'})).rows).toEqual(expected);
       } finally { await observer.query('ROLLBACK'); }

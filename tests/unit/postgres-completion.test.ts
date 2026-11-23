@@ -473,6 +473,43 @@ it('UPDATE SET 目录按原会话交付目标权限，并把读取权限传给 C
   }
 });
 
+it('更新和删除条件复用目标、连接输出及相关子查询的读取作用域', () => {
+  const update = 'UPDATE ONLY (app.items) AS d SET value=1 FROM app.feed f WHERE ';
+  const remove = 'DELETE FROM ONLY (app.items) AS d USING app.feed f WHERE ';
+  for (const statement of [update, remove]) {
+    expect(at(statement + 'd.| RETURNING d.id')?.query)
+      .toMatchObject({relations: [{schema: 'app', name: 'items', alias: 'd', columnAccess: 'select'}]});
+    expect(at(statement + 'EXISTS (SELECT 1 WHERE f.|)')?.query)
+      .toMatchObject({relations: [{schema: 'app', name: 'feed', alias: 'f', columnAccess: 'select'}]});
+    expect(at(statement + 'new.| RETURNING new.id')?.query).toBeUndefined();
+    expect(at(statement + 'tools.ru|le(d.id)')?.routine).toEqual({context: 'expression', schema: 'tools'});
+  }
+  for (const statement of ['UPDATE app.items SET value=1', 'DELETE FROM app.items']) {
+    expect(at(statement + ' WHERE CURRENT OF cur|sor RETURNING id')?.query).toBeUndefined();
+  }
+  expect(at('DELETE FROM app.items d USING (app.a JOIN app.b USING (k)) pair WHERE pair.|')?.query)
+    .toMatchObject({relations: [{name: 'pair', columnAccess: 'select'}], joinOutput: {source: {kind: 'join'}}});
+  expect(at('UPDATE app.items d SET value=1 FROM app.a JOIN app.b USING (k) WHERE k| = 1')?.query)
+    .toMatchObject({qualified: false, joinOutput: {source: {kind: 'projection'}}});
+});
+
+it('RETURNING 直接引用和写入 CTE 星号均要求读取权限', async () => {
+  for (const marked of [
+    'INSERT INTO app.items DEFAULT VALUES RETURNING new.co|_tail',
+    'DELETE FROM app.items t RETURNING WITH (OLD AS before) before.co|_tail',
+    'WITH saved AS (UPDATE app.items SET id=1 RETURNING new.*) SELECT saved.co|_tail FROM saved',
+  ]) {
+    const request = vi.fn(async (): Promise<PostgresCompletionResult> => ({incomplete: false,
+      items: [{kind: 'column', reference: 0, name: 'count_read', type: 'integer'}]}));
+    const {provider, suggest} = editor(marked, request, '原会话');
+    try {
+      expect((await suggest())?.suggestions.map(item => item.insertText)).toEqual(['"count_read"']);
+      expect(request).toHaveBeenCalledExactlyOnceWith({kind: 'columns', prefix: 'co', connectionId: '原连接', database: '原库',
+        sessionId: '原会话', relations: [{schema: 'app', name: 'items', columnAccess: 'select'}]});
+    } finally { provider.dispose(); }
+  }
+});
+
 it('RETURNING 结果可传给外层查询，暴露 JOIN 输出及显式行别名的星号', () => {
   const cte = 'WITH data(id, label) AS (VALUES (1, \'a\')), meta(id, info) AS (VALUES (1, \'b\')), changed AS (';
   const update = 'UPDATE app.items SET id=1 FROM data JOIN meta USING (id)';
@@ -1070,7 +1107,7 @@ it('MERGE 只向目录发送当前目标身份，本地来源字段直接补全'
     expect(inputs).toEqual([]);
     expect((await target.suggest())?.suggestions).toMatchObject([{ insertText: '"note"', detail: 'text' }]);
     expect(inputs).toEqual([{ connectionId: '原连接', database: '原库', prefix: 'no', kind: 'columns',
-      relations: [{ schema: 'app', name: 'orders' }] }]);
+      relations: [{ schema: 'app', name: 'orders', columnAccess: 'select' }] }]);
   } finally { source.provider.dispose(); target.provider.dispose(); }
 });
 

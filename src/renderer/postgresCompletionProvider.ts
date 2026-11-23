@@ -3,7 +3,8 @@ import type { PostgresCompletionInput, PostgresCompletionReference, PostgresComp
 import { postgresCompletionLimits } from '../shared/postgresCompletion';
 import { postgresIdentifier } from '../shared/postgresSql';
 import { postgresConflictExpression } from '../shared/postgresConflictExpression';
-import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresSignature, isJoinedProjection, type PostgresFieldTarget } from './postgresCompletionAnalysis';
+import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresSignature, catalogColumnReferences,
+  isJoinedProjection, type PostgresFieldTarget } from './postgresCompletionAnalysis';
 import { joinCatalogRelations, joinedOutputColumns, sharedJoinColumns } from './postgresJoinColumns';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from './postgresNamedParameterReferences';
 import { postgresSignatureHelp } from './postgresSignatureHelp';
@@ -294,13 +295,11 @@ export function createPostgresCompletionProvider(options: {
         if (query?.kind === 'columns' && !joined) {
           for (const [index, ref] of query.relations.entries()) {
             if (isJoinedProjection(ref)) continue;
-            const { name, schema, projection, columnAccess } = ref;
-            const directory = projection?.stars ?? [{ name, ...(schema ? { schema } : {}) }];
-            for (const source of directory) {
-              references.push(columnAccess && !source.functionCall && !source.functionLayout ? { ...source, columnAccess } : source);
+            for (const source of catalogColumnReferences(ref)) {
+              references.push(source);
               origins.push(index);
             }
-            for (const name of projection?.names ?? []) {
+            for (const name of ref.projection?.names ?? []) {
               if (name && matches(name)) localColumns.push({ reference: index, name });
             }
           }

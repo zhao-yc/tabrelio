@@ -187,6 +187,14 @@ interface QueryContext {
 }
 interface Parsed { projection: Projection; query?: Query; routine?: PostgresRoutineCompletionTarget; windows?: PostgresCompletionAnalysis['windows']; }
 
+/** 物理星号继承读取权限；表函数仍通过其独立的签名和返回类型读取目录。 */
+export function catalogColumnReferences(ref: PostgresCompletionRelation): PostgresCompletionReference[] {
+  const { name, schema, projection, columnAccess } = ref;
+  const sources = projection?.stars ?? [{ name, ...(schema ? { schema } : {}) }];
+  if (!columnAccess) return sources;
+  return sources.map(source => source.functionCall || source.functionLayout ? source : { ...source, columnAccess });
+}
+
 /** 只接受一个 schema 限定符，关系别名和赋值左侧继续由字段补全处理。 */
 function expressionRoutine(main: Part[], left: PostgresEditorToken[], cursorGroup: Part | undefined,
   refs: PostgresCompletionRelation[][], expressionStart?: number): PostgresRoutineCompletionTarget | undefined {
@@ -268,12 +276,9 @@ function project(parts: Part[], refs: PostgresCompletionRelation[], starSources?
             includesJoin ||= joinedOutputs.has(ref.projection);
             names.push(...ref.projection.names);
             if (trace?.projected) origins.push(...ref.projection.names.map((_, index) => ref.projection?.origins?.[index] ?? null));
-            stars.push(...ref.projection.stars);
             exact &&= ref.projection.exact;
-          } else {
-            stars.push({ name: ref.name, ...(ref.schema ? { schema: ref.schema } : {}) });
-            exact = false;
-          }
+          } else exact = false;
+          stars.push(...catalogColumnReferences(ref));
         }
       } else { exact = false; knownJoinShape = false; }
     } else if (tail && tail.length <= limits.name && (explicit || (path || implicit) && !stop.has(keyword(last)))) {
@@ -1330,6 +1335,10 @@ function mergeExpression(parts: Part[], refs: ScopedRelation[], analysis: MergeA
   }
 }
 
+function readableColumns(refs: ScopedRelation[]): ScopedRelation[] {
+  return refs.map(ref => ({ ...ref, columnAccess: 'select' }));
+}
+
 /** RETURNING 的裸星号仅展开可裸用的输入列，旧行与新行的别名只参与限定列和限定星号。 */
 function parseReturning(parts: Part[], refs: ScopedRelation[], target: ScopedRelation, analysis: MergeAnalysis,
   joined?: { stars: PostgresCompletionRelation[]; outputs?: Projection[] }): Parsed | undefined {
@@ -1337,10 +1346,11 @@ function parseReturning(parts: Part[], refs: ScopedRelation[], target: ScopedRel
   const output = returningScope(parts.slice(1), refs, outer, target, trace);
   if (!output) return;
   const expressions = parts.slice(1 + output.start);
-  mergeExpression(expressions, output.refs, analysis, parts[output.start].end, Infinity, { outputs: joined?.outputs });
+  const visible = trace ? output.refs : readableColumns(output.refs);
+  mergeExpression(expressions, visible, analysis, parts[output.start].end, Infinity, { outputs: joined?.outputs });
   if (trace?.unsupported) return;
   const stars = joined?.stars ?? refs.filter(ref => !ref.qualifiedOnly);
-  const projection = !trace || trace.projected ? project([parts[0], ...expressions], output.refs, stars, trace) : unknown;
+  const projection = !trace || trace.projected ? project([parts[0], ...expressions], visible, trace ? stars : readableColumns(stars), trace) : unknown;
   return { ...analysis.active, projection };
 }
 
@@ -2003,13 +2013,16 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     (['WHERE', 'RETURNING'].includes(mergeKeyword(main, index)) || mergeKeyword(main, index) === 'FROM' && relationEntry(main, index)));
   const assignmentBoundary = main[setEnd]?.start ?? Infinity;
   const inAssignments = !!context && set >= 0 && context.offset >= main[set].end && context.offset < assignmentBoundary;
-  const joined = readQueryJoinSources(main, scope, outer, context, trace, returningHere || inAssignments);
+  const where = write ? main.findIndex((_, index) => mergeKeyword(main, index) === 'WHERE') : -1;
+  const predicateBoundary = main[returning]?.start ?? Infinity;
+  const inPredicate = !trace && !!context && where >= 0 && context.offset >= main[where].end && context.offset < predicateBoundary;
+  const completeWrite = returningHere || inAssignments || inPredicate;
+  const joined = readQueryJoinSources(main, scope, outer, context, trace, completeWrite);
   if (trace?.unsupported) return unsupported();
   if (joined && 'active' in joined) return joined.active;
   const tableSource = command === 'TABLE';
   if (trace && !write && !['SELECT', 'VALUES', 'TABLE'].includes(command)) return unsupported();
   if (write && command === 'DELETE' && keyword(main[1]) !== 'FROM') return unsupported();
-  const where = command === 'DELETE' ? main.findIndex(part => keyword(part) === 'WHERE') : -1;
   const refs: ScopedRelation[] = [];
   let writeRelation: ScopedRelation | undefined;
   const spans = trace ? new Map<number, RelationSpan>() : undefined;
@@ -2037,7 +2050,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     if (from && punct(main[i], ',')) commas.add(i);
     if (!usingSource && !(tableSource && i === 0) && !relationEntry(main, i) && !commas.has(i)) continue;
     const target = writeTarget(main, i);
-    if (!trace && write && target && (returningHere || inAssignments)) {
+    if (!trace && write && target && completeWrite) {
       const destination = readMergeRelation(main, i + 1, main[i].end, true, [], { scope, outer, names: new Set() });
       if (!destination) return { projection: unknown };
       writeRelation = destination.relation;
@@ -2161,18 +2174,24 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     }
     return { projection };
   }
-  if (returningHere) {
+  if (completeWrite) {
     if (!writeRelation) return { projection: unknown };
     const outputs = joined ? [relationProjection(writeRelation), ...joined.outputs] : undefined;
-    const joinedResult = outputs ? { outputs, stars: outputs.map(projection => ({ name: '', projection })) } : undefined;
-    return parseReturning(main.slice(returning), refs, writeRelation, { scope, outer, context, names: new Set() }, joinedResult) ?? { projection: unknown };
-  }
-  if (inAssignments && writeRelation) {
     const analysis: MergeAnalysis = { scope, outer, context, names: new Set() };
-    const sources = refs.map(ref => ({ ...ref, columnAccess: 'select' as const }));
-    const outputs = joined ? [relationProjection(writeRelation), ...joined.outputs] : undefined;
-    completeWriteAction([main[0], ...main.slice(set, setEnd < 0 ? undefined : setEnd)], sources,
-      { ...writeRelation, columnAccess: 'update' }, analysis, assignmentBoundary, outputs);
+    if (returningHere) {
+      const result = outputs ? { outputs, stars: outputs.map(projection => ({ name: '', projection })) } : undefined;
+      return parseReturning(main.slice(returning), refs, writeRelation, analysis, result) ?? { projection: unknown };
+    }
+    const sources = readableColumns(refs);
+    if (inPredicate) {
+      // CURRENT OF 接的是游标名，普通布尔条件才查字段与例程目录。
+      if (keyword(main[where + 1]) === 'CURRENT' && keyword(main[where + 2]) === 'OF') return { projection: unknown };
+      const predicate = main.slice(where + 1, returning < 0 ? undefined : returning);
+      mergeExpression(predicate, sources, analysis, main[where].end, predicateBoundary, { outputs });
+    } else {
+      completeWriteAction([main[0], ...main.slice(set, setEnd < 0 ? undefined : setEnd)], sources,
+        { ...writeRelation, columnAccess: 'update' }, analysis, assignmentBoundary, outputs);
+    }
     return analysis.active ?? { projection: unknown };
   }
   const projection = tableSource && refs[0] ? relationProjection(refs[0]) : project(main, refs, joined?.outputs.map(projection => ({name: '', projection})));
