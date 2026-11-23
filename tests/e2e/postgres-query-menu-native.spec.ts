@@ -2593,6 +2593,68 @@ test('PostgreSQL 普通 UPDATE 和 DELETE 按会话权限补全赋值、条件�
   await quitDesktop();
 });
 
+test('PostgreSQL MERGE 按原会话列权限补全条件和写入分支', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query(`CREATE TABLE public.merge_access_items (id int PRIMARY KEY, field_read int, field_update int, field_insert int);
+      CREATE TABLE public.merge_access_feed (id int, field_source int, field_hidden int);
+      INSERT INTO public.merge_access_items VALUES (1,3,0,0), (3,4,0,0);
+      INSERT INTO public.merge_access_feed VALUES (1,9,30), (2,8,31);
+      CREATE ROLE merge_access_role NOLOGIN;
+      GRANT USAGE ON SCHEMA public TO merge_access_role;
+      GRANT SELECT (id,field_read), UPDATE (field_update), INSERT (id,field_insert) ON public.merge_access_items TO merge_access_role;
+      GRANT SELECT (id,field_source), UPDATE (field_hidden) ON public.merge_access_feed TO merge_access_role;`);
+    const setRole = 'SET ROLE merge_access_role';
+    await prepare({id: '', name: '隔离 PostgreSQL MERGE 分支', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, setRole);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await command('execute-all');
+    await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === setRole)).toBe(true);
+    await expect.poll(() => enabled('execute-all')).toBe(true);
+    const baseline = await history(), identity = (await inspectModel()).identity;
+    const accept = async (draft: string, column: string) => {
+      await replaceDraft(draft);
+      await modelSelection(1, draft.indexOf('field_tail') + 'field_'.length + 1);
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText([column]);
+      await page.keyboard.press('Enter');
+      const completed = draft.replace('field_tail', postgresIdentifier(column));
+      await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+      expect(await history()).toEqual(baseline);
+      expect((await inspectModel()).identity).toEqual(identity);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+      return completed;
+    };
+    let draft = 'MERGE INTO public.merge_access_items d USING public.merge_access_feed s ON d.id=s.id ' +
+      'WHEN MATCHED AND s.field_tail>0 THEN UPDATE SET field_tail=s.field_source+d.field_tail ' +
+      'WHEN NOT MATCHED BY TARGET THEN INSERT (id,field_tail) VALUES (s.id,s.field_source) ' +
+      'WHEN NOT MATCHED BY SOURCE AND d.field_tail>0 THEN UPDATE SET field_update=d.field_read ' +
+      'RETURNING merge_action(),new.id';
+    for (const column of ['field_source', 'field_update', 'field_read', 'field_insert', 'field_read']) draft = await accept(draft, column);
+    const inspect = 'SELECT id,field_read,field_update,field_insert FROM public.merge_access_items ORDER BY id';
+    await observer.query('BEGIN');
+    try {
+      await observer.query('SET LOCAL ROLE merge_access_role');
+      const done = await observer.query({text: draft, rowMode: 'array'});
+      expect(done.rows.sort((left, right) => Number(left[1]) - Number(right[1]))).toEqual([['UPDATE',1], ['INSERT',2], ['UPDATE',3]]);
+      await observer.query('RESET ROLE');
+      expect((await observer.query({text: inspect, rowMode: 'array'})).rows).toEqual([[1,3,12,0], [2,null,null,8], [3,4,4,0]]);
+    } finally { await observer.query('ROLLBACK'); }
+    expect((await observer.query({text: inspect, rowMode: 'array'})).rows).toEqual([[1,3,0,0], [3,4,0,0]]);
+    await page.screenshot({path: info.outputPath('PostgreSQL-MERGE分支权限.png'), animations: 'disabled'});
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL INSERT SELECT 隔离目标列权限和读取来源', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

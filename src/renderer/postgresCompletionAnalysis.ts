@@ -1724,6 +1724,19 @@ function startsTargetColumn(list: Group, context: QueryContext): boolean {
     punct(previous, ',') && list.parts.includes(previous));
 }
 
+/** 左侧的数组下标会读已有值，与同一动作的值表达式使用相同的来源。 */
+function completeWriteSubscript(parts: Part[], refs: ScopedRelation[], analysis: MergeAnalysis, context: QueryContext,
+  outputs?: Projection[]): void {
+  let group = parts.find(part => part.kind === 'group' && contains(part, context.offset));
+  while (group?.kind === 'group') {
+    if (group.closing === ']') {
+      mergeExpression(group.parts, refs, analysis, group.start + 1, group.end - Number(group.closed), { outputs });
+      return;
+    }
+    group = group.parts.find(part => part.kind === 'group' && contains(part, context.offset));
+  }
+}
+
 /** 写入列来自目标；赋值右侧、谓词和 VALUES 表达式使用调用方限定的关系。 */
 function completeWriteAction(parts: Part[], refs: ScopedRelation[], target: ScopedRelation, analysis: MergeAnalysis, end: number,
   outputs?: Projection[]): void {
@@ -1753,22 +1766,18 @@ function completeWriteAction(parts: Part[], refs: ScopedRelation[], target: Scop
       targetColumns();
       return;
     }
-    // 数组下标是读取表达式，既有值和来源字段沿用赋值右侧的可见范围。
-    let group = parts.slice(first).find(part => part.kind === 'group' && contains(part, context.offset));
-    while (group?.kind === 'group') {
-      if (group.closing === ']') {
-        mergeExpression(group.parts, refs, analysis, group.start + 1, group.end - Number(group.closed), { outputs });
-        return;
-      }
-      group = group.parts.find(part => part.kind === 'group' && contains(part, context.offset));
-    }
+    completeWriteSubscript(parts.slice(first), refs, analysis, context, outputs);
   } else if (keyword(parts[0]) === 'INSERT') {
     const list = parts[1];
-    if (list?.kind === 'group' && list.closing === ')' && contains(list, context.offset)) targetColumns();
+    if (list?.kind === 'group' && list.closing === ')' && contains(list, context.offset)) {
+      if (startsTargetColumn(list, context)) targetColumns();
+      else completeWriteSubscript(list.parts, refs, analysis, context, outputs);
+      return;
+    }
     const valuesAt = parts.findIndex(part => keyword(part) === 'VALUES');
     const values = valuesAt < 0 ? undefined : parts[valuesAt + 1];
     if (values?.kind === 'group' && values.closing === ')' && contains(values, context.offset)) {
-      mergeExpression([values], refs, analysis, values.start + 1, values.end);
+      mergeExpression([values], refs, analysis, values.start + 1, values.end, { outputs });
     }
   }
 }
@@ -1863,8 +1872,12 @@ function parseMerge(parts: Part[], analysis: MergeAnalysis): Parsed | undefined 
   const matched = implicit ? [relation, ...actionSource] : refs;
   // PostgreSQL 17/18 只切换来源 JOIN 的首个根命名空间项，未遮蔽的输入别名仍可解析。
   const withoutSource = refs.filter(ref => ref !== source.root);
+  const sourceOutputs = source.joined ? [source.projection] : undefined;
+  const targetOutput = source.joined ? relationProjection(relation) : undefined;
+  const matchedOutputs = targetOutput ? [targetOutput, source.projection] : undefined;
   const firstClause = clauses[0]?.when ?? end;
-  mergeExpression(parts.slice(join + 1, firstClause), refs, analysis, parts[join].end, parts[firstClause]?.start ?? Infinity);
+  mergeExpression(parts.slice(join + 1, firstClause), trace ? refs : readableColumns(refs), analysis,
+    parts[join].end, parts[firstClause]?.start ?? Infinity, { outputs: matchedOutputs });
   for (const [i, { when, then }] of clauses.entries()) {
     if (trace && then === undefined) return;
     let index = when + 1;
@@ -1885,19 +1898,24 @@ function parseMerge(parts: Part[], analysis: MergeAnalysis): Parsed | undefined 
     }
     const inserts = unmatched && side !== 'SOURCE';
     const visible = unmatched ? inserts ? actionSource : withoutSource : matched;
+    const readable = trace ? visible : readableColumns(visible);
+    const outputs = unmatched ? inserts ? sourceOutputs : undefined : matchedOutputs;
     const nextClause = clauses[i + 1]?.when ?? end;
     const conditionEnd = then ?? nextClause;
     if (index !== conditionEnd) {
       if (keyword(parts[index]) === 'AND' && (!trace || index + 1 < conditionEnd)) {
-        mergeExpression(parts.slice(index + 1, conditionEnd), visible, analysis, parts[index].end, parts[conditionEnd]?.start ?? Infinity);
+        mergeExpression(parts.slice(index + 1, conditionEnd), readable, analysis,
+          parts[index].end, parts[conditionEnd]?.start ?? Infinity, { outputs });
       } else if (trace) return;
     }
     if (then !== undefined) {
       const action = parts.slice(then + 1, nextClause);
       if (trace) {
         if (!traceMergeAction(action, inserts, scope, visible, outer, trace)) return;
-      } else if (context && context.offset >= parts[then].end) {
-        completeWriteAction(action, visible, relation, analysis, parts[nextClause]?.start ?? Infinity);
+      } else if (context && context.offset >= parts[then].end && keyword(action[0]) === (inserts ? 'INSERT' : 'UPDATE')) {
+        // 目标目录选择动作要求的列权限，VALUES 和赋值表达式遵循各自的分支读取权限。
+        completeWriteAction(action, readable, { ...relation, columnAccess: inserts ? 'insert' : 'update' }, analysis,
+          parts[nextClause]?.start ?? Infinity, outputs);
       }
     }
   }
@@ -1906,7 +1924,8 @@ function parseMerge(parts: Part[], analysis: MergeAnalysis): Parsed | undefined 
     // MERGE RETURNING * 先展开来源的输出（含 JOIN 合并键），再展开目标，排除仅可限定访问的 OLD/NEW。
     if (trace && end + 1 === parts.length) return;
     const output = parseReturning(parts.slice(end), refs, relation, analysis,
-      { stars: [{ name: '', projection: source.projection }, relation] });
+      { stars: [{ name: '', projection: source.projection }, relation],
+        outputs: targetOutput ? [source.projection, targetOutput] : undefined });
     if (!output) return trace ? undefined : analysis.active;
     projection = output.projection;
   }

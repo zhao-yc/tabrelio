@@ -992,6 +992,8 @@ PostgreSQL 的 `JOIN USING` 和 `NATURAL JOIN` 合并键在结果里只建议一
 
 在 PostgreSQL 的 `UPDATE` 或 `DELETE` 的 `WHERE` 中，补全按 `SELECT` 权限提供目标列及 `FROM`／`USING` 来源字段，包括连接输出和相关子查询。写入语句的 `RETURNING` 也按读取权限筛选字段，新旧行别名和写入 CTE 的星号沿用同一规则。 [PostgreSQL UPDATE](https://www.postgresql.org/docs/18/sql-update.html) · [PostgreSQL DELETE](https://www.postgresql.org/docs/18/sql-delete.html)
 
+编写 PostgreSQL `MERGE` 时，匹配条件 `ON`、`WHEN` 条件及值表达式按可见来源和 `SELECT` 权限补全。`THEN UPDATE SET` 左侧按 `UPDATE` 权限补全目标列，`THEN INSERT` 的列清单按 `INSERT` 权限补全。 [PostgreSQL MERGE](https://www.postgresql.org/docs/18/sql-merge.html)
+
 编写 PostgreSQL 的 `INSERT … ON CONFLICT … DO UPDATE` 时，`SET` 左侧按 `UPDATE` 权限补全目标列。在赋值右侧和动作 `WHERE` 中，可用目标表别名读取既有行，用 `excluded.` 读取待插入行，两者都按 `SELECT` 权限补全。存在已连接会话时，权限及表目录按该会话解析。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)
 
 在 PostgreSQL 的 `ON CONFLICT` 后按 Ctrl+空格，可选择由普通列组成且无谓词的完整主键或唯一键。括号内已填的列会保留，接受候选会补齐缺项。`ON CONSTRAINT` 后可选用目标表的约束名，写明 `DO NOTHING` 时也可选择排斥约束。列权限和同名表以当前会话为准。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)

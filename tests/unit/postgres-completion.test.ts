@@ -510,6 +510,44 @@ it('RETURNING 直接引用和写入 CTE 星号均要求读取权限', async () =
   }
 });
 
+it('MERGE 分支分别使用 INSERT、UPDATE 或 SELECT 列权限及对应来源', () => {
+  const merge = 'MERGE INTO app.items d USING app.feed s ON ';
+  const target = {relations: [{schema: 'app', name: 'items', alias: 'd'}]};
+  const source = {relations: [{schema: 'app', name: 'feed', alias: 's', columnAccess: 'select'}]};
+  expect(at(merge + 's.|=d.id WHEN MATCHED THEN DELETE')?.query).toMatchObject(source);
+  expect(at(merge + 'true WHEN MATCHED AND s.| THEN UPDATE SET value=1')?.query).toMatchObject(source);
+  expect(at(merge + 'true WHEN MATCHED THEN UPDATE SET val|ue=s.value')?.query)
+    .toMatchObject({relations: [{...target.relations[0], columnAccess: 'update'}]});
+  expect(at(merge + 'true WHEN NOT MATCHED BY TARGET THEN INSERT (id,val|ue) VALUES (s.id,s.value)')?.query)
+    .toMatchObject({relations: [{...target.relations[0], columnAccess: 'insert'}]});
+  expect(at(merge + 'true WHEN NOT MATCHED THEN INSERT (vals[s.|]) VALUES (1)')?.query).toMatchObject(source);
+  expect(at(merge + 'true WHEN NOT MATCHED THEN INSERT (vals) VALUES (s.|)')?.query).toMatchObject(source);
+  expect(at(merge + 'true WHEN NOT MATCHED BY SOURCE THEN UPDATE SET value=d.|')?.query)
+    .toMatchObject({relations: [{...target.relations[0], columnAccess: 'select'}]});
+  expect(at(merge + 'true WHEN NOT MATCHED BY SOURCE THEN UPDATE SET value=s.|')?.query).toBeUndefined();
+  expect(at(merge + 'true WHEN NOT MATCHED THEN INSERT (value) VALUES (d.|)')?.query).toBeUndefined();
+  expect(at(merge + 'true WHEN NOT MATCHED THEN UPDATE SET val|ue=1')?.query).toBeUndefined();
+  expect(at('MERGE INTO app.items d USING app.a JOIN app.b USING (k) ON true WHEN NOT MATCHED AND k| > 0')?.query)
+    .toMatchObject({qualified: false, joinOutput: {source: {kind: 'projection'}}});
+});
+
+it('MERGE 写入位置只把目标身份和所需列权限发给原会话', async () => {
+  const merge = 'MERGE INTO app.items d USING app.feed s ON d.id=s.id ';
+  for (const [clause, columnAccess] of [
+    ['WHEN MATCHED THEN UPDATE SET count_|tail=s.count_value', 'update'],
+    ['WHEN NOT MATCHED THEN INSERT (count_|tail) VALUES (s.count_value)', 'insert'],
+  ] as const) {
+    const request = vi.fn(async (): Promise<PostgresCompletionResult> => ({incomplete: false,
+      items: [{kind: 'column', reference: 0, name: 'count_value', type: 'integer'}]}));
+    const {provider, suggest} = editor(merge + clause, request, '原会话');
+    try {
+      expect((await suggest())?.suggestions.map(item => item.insertText)).toEqual(['"count_value"']);
+      expect(request).toHaveBeenCalledExactlyOnceWith({kind: 'columns', prefix: 'count_', connectionId: '原连接', database: '原库',
+        sessionId: '原会话', relations: [{schema: 'app', name: 'items', columnAccess}]});
+    } finally { provider.dispose(); }
+  }
+});
+
 it('RETURNING 结果可传给外层查询，暴露 JOIN 输出及显式行别名的星号', () => {
   const cte = 'WITH data(id, label) AS (VALUES (1, \'a\')), meta(id, info) AS (VALUES (1, \'b\')), changed AS (';
   const update = 'UPDATE app.items SET id=1 FROM data JOIN meta USING (id)';
