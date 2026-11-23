@@ -28,7 +28,7 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
     } else {
       const result = await directory.load(sqliteCompletionColumns(relation, prefix));
       if (result.incomplete) return;
-      for (const entry of result.entries) if (entry.kind === 'column' && fold(entry.name) === fold(name)) candidates.push({ relation, column: entry.name, entry });
+      for (const entry of result.entries) if (entry.kind === 'column' && !(relation.visibleColumnsOnly && entry.hidden) && fold(entry.name) === fold(name)) candidates.push({ relation, column: entry.name, entry });
     }
   }
   if (candidates.length) break;

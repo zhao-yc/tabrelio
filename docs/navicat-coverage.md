@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite 查询编辑器支持括号连接的成员字段补全、悬停、内部 USING 和可展开首组的复合排序星号。组内和组外分别按 SQLite 来源作用域保留别名，嵌套投影省略隐藏列。Q01 继续为部分覆盖。[SQLite 来源语法](https://www.sqlite.org/syntax/table-or-subquery.html)
+
 2026-11-23 源码增量。SQLite 查询编辑器按原会话的列目录补全和悬停表值函数返回列，支持 JSON、PRAGMA 等 SQLite 已注册模块和已声明的虚拟表。复合排序星号及 USING 均复用该目录。补全只读取结构，实参留在编辑器。Q01 继续为部分覆盖。[SQLite 表值函数说明](https://www.sqlite.org/lang_select.html#tabfunc1)
 
 2026-11-23 源码增量。SQLite 查询编辑器可在 `JOIN … USING` 中补全当前连接两侧共有列，排除清单已有项，保留 CTE 和派生表已知列，并按 SQLite 规则处理含 `RIGHT` 或 `FULL JOIN` 的查询块中的左侧同名列。Q01 继续为部分覆盖。[SQLite JOIN 文档](https://www.sqlite.org/lang_select.html#fromclause)

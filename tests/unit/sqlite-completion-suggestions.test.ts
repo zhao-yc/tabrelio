@@ -173,6 +173,21 @@ it('表值函数只发送名称和前缀，接受字段后 SQLite 查询可执�
   try { expect(db.prepare(sql).all()).toEqual([{ value: 3 }, { value: 7 }]); }
   finally { db.close(); }
 });
+it('嵌套连接组在外侧只补投影列，接受表值函数字段后 SQLite 查询可执行', async () => {
+  const marked = "SELECT j.| FROM anchor a JOIN (document d JOIN json_each(d.payload) j ON 1) ON 1 ORDER BY j.key";
+  const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const d = directory([column('value', 'json_each'), { ...column('json', 'json_each'), hidden: true }]);
+  const { items } = await sqliteCompletionSuggestions(analysis, d);
+  expect(d.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'json_each', prefix: '', tableFunction: true });
+  expect(items.map(item => item.insertText)).toEqual(['"value"']);
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE anchor(id); INSERT INTO anchor VALUES(1); CREATE TABLE document(payload); INSERT INTO document VALUES('[3,7]');`);
+    expect(db.prepare(marked.replace('|', items[0].insertText)).all()).toEqual([{ value: 3 }, { value: 7 }]);
+    expect(() => db.prepare(marked.replace('|', 'json'))).toThrow(/no such column/i);
+  } finally { db.close(); }
+});
 it('准确别名字段只替最后标识符，Unicode引号和片段语法保持普通文本', async () => {
   const d = directory([column('字段"🚢.${x}')]), result = await sqliteCompletionSuggestions(ready(), d);
   expect(d.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'subject', prefix: '' }); expect(result.items[0]).toMatchObject({ label: '字段"🚢.${x}', insertText: '"字段""🚢.${x}"', kind: 'column' });

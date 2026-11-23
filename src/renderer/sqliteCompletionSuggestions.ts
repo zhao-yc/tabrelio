@@ -96,7 +96,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
       } else {
         const metadata = await directory.load(sqliteCompletionColumns(relation, analysis.target.prefix)); incomplete ||= metadata.incomplete;
         const source = relation.tableFunction ? text.tableFunction : undefined;
-        for (const entry of metadata.entries) if (entry.kind === 'column') add({ label: entry.name, kind: 'column', insertText: insert(entry.name), detail: binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : '') });
+        for (const entry of metadata.entries) if (entry.kind === 'column' && !(relation.visibleColumnsOnly && entry.hidden)) add({ label: entry.name, kind: 'column', insertText: insert(entry.name), detail: binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : '') });
       }
       if (!qualifiers.length) add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail: text.alias, trigger: true });
     }

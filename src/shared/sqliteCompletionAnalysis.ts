@@ -3,7 +3,7 @@ import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits, sql
 import type { LocalReferenceToken } from './localReferenceIndex';
 import type { PhysicalObjectAnalysis } from './physicalObjectAnalysis';
 
-export type SqliteCompletionRelation = ({ kind: 'physical'; alias?: string } & SqliteCompletionSource | { kind: 'local'; source: 'cte' | 'derived'; name: string; alias?: string; columns: string[]; declaration?: true }) & { scopeDepth?: number };
+export type SqliteCompletionRelation = ({ kind: 'physical'; alias?: string; visibleColumnsOnly?: true } & SqliteCompletionSource | { kind: 'local'; source: 'cte' | 'derived'; name: string; alias?: string; columns: string[]; declaration?: true }) & { scopeDepth?: number };
 export type SqliteAnalysisIntent = 'hover' | 'definition' | 'object';
 export interface SqliteLocalDefinition { start: number; end: number; }
 type OutputSource = SqliteCompletionSource;
@@ -13,7 +13,7 @@ interface UsingProjection { left: { operand: JoinOperand; merged?: true | string
 export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; output?: OutputProjection; using?: UsingProjection; unqualifiedColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
 type Token = { kind: 'id' | 'string' | 'number' | 'parameter' | 'symbol'; value: string; start: number; end: number; depth: number; quoted?: boolean; closed?: boolean; pair?: number };
 type Cte = { name: string; columns?: string[]; start: number; end: number; declaration: SqliteLocalDefinition };
-type Binding = { relation: SqliteCompletionRelation; start: number; end: number; aliasIndex?: number; referenceIndex?: number; declaration?: SqliteLocalDefinition; unknown?: boolean; level?: number };
+type Binding = { relation: SqliteCompletionRelation; start: number; end: number; aliasIndex?: number; referenceIndex?: number; declaration?: SqliteLocalDefinition; unknown?: boolean; nestedProjection?: true; level?: number };
 type Ready = Extract<SqliteCompletionAnalysis, { status: 'ready' }>;
 const unicode = (value: string) => !value.includes('\0') && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
 const idStart = (character: string) => !!character && (/[A-Za-z_]/.test(character) || character.codePointAt(0)! >= 128);
@@ -315,8 +315,9 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
             for (const wildcard of new Set(wildcards.map(name => name === null ? null : fold(name)))) {
               const matches = wildcard === null ? bindings : bindings.filter(({ relation }) => fold(relation.alias ?? relation.name) === wildcard);
               if (!matches.length || wildcard !== null && matches.length !== 1) { incomplete = true; continue; }
-              for (const { relation, unknown } of matches) {
-                if (relation.kind === 'physical') {
+              for (const { relation, unknown, nestedProjection } of matches) {
+                if (nestedProjection) incomplete = true;
+                else if (relation.kind === 'physical') {
                   const source = columnSource(relation), key = sqliteCompletionSourceKey(source);
                   if (!sources.has(key)) sources.set(key, source);
                 } else if (unknown) incomplete = true;
@@ -336,23 +337,122 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         }
         return scope(branchStart, branchEnd, ctes, outer, level + 1);
       }
-      const usingAt = projectionOnly || !['select', 'update'].includes(command) ? -1 : tokens.findIndex((token, at) => {
+      const usingPosition = (start: number, end: number, depth: number) => projectionOnly || !['select', 'update'].includes(command) ? -1 : tokens.findIndex((token, at) => {
         const open = tokens[at + 1];
-        return at >= head && at < end && token.depth === base && keyword(token, 'using') && open?.kind === 'symbol' &&
+        return at >= start && at < end && token.depth === depth && keyword(token, 'using') && open?.kind === 'symbol' &&
           open.value === '(' && offset >= open.end && offset <= (tokens[open.pair ?? end]?.start ?? source.length);
       });
+      const usingAt = usingPosition(head, end, base);
       if (usingAt >= 0 && (intent || qualifiers.length)) fail('using');
       const relationEnd = usingAt < 0 ? end : usingAt, relationOnly = projectionOnly || usingAt >= 0;
-      const joins = new Map<Binding, { natural: boolean; merged?: string[] }>();
+      type Joins = Map<Binding, { natural: boolean; rightOrFull: boolean; merged?: string[] }>;
+      const joins: Joins = new Map(), groupedOperands = new Set<Binding>();
       const own: Binding[] = [], derived: { start: number; end: number }[] = []; let relationContext = false, aliasContext = false, targetBinding: Binding | undefined, argumentBinding: Binding | undefined, insertList: { start: number; end: number } | undefined;
+      let groupScope: Binding[] | undefined, groupUsing: UsingProjection | undefined, groupUsingIsolated = false;
       const relevant = (begin: number, finish: number) => offset >= (tokens[begin]?.start ?? source.length) && target.start <= (tokens[finish - 1]?.end ?? source.length);
-      function relation(at: number, target = false): number {
+      const hasRightOrFull = (start: number, end: number, depth: number) => tokens.some((token, at) => at >= start && at < end && token.depth === depth &&
+        keyword(token, 'join') && modifiersAtJoin(tokens, at).some(word => word === 'right' || word === 'full'));
+      function usingProjection(inputs: Binding[], joins: Joins, using: number, start: number, end: number, depth: number): UsingProjection {
+        const right = inputs.at(-1), join = right && joins.get(right);
+        if (intent || qualifiers.length || !right || !join || right.end > using || join.natural || inputs.length < 2 ||
+          relationContext || aliasContext || inputs.some(binding => groupedOperands.has(binding))) fail('using');
+        const tail = tokens.slice(right.end, using);
+        const indexed = tail.length === 3 && keyword(tail[0], 'indexed') && keyword(tail[1], 'by') && tail[2].kind === 'id';
+        const noIndex = tail.length === 2 && keyword(tail[0], 'not') && keyword(tail[1], 'indexed');
+        if (tail.length && !indexed && !noIndex) fail('using');
+        // SQLite 对含 RIGHT/FULL JOIN 的整个查询块启用 USING 同名列消歧。
+        const uniqueLeft = [...joins.values()].some(join => join.rightOrFull) || hasRightOrFull(start, end, depth);
+        const operand = ({ relation }: Binding): JoinOperand => relation.kind === 'local' ? { columns: relation.columns }
+          : { source: columnSource(relation) };
+        return {
+          left: inputs.slice(0, -1).map(binding => {
+            const prior = joins.get(binding), merged = prior?.natural ? true : prior?.merged;
+            return { operand: operand(binding), ...(merged ? { merged } : {}) };
+          }), right: operand(right), used: usingNames(tokens, using + 1, tokens[using + 1].pair ?? end, target),
+          ...(uniqueLeft ? { uniqueLeft: true } : {}),
+        };
+      }
+      function readPreviousUsing(joins: Joins, at: number, bound: number) {
+        const join = joins.get(own.at(-1)!); const close = tokens[at + 1].pair;
+        if (!join || close === undefined || close >= bound) fail('using');
+        join.merged = usingNames(tokens, at + 1, close);
+      }
+      function recordJoin(joins: Joins, before: number, at: number) {
+        if (own.length <= before) return;
+        const modifiers = modifiersAtJoin(tokens, at);
+        joins.set(own[before], { natural: modifiers.includes('natural'), rightOrFull: modifiers.includes('right') || modifiers.includes('full') });
+      }
+      /** SQLite 展开首个无修饰的括号来源，其余多来源组按嵌套查询隔离 ON/USING。 */
+      function relationGroup(open: number, close: number, bound: number, hasPrefix: boolean, parentJoins?: Joins): number {
+        const depth = tokens[open].depth + 1, inside = offset >= tokens[open].end && offset <= (tokens[close]?.start ?? source.length);
+        const first = own.length, using = usingPosition(open + 1, close, depth), stop = using < 0 ? close : using;
+        const joins: Joins = new Map();
+        const collectJoins = using >= 0 || parentJoins ? joins : undefined;
+        let at = relation(open + 1, false, stop, false, collectJoins);
+        while (at < stop) {
+          const token = tokens[at];
+          if (token.depth === depth) {
+            if (keyword(token, 'join') || token.kind === 'symbol' && token.value === ',') {
+              const before = own.length, next = relation(at + 1, false, stop, true, collectJoins);
+              if (collectJoins) recordJoin(collectJoins, before, at);
+              at = next;
+              continue;
+            }
+            if (collectJoins && keyword(token, 'using') && tokens[at + 1]?.value === '(') readPreviousUsing(collectJoins, at, stop);
+          }
+          at++;
+        }
+        const members = own.slice(first);
+        if (using >= 0) groupUsing = usingProjection(members, joins, using, open + 1, close, depth);
+        let next = close < bound ? close + 1 : close;
+        const explicit = keyword(tokens[next], 'as');
+        if (explicit) next++;
+        const token = tokens[next];
+        const alias = next < bound && token?.kind === 'id' && token.value && (token.quoted || !structural.has(fold(token.value))) ? token : undefined;
+        const aliasIndex = alias ? next++ : undefined;
+        if (aliasIndex !== undefined) aliasContext ||= relevant(aliasIndex, aliasIndex + 1);
+        else if (explicit) aliasContext = true;
+        const flattened = !hasPrefix && !alias && !keyword(tokens[next], 'on') && !keyword(tokens[next], 'using');
+        if (flattened && parentJoins) for (const [binding, join] of joins) parentJoins.set(binding, join);
+        if (groupUsing && inside && !groupUsingIsolated) {
+          if (hasRightOrFull(open + 1, close, depth)) groupUsing.uniqueLeft = true;
+          groupUsingIsolated = !flattened && members.length > 1;
+        }
+        if (members.length === 1) {
+          const binding = members[0];
+          // 包装单一来源时 SQLite 复制物理目标，不继承括号内的原别名。
+          if (!flattened && !inside) {
+            if (!alias && binding.relation.kind === 'local' && binding.relation.source === 'derived') fail('derived-alias');
+            delete binding.relation.alias;
+            if (alias) binding.relation.alias = alias.value;
+            binding.aliasIndex = aliasIndex;
+          }
+          binding.end = next;
+        } else if (members.length > 1) {
+          if (inside && !flattened) groupScope ??= members;
+          if (alias && !inside) fail('relation-group');
+          if (!flattened) for (const member of members) {
+            if (!inside) {
+              groupedOperands.add(member);
+              member.nestedProjection = true;
+              if (member.relation.kind === 'physical') member.relation.visibleColumnsOnly = true;
+            }
+          }
+        }
+        return next;
+      }
+      function relation(at: number, target = false, bound = relationEnd, hasPrefix = false, parentJoins?: Joins): number {
         const begin = at; let binding: Binding;
-        if (relationOnly && at >= relationEnd) fail('relation');
-        if (tokens[at]?.value === '(') {
-          const open = at++, close = tokens[open].pair ?? end;
-          if (!keyword(tokens[at], 'select') && !keyword(tokens[at], 'with')) fail('relation-group');
-          derived.push({ start: at, end: close }); const columns = projectionColumns(tokens, at, close); at = close < end ? close + 1 : end;
+        if (at >= bound) {
+          if (relationOnly || offset < (tokens[bound - 1]?.end ?? 0) || offset > (tokens[bound]?.start ?? source.length)) fail('relation');
+          relationContext = true;
+          return at;
+        }
+        if (tokens[at]?.kind === 'symbol' && tokens[at].value === '(') {
+          const open = at++, close = tokens[open].pair ?? bound;
+          if (target || close > bound) fail('relation-group');
+          if (!keyword(tokens[at], 'select') && !keyword(tokens[at], 'with')) return relationGroup(open, close, bound, hasPrefix, parentJoins);
+          derived.push({ start: at, end: close }); const columns = projectionColumns(tokens, at, close); at = close < bound ? close + 1 : bound;
           if (keyword(tokens[at], 'as')) at++;
           const alias = tokens[at];
           if (alias?.kind === 'id' && alias.value && (alias.quoted || !structural.has(fold(alias.value)))) {
@@ -371,17 +471,17 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
           if (tokens[at]?.value === '.') {
             const folded = fold(name); if (folded !== 'main' && folded !== 'temp') fail('schema'); schema = folded; at++;
             if (tokens[at]?.kind !== 'id' || !tokens[at].value) { relationContext = true; return at; } name = tokens[at++].value;
-            if (relationOnly && (at > relationEnd || !tokens[at - 1].quoted && structural.has(fold(name)))) fail('relation');
+            if (relationOnly && (at > bound || !tokens[at - 1].quoted && structural.has(fold(name)))) fail('relation');
           }
           const nameEnd = at;
           const tableFunction = !target && tokens[at]?.kind === 'symbol' && tokens[at].value === '(' && ['select', 'update'].includes(command);
           const local = schema === undefined ? ctes.get(fold(name)) : undefined; if (target && local) fail('dml-target');
           let inArgument = false;
           if (tableFunction) {
-            const open = tokens[at], close = open.pair ?? relationEnd;
+            const open = tokens[at], close = open.pair ?? bound;
             inArgument = offset >= open.end && offset <= (tokens[close]?.start ?? source.length);
-            if (close >= relationEnd && !inArgument || local && !inArgument) fail('table-function');
-            at = close < relationEnd ? close + 1 : close;
+            if (close >= bound && !inArgument || local && !inArgument) fail('table-function');
+            at = close < bound ? close + 1 : close;
           }
           const relation: SqliteCompletionRelation = local ? { kind: 'local', source: 'cte', name: local.name, columns: local.columns ?? [] }
             : { kind: 'physical', name, ...(schema ? { schema } : {}), ...(tableFunction ? { tableFunction: true } : {}) };
@@ -407,49 +507,33 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         const token = tokens[at]; if (token.depth !== base) continue;
         const joined = keyword(token, 'join') || token.kind === 'symbol' && token.value === ',';
         if (fromClause(tokens, at) || joined && (inFrom || usingAt < 0 && keyword(token, 'join'))) {
-          const before = own.length, next = relation(at + 1, command === 'delete' && !targetBinding);
-          if (usingAt >= 0 && joined && own.length > before) {
-            joins.set(own[before], { natural: modifiersAtJoin(tokens, at).includes('natural') });
-          }
+          const before = own.length, next = relation(at + 1, command === 'delete' && !targetBinding, relationEnd, joined, usingAt >= 0 ? joins : undefined);
+          if (usingAt >= 0 && joined) recordJoin(joins, before, at);
           if (command === 'delete' && !targetBinding) targetBinding = own[0];
           inFrom = true;
           if (next > at + 1) at = next - 1;
           continue;
         }
         if (usingAt >= 0 && inFrom && keyword(token, 'using') && tokens[at + 1]?.value === '(') {
-          const join = joins.get(own.at(-1)!); const close = tokens[at + 1].pair;
-          if (!join || close === undefined || close >= usingAt) fail('using');
-          join.merged = usingNames(tokens, at + 1, close);
+          readPreviousUsing(joins, at, usingAt);
         }
         if (['where', 'group', 'having', 'order', 'limit', 'returning', 'set', 'values', 'window'].some(word => keyword(token, word))) inFrom = false;
       }
+      if (groupUsing) {
+        if (!groupUsingIsolated && hasRightOrFull(head, end, base)) groupUsing.uniqueLeft = true;
+        return { bindings: [], ctes: new Map(), syntax: ['column'], using: groupUsing };
+      }
       if (usingAt >= 0) {
-        const inputs = own.filter(binding => binding !== targetBinding), right = inputs.pop();
-        const join = right && joins.get(right);
-        if (!right || !join || right.end > usingAt || !inFrom || join.natural || !inputs.length || relationContext || aliasContext) fail('using');
-        const tail = tokens.slice(right.end, usingAt);
-        const indexed = tail.length === 3 && keyword(tail[0], 'indexed') && keyword(tail[1], 'by') && tail[2].kind === 'id';
-        const noIndex = tail.length === 2 && keyword(tail[0], 'not') && keyword(tail[1], 'indexed');
-        if (tail.length && !indexed && !noIndex) fail('using');
-        // SQLite 对含 RIGHT/FULL JOIN 的整个 SELECT 分支启用 USING 同名列消歧。
-        const uniqueLeft = tokens.some((token, at) => at >= head && at < end && token.depth === base &&
-          keyword(token, 'join') && modifiersAtJoin(tokens, at).some(word => word === 'right' || word === 'full'));
-        const operand = ({ relation }: Binding): JoinOperand => relation.kind === 'local' ? { columns: relation.columns }
-          : { source: columnSource(relation) };
-        return { bindings: [], ctes: new Map(), syntax: ['column'], using: {
-          left: inputs.map(binding => {
-            const prior = joins.get(binding), merged = prior?.natural ? true : prior?.merged;
-            return { operand: operand(binding), ...(merged ? { merged } : {}) };
-          }), right: operand(right), used: usingNames(tokens, usingAt + 1, tokens[usingAt + 1].pair ?? end, target),
-          ...(uniqueLeft ? { uniqueLeft: true } : {}),
-        } };
+        if (!inFrom) fail('using');
+        return { bindings: [], ctes: new Map(), syntax: ['column'], using: usingProjection(own.filter(binding => binding !== targetBinding), joins, usingAt, head, end, base) };
       }
       if (projectionOnly) {
         if (relationContext || aliasContext) fail('relation');
         return { bindings: own, ctes, syntax: ['column'] };
       }
       // 函数实参使用已绑定的输入和相关外层。自身返回列及此后才加入的关系留在调用外。
-      const visibleOwn = argumentBinding ? own.slice(0, own.indexOf(argumentBinding)).filter(binding => binding !== targetBinding) : own;
+      const scoped = groupScope ?? own;
+      const visibleOwn = argumentBinding ? scoped.slice(0, scoped.indexOf(argumentBinding)).filter(binding => binding !== targetBinding) : scoped;
       // 子查询只继承真正可相关的外层binding；FROM派生表与CTE体不得看到外层行别名。
       for (let at = head; at < end; at++) if (tokens[at].value === '(' && (keyword(tokens[at + 1], 'select') || keyword(tokens[at + 1], 'with'))) {
         const finish = tokens[at].pair ?? end;
@@ -554,7 +638,7 @@ const usingProjection = z.object({ left: z.array(z.object({ operand: joinOperand
   .min(1).max(limits.relations - 1).refine(left => left[0]?.merged === undefined), right: joinOperand,
   used: columnNames, uniqueLeft: z.literal(true).optional() }).strict();
 const relationSchema = z.discriminatedUnion('kind', [
-  outputSource.extend({ kind: z.literal('physical'), alias: nameSchema.optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }),
+  outputSource.extend({ kind: z.literal('physical'), alias: nameSchema.optional(), visibleColumnsOnly: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }),
   z.object({ kind: z.literal('local'), source: z.enum(['cte', 'derived']), name: nameSchema, alias: nameSchema.optional(), columns: columnNames, declaration: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }).strict(),
 ]);
 const resultSchema = z.discriminatedUnion('status', [

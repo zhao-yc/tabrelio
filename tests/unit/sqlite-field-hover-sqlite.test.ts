@@ -48,3 +48,18 @@ it('真实生成及无声明字段保持目录事实，动态存储类型不伪�
     const untyped = await f.hover('SELECT s.un|typed FROM subject s'); expect(untyped.content).toContain(text.noDeclaredType); expect(untyped.content).not.toContain(text.declaredType + '："BLOB"');
   } finally { f.db.close(); }
 });
+it('真实嵌套连接组的字段悬停只显示投影列，首来源展开仍可访问原隐藏列', async () => {
+  const f = fixture();
+  try {
+    const grouped = " FROM outer_table o JOIN (inner_empty e JOIN json_each('[7]') j) ON 1";
+    const visible = await f.hover('SELECT j.va|lue' + grouped);
+    expect(f.db.prepare(visible.source).get()?.value).toBe(7);
+    expect(visible.content).toContain('"json_each"');
+    const hidden = await f.hover('SELECT j.js|on' + grouped);
+    expect(() => f.db.prepare(hidden.source)).toThrow(/no such column/i);
+    expect(hidden.content).toBeUndefined();
+    const flattened = await f.hover("SELECT j.js|on FROM (inner_empty e JOIN json_each('[7]') j)");
+    expect(f.db.prepare(flattened.source).get()?.json).toBe('[7]');
+    expect(flattened.content).toContain(text.hidden + '：是');
+  } finally { f.db.close(); }
+});

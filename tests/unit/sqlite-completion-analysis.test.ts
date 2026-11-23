@@ -8,6 +8,56 @@ it('SELECT别名可向后读取准确FROM，限定字段只替当前标识符而
 it('未限定物理表保schema省略让后端temp优先，main/temp显式目标保独立',()=>{expect(ready('SELECT | FROM subject').relations).toEqual([{kind:'physical',name:'subject'}]);expect(ready('SELECT t.| FROM temp.subject t').relations).toEqual([{kind:'physical',schema:'temp',name:'subject',alias:'t'}]);expect(ready('SELECT main.subject.| FROM main.subject').qualifiers).toEqual(['main','subject']);expect(ready('SELECT * FROM temp.|').syntax).toContain('relation');});
 it('JOIN和同物理表不同alias保准确两个绑定；重复alias明确阻断歧义',()=>{expect(ready('SELECT a.| FROM subject a JOIN subject b ON a.id=b.id').relations).toEqual([{kind:'physical',name:'subject',alias:'a'},{kind:'physical',name:'subject',alias:'b'}]);expect(analyze('SELECT x.| FROM a x JOIN b x')).toMatchObject({status:'blocked',reason:'ambiguous'});});
 it('混合JOIN ON后逗号仍属于FROM关系，不把ON内嵌函数逗号当表',()=>{const value=ready('SELECT c.| FROM a x JOIN b y ON coalesce(x.id,0)=y.id, c');expect(value.relations.map(item=>item.name)).toEqual(['a','b','c']);});
+it('括号连接的成员在外部查询仍可单独限定，嵌套括号和函数参数不增加虚假来源', () => {
+  const value = ready('SELECT j.va|lue FROM ((main.doc d JOIN json_each(coalesce(d.payload,\'[]\')) j ON 1), temp.other o)');
+  expect(value.relations).toEqual([
+    { kind: 'physical', name: 'doc', schema: 'main', alias: 'd' },
+    { kind: 'physical', name: 'json_each', alias: 'j', tableFunction: true },
+    { kind: 'physical', name: 'other', schema: 'temp', alias: 'o' },
+  ]);
+  expect(ready('SELECT * FROM a JOIN (b JOIN main.|) ON 1').syntax).toContain('relation');
+  expect(ready('SELECT * FROM a JOIN (|').syntax).toContain('relation');
+});
+it('括号连接内部的 ON 和表值函数实参使用组内来源，限定不串到同查询块的其他组', () => {
+  expect(ready('SELECT * FROM external e JOIN (a x JOIN b y ON x.i|d=y.id) ON e.id=x.id').relations)
+    .toEqual([{ kind: 'physical', name: 'a', alias: 'x' }, { kind: 'physical', name: 'b', alias: 'y' }]);
+  expect(ready('SELECT * FROM external e JOIN ((a x JOIN json_each(x.pa|yload) j ON 1), b y) ON 1').relations)
+    .toEqual([{ kind: 'physical', name: 'a', alias: 'x' }]);
+  expect(ready('SELECT * FROM (a x JOIN b y ON x.i|d=y.id) AS exposed').relations.map(relation => relation.alias))
+    .toEqual(['x', 'y']);
+  expect(ready('SELECT * FROM (a x JOIN b y ON future.i|d=y.id), c future').relations.map(relation => relation.alias))
+    .toEqual(['x', 'y', 'future']);
+});
+it('单来源括号别名覆盖原限定符，定义定位到外部的别名声明', () => {
+  const marked = 'SELECT ou|ter_alias.id FROM ((main.data_table AS inner_alias)) AS outer_alias JOIN other o ON 1';
+  const { source, offset } = query(marked);
+  const value = analyzeSqliteCompletion(source, offset, 'definition');
+  const start = source.lastIndexOf('outer_alias');
+  expect(value).toMatchObject({ status: 'ready', definition: { start, end: start + 'outer_alias'.length } });
+  expect(ready('SELECT g.i|d FROM (main.data_table AS inner_alias) g').relations)
+    .toEqual([{ kind: 'physical', name: 'data_table', schema: 'main', alias: 'g' }]);
+  expect(ready('SELECT data_table.i|d FROM main.other o JOIN (main.data_table AS removed) ON 1').relations)
+    .toEqual([{ kind: 'physical', name: 'other', schema: 'main', alias: 'o' }, { kind: 'physical', name: 'data_table', schema: 'main' }]);
+});
+it('括号内 USING 与复合星号通过原目录身份映射物理表和表值函数', () => {
+  expect(ready('SELECT * FROM outside s, (main.a x JOIN temp.b y USING (i|d))').using).toEqual({
+    left: [{ operand: { source: { name: 'a', schema: 'main' } } }], right: { source: { name: 'b', schema: 'temp' } }, used: [],
+  });
+  expect(ready("SELECT j.* FROM (doc d JOIN json_each(d.payload) j) UNION ALL SELECT j.* FROM (json_each('[]') j) ORDER BY va|").output)
+    .toEqual({ columns: [], sources: [{ name: 'json_each', tableFunction: true }] });
+  expect(ready('SELECT * FROM ((a LEFT JOIN b USING(id))) FULL JOIN c USING(i|d)').using).toEqual({
+    left: [{ operand: { source: { name: 'a' } } }, { operand: { source: { name: 'b' } }, merged: ['id'] }],
+    right: { source: { name: 'c' } }, used: [], uniqueLeft: true,
+  });
+  expect(ready('SELECT * FROM (a JOIN b USING(i|d)) FULL JOIN c USING(id)').using?.uniqueLeft).toBe(true);
+  expect(ready('SELECT * FROM a FULL JOIN (b JOIN c USING(i|d)) ON 1').using?.uniqueLeft).toBeUndefined();
+});
+it('嵌套为内置查询的组外字段仅含投影列，复合排序保留已知输出并提示不完整', () => {
+  const value = ready("SELECT j.va|lue FROM doc d JOIN (payload p JOIN json_each(p.body) j ON 1) ON 1");
+  expect(value.relations).toContainEqual({ kind: 'physical', name: 'json_each', alias: 'j', tableFunction: true, visibleColumnsOnly: true });
+  expect(ready('SELECT 1 AS known UNION ALL SELECT y.* FROM a JOIN (b x JOIN c y USING(id)) ON 1 ORDER BY |').output)
+    .toEqual({ columns: ['known'], sources: [], incomplete: true });
+});
 it('当前statement之外的前后物理表不会进入补全',()=>{expect(ready('SELECT a. FROM prior a; SELECT b.| FROM actual b; SELECT c. FROM later c').relations).toEqual([{kind:'physical',name:'actual',alias:'b'}]);});
 it('UTF16、CRLF与双引号重复转义保完整替换范围和准确prefix',()=>{const marked='SELECT\r\n t."co""l|umn🚢" FROM "表🚢" t',input=query(marked),value=ready(marked);expect(value.target).toEqual({start:input.source.indexOf('"co'),end:input.source.indexOf('" FROM')+1,prefix:'co"l',quoted:true});expect(input.source.slice(value.target.start,value.target.end)).toBe('"co""lumn🚢"');expect(value.qualifiers).toEqual(['t']);});
 it('backtick重复转义和方括号完整名可识别；方括号不伪造]]转义',()=>{expect(ready('SELECT t.\u0060a\u0060\u0060b|c\u0060 FROM [表.🚢] t').target).toMatchObject({prefix:'a\u0060b',quoted:true});expect(ready('SELECT t.[a.|b] FROM subject t').target).toMatchObject({prefix:'a.',quoted:true});expect(analyze('SELECT [a|]]b] FROM subject')).toMatchObject({status:'blocked',reason:'syntax'});});

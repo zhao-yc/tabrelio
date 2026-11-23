@@ -25,7 +25,7 @@ const modifier = process.platform === 'darwin' ? 'Meta' : 'Control', connectionN
 const bootstrapSql = "CREATE TEMP TABLE subject(temp_marker TEXT,id INTEGER); INSERT INTO temp.subject VALUES('SQLITE_COMPLETION_TEMP_A',1);";
 const transactionalSql = 'CREATE TABLE main.uncommitted_completion_only(uncommitted_marker TEXT);';
 const secondSessionSql = 'SELECT main_marker,id FROM main.subject ORDER BY id;';
-const functionSql = `SELECT j."value" FROM json_each('["TVF_FIRST","TVF_SECOND"]') j ORDER BY j.key`;
+const functionSql = `SELECT j."value" FROM (SELECT 1 AS marker) a JOIN (main.subject s JOIN json_each('["TVF_FIRST","TVF_SECOND"]') j ON s.id=1) ON 1 ORDER BY j.key`;
 const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql, functionSql];
 let completed: { directory: string; database: string; firstPid?: number; secondPid?: number; platform: string } | undefined;
 let observeFailure: (() => Record<string, unknown>) | undefined;
@@ -270,7 +270,7 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     stage = '用户显式回滚原事务，旧DDL目录失效而TEMP仍属A；主文件完整原样';
     await step(() => query().getByRole('button', { name: zh.common.transactionRollback, exact: true }).click()); await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeDisabled()); expect((await passiveState(sessionA)).state).toEqual({ transactionOpen: false, transactionKnown: true, broken: false }); expect(disk()).toEqual(baseline);
     await choose('SELECT s.te| FROM subject AS s', 'temp_marker', 'SELECT s."temp_marker" FROM subject AS s', 'main_marker'); const missing = await at('SELECT * FROM uncomm|'); await trigger(missing); await step(() => expect(widget().locator('.monaco-list-row .label-name').filter({ hasText: /^uncommitted_completion_only$/ })).toHaveCount(0)); await settleMetadata(); const rollbackLookup = completionFacts(await step(audit)).filter(fact => fact.request.kind === 'relations' && fact.request.sessionId === sessionA && fact.request.prefix === 'uncomm').at(-1)!; expect(sqliteCompletionOutputSchema.parse(result(rollbackLookup.reply)).entries).toEqual([]); await step(() => page.keyboard.press('Escape'));
-    stage = '原查询接受表值函数的真实字段候选后按用户意图执行一次';
+    stage = '原查询接受括号连接内表值函数的真实字段候选后按用户意图执行一次';
     const beforeFunction = { tasks: await tasks(), history: await history(), executions: 3, sessions: 2 };
     await choose(functionSql.replace('"value"', 'va|suffix'), 'value', functionSql);
     await settleMetadata(); await metadataReadOnly(baseline, beforeFunction);
