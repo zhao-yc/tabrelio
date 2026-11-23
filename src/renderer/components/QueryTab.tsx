@@ -2735,14 +2735,15 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     failureLocator.locateRange(sourceRange);
   }
   /** 从仅显示结果定位错误时，先恢复原编辑器，再按已确认的原范围选中。 */
-  function locateScriptFailure(failure: QueryFailure, precise = false): void {
+  function locateScriptFailure(failure: QueryFailure, precise = false): boolean {
     const belongs = outcome?.scriptReport ? scriptFailureRanges.current.has(failure) : outcome?.failure === failure;
-    if (!belongs || failureSource.current !== failureLocator || !failureLocator?.available()) return;
-    if (precise ? !failureLocator.canLocateError(failure) : !failureLocator.bindRange(failure.sourceRange)) return;
+    if (!belongs || failureSource.current !== failureLocator || !failureLocator?.available()) return false;
+    if (precise ? !failureLocator.canLocateError(failure) : !failureLocator.bindRange(failure.sourceRange)) return false;
     if (resultsOnly) flushSync(() => setResultsOnly(false));
     editor.current?.layout();
-    if (precise ? failureLocator.locateError(failure) : failureLocator.locate())
-      document.getElementById(layoutEditorId)?.scrollIntoView({block: 'nearest'});
+    if (failureSource.current !== failureLocator || !(precise ? failureLocator.locateError(failure) : failureLocator.locate())) return false;
+    document.getElementById(layoutEditorId)?.scrollIntoView({block: 'nearest'});
+    return true;
   }
   /** 在模态打开前捕获已验证的原语句。正文失效或固定快照仍可展示结果附带文本。 */
   function openResultSql(): void {

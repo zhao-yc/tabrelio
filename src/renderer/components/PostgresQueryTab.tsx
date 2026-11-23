@@ -380,24 +380,25 @@ export function PostgresQueryTab({
     locateFailure();
   }
   /** 多错摘要共用原模型租约；旧错误对象不能重绑后继执行的范围。 */
-  function locateFailure(failure?: QueryFailure): void {
+  function locateFailure(failure?: QueryFailure): boolean {
     const locator = failureSource.current;
     if (pinStateRef.current.selected || !locator?.available() || failure &&
-        (!scriptFailureRanges.current.has(failure) || !locator.bindRange(failure.sourceRange))) return;
-    flushSync(() => setResultsOnly(false));
-    editor.current?.layout(); locator.locate();
+        (!scriptFailureRanges.current.has(failure) || !locator.bindRange(failure.sourceRange))) return false;
+    if (resultsOnly) flushSync(() => setResultsOnly(false));
+    if (failureSource.current !== locator || pinStateRef.current.selected) return false;
+    editor.current?.layout(); return locator.locate();
   }
   function canLocateFailurePosition(failure: QueryFailure): boolean {
     return !!failure.errorRange && !pinStateRef.current.selected && scriptFailureRanges.current.has(failure) &&
       !!failureSource.current?.canLocateError(failure);
   }
   /** 保留整句按钮的范围，独立跳到同一回执的准确字符或原参数模板。 */
-  function locateFailurePosition(failure: QueryFailure): void {
-    if (!canLocateFailurePosition(failure)) return;
+  function locateFailurePosition(failure: QueryFailure): boolean {
+    if (!canLocateFailurePosition(failure)) return false;
     const locator = failureSource.current;
-    flushSync(() => setResultsOnly(false));
-    if (failureSource.current !== locator || !canLocateFailurePosition(failure)) return;
-    editor.current?.layout(); locator?.locateError(failure);
+    if (resultsOnly) flushSync(() => setResultsOnly(false));
+    if (!locator || failureSource.current !== locator || !canLocateFailurePosition(failure)) return false;
+    editor.current?.layout(); return locator.locateError(failure);
   }
   /** 暂存只读取本标签原模型及已确认的物理会话；不把参数值写入工作区或来源键。 */
   function parameterReuseInput(): QueryParameterReuseOwnerInput | null {

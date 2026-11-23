@@ -1186,6 +1186,8 @@ SQLite 当前语句回执的「定位结果原语句」会恢复编辑区并选�
 
 PostgreSQL 返回原 SQL 的确切错误位置时，可点「定位错误位置」。在「遇错继续」摘要中，每条带位置的错误都可独立跳转。编辑器会选中对应字符或原命名参数模板，若报错指向语句末尾则将光标放在那里。定位只操作原编辑器，无需重发 SQL，也不会显示绑定值。 [PostgreSQL 错误字段](https://www.postgresql.org/docs/18/protocol-error-fields.html)
 
+脚本有多条失败记录时，可从「遇错继续」摘要点「上一处错误」或「下一处错误」，按脚本顺序循环。导航优先使用服务端给出的已校验位置，缺少精确位置时选中整句。无可靠原文范围的错误仍可在摘要查看。摘要标出当前条目，编辑草稿会使旧定位失效。
+
 SQLite 查询也可在「定位错误位置」跳到原生编译器指出的字符或原命名参数模板。「遇错继续」可逐条定位。约束失败、超时及其他没有原生字符偏移的错误仍按可确认的语句范围定位。 [SQLite 原生错误位置](https://sqlite.org/c3ref/errcode.html)
 
 MySQL 和 MariaDB 返回标准英文语法错误，且报错片段能与本次发送的 SQL 对上时，可用「定位报错行」选中原稿中的对应行。支持全文、选区、当前语句和参数模板，「遇错继续」可逐条定位。MySQL 5.7 报告的上一行可以用唯一匹配的相邻片段校正。数据库返回空片段、其他语言的提示、动态 SQL 的内部错误或其他无法核对的位置时，可用整句定位。 [MySQL 错误响应](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_basic_err_packet.html) · [MariaDB 错误码](https://mariadb.com/docs/server/reference/error-codes/mariadb-error-code-reference)

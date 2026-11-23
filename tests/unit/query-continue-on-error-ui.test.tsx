@@ -97,6 +97,35 @@ it('摘要展示末尾完成/真实计数/逐条顺序，定位只回交所选�
   expect(document.body.textContent).toContain(t.counts(5, 3, 2)); expect(document.body.textContent).toContain(t.reachedEnd); expect(document.body.textContent).not.toContain('首个错误处停止'); expect(button(t.locate(2)).disabled).toBe(true);
   await act(async () => button(t.locate(4)).dispatchEvent(new MemoryEvent('click'))); expect(locate).toHaveBeenCalledExactlyOnceWith(value.errors[1]);
 });
+it('错误导航循环、跳过无原文范围的回执，并沿用逐条定位的当前位置', async () => {
+  const first = {...failure(2), errorRange: {start: 2, end: 3}}, unknown = {...failure(3), sourceRange: undefined}, last = failure(4);
+  const value = report([first, unknown, last]), locate = vi.fn((_entry: QueryFailure) => true), exact = vi.fn((_entry: QueryFailure) => true);
+  const render = (current: typeof value, available: boolean) => <QueryContinueOnErrorNotice report={current} completedResults={3}
+    locateAvailable={item => available && item !== unknown} positionAvailable={item => available && item === first}
+    onLocate={locate} onLocatePosition={exact}/>;
+  const click = async (label: string) => act(async () => { button(label).dispatchEvent(new MemoryEvent('click')); });
+  await mount(render(value, true));
+  expect(document.body.textContent).toContain(t.navigable(2));
+  await click(t.next);
+  expect(exact).toHaveBeenCalledExactlyOnceWith(first); expect(locate).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain(t.located(2, 1, 2));
+  await click(t.previous);
+  expect(locate).toHaveBeenLastCalledWith(last);
+  expect(document.body.textContent).toContain(t.located(4, 2, 2));
+  await click(t.locate(2));
+  await click(t.next);
+  expect(locate.mock.calls.map(([entry]) => entry)).toEqual([last, first, last]);
+  exact.mockReturnValueOnce(false); locate.mockReturnValueOnce(false);
+  await click(t.next);
+  expect(document.body.textContent).toContain(t.located(4, 2, 2));
+  await act(async () => root!.render(render({...value}, true)));
+  expect(document.body.textContent).toContain(t.navigable(2));
+  await click(t.previous);
+  expect(locate).toHaveBeenLastCalledWith(last);
+  await act(async () => root!.render(render(value, false)));
+  expect(button(t.previous).disabled).toBe(true); expect(button(t.next).disabled).toBe(true);
+  expect(document.body.textContent).toContain(t.navigable(0));
+});
 it('全成功也显示显式模式摘要，停止原因仅作有界文字显示', async () => {
   await mount(<QueryContinueOnErrorNotice report={{ ...report([]), statementsCompleted: 5 }} completedResults={5}/>); expect(document.body.textContent).toContain(t.title); expect(document.body.textContent).toContain(t.counts(5, 5, 0)); expect(document.querySelectorAll('button')).toHaveLength(0);
   await act(async () => root!.render(<QueryContinueOnErrorNotice report={{ ...report([]), reachedEnd: false, stopReason: '<img src=x>' + '错'.repeat(6000) }} completedResults={1}/>));

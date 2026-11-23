@@ -101,6 +101,10 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     await expect(report).toContainText(continuing.counts(4, 2, 2));
     await locate(report.getByRole('button', {name: text.locateLineFor(2), exact: true}), firstLine);
     await locate(report.getByRole('button', {name: text.locateLineFor(3), exact: true}), secondLine);
+    const navigator = report.getByRole('group', {name: continuing.navigation, exact: true});
+    await locate(navigator.getByRole('button', {name: continuing.next, exact: true}), firstLine);
+    await expect(navigator).toContainText(continuing.located(2, 1, 2));
+    await locate(navigator.getByRole('button', {name: continuing.previous, exact: true}), secondLine);
     await page.screenshot({path: info.outputPath('原查询报错行.png'), animations: 'disabled'});
     await (await toggle(continuing.option)).uncheck();
 

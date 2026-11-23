@@ -360,6 +360,15 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     await step(() => query().getByRole('button', {name: queryLayoutZh.placement, exact: true}).click());
     await step(() => page.getByRole('menuitem', {name: queryLayoutZh.results, exact: true}).click());
     await step(() => expect(query().locator('.sql-editor-wrap')).toBeHidden());
+    const navigator = query().getByRole('group', {name: continueText.navigation, exact: true});
+    await step(() => navigator.getByRole('button', {name: continueText.previous, exact: true}).click());
+    const secondError = continuedSource.indexOf('BAD SELECT');
+    expect((await model()).selections).toEqual([{start: secondError, end: secondError + 1}]);
+    await step(() => expect(navigator).toContainText(continueText.located(3, 2, 2)));
+    await step(() => navigator.getByRole('button', {name: continueText.next, exact: true}).click());
+    const firstError = continuedSource.indexOf('missing_column');
+    expect((await model()).selections).toEqual([{start: firstError, end: firstError + 1}]);
+    await step(() => expect(navigator).toContainText(continueText.located(2, 1, 2)));
     for (const ordinal of [2, 3]) {
       const source = continuedStatements[ordinal - 1], start = continuedSource.indexOf(source);
       const position = ordinal === 2 ? continuedSource.indexOf('missing_column') : start;

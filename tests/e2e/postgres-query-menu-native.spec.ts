@@ -550,6 +550,12 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await report().getByRole('button', {name: failureText.locatePositionFor(2), exact: true}).click();
     await expect.poll(inspectModel).toMatchObject({selected: 'm', position: {lineNumber: 2, column: 9}});
     await expect(report().getByRole('button', {name: failureText.locatePositionFor(4), exact: true})).toHaveCount(0);
+    const navigator = report().getByRole('group', {name: continueText.navigation, exact: true});
+    await navigator.getByRole('button', {name: continueText.next, exact: true}).click();
+    await expect.poll(inspectModel).toMatchObject({selected: 'SELECT 1/0'});
+    await expect(navigator).toContainText(continueText.located(4, 2, 2));
+    await navigator.getByRole('button', {name: continueText.next, exact: true}).click();
+    await expect.poll(inspectModel).toMatchObject({selected: 'm', position: {lineNumber: 2, column: 9}});
     expect(await history()).toEqual(beforeLocate); expect(await records()).toEqual([1, 2, 3]);
     expect(beforeLocate[0].success).toBe(false);
     await page.screenshot({path: info.outputPath('PostgreSQL遇错继续摘要.png')});
