@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import type { QueryOutcome, QueryResult } from '../../src/shared/contracts';
 import { sqliteExplainLimits } from '../../src/shared/sqliteExplain';
 import { sqliteExplainZh as text } from '../../src/renderer/locales/sqliteExplain.zh-CN';
+import { explainZh as findText } from '../../src/renderer/locales/explain.zh-CN';
 import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
 
 const grids = vi.hoisted(() => ({ calls: [] as any[] }));
@@ -38,7 +39,10 @@ function tree(): MemoryNode[] { return document.querySelectorAll('[role="treeite
 function selected() { return tree().find(node => node.getAttribute('aria-selected') === 'true'); }
 function callback(node: MemoryNode, name = 'onClick'): (...args: any[]) => unknown { const key = Object.keys(node).find(key => key.startsWith('__reactProps$')); if (!key) throw Error('缺少真实React事件'); return Reflect.get(node, key)[name]; }
 async function click(label: string) { await act(async () => button(label).dispatchEvent(new MemoryEvent('click'))); }
-async function key(node: MemoryNode, value: string) { const event = Object.assign(new MemoryEvent('keydown'), { key: value }); await act(async () => node.dispatchEvent(event)); return event; }
+async function key(node: MemoryNode, value: string, modifiers: { shiftKey?: boolean; isComposing?: boolean } = {}) { const event = Object.assign(new MemoryEvent('keydown'), { key: value, ...modifiers }); await act(async () => node.dispatchEvent(event)); return event; }
+function searchInput() { return document.querySelector(`input[aria-label="${text.find}"]`)!; }
+function searchCount() { return document.querySelector(`[aria-label="${findText.findCount}"]`)!.textContent; }
+async function search(value: string) { await act(async () => { const input = searchInput(); input.value = value; input.dispatchEvent(new MemoryEvent('input')); }); }
 
 describe('SQLite 计划专属视图真实 React RAM', () => {
   it('原数值id和detail逐字保留，不解释脚本或构造MySQL估计指标', async () => {
@@ -53,6 +57,54 @@ describe('SQLite 计划专属视图真实 React RAM', () => {
   });
   it('键盘折叠/展开与父子移动，选择和焦点停留真实可见节点', async () => {
     const f = await mount(); await key(tree()[0], 'ArrowRight'); expect(selected()!.textContent).toContain('SEARCH'); await key(selected()!, 'ArrowRight'); expect(selected()!.textContent).toContain('不得运行'); await key(selected()!, 'ArrowLeft'); expect(selected()!.textContent).toContain('SEARCH'); await key(selected()!, 'ArrowLeft'); expect(tree()).toHaveLength(3); expect(selected()!.getAttribute('aria-expanded')).toBe('false'); await key(selected()!, 'Enter'); expect(tree()).toHaveLength(4); await key(selected()!, 'End'); expect(selected()!.textContent).toContain('TEMP B-TREE'); expect(document.activeElement).toBe(selected()); await click(text.collapse); expect(tree()).toHaveLength(1); await click(text.expand); expect(tree()).toHaveLength(4); expect(f.invoke).not.toHaveBeenCalled();
+  });
+  it('从原文视图查找折叠节点，只展开命中祖先并聚焦原节点', async () => {
+    const value = fixture();
+    value.sqliteExplain!.nodes.push({ id: '5', parent: '9007199254740993', depth: 1, auxiliary: '0', detail: '无关分支' },
+      { id: '6', parent: '5', depth: 2, auxiliary: '0', detail: '仍然折叠' });
+    const f = await mount(value);
+    await click(text.collapse); expect(tree()).toHaveLength(1);
+    await click(text.rawLabel); await search('<SCRIPT>');
+    expect(searchCount()).toBe(findText.matches(0, 1));
+    await key(searchInput(), 'Enter');
+    expect(button(text.treeLabel).getAttribute('aria-pressed')).toBe('true');
+    expect(selected()!.textContent).toContain('保留原文 <script>不得运行</script>');
+    expect(selected()!.getAttribute('data-plan-match')).toBe('true');
+    expect(document.activeElement).toBe(selected());
+    expect(scroll).toHaveBeenLastCalledWith({ block: 'nearest', inline: 'nearest' });
+    expect(tree().find(node => node.textContent.includes('无关分支'))?.getAttribute('aria-expanded')).toBe('false');
+    expect(tree().some(node => node.textContent.includes('仍然折叠'))).toBe(false);
+    expect(searchCount()).toBe(findText.matches(1, 1));
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+  it('完整节点编号、Unicode 和字面匹配，前后环绕且中文输入组合不跳转', async () => {
+    const value = fixture(); value.sqliteExplain!.nodes[3].detail += ' IDX_NAME🧭';
+    await mount(value);
+    await search('Idx_Name'); expect(searchCount()).toBe(findText.matches(0, 2));
+    const composition = await key(searchInput(), 'Enter', { isComposing: true });
+    expect(composition.defaultPrevented).toBe(false);
+    await key(searchInput(), 'Enter', { shiftKey: true });
+    expect(selected()?.textContent).toContain('TEMP B-TREE');
+    await click(findText.next); expect(selected()?.textContent).toContain('SEARCH');
+    await click(findText.previous); expect(selected()?.textContent).toContain('TEMP B-TREE');
+    await search('9007199254740993'); expect(searchCount()).toBe(findText.matches(0, 3));
+    await search('900719925474099'); expect(button(findText.next).disabled).toBe(true);
+    await search('🧭'); expect(searchCount()).toBe(findText.matches(0, 2));
+    await search('.*'); expect(searchCount()).toBe(findText.matches(0, 0));
+  });
+  it('超长输入保留已应用关键字，清空和换代不复用旧回调', async () => {
+    const f = await mount();
+    await search('idx_name'); await click(findText.next);
+    const oldSelection = selected(), staleNext = callback(button(findText.next)), staleInput = callback(searchInput(), 'onInput');
+    await search('x'.repeat(201));
+    expect(searchInput().value).toBe('idx_name');
+    expect(searchInput().getAttribute('aria-invalid')).toBe('true');
+    expect(searchCount()).toBe(findText.matches(1, 1)); expect(selected()).toBe(oldSelection);
+    await key(searchInput(), 'Escape'); expect(searchInput().value).toBe(''); expect(selected()).toBe(oldSelection);
+    await f.render(fixture()); await f.render(f.outcome);
+    await act(async () => { staleNext(); staleInput({ currentTarget: { value: '旧查找' } }); });
+    expect(searchInput().value).toBe(''); expect(searchCount()).toBe(findText.findIdle); expect(selected()).toBe(tree()[0]);
+    expect(f.invoke).not.toHaveBeenCalled();
   });
   it('新outcome及A→B→A重置本地状态，旧节点和切换回调不能操作后继计划', async () => {
     const f = await mount(), oldCollapse = callback(button(text.collapse)), oldNode = callback(tree()[1]); await click(text.collapse); const next = fixture(); next.sqliteExplain!.nodes[0].detail = '新计划'; await f.render(next); await f.render(f.outcome); expect(tree()).toHaveLength(4); await act(async () => { oldCollapse(); oldNode(); }); expect(tree()).toHaveLength(4); expect(selected()!.textContent).toContain('根计划'); expect(f.invoke).not.toHaveBeenCalled();

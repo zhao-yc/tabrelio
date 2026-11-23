@@ -1,6 +1,7 @@
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteExplainZh } from '../../src/renderer/locales/sqliteExplain.zh-CN';
+import { explainZh as findText } from '../../src/renderer/locales/explain.zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import type { QueryResult } from '../../src/shared/contracts';
 import type { SqliteExplainNode } from '../../src/shared/sqliteExplain';
@@ -213,7 +214,24 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     for (const [index, node] of plan.expectedNodes.entries()) { await step(() => expect(tree.getByRole('treeitem').nth(index)).toHaveAttribute('aria-level', String(node.depth + 1))); await step(() => expect(tree.getByRole('treeitem').nth(index)).toContainText(node.detail)); }
     await step(() => view().getByRole('button', { name: 'SQLite 计划表格', exact: true }).click()); await step(() => expect(view().getByRole('button', { name: 'SQLite 计划表格', exact: true })).toHaveAttribute('aria-pressed', 'true')); await expectRawGrid(plan);
     await step(() => view().getByRole('button', { name: 'SQLite 计划原文', exact: true }).click()); const raw = view().getByLabel('SQLite 计划原文内容', { exact: true }); await step(() => expect(raw).toBeVisible()); expect(await step(() => raw.textContent())).toBe(plan.raw);
-    await step(() => view().getByRole('button', { name: 'SQLite 计划树', exact: true }).click()); await step(() => view().getByRole('button', { name: '折叠 SQLite 全部计划节点', exact: true }).click()); await step(() => view().getByRole('button', { name: '展开 SQLite 全部计划节点', exact: true }).click()); await step(() => expect(tree.getByRole('treeitem')).toHaveCount(plan.expectedNodes.length)); await step(() => expect(view().getByRole('button', { name: /快照/ })).toHaveCount(0));
+    await step(() => view().getByRole('button', { name: sqliteExplainZh.treeLabel, exact: true }).click());
+    await step(() => view().getByRole('button', { name: sqliteExplainZh.collapse, exact: true }).click());
+    const child = plan.expectedNodes.find(node => node.depth > 0 && plan.expectedNodes.filter(candidate => candidate.detail.includes(node.detail)).length === 1);
+    if (!child) throw Error('本例真实计划缺少可单独定位的子节点');
+    const found = tree.getByRole('treeitem').filter({ hasText: child.detail });
+    await step(() => expect(found).toHaveCount(0));
+    const search = view().getByRole('textbox', { name: sqliteExplainZh.find, exact: true });
+    const count = view().getByRole('status', { name: findText.findCount, exact: true });
+    await step(() => search.fill(child.detail.toLowerCase()));
+    await step(() => expect(count).toHaveText(findText.matches(0, 1)));
+    await step(() => search.press('Enter'));
+    await step(() => expect(found).toHaveAttribute('aria-selected', 'true'));
+    await step(() => expect(found).toBeFocused());
+    await step(() => expect(count).toHaveText(findText.matches(1, 1)));
+    await step(() => view().getByRole('button', { name: findText.clear, exact: true }).click());
+    await step(() => expect(found).toHaveAttribute('aria-selected', 'true'));
+    await step(() => view().getByRole('button', { name: sqliteExplainZh.expand, exact: true }).click());
+    await step(() => expect(tree.getByRole('treeitem')).toHaveCount(plan.expectedNodes.length)); await step(() => expect(view().getByRole('button', { name: /快照/ })).toHaveCount(0));
     const after = await step(audit); expect(after.commands).toEqual(before.commands); expect(after.operations).toEqual(before.operations); expect(after.events).toEqual(before.events); expect(after.driverSql).toEqual(before.driverSql); expect(after.pending).toBe(0); return { savedContext, before, after };
   };
   try {

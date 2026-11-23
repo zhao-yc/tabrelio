@@ -7,6 +7,7 @@ export const sqliteExplainZh = {
   treeLabel: 'SQLite 计划树', tableLabel: 'SQLite 计划表格', rawLabel: 'SQLite 计划原文', rawContent: 'SQLite 计划原文内容',
   source: 'SQLite EXPLAIN QUERY PLAN', estimates: '这是优化器计划，不是实际执行或实测耗时。节点说明保留 SQLite 原文，不推测成本、耗时或索引结构；输出可能随 SQLite 版本变化。',
   expand: '展开 SQLite 全部计划节点', collapse: '折叠 SQLite 全部计划节点',
+  find: '查找 SQLite 计划节点', findPlaceholder: '输入表名、索引名、原始说明或节点编号',
   keyboard: '方向键选择节点；向右方向键展开或选择子节点，向左方向键折叠或选择父节点；Home/End 到首尾，Enter/空格展开或折叠。',
   empty: '没有可确认的完整树关系，请查看原始表格或原文。', bounds: '计划节点或深度超出展示边界，未构造不完整树；请查看原始表格和警告。',
   noTable: '没有原始计划表格。', noRaw: '没有可用的计划原文。', truncated: '原文已达到展示预算，内容不完整；不能据此推断完整计划。',
