@@ -3,10 +3,12 @@ import type { PostgresCompletionInput, PostgresCompletionReference, PostgresComp
 import { postgresCompletionLimits } from '../shared/postgresCompletion';
 import { postgresIdentifier } from '../shared/postgresSql';
 import { analyzePostgresCompletion, analyzePostgresSignature } from './postgresCompletionAnalysis';
+import { postgresNamedParameterCompletion, postgresNamedParameterHover } from './postgresNamedParameterReferences';
 import { postgresSignatureHelp } from './postgresSignatureHelp';
+import { postgresZh } from './locales/postgres.zh-CN';
 
 export interface PostgresCompletionScope { tabId: string; connectionId: string; database: string; connectionVersion: number; sessionId?: string; }
-type Kind = 'schema' | 'table' | 'view' | 'column' | 'routine' | 'keyword';
+type Kind = 'schema' | 'table' | 'view' | 'column' | 'routine' | 'keyword' | 'variable';
 type Status = 'idle' | 'partial' | 'unavailable' | 'limited' | 'sessionUnknown';
 const keywords = ['SELECT','FROM','JOIN','LEFT JOIN','RIGHT JOIN','INNER JOIN','WHERE','GROUP BY','ORDER BY',
   'HAVING','LIMIT','OFFSET','INSERT INTO','VALUES','UPDATE','SET','DELETE FROM','RETURNING','ON CONFLICT',
@@ -30,6 +32,7 @@ function debounce(signal: AbortSignal, milliseconds: number): Promise<void> {
 /** 单编辑器请求串行，旧正文、光标、标签、连接及取消都不能交付迟到建议。 */
 export function createPostgresCompletionProvider(options: {
   scope: PostgresCompletionScope;
+  standardStrings?: boolean;
   model(): monaco.editor.ITextModel | null;
   position(): monaco.Position | null;
   current(): boolean;
@@ -37,13 +40,14 @@ export function createPostgresCompletionProvider(options: {
   kinds: Record<Kind, monaco.languages.CompletionItemKind>;
   snippetRule: monaco.languages.CompletionItemInsertTextRule;
   status(value: Status): void;
-}): monaco.languages.CompletionItemProvider & { signatureHelp: monaco.languages.SignatureHelpProvider; invalidate(): void; dispose(): void } {
+}): monaco.languages.CompletionItemProvider & { signatureHelp: monaco.languages.SignatureHelpProvider; hover: monaco.languages.HoverProvider; invalidate(): void; dispose(): void } {
   let active: AbortController | undefined;
   let inFlight: Promise<PostgresCompletionResult> | undefined;
   let signatureGeneration = 0;
   let disposed = false;
   const { connectionId, database, sessionId } = options.scope;
   const target = { connectionId, database, ...(sessionId ? { sessionId } : {}) };
+  const parameterText = postgresZh.parameterEditor;
 
   /** 两类提示共用原会话请求通道，过期请求在排队后也不能发出。 */
   async function request(input: PostgresCompletionInput, current: () => boolean) {
@@ -81,9 +85,21 @@ export function createPostgresCompletionProvider(options: {
   };
   return {
     signatureHelp,
-    triggerCharacters: ['.', '"'],
+    hover: {
+      provideHover(model, position, token) {
+        if (disposed || !options.current() || options.model() !== model || model.isDisposed() || token.isCancellationRequested ||
+            model.getValueLength() > postgresCompletionLimits.source) return null;
+        const fact = postgresNamedParameterHover(model.getValue(), model.getOffsetAt(position), options.standardStrings);
+        if (!fact) return null;
+        const start = model.getPositionAt(fact.start), end = model.getPositionAt(fact.end);
+        return { range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column },
+          contents: [{ value: '`[$' + fact.name + ']` · ' + parameterText.title },
+            { value: parameterText.references(fact.statementCount, fact.draftCount) }] };
+      },
+    },
+    triggerCharacters: ['.', '"', '$'],
     /** 先校验本地词法，只向服务端发送目标和前缀。 */
-    async provideCompletionItems(model, position, _context, token) {
+    async provideCompletionItems(model, position, context, token) {
       const empty = { suggestions: [] };
       if (disposed || !options.current() || options.model() !== model || model.isDisposed() || token.isCancellationRequested) return empty;
       active?.abort();
@@ -102,7 +118,19 @@ export function createPostgresCompletionProvider(options: {
         options.status('idle');
         if (model.getValueLength() > postgresCompletionLimits.source) { options.status('limited'); return empty; }
         const source = model.getValue();
-        const analysis = analyzePostgresCompletion(source, model.getOffsetAt(position));
+        const offset = model.getOffsetAt(position);
+        const parameter = postgresNamedParameterCompletion(source, offset, options.standardStrings);
+        if (parameter) {
+          const start = model.getPositionAt(parameter.start), end = model.getPositionAt(parameter.end);
+          const range = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+          return { incomplete: parameter.items.length > 0, suggestions: parameter.items.map(({ name, local }, index) => {
+            const text = '[$' + name + ']';
+            return { range, kind: options.kinds.variable, label: text, filterText: text, insertText: text,
+              detail: local ? parameterText.currentStatement : parameterText.otherStatement, sortText: String(index).padStart(3, '0') };
+          }) };
+        }
+        if (parameter === null || context?.triggerCharacter === '$') return empty;
+        const analysis = analyzePostgresCompletion(source, offset);
         if (!analysis) return empty;
         const { query, prefix, quoted, routine } = analysis;
         const start = model.getPositionAt(analysis.start), end = model.getPositionAt(analysis.end);

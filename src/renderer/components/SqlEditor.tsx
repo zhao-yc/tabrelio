@@ -463,6 +463,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const original = postgresCompletion;
     const provider = createPostgresCompletionProvider({
       scope: original,
+      standardStrings: postgresStandardStrings,
       model: () => editorRef.current?.getModel() ?? null,
       position: () => editorRef.current?.getPosition() ?? null,
       current: () => {
@@ -470,6 +471,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         const tab = workspace.settings.tabs.find(item => item.id === original.tabId);
         const profile = workspace.connections.find(item => item.id === original.connectionId);
         return aliveRef.current && !propsRef.current.readOnly && !suggestionsBlocked() && contentRef.current?.ready === true &&
+          snippetScope.current.standardStrings === postgresStandardStrings && snippetScope.current.postgres?.sessionId === original.sessionId &&
           !document.querySelector(appModalSelector) &&
           editor?.getSelections()?.length === 1 && editor.getSelection()?.isEmpty() === true &&
           workspace.settings.activeTabId === original.tabId && !workspace.activeJobs[original.tabId] && tab?.connectionId === original.connectionId &&
@@ -478,20 +480,22 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       },
       request: input => invoke('postgres.completion', input),
       kinds: { schema: monaco.languages.CompletionItemKind.Module, table: completionKinds.table, view: completionKinds.view,
-        column: completionKinds.column, keyword: completionKinds.keyword, routine: monaco.languages.CompletionItemKind.Function },
+        column: completionKinds.column, keyword: completionKinds.keyword, routine: monaco.languages.CompletionItemKind.Function,
+        variable: monaco.languages.CompletionItemKind.Variable },
       snippetRule: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
       status: status => statusRef.current?.(status),
     });
     statusRef.current?.('idle');
     const registration = monaco.languages.registerCompletionItemProvider(postgresEditorLanguages, provider);
     const signatureRegistration = monaco.languages.registerSignatureHelpProvider(postgresEditorLanguages, provider.signatureHelp);
+    const hoverRegistration = monaco.languages.registerHoverProvider(postgresEditorLanguages, provider.hover);
     const stop = useWorkspace.subscribe((next, previous) => {
       if (next.settings.activeTabId !== previous.settings.activeTabId ||
           next.activeJobs[original.tabId] !== previous.activeJobs[original.tabId] ||
           next.connectionVersions[original.connectionId] !== previous.connectionVersions[original.connectionId]) provider.invalidate();
     });
-    return () => { stop(); registration.dispose(); signatureRegistration.dispose(); provider.dispose(); };
-  }, [requestedDialect, readOnly, contentReady, postgresCompletion?.tabId, postgresCompletion?.connectionId,
+    return () => { stop(); registration.dispose(); signatureRegistration.dispose(); hoverRegistration.dispose(); provider.dispose(); };
+  }, [requestedDialect, readOnly, contentReady, postgresStandardStrings, postgresCompletion?.tabId, postgresCompletion?.connectionId,
     postgresCompletion?.database, postgresCompletion?.connectionVersion, postgresCompletion?.sessionId]);
   useEffect(() => {
     if (requestedDialect === 'postgresql') return;

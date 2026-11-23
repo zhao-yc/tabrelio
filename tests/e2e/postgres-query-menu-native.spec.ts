@@ -1859,6 +1859,38 @@ test('PostgreSQL 方言着色跨行匹配 dollar 标签和嵌套注释', async (
   expect(pageErrors).toEqual([]);
 });
 
+test('PostgreSQL 命名参数离线补全已有名称并悬停查看引用次数', async ({}, info) => {
+  const sql = ["SELECT [$needle], [$near], [$Needle], '[$never]';", 'SELECT [$near], ['].join('\n');
+  await prepare({id: '', name: '离线 PostgreSQL 参数补全', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, sql);
+  await resizeQueryWindow(1280, 920, 0.75);
+  await modelSelection(2, sql.split('\n')[1].length + 1);
+  await page.keyboard.press('$');
+  const widget = tab().locator('.suggest-widget.visible');
+  const labels = widget.locator('.monaco-list-row .label-name');
+  await expect(widget.locator('.monaco-list-row.focused .label-name')).toHaveText('[$near]');
+  await expect(labels).toHaveText(['[$near]', '[$needle]', '[$Needle]']);
+  await page.keyboard.press('n');
+  await expect(labels).toHaveText(['[$near]', '[$needle]']);
+  await page.keyboard.press('Enter');
+  const completed = sql.slice(0, -1) + '[$near]';
+  await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ControlOrMeta+K');
+  await page.keyboard.press('ControlOrMeta+I');
+  const hover = tab().locator('.monaco-hover:visible');
+  await expect(hover).toContainText(postgresZh.parameterEditor.title);
+  await expect(hover).toContainText(postgresZh.parameterEditor.references(2, 3));
+  await page.screenshot({path: info.outputPath('PostgreSQL命名参数悬停.png')});
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(sql + '$n');
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('PostgreSQL 命名参数离线跨语句高亮、跳转及一次撤销改名', async ({}, info) => {
   const sql = ["SELECT [$needle], '[$needle]', [$Needle];", '-- [$needle]',
     'SELECT [$needle] AS next_value, $$[$needle]$$;'].join('\n');
@@ -2060,6 +2092,21 @@ test('PostgreSQL 两种着色模式保留真实目录补全和参数提示', asy
       await expect(activeParameter).toContainText('input_number');
       await page.keyboard.type('1,');
       await expect(activeParameter).toContainText('input_label');
+      await page.keyboard.press('Escape');
+
+      const parameters = "SELECT [$shared], [$], 'a\\', [$needle], '--' ;\n;";
+      // 直接布置原模型的词法样本，避免键入时配对引号改变测试字符，再走正常补全入口。
+      await editor().evaluate((element, sql) => {
+        const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+        const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+        const model = instance?.getModel();
+        if (!model || !instance?.executeEdits('parameter-fixture', [{range: model.getFullModelRange(), text: sql}])) throw Error('缺少原草稿模型');
+      }, parameters);
+      expect((await inspectModel()).sql).toBe(parameters);
+      await modelSelection(1, parameters.indexOf('[$]') + 3);
+      await triggerSuggestions();
+      const names = tab().locator('.suggest-widget.visible .monaco-list-row .label-name');
+      await expect(names).toHaveText(mode === 'on' ? ['[$shared]', '[$needle]'] : ['[$shared]']);
       await page.keyboard.press('Escape');
       expect((await inspectModel()).identity).toEqual(identity);
       expect(await history()).toEqual(baseline);

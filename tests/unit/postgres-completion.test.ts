@@ -5,6 +5,7 @@ import type { PostgresCompletionInput, PostgresCompletionResult } from '../../sr
 import { createPostgresCompletionProvider } from '../../src/renderer/postgresCompletionProvider';
 import { describe, expect, it, vi } from 'vitest';
 import { analyzePostgresCompletion, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
+import { postgresNamedParameterCompletion, postgresNamedParameterHover } from '../../src/renderer/postgresNamedParameterReferences';
 
 /** 测试使用竖线表示编辑器光标，其余 SQL 原样进入生产词法。 */
 function at(marked: string) {
@@ -360,13 +361,56 @@ function editor(marked: string, request: (input: PostgresCompletionInput) => Pro
     scope: { tabId: '原页', connectionId: '原连接', database: '原库', connectionVersion: 1, sessionId },
     model: () => model, position: () => position, current: () => true,
     request,
-    kinds: { schema: 1, table: 1, view: 1, column: 1, keyword: 1, routine: 1 },
+    kinds: { schema: 1, table: 1, view: 1, column: 1, keyword: 1, routine: 1, variable: 1 },
     snippetRule: 4,
     status: () => {},
   });
   return { provider, suggest: () => provider.provideCompletionItems(model, position, { triggerKind: 0 }, token),
-    signature: () => provider.signatureHelp.provideSignatureHelp(model, position, token, { triggerKind: 1, isRetrigger: false }) };
+    signature: () => provider.signatureHelp.provideSignatureHelp(model, position, token, { triggerKind: 1, isRetrigger: false }),
+    hover: () => provider.hover.provideHover(model, position, token) };
 }
+
+it('离线参数补全优先建议本语句的匹配名称，整段替换并保留后续类型转换', async () => {
+  const active = '[$ne_tail]', marked = "SELECT [$needle], [$Needle], '[$never]'; SELECT [$near], [$ne|_tail]::int, [$near]";
+  const start = marked.indexOf('[$ne|_tail]');
+  const request = vi.fn(async () => ({ items: [], incomplete: false }));
+  const client = editor(marked, request);
+  try {
+    const result = await client.suggest();
+    expect(result?.incomplete).toBe(true);
+    expect(result?.suggestions.map(item => item.insertText)).toEqual(['[$near]', '[$needle]']);
+    expect(result?.suggestions[0].range).toEqual({ startLineNumber: 1, startColumn: start + 1, endLineNumber: 1, endColumn: start + active.length + 1 });
+    expect(request).not.toHaveBeenCalled();
+  } finally { client.provider.dispose(); }
+});
+
+it('不在注释、引用或 dollar 标签内补全，未知字符串模式需要一致的参数绑定', () => {
+  const complete = (marked: string, standardStrings?: boolean) =>
+    postgresNamedParameterCompletion(marked.replace('|', ''), marked.indexOf('|'), standardStrings);
+  for (const sample of ["'[$ne|]'", '"[$ne|]"', '$body$[$ne|]$body$', '1 /* [$ne|] */', '1 -- [$ne|]']) {
+    expect(complete('SELECT [$needle]; SELECT ' + sample)).toBeNull();
+  }
+  for (const sample of ['arr[$1|]', 'arr[$tag|$value$tag$]', '[$中文|]', '[$' + 'a'.repeat(65) + '|]']) {
+    expect(complete('SELECT [$needle]; SELECT ' + sample)).toBeUndefined();
+  }
+  const ambiguous = "SELECT [$|], 'a\\', [$needle], '--' ;";
+  expect(complete(ambiguous)).toBeNull();
+  expect(complete(ambiguous, true)?.items).toEqual([{ name: 'needle', local: true }]);
+  expect(complete(ambiguous, false)?.items).toEqual([]);
+});
+
+it('参数悬停只给出原名、单句及整篇次数，排除相似文本且不读取目录', async () => {
+  const request = vi.fn(async () => ({ items: [], incomplete: false }));
+  const source = "SELECT [$needle], [$Needle]; SELECT [$ne|edle], [$needle], '[$needle]'; -- [$needle]";
+  const client = editor(source, request);
+  try {
+    expect(await client.hover()).toMatchObject({ contents: [
+      { value: '`[$needle]` · PostgreSQL 命名值参数' }, { value: '本语句 2 处 · 当前草稿 3 处' },
+    ] });
+    expect(postgresNamedParameterHover(source.replace('|', ''), source.lastIndexOf('needle'))).toBeUndefined();
+    expect(request).not.toHaveBeenCalled();
+  } finally { client.provider.dispose(); }
+});
 
 it('签名按名称或位置高亮，精确请求受原标签失效约束', async () => {
   const inputs: PostgresCompletionInput[] = [];

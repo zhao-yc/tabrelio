@@ -30,6 +30,12 @@ export const postgresZh = {
     '关闭原PostgreSQL会话？未提交事务将放弃。若原写入结果未知，请先核对数据库；重新连接不会重放任何SQL。',
   parameterHint: '使用 [$name] 命名参数，重复名称共用一个值。也可使用 $1、$2 等连续位置参数，对应表单中的 p1、p2。同一次操作请统一参数写法，值通过 PostgreSQL 协议绑定。',
   parameterCurrentHint: '只填写并执行光标所在的语句。支持 [$name] 或 $1、$2 等位置参数。',
+  parameterEditor: {
+    title: 'PostgreSQL 命名值参数',
+    currentStatement: '当前语句已有参数',
+    otherStatement: '当前草稿的其它语句',
+    references: (statement: number, draft: number) => '本语句 ' + statement + ' 处 · 当前草稿 ' + draft + ' 处',
+  },
   retainedSave: '查询已保存到本地查询目录，但原页已变化，请重新核对；原输入没有被覆盖。',
   closeFailed: 'PostgreSQL原会话关闭未确认，请保留现场并显式断开原连接：',
   empty: '执行SQL后在此显示结果',
