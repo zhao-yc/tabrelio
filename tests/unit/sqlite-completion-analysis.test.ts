@@ -57,11 +57,13 @@ it('复合分支保留相关外层，隔离兄弟分支和 INSERT 目标', () =>
 
 it('复合排序只交付可确认的输出名，兼容不同分支的别名、星号与大小写去重', () => {
   const result = ready('SELECT a.*, a.cost * a.qty AS "合计🚢", a.id AS Key FROM first a UNION ALL SELECT b.*, 0 AS amount, b.id AS key FROM second b ORDER BY amount DESC, "合|计🚢" LIMIT 5');
-  expect(result).toMatchObject({ syntax: ['column'], qualifiers: [], relations: [], outputColumns: ['合计🚢', 'Key', 'amount'] });
+  expect(result).toMatchObject({ syntax: ['column'], qualifiers: [], relations: [], output: {
+    columns: ['合计🚢', 'Key', 'amount'], sources: [{ name: 'first' }, { name: 'second' }],
+  } });
 });
 
 it.each([
-  'SELECT * FROM first UNION ALL SELECT * FROM second ORDER BY |',
+  'SELECT 1 + 2 UNION ALL SELECT 3 + 4 ORDER BY |',
   'SELECT id FROM first UNION ALL SELECT id FROM second ORDER BY second.|',
   'SELECT id FROM first UNION ALL SELECT id FROM second ORDER BY id COLLATE no|case',
   'SELECT id FROM first UNION ALL SELECT id FROM second ORDER BY i|d + 1',
@@ -71,12 +73,35 @@ it.each([
   expect(analyze(source)).toMatchObject({ status: 'blocked', reason: 'compound' });
 });
 
+it('复合排序按星号实际投影的来源读目录，裸星号展开同一分支的全部本地绑定', () => {
+  const result = ready('SELECT a.* FROM main.first a JOIN ignored z ON 1 UNION ALL SELECT * FROM temp.second b NATURAL JOIN main.third c ORDER BY |');
+  expect(result.output).toEqual({ columns: [], sources: [{ name: 'first', schema: 'main' }, { name: 'second', schema: 'temp' }, { name: 'third', schema: 'main' }] });
+});
+
+it('明确的 CTE 和匿名派生表输出可以直接展开，未知局部来源保留部分补全', () => {
+  const result = ready('WITH c(item) AS (SELECT 1), u AS (SELECT * FROM hidden_table) SELECT c.*, u.* FROM c, u UNION ALL SELECT * FROM (SELECT 2 AS next, 3 AS flag) ORDER BY |');
+  expect(result.output).toEqual({ columns: ['item', 'next', 'flag'], sources: [], incomplete: true });
+});
+
+it('重复读取同一物理目录仅登记一次，名称歧义的星号保留其它已知输出', () => {
+  expect(ready('SELECT a.* FROM main.first a UNION ALL SELECT b.* FROM MAIN.FIRST b ORDER BY |').output)
+    .toEqual({ columns: [], sources: [{ name: 'first', schema: 'main' }] });
+  expect(ready('SELECT t.* FROM main.t JOIN temp.t ON 1 UNION ALL SELECT 1 AS known ORDER BY |').output)
+    .toEqual({ columns: ['known'], sources: [], incomplete: true });
+});
+
+it('表函数不会被当作同名表读取，也不阻止同一分支中可解析的星号', () => {
+  const result = ready("SELECT t.*, j.*, 1 IS DISTINCT FROM 2 AS flag FROM main.first t JOIN json_each('[]') j ON 1 UNION ALL SELECT 1 AS id ORDER BY |");
+  expect(result.output).toEqual({ columns: ['flag', 'id'], sources: [{ name: 'first', schema: 'main' }], incomplete: true });
+});
+
 it('复合输出候选回包独立于读取目录、悬停及定义范围', () => {
   const marked = 'SELECT 1 AS id UNION ALL SELECT 2 AS item ORDER BY |';
   const { source, offset } = query(marked), result = ready(marked);
   const openTable = { kind: 'physical', name: 'first' };
-  for (const fields of [{ relations: [openTable] }, { qualifiers: ['first'] }, { outputColumns: [] },
-    { outputColumns: ['X', 'x'] }, { syntax: ['column', 'keyword'] }]) {
+  for (const fields of [{ relations: [openTable] }, { qualifiers: ['first'] }, { output: { columns: [], sources: [] } },
+    { output: { columns: ['X', 'x'], sources: [] } }, { output: { columns: [], sources: [{ name: 'a' }, { name: 'A' }] } },
+    { output: { columns: [], sources: [{ name: 'a', schema: 'main', sql: 'SELECT private' }] } }, { syntax: ['column', 'keyword'] }]) {
     expect(() => validateSqliteCompletionAnalysis({ ...result, ...fields }, source, offset)).toThrow();
   }
   expect(() => validateSqliteCompletionAnalysis(result, source, offset, 'hover')).toThrow();

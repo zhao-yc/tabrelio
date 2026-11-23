@@ -47,6 +47,44 @@ it('复合排序补入后一分支的明确别名，SQLite 实际按该输出列
     expect(db.prepare(sql).all()).toEqual([{ id: 1, cost: 10 }, { id: 2, cost: 9 }]);
   } finally { db.close(); }
 });
+it('星号排序只请求投影来源并按 SQLite 目录保留生成列，补入结果可直接执行', async () => {
+  const marked = 'SELECT * FROM main.subject UNION ALL SELECT s.* FROM temp.subject s JOIN ignored i ON 1 ORDER BY sco|suffix DESC';
+  const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE main.subject(id INTEGER, score INTEGER GENERATED ALWAYS AS (id * 2) STORED);
+      CREATE TEMP TABLE subject(id INTEGER, amount INTEGER);
+      CREATE TABLE ignored(score INTEGER);
+      INSERT INTO main.subject VALUES(1);
+      INSERT INTO temp.subject VALUES(2, 99);
+      INSERT INTO ignored VALUES(0);`);
+    const load = vi.fn(async (request: SqliteCompletionLookup) => {
+      if (request.kind !== 'columns' || !request.schema) throw Error('预期有明确来源的列目录');
+      const { table, schema, prefix } = request;
+      const entries: SqliteCompletionEntry[] = db.prepare('SELECT name, type, hidden FROM pragma_table_xinfo(?, ?) WHERE substr(name,1,length(?)) = ? COLLATE NOCASE ORDER BY cid')
+        .all(table, schema, prefix, prefix).map(row => ({ kind: 'column', name: String(row.name), declaredType: String(row.type),
+          hidden: row.hidden === 1, generated: row.hidden === 2 || row.hidden === 3, table, schema }));
+      return { entries, incomplete: false, stamp: '1:1' };
+    });
+    const { items } = await sqliteCompletionSuggestions(analysis, { load });
+    expect(load.mock.calls).toEqual([[{ kind: 'columns', table: 'subject', schema: 'main', prefix: 'sco' }],
+      [{ kind: 'columns', table: 'subject', schema: 'temp', prefix: 'sco' }]]);
+    expect(items.map(item => item.insertText)).toEqual(['"score"']);
+    const completed = source.slice(0, analysis.target.start) + items[0].insertText + source.slice(analysis.target.end);
+    expect(db.prepare(completed).all()).toEqual([{ id: 2, score: 99 }, { id: 1, score: 2 }]);
+  } finally { db.close(); }
+});
+
+it('复合排序排除隐藏列并按 SQLite 名称去重，保留目录不完整状态', async () => {
+  const marked = 'SELECT * FROM main.subject UNION ALL SELECT id AS ID, visible FROM local_table ORDER BY |';
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const d = directory([column('id'), column('gen'), { ...column('hidden'), hidden: true }], true);
+  const result = await sqliteCompletionSuggestions(analysis, d);
+  expect(result.items.map(item => item.insertText)).toEqual(['"ID"', '"visible"', '"gen"']);
+  expect(result.incomplete).toBe(true);
+});
 it('准确别名字段只替最后标识符，Unicode引号和片段语法保持普通文本', async () => {
   const d = directory([column('字段"🚢.${x}')]), result = await sqliteCompletionSuggestions(ready(), d);
   expect(d.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'subject', prefix: '' }); expect(result.items[0]).toMatchObject({ label: '字段"🚢.${x}', insertText: '"字段""🚢.${x}"', kind: 'column' });

@@ -11,15 +11,24 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   let incomplete = false;
   const add = (item: SqliteCompletionItem) => {
     if (!fold(item.label).startsWith(prefix)) return;
-    const key = item.kind + '\0' + item.insertText;
+    const key = analysis.output ? fold(item.label) : item.kind + '\0' + item.insertText;
     if (seen.has(key)) return;
     if (items.length >= sqliteCompletionLimits.suggestions) { incomplete = true; return; }
     seen.add(key); items.push(item);
   };
   const bound = analysis.relations.filter(relation => relation.kind === 'physical' || !relation.declaration);
   const declarations = analysis.relations.filter(relation => relation.kind === 'local' && relation.declaration);
-  for (const name of analysis.outputColumns ?? []) {
-    add({ label: name, kind: 'column', insertText: quote(name), detail: text.outputColumn });
+  if (analysis.output) {
+    incomplete = analysis.output.incomplete === true;
+    const addOutput = (name: string) => add({ label: name, kind: 'column', insertText: quote(name), detail: text.outputColumn });
+    for (const name of analysis.output.columns) addOutput(name);
+    for (const { name, schema } of analysis.output.sources) {
+      const metadata = await directory.load({ kind: 'columns', table: name, prefix: analysis.target.prefix, ...(schema ? { schema } : {}) });
+      incomplete ||= metadata.incomplete;
+      // 星号包含普通列和生成列，虚拟表的隐藏列仅能显式引用。
+      for (const entry of metadata.entries) if (entry.kind === 'column' && !entry.hidden) addOutput(entry.name);
+    }
+    return { items, incomplete };
   }
   if (analysis.syntax.includes('relation') && qualifiers.length <= 1) {
     const schema = qualifiers.length === 1 && ['main', 'temp'].includes(fold(qualifiers[0])) ? fold(qualifiers[0]) as 'main' | 'temp' : undefined;

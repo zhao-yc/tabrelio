@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import type { CompletionSessionState } from '../../src/shared/sqlCompletion';
 import type { SqliteCompletionInput, SqliteCompletionOutput } from '../../src/shared/sqliteCompletion';
-import { analyzeSqliteCompletion, type SqliteCompletionAnalysis } from '../../src/shared/sqliteCompletionAnalysis';
+import { analyzeSqliteCompletion, validateSqliteCompletionAnalysis, type SqliteCompletionAnalysis } from '../../src/shared/sqliteCompletionAnalysis';
 import { createSqliteCompletionProvider, type SqliteCompletionModel } from '../../src/renderer/sqliteCompletionProvider';
 
 const analysis = (): SqliteCompletionAnalysis => ({ status: 'ready', target: { start: 9, end: 9, prefix: '', quoted: false }, syntax: ['column'], qualifiers: ['s'], relations: [{ kind: 'physical', name: 'subject', alias: 's' }] });
@@ -58,6 +58,22 @@ it('卸载等待原悬停目录及准确取消终态，不发布迟到字段', a
 it.each([false, true])('同模型%s会话补全只有固定目录调用，完整range正确且不送SQL正文', async session => {
   const f = fixture(session), run = f.invoke(), result = await run.promise; expect(result.suggestions[0]).toMatchObject({ label: 'field_🚢', insertText: '"field_🚢"', range: { startLineNumber: 1, startColumn: 10, endLineNumber: 1, endColumn: 10 } });
   expect(f.request.mock.calls.map(([q]) => q.kind)).toEqual(['columns', 'stamp']); expect(f.request.mock.calls[0][0]).toMatchObject({ connectionId: 'c', prefix: '', kind: 'columns', table: 'subject', ...(session ? { sessionId: 'sqlite:s' } : {}) }); expect(JSON.stringify(f.request.mock.calls)).not.toContain('SELECT s.'); expect(f.state).toHaveBeenCalledTimes(session ? 2 : 0); expect(f.cancel).not.toHaveBeenCalled(); expect(run.token.listeners).toBe(0); expect(f.changes.size).toBe(0); await f.provider.dispose(); expect(f.worker.dispose).toHaveBeenCalledOnce();
+});
+it.each([false, true])('复合星号串行核对两处目录和最终代次，目录变化：%s', async changed => {
+  const f = fixture(true);
+  const source = 'SELECT * FROM main.first UNION ALL SELECT t.* FROM temp.second t ORDER BY field_old';
+  vi.mocked(f.model.getValue).mockReturnValue(source);
+  vi.mocked(f.model.getValueLength).mockReturnValue(source.length);
+  vi.spyOn(f.model, 'getOffsetAt').mockReturnValue(source.indexOf('field_old') + 2);
+  f.worker.analyze.mockImplementation(async (sql, offset) => validateSqliteCompletionAnalysis(analyzeSqliteCompletion(sql, offset), sql, offset));
+  if (changed) f.request.mockImplementation(async input => ({ ...f.reply(input), stamp: input.kind === 'stamp' ? '2:0' : '1:0' }));
+  try {
+    const result = await f.invoke().promise;
+    expect(f.request.mock.calls.map(([input]) => input.kind === 'columns' ? [input.table, input.schema, input.prefix] : [input.kind]))
+      .toEqual([['first', 'main', 'fi'], ['second', 'temp', 'fi'], ['stamp']]);
+    if (changed) expect(result.suggestions).toEqual([]);
+    else expect(result.suggestions).toMatchObject([{ insertText: '"field_🚢"', range: { endColumn: source.length + 1 } }]);
+  } finally { await f.provider.dispose(); }
 });
 it('分析前预算拒绝不取SQL正文、不发目录或分配线程', async () => {
   const f = fixture(); vi.mocked(f.model.getValueLength).mockReturnValue(262145); expect((await f.invoke().promise).suggestions).toEqual([]); expect(f.model.getValue).not.toHaveBeenCalled(); expect(f.worker.analyze).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled(); expect(f.status).toHaveBeenCalledWith('limited'); await f.provider.dispose();

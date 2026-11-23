@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite 复合 `ORDER BY` 补全可展开 `*` 和 `别名.*`，仅查询投影实际引用的表或视图目录。候选包含生成列，排除虚拟表隐藏列。明确的 CTE 和派生表输出直接纳入，无法确定的星号显示部分候选。Q01 继续为部分覆盖。[SQLite SELECT 文档](https://www.sqlite.org/lang_select.html#resultset)
+
 2026-11-23 源码增量。SQLite 查询编辑器可在 `UNION`、`UNION ALL`、`INTERSECT` 和 `EXCEPT` 中按光标所在分支补全及悬停字段。复合查询末尾的 `ORDER BY` 可补全各分支中明确的输出名称，包括后一分支的别名，且无需读取表目录。Q01 继续为部分覆盖。[SQLite SELECT 文档](https://www.sqlite.org/lang_select.html#orderby)
 
 2026-11-23 源码增量。PostgreSQL 查询编辑器在 `SELECT` 的排序与分页位置补全 `NULLS FIRST/LAST`、`FETCH FIRST/NEXT`、`ROW/ROWS` 和 `ONLY`。当前查询块有 `ORDER BY` 且未使用 `SKIP LOCKED` 时也可补全 `WITH TIES`。已输入短语的第一个词时只补后续词，子查询和集合查询按各自范围给出候选。Q01 继续为部分覆盖。
