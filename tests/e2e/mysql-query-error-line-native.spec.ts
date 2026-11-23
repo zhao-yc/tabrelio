@@ -52,6 +52,11 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     const line = primary.getByRole('button', {name: text.locateLine, exact: true});
     const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
     const state = () => page.evaluate(observeQueryFailureSource);
+    const resultNavigation = query.getByRole('button', {name: resultNavText.open, exact: true});
+    const resultDialog = page.getByRole('dialog', {name: resultNavText.open, exact: true});
+    const resultSearch = resultDialog.getByRole('combobox', {name: resultNavText.input, exact: true});
+    const includeErrors = resultDialog.getByRole('checkbox', {name: resultNavText.includeFailures, exact: true});
+    const errorDetails = resultDialog.getByRole('region', {name: resultNavText.errorDetail, exact: true});
     const write = async (sql: string, start = 0, end = start) => {
       await editor.evaluate((target, input) => {
         const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
@@ -98,6 +103,10 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
       await locate(line, firstLine);
     }
     await execute('SELECT missing_native_field;'); await expect(primary).toBeVisible(); await expect(line).toHaveCount(0);
+    await resultNavigation.click();
+    await expect(includeErrors).toBeChecked();
+    await expect(errorDetails).toContainText('missing_native_field');
+    await resultSearch.press('Escape');
 
     await (await toggle(queryWarningsZh.option)).check();
     await execute(failed); await locate(line, firstLine);
@@ -139,19 +148,24 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     await execute('SELECT 70 AS nav_before; SELECT missing_native_field; CALL nav_result_groups(); SELECT 73 AS nav_tail;');
     await expect(report).toContainText(continuing.counts(4, 3, 1));
     const beforeResultNavigation = await history();
-    await query.getByRole('button', {name: resultNavText.open, exact: true}).click();
-    const resultDialog = page.getByRole('dialog', {name: resultNavText.open, exact: true});
-    const search = resultDialog.getByRole('combobox', {name: resultNavText.input, exact: true});
+    await resultNavigation.click();
     const matches = resultDialog.getByRole('option');
-    await search.fill('@2'); await expect(matches).toHaveCount(0);
-    await search.fill('@3'); await expect(matches).toHaveCount(3);
+    await resultSearch.fill('@2'); await expect(matches).toHaveCount(0);
+    await includeErrors.check();
+    await expect(matches).toContainText(resultNavText.failedStatement(2));
+    await expect(errorDetails).toContainText('missing_native_field');
+    await resultSearch.press('Enter');
+    await expect(resultDialog).toBeHidden();
+    await expect.poll(state).toMatchObject({focused: true, selections: [{text: 'SELECT missing_native_field'}]});
+    await resultNavigation.click(); await includeErrors.check();
+    await resultSearch.fill('@3'); await expect(matches).toHaveCount(3);
     for (const ordinal of [2, 3, 4]) {
       const entry = matches.filter({hasText: new RegExp(`^${resultNavText.result(ordinal)}`)});
       await expect(entry).toContainText(resultNavText.statement(3));
     }
-    await search.fill('#3'); await expect(matches).toHaveCount(1);
+    await resultSearch.fill('#3'); await expect(matches).toHaveCount(1);
     await expect(matches).toContainText(resultNavText.statement(3));
-    await search.press('Enter');
+    await resultSearch.press('Enter');
     await expect(query.getByRole('gridcell', {name: '72', exact: true})).toBeVisible();
     expect(await history()).toEqual(beforeResultNavigation);
     expect(pageErrors).toEqual([]);

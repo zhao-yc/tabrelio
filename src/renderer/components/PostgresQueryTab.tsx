@@ -2491,14 +2491,14 @@ export function PostgresQueryTab({
             <button disabled={locked || pinState.items.length < 2} title={pinState.items.length < 2 ? comparisonText.requireTwo : comparisonText.notice}
               onClick={openResultComparison}>{comparisonText.open}</button>
           </div>}
-          {(!pin && results.length > 1 || dataResult || pinState.items.length > 0) && (
+          {(!pin && results.length > 1 || dataResult || pinState.items.length > 0 || failureNavigation.failures.length > 0) && (
             <div className="postgres-result-actions">
               {!pin && results.length > 1 && <select aria-label="PostgreSQL结果集" value={selected} disabled={locked}
                 onChange={event => selectCurrentResult(Number(event.target.value))}>
                 {results.map((r, i) => <option key={i} value={i}>{text.result(resultSources?.[i]?.statementOrdinal ?? i + 1, r.postgresCommand ?? '', r.rows.length, resultNames[i])}</option>)}
               </select>}
-              {(results.length > 1 || pinState.items.length > 0) && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames}
-                statementOrdinals={resultStatementOrdinals}
+              {(results.length > 1 || pinState.items.length > 0 || failureNavigation.failures.length > 0) && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames}
+                statementOrdinals={resultStatementOrdinals} executionErrors={failureNavigation}
                 selected={pin ? undefined : selected} pins={pinState.items} selectedPin={pin}
                 disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
               {pin && <PinnedResultRename tabId={tab.id} pin={pin} disabled={locked} isCurrent={pinNavigationCurrent} onRename={renameSelectedPin}/>}

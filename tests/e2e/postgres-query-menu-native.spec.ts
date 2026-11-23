@@ -564,10 +564,22 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await expect(navigator).toContainText(continueText.located(4, 2, 2));
     await navigator.getByRole('button', {name: continueText.next, exact: true}).click();
     await expect.poll(inspectModel).toMatchObject({selected: 'm', position: {lineNumber: 2, column: 9}});
-    await tab().getByRole('button', {name: resultNavText.open, exact: true}).click();
+    await modelSelection(1, 1);
+    const resultNavigation = tab().getByRole('button', {name: resultNavText.open, exact: true});
+    await resultNavigation.click();
     const resultDialog = page.getByRole('dialog', {name: resultNavText.open, exact: true});
     const resultSearch = resultDialog.getByRole('combobox', {name: resultNavText.input, exact: true});
-    await resultSearch.fill('@2'); await expect(resultDialog.getByRole('option')).toHaveCount(0);
+    await resultDialog.getByRole('checkbox', {name: resultNavText.includeFailures, exact: true}).check();
+    const receiptOptions = resultDialog.getByRole('option');
+    await expect(receiptOptions).toHaveCount(5);
+    await expect(receiptOptions.nth(1)).toContainText(resultNavText.failedStatement(2));
+    await expect(receiptOptions.nth(3)).toContainText(resultNavText.failedStatement(4));
+    await resultSearch.fill('missing_column');
+    await expect(receiptOptions).toHaveCount(1);
+    await expect(resultDialog.getByRole('region', {name: resultNavText.errorDetail, exact: true})).toContainText('missing_column');
+    await resultDialog.getByRole('button', {name: resultNavText.locateError, exact: true}).click();
+    await expect.poll(inspectModel).toMatchObject({selected: 'm', position: {lineNumber: 2, column: 9}});
+    await resultNavigation.click();
     await resultSearch.fill('@3'); await expect(resultDialog.getByRole('option')).toHaveCount(1);
     await expect(resultDialog.getByRole('option')).toContainText(resultNavText.result(2));
     await expect(resultDialog.getByRole('option')).toContainText(resultNavText.statement(3));
@@ -746,6 +758,9 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     await preciseLocate(selectedScript.indexOf('missing_column'), 'm');
     await unchangedLocate(selectedScript.slice(failedStart, end).trimStart());
     await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click();
+    // 等待 BEGIN 已回执且原标签结束忙态，再投递下一条原生命令。
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
+    await expect(tab().getByRole('button', {name: postgresZh.commit, exact: true})).toBeEnabled();
     await select(selectedScript.indexOf('missing_column')); await command('execute-current');
     await expect(notice()).toContainText(partialText.position(1, 0));
     await expect(tab().locator('.tab-status')).toContainText(postgresZh.failedTransaction);

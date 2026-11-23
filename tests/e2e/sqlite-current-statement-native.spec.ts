@@ -347,6 +347,24 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     await step(() => expect(locate).toBeDisabled());
     await step(() => expect(precise).toBeDisabled());
     await step(() => expect(locateResult()).toBeDisabled());
+    const resultNavigation = query().getByRole('button', {name: resultNavText.open, exact: true});
+    const resultDialog = page.getByRole('dialog', {name: resultNavText.open, exact: true});
+    const resultSearch = resultDialog.getByRole('combobox', {name: resultNavText.input, exact: true});
+    const includeErrors = resultDialog.getByRole('checkbox', {name: resultNavText.includeFailures, exact: true});
+    const errorDetails = resultDialog.getByRole('region', {name: resultNavText.errorDetail, exact: true});
+    const editedDraft = await model();
+    await step(() => resultNavigation.click());
+    await step(() => includeErrors.check());
+    await step(() => resultSearch.fill('@2'));
+    // SQLite 首错回执按原协议使用保守消息，详情必须复用原 IPC 文本。
+    const {message: returnedFailure} = scriptFailure.outcome.failure as {message: string};
+    await step(() => expect(errorDetails.locator('pre')).toHaveText(returnedFailure));
+    await step(() => expect(resultDialog.getByRole('button', {name: resultNavText.locateError, exact: true})).toBeDisabled());
+    await step(() => resultSearch.press('Enter'));
+    await step(() => expect(resultDialog).toBeVisible());
+    await step(() => resultSearch.press('Escape'));
+    expect(await model()).toEqual(editedDraft);
+    expect(await history()).toEqual(beforeLocationHistory);
     expect(disk()).toEqual(afterNormal);
     stage = '显式开启遇错继续，定位多条失败并保留后续完整结果';
     const continueOption = async () => (require('./navigation-menu') as typeof import('./navigation-menu'))
@@ -384,11 +402,11 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
       await step(() => expect(query().locator('.sql-editor-wrap')).toBeVisible());
       expect((await model()).selections).toEqual([{start, end: start + source.length}]);
     }
-    await step(() => query().getByRole('button', {name: resultNavText.open, exact: true}).click());
-    const resultDialog = page.getByRole('dialog', {name: resultNavText.open, exact: true});
-    const resultSearch = resultDialog.getByRole('combobox', {name: resultNavText.input, exact: true});
+    await step(() => resultNavigation.click());
     await step(() => resultSearch.fill('@3'));
     await step(() => expect(resultDialog.getByRole('option')).toHaveCount(0));
+    await step(() => includeErrors.check());
+    await step(() => expect(resultDialog.getByRole('option')).toContainText(resultNavText.failedStatement(3)));
     await step(() => resultSearch.fill('@4'));
     await step(() => expect(resultDialog.getByRole('option')).toHaveCount(1));
     await step(() => expect(resultDialog.getByRole('option')).toContainText(resultNavText.result(2)));

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { QueryOutcome } from '../../shared/contracts';
 import type { QueryFailure } from '../../shared/queryFailure';
 import { queryContinueOnErrorZh as t } from '../locales/queryContinueOnError.zh-CN';
@@ -30,9 +30,9 @@ export function useQueryFailureNavigation(outcome: QueryOutcome | null | undefin
   type Visit = {receipt: NonNullable<typeof receipt>; failure: QueryFailure};
   const [visited, setVisited] = useState<Visit>();
   const latest = useRef<Visit | undefined>(undefined);
-  const failures: readonly (QueryFailure & {kind?: 'server' | 'stopped'})[] =
-    outcome?.scriptReport?.errors ?? (outcome?.failure ? [outcome.failure] : []);
-  const entries = failures.slice(0, 100).map(failure => ({failure,
+  const failures = useMemo<readonly (QueryFailure & {kind?: 'server' | 'stopped'})[]>(() =>
+    (outcome?.scriptReport?.errors ?? (outcome?.failure ? [outcome.failure] : [])).slice(0, 100), [outcome]);
+  const entries = failures.map(failure => ({failure,
     statement: !!onLocate && !!locateAvailable?.(failure),
     position: !!failure.errorRange && !!onLocatePosition && !!positionAvailable?.(failure),
   }));
@@ -56,7 +56,8 @@ export function useQueryFailureNavigation(outcome: QueryOutcome | null | undefin
       (current + direction + navigable.length) % navigable.length;
     locate(navigable[next].failure, 'best');
   }
-  return {entries, count: navigable.length, index, active: navigable[index]?.failure, locate, move,
+  return {entries, failures, count: navigable.length, index, active: navigable[index]?.failure, locate, move,
+    canLocateFailure: (failure: QueryFailure) => navigable.some(entry => entry.failure === failure),
     canLocate: !!onLocate || !!onLocatePosition, canLocatePosition: !!onLocatePosition};
 }
 

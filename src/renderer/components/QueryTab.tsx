@@ -2938,8 +2938,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         return <button className={!pin && resultIndex === index ? 'selected' : ''} aria-label={label} title={label}
           aria-pressed={!pin && resultIndex === index} onClick={() => selectCurrentResult(index)} key={index}>{name ?? ordinal}</button>;
       })}</div>
-      {(results.length > 1 || pins.length > 0) && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames}
-        statementOrdinals={resultStatementOrdinals}
+      {(results.length > 1 || pins.length > 0 || failureNavigation.failures.length > 0) && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames}
+        statementOrdinals={resultStatementOrdinals} executionErrors={failureNavigation}
         selected={pin ? undefined : resultIndex} pins={pins} selectedPin={pin}
         disabled={busy || queryRunning || resultModal || fileSource.busy}
         isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}

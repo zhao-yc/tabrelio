@@ -1,6 +1,8 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import type { QueryResult } from '../../shared/contracts';
+import type { QueryFailure } from '../../shared/queryFailure';
+import { truncateQueryScriptMessage } from '../../shared/queryContinueOnError';
 import { queryPinsZh } from '../locales/queryPins.zh-CN';
 import { queryResultNavigatorZh as text } from '../locales/queryResultNavigator.zh-CN';
 import { appModalSelector } from '../modalSelectors';
@@ -9,11 +11,18 @@ import { useWorkspace } from '../store';
 import { Modal } from './ui';
 import '../openTabSearch.css';
 
+interface ExecutionErrors {
+  failures: readonly QueryFailure[];
+  canLocateFailure(failure: QueryFailure): boolean;
+  locate(failure: QueryFailure, target: 'best'): void;
+}
+
 interface Props {
   tabId: string;
   results: readonly QueryResult[];
   names: readonly (string | undefined)[];
   statementOrdinals?: readonly (number | undefined)[];
+  executionErrors: ExecutionErrors;
   selected?: number;
   pins: readonly PinnedQueryResult[];
   selectedPin?: PinnedQueryResult;
@@ -23,20 +32,23 @@ interface Props {
   onSelectPin(pin: PinnedQueryResult): void;
 }
 
-type Entry = { kind: 'current'; index: number; name?: string; statementOrdinal?: number; result: QueryResult } |
-  { kind: 'pinned'; pin: PinnedQueryResult; name: string; result: QueryResult };
-type Source = 'all' | Entry['kind'];
+type CurrentEntry = { kind: 'current'; index: number; name?: string; statementOrdinal?: number; result: QueryResult } |
+  { kind: 'failure'; index: number; statementOrdinal: number; failure: QueryFailure; message: string };
+type Entry = CurrentEntry | { kind: 'pinned'; pin: PinnedQueryResult; name: string; result: QueryResult };
+type Source = 'all' | 'current' | 'pinned';
 
 const pageSize = 40;
 
 /** 导航绑定打开时的结果与固定列表，选中后走查询页原有的来源切换。 */
 export function QueryResultNavigator(props: Props) {
-  const { tabId, results, pins, disabled, isCurrent } = props;
+  const { tabId, results, pins, executionErrors, disabled, isCurrent } = props;
+  const { failures } = executionErrors;
   const latest = useRef(props);
   latest.current = props;
   const [owner, setOwner] = useState<{ results: readonly QueryResult[]; pins: readonly PinnedQueryResult[];
+    failures: readonly QueryFailure[];
     current(): boolean; invalidate(): void }>();
-  const opened = owner?.results === results && owner.pins === pins && !disabled;
+  const opened = owner?.results === results && owner.pins === pins && owner.failures === failures && !disabled;
   useLayoutEffect(() => {
     if (owner && !opened) setOwner(undefined);
   }, [owner, opened]);
@@ -56,7 +68,7 @@ export function QueryResultNavigator(props: Props) {
     if (!tab || workspace.settings.activeTabId !== tabId) return;
     const version = workspace.connectionVersions[tab.connectionId];
     let live = true;
-    setOwner({ results, pins, invalidate() { live = false; }, current() {
+    setOwner({ results, pins, failures, invalidate() { live = false; }, current() {
       const state = useWorkspace.getState();
       return live && state.settings.activeTabId === tabId && state.settings.tabs.find(item => item.id === tabId) === tab &&
         state.connectionVersions[tab.connectionId] === version && !state.activeJobs[tabId];
@@ -65,39 +77,55 @@ export function QueryResultNavigator(props: Props) {
 
   function select(entry: Entry) {
     if (!owner || !opened || !owner.current()) return;
+    if (entry.kind === 'failure' && !executionErrors.canLocateFailure(entry.failure)) return;
     // 关闭窗口后再核对查询归属和原列表，防止旧条目切到重跑后的同序号结果。
     flushSync(() => setOwner(undefined));
     const current = latest.current;
-    if (!owner.current() || current.results !== owner.results || current.pins !== owner.pins ||
+    if (!owner.current() || current.results !== owner.results || current.pins !== owner.pins || current.executionErrors.failures !== owner.failures ||
         current.disabled || !current.isCurrent()) return;
     if (entry.kind === 'current' && current.results[entry.index] === entry.result) current.onSelect(entry.index);
     if (entry.kind === 'pinned' && current.pins.includes(entry.pin)) current.onSelectPin(entry.pin);
+    if (entry.kind === 'failure' && owner.failures[entry.index] === entry.failure && current.executionErrors.canLocateFailure(entry.failure)) {
+      current.executionErrors.locate(entry.failure, 'best');
+    }
   }
 
   return <>
     <button type="button" disabled={disabled} aria-haspopup="dialog" aria-expanded={opened} onClick={open}>{text.open}</button>
-    {opened && createPortal(<ResultList results={results} names={props.names} statementOrdinals={props.statementOrdinals} selected={props.selected} pins={pins} selectedPin={props.selectedPin}
+    {opened && createPortal(<ResultList results={results} names={props.names} statementOrdinals={props.statementOrdinals}
+      executionErrors={executionErrors} selected={props.selected} pins={pins} selectedPin={props.selectedPin}
       onSelect={select} onClose={() => setOwner(undefined)}/>, document.body)}
   </>;
 }
 
-function ResultList({ results, names, statementOrdinals, selected, pins, selectedPin, onSelect, onClose }:
-  Pick<Props, 'results' | 'names' | 'statementOrdinals' | 'selected' | 'pins' | 'selectedPin'> & { onSelect(entry: Entry): void; onClose(): void }) {
+function ResultList({ results, names, statementOrdinals, executionErrors, selected, pins, selectedPin, onSelect, onClose }:
+  Pick<Props, 'results' | 'names' | 'statementOrdinals' | 'executionErrors' | 'selected' | 'pins' | 'selectedPin'> & { onSelect(entry: Entry): void; onClose(): void }) {
   const [query, setQuery] = useState(''), [source, setSource] = useState<Source>('all');
+  const [includeFailures, setIncludeFailures] = useState(!results.length && !pins.length);
   const [position, setPosition] = useState(() => {
     if (selectedPin) return Math.max(0, pins.indexOf(selectedPin));
     return selected === undefined ? 0 : pins.length + selected;
   });
   const input = useRef<HTMLInputElement>(null), active = useRef<HTMLButtonElement>(null), listId = useId();
   const composing = useRef(false);
-  const entries = useMemo<Entry[]>(() => [
-    ...pins.map((pin): Entry => ({ kind: 'pinned', pin, name: pin.label, result: pin.result })),
-    ...results.map((result, index): Entry => {
+  const { failures } = executionErrors;
+  const entries = useMemo<Entry[]>(() => {
+    const current = results.map((result, index): CurrentEntry => {
       // 来源必须与完整结果列表逐项对齐。缺失的语句序号不能由结果序号补造。
       const ordinal = statementOrdinals?.length === results.length ? statementOrdinals[index] : undefined;
       return { kind: 'current', index, name: names[index], statementOrdinal: ordinal && ordinal > 0 && Number.isSafeInteger(ordinal) ? ordinal : undefined, result };
-    }),
-  ], [results, names, statementOrdinals, pins]);
+    });
+    if (includeFailures && failures.length) {
+      current.push(...failures.map((failure, index): CurrentEntry => {
+        const message = truncateQueryScriptMessage(failure.message);
+        return { kind: 'failure', index, statementOrdinal: failure.statementOrdinal, failure,
+          message: message.length < failure.message.length ? `${message}\n${text.errorTruncated}` : message };
+      }));
+      // 只在所有回执都有语句序号时混排，同一语句的多组结果保留返回顺序。
+      if (current.every(entry => entry.statementOrdinal !== undefined)) current.sort((left, right) => left.statementOrdinal! - right.statementOrdinal!);
+    }
+    return [...pins.map((pin): Entry => ({ kind: 'pinned', pin, name: pin.label, result: pin.result })), ...current];
+  }, [results, names, statementOrdinals, pins, includeFailures, failures]);
   const matches = useMemo(() => {
     const value = query.trim().toLowerCase();
     const ordinal = Number(/^#?(\d+)$/.exec(value)?.[1]);
@@ -105,8 +133,9 @@ function ResultList({ results, names, statementOrdinals, selected, pins, selecte
     const statement = /^@(\d+)$/.exec(value);
     const statementOrdinal = statement ? Number(statement[1]) : undefined;
     return entries.filter(entry => {
-      if (source !== 'all' && source !== entry.kind) return false;
-      if (statementOrdinal !== undefined) return entry.kind === 'current' && entry.statementOrdinal === statementOrdinal;
+      if (source !== 'all' && (entry.kind === 'pinned' ? source !== 'pinned' : source !== 'current')) return false;
+      if (statementOrdinal !== undefined) return entry.kind !== 'pinned' && entry.statementOrdinal === statementOrdinal;
+      if (entry.kind === 'failure') return !ordinalOnly && entry.message.toLowerCase().includes(value);
       if (!value || entry.kind === 'current' && entry.index + 1 === ordinal) return true;
       const { result, name } = entry;
       return !ordinalOnly && (name?.toLowerCase().includes(value) ||
@@ -118,7 +147,8 @@ function ResultList({ results, names, statementOrdinals, selected, pins, selecte
   const page = Math.floor(current / pageSize);
   const pageCount = Math.ceil(matches.length / pageSize);
   const entry = matches[current];
-  const optionId = (item: Entry) => `${listId}-${item.kind === 'pinned' ? 'pin-' + item.pin.id : item.index}`;
+  const canLocateError = entry?.kind === 'failure' && executionErrors.canLocateFailure(entry.failure);
+  const optionId = (item: Entry) => item.kind === 'pinned' ? `${listId}-pin-${item.pin.id}` : `${listId}-${item.kind}-${item.index}`;
   useEffect(() => { active.current?.scrollIntoView({ block: 'nearest' }); }, [entry]);
 
   function activate(item: Entry) {
@@ -144,14 +174,25 @@ function ResultList({ results, names, statementOrdinals, selected, pins, selecte
             if (!event.repeat) activate(entry);
           }
         }}/>
-      {pins.length > 0 && results.length > 0 && <div className="open-tab-search-sort" role="group" aria-label={text.source}>
+      {pins.length > 0 && (results.length > 0 || includeFailures && failures.length > 0) && <div className="open-tab-search-sort" role="group" aria-label={text.source}>
         {(['all', 'current', 'pinned'] as const).map(kind => <button key={kind} type="button" aria-pressed={source === kind}
           onClick={() => { setSource(kind); setPosition(0); input.current?.focus(); }}>{text.sources[kind]}</button>)}
       </div>}
-      <p role="status">{text.count(matches.length, entries.length)}</p>
-      <p className="muted small">{text.receiptHint}</p>
-      <div id={listId} className="open-tab-search-list" role="listbox" aria-label={text.list}>
-        {matches.slice(page * pageSize, (page + 1) * pageSize).map(item => {
+      {!!failures.length && <label className="check"><input type="checkbox" checked={includeFailures}
+        onChange={event => { setIncludeFailures(event.target.checked); setSource('all'); setPosition(0); input.current?.focus(); }}/>{text.includeFailures}</label>}
+      <p role="status">{includeFailures ? text.receiptCount(matches.length, entries.length) : text.count(matches.length, entries.length)}</p>
+      <p className="muted small">{includeFailures ? text.errorHint : text.receiptHint}</p>
+      <div id={listId} className="open-tab-search-list" role="listbox" aria-label={includeFailures ? text.receipts : text.list}>
+        {matches.slice(page * pageSize, (page + 1) * pageSize).map((item, row) => {
+          if (item.kind === 'failure') {
+            const id = optionId(item);
+            return <button key={id} ref={item === entry ? active : undefined} id={id}
+              type="button" role="option" aria-selected={item === entry} tabIndex={-1} className="open-tab-search-option"
+              onMouseDown={event => event.preventDefault()} onClick={() => { setPosition(page * pageSize + row); input.current?.focus(); }}>
+              <span className="open-tab-search-heading warning-text"><strong>{text.failedStatement(item.statementOrdinal)}</strong></span>
+              <span className="query-result-navigator-sql">{item.message.slice(0, 200).replace(/[\uD800-\uDBFF]$/, '')}{item.message.length > 200 ? '…' : ''}</span>
+            </button>;
+          }
           const { result, name } = item, id = optionId(item);
           const label = item.kind === 'pinned' ? item.pin.label : [text.result(item.index + 1), name].filter(Boolean).join(' · ');
           const selectedItem = item.kind === 'pinned' ? item.pin === selectedPin : !selectedPin && item.index === selected;
@@ -174,12 +215,19 @@ function ResultList({ results, names, statementOrdinals, selected, pins, selecte
           </button>;
         })}
       </div>
-      {!matches.length && <p>{text.empty}</p>}
+      {!matches.length && <p>{includeFailures ? text.noReceipts : text.empty}</p>}
       {pageCount > 1 && <div className="open-tab-search-options">
         <button type="button" disabled={page === 0} onClick={() => setPosition((page - 1) * pageSize)}>{text.previous}</button>
         <span>{text.page(page + 1, pageCount)}</span>
         <button type="button" disabled={page + 1 === pageCount} onClick={() => setPosition((page + 1) * pageSize)}>{text.next}</button>
       </div>}
+      {entry?.kind === 'failure' && <section className="query-result-navigator-error" aria-label={text.errorDetail}>
+        <pre>{entry.message}</pre>
+        <div className="open-tab-search-options">
+          <button type="button" disabled={!canLocateError} onClick={() => activate(entry)}>{text.locateError}</button>
+          {!canLocateError && <span className="muted small">{text.errorLocationUnavailable}</span>}
+        </div>
+      </section>}
     </div>
     <footer className="modal-footer"><button type="button" onClick={onClose}>{text.close}</button></footer>
   </Modal>;
