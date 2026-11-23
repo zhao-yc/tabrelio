@@ -1,7 +1,7 @@
 import type { SqliteCompletionAnalysis, SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionLimits, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
-import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns } from './sqliteJoinColumns';
+import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
 
 export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
@@ -109,28 +109,53 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   if (analysis.syntax.includes('column')) {
     const selected = bound.filter(matches);
     if (qualifiers.length && selected.length > 1) return { items: [], incomplete: true };
+    const outputAliases = analysis.outputAliases, sourceNames = new Set<string>();
+    const addOutputAlias = (name: string) => add({ label: name, kind: 'column', insertText: quote(name), detail: text.outputAlias });
+    let aliasSourcesIncomplete = outputAliases?.sourcesIncomplete === true;
+    let aliasMayResolveToRowid = false;
+    incomplete ||= aliasSourcesIncomplete;
+    if (outputAliases?.outputFirst) for (const name of outputAliases.names) addOutputAlias(name);
     for (const relation of selected) {
       const binding = relation.alias ?? relation.name;
+      const aliasSource = !!outputAliases && relation.scopeDepth === outputAliases.scopeDepth;
       // INSERT列清单由分析器仅投影目标表；已有点限定时只替换最后的字段。
       const insert = (name: string) => qualifiers.length || analysis.unqualifiedColumns ? quote(name) : quote(binding) + '.' + quote(name);
+      const addSourceColumn = (name: string, detail: string) => {
+        if (aliasSource) sourceNames.add(fold(name));
+        add({ label: name, kind: 'column', insertText: insert(name), detail });
+      };
       if (relation.kind === 'local') {
         const kind = relation.source === 'cte' ? text.cte : text.derived;
         if (relation.projection === undefined) {
-          for (const name of relation.columns) add({ label: name, kind: 'column', insertText: insert(name), detail: binding + ' · ' + kind });
+          for (const name of relation.columns) addSourceColumn(name, binding + ' · ' + kind);
         } else {
           const projection = await reader.readColumns({ projection: relation.projection }, '');
           incomplete ||= projection.incomplete;
+          aliasSourcesIncomplete ||= aliasSource && projection.incomplete;
           for (const { name, entry } of projection.columns) {
             const detail = [binding, kind, entry?.declaredType].filter(Boolean).join(' · ');
-            add({ label: name, kind: 'column', insertText: insert(name), detail });
+            addSourceColumn(name, detail);
           }
         }
       } else {
-        const metadata = await reader.readColumns({ source: relation }, analysis.target.prefix); incomplete ||= metadata.incomplete;
+        const metadata = await reader.readColumns({ source: relation }, analysis.target.prefix);
+        incomplete ||= metadata.incomplete;
+        aliasSourcesIncomplete ||= aliasSource && metadata.incomplete;
+        aliasMayResolveToRowid ||= aliasSource;
         const source = relation.tableFunction ? text.tableFunction : undefined;
-        for (const { entry } of metadata.columns) if (entry && !(relation.visibleColumnsOnly && entry.hidden)) add({ label: entry.name, kind: 'column', insertText: insert(entry.name), detail: binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : '') });
+        for (const { entry } of metadata.columns) if (entry && !(relation.visibleColumnsOnly && entry.hidden)) {
+          addSourceColumn(entry.name, binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : ''));
+        }
       }
       if (!qualifiers.length) add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail: relation.kind === 'local' && relation.source === 'group' ? text.joinGroup : text.alias, trigger: true });
+    }
+    // 当前查询块的来源列优先于输出别名，外层列在输出别名之后。目录无法确认隐式 rowid。
+    if (outputAliases && !outputAliases.outputFirst && !aliasSourcesIncomplete) {
+      for (const name of outputAliases.names) {
+        if (sourceNames.has(fold(name))) continue;
+        if (aliasMayResolveToRowid && sqliteRowidName.test(name)) { incomplete = true; continue; }
+        addOutputAlias(name);
+      }
     }
   }
   if (analysis.syntax.includes('keyword') && !analysis.target.quoted && !qualifiers.length) for (const keyword of keywords) add({ label: keyword, kind: 'keyword', insertText: keyword, detail: text.keyword });

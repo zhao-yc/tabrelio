@@ -1,6 +1,7 @@
 /** SQLite补全只展示目录和语法建议，选择建议不会执行SQL。 */
 export const sqliteCompletionZh = {
   outputColumn: '复合查询输出列',
+  outputAlias: '查询输出别名',
   joinColumn: '连接两侧共有列',
   joinGroup: '连接组输出列',
   tableFunction: 'SQLite 表值函数',

@@ -13,6 +13,7 @@ export interface SqliteJoinColumn {
 }
 interface JoinColumns { columns: SqliteJoinColumn[]; incomplete: boolean; ambiguousOrigins?: Set<string>; }
 type JoinGroupInput = { columns: SqliteJoinColumn[]; merged?: true | string[] };
+export const sqliteRowidName = /^(?:rowid|_rowid_|oid)$/i;
 export const sqliteJoinRowidName = /^(?:rowid|_rowid_|oid)(?::\d+)*:?$/i;
 const duplicateBase = (name: string) => name.replace(/:\d*$/, '');
 

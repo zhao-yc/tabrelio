@@ -28,7 +28,8 @@ const secondSessionSql = 'SELECT main_marker,id FROM main.subject ORDER BY id;';
 const functionSql = `SELECT j."value", g."value" AS grouped_value FROM (SELECT id AS "id:1" FROM json_each('["TVF_FIRST","TVF_SECOND"]')) a JOIN (main.subject s JOIN json_each('["TVF_FIRST","TVF_SECOND"]') j ON s.id=1) AS g USING ("id:1") ORDER BY j.key`;
 const compoundSql = `SELECT j.* FROM (SELECT 1 AS marker) a JOIN (main.subject s JOIN json_each('["COMPOUND_FIRST","COMPOUND_SECOND"]') j ON s.id=1) ON 1 UNION ALL SELECT 5,'COMPOUND_LAST','text','COMPOUND_LAST',999,NULL,'','' ORDER BY "id:1" DESC`;
 const localProjectionSql = `WITH base AS (SELECT s.* FROM main.subject s), tail AS (SELECT base.*, base.main_marker AS main_marker FROM base) SELECT v."main_marker:1" AS renamed, v.* FROM (SELECT * FROM tail) v JOIN tail w USING ("main_marker:1") WHERE v.id=1 UNION ALL SELECT 'CTE_COMPOUND_FIRST','same',0,'CTE_COMPOUND_FIRST' ORDER BY "main_marker:1" ASC`;
-const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql, functionSql, compoundSql, localProjectionSql];
+const outputAliasSql = `SELECT CASE WHEN id=1 THEN 'one' ELSE 'high' END AS bucket, count(*) AS amount FROM main.subject GROUP BY "bucket" HAVING "amount">0 ORDER BY "bucket" ASC`;
+const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql, functionSql, compoundSql, localProjectionSql, outputAliasSql];
 let completed: { directory: string; database: string; firstPid?: number; secondPid?: number; platform: string } | undefined;
 let observeFailure: (() => Record<string, unknown>) | undefined;
 /** 任何失败保留准确窗口、profile及合成库，不自动重启/重试/强停/清理。 */
@@ -132,8 +133,8 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     await step(() => expect.poll(async () => (await analysis()).some(record => record.id > before && record.posted === 1 && record.replied === 1 && record.terminated === 1), { timeout: 13000 }).toBe(true));
     return (await analysis()).find(record => record.id > before && record.posted === 1 && record.replied === 1 && record.terminated === 1)!;
   };
-  const choose = async (marked: string, label: string, expectedSql: string, exclude?: string) => {
-    const expected = await at(marked); await trigger(expected); await step(() => expect(widget()).toBeVisible()); const names = widget().locator('.monaco-list-row .label-name'); await step(() => expect(names.filter({ hasText: new RegExp('^' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$') })).toHaveCount(1)); if (exclude) await step(() => expect(names.filter({ hasText: new RegExp('^' + exclude + '$') })).toHaveCount(0));
+  const choose = async (marked: string, label: string, expectedSql: string, exclude?: string, beforeTrigger?: () => Promise<void>) => {
+    const expected = await at(marked); await beforeTrigger?.(); await trigger(expected); await step(() => expect(widget()).toBeVisible()); const names = widget().locator('.monaco-list-row .label-name'); await step(() => expect(names.filter({ hasText: new RegExp('^' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$') })).toHaveCount(1)); if (exclude) await step(() => expect(names.filter({ hasText: new RegExp('^' + exclude + '$') })).toHaveCount(0));
     const count = await step(() => names.count()); if (count > 256) throw Error('实际建议超过本轮有界合同'); for (let index = 0; index < count; index++) { const focused = await step(() => widget().locator('.monaco-list-row.focused .label-name').textContent()); if (focused === label) break; await step(() => page.keyboard.press('ArrowDown')); } await step(() => expect(widget().locator('.monaco-list-row.focused .label-name')).toHaveText(label)); await step(() => page.keyboard.press('Enter')); await step(() => expect(widget()).toHaveCount(0)); await expectSql(expectedSql);
   };
   const createQuery = async () => { await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true }, check)).click()); const dialog = page.getByRole('dialog', { name: zh.common.newQuery, exact: true }); await step(() => dialog.getByRole('button', { name: zh.app.text053, exact: true }).click()); await step(() => expect(query().locator('.monaco-editor').getByRole('textbox')).toBeVisible()); const state = await settings(), tab = state.tabs.find(tab => tab.id === state.activeTabId); if (!tab || tab.kind !== 'query') throw Error('未打开原查询标签'); return tab.id; };
@@ -145,14 +146,16 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
   const metadataReadOnly = async (expectedDisk: ReturnType<typeof disk>, before: { tasks: Awaited<ReturnType<typeof tasks>>; history: Awaited<ReturnType<typeof history>>; executions: number; sessions: number }) => { expect(await tasks()).toEqual(before.tasks); expect(await history()).toEqual(before.history); const facts = await step(audit); expect(operations(facts, 'query.execute')).toHaveLength(before.executions); expect(operations(facts, 'sessions.open')).toHaveLength(before.sessions); expect(disk()).toEqual(expectedDisk); };
   const settleMetadata = () => step(() => expect.poll(async () => { const facts = await audit(), records = await analysis(); return facts.pending === 0 && records.every(record => record.terminated === 1); }).toBe(true));
   /** 真实Monaco悬停快捷键与完整词中光标；不直接调用provider、设置model或伪造hover内容。 */
-  const showHover = async (marked: string, expected: string[]) => {
+  const showHover = async (marked: string, expected: string[], noCatalogRead = false) => {
     const original = await at(marked); await settleMetadata(); const before = (await analysis()).at(-1)?.id ?? 0;
+    const beforeReads = noCatalogRead ? completionFacts(await step(audit)).length : undefined;
     await step(() => page.keyboard.press(modifier + '+K')); await step(() => page.keyboard.press(modifier + '+I'));
     const tooltip = page.locator('.monaco-hover:visible');
     for (const value of expected) await step(() => expect(tooltip).toContainText(value));
     await step(() => expect.poll(async () => (await analysis()).some(record => record.id > before && record.intent === 'hover' && record.status === 'ready' && record.terminated === 1)).toBe(true));
     await expectSql(original.source); await info.attach('SQLite字段悬停-' + expected[0], { body: await step(() => page.screenshot()), contentType: 'image/png' });
     await step(() => page.keyboard.press('Escape')); await settleMetadata();
+    if (beforeReads !== undefined) expect(completionFacts(await step(audit))).toHaveLength(beforeReads);
   };
   /** 只读核对实际Monaco的模型、光标及版本，不用setPosition或直接调用导航provider。 */
   const navigationModel = () => step(() => page.evaluate(() => {
@@ -333,6 +336,26 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     expect(result(operations(await step(audit), 'query.execute').at(-1)!.reply)).toMatchObject({ results: [{ rows: [
       { c0: 'CTE_COMPOUND_FIRST', c3: 'CTE_COMPOUND_FIRST' }, { c0: 'SQLITE_COMPLETION_MAIN_中文🚢', c3: 'SQLITE_COMPLETION_MAIN_中文🚢' },
     ] }] });
+    const beforeAliases = { tasks: await tasks(), history: await history(), executions: 6, sessions: 2 };
+    for (const [clause, name, prefix] of [['GROUP BY', 'bucket', 'bu'], ['HAVING', 'amount', 'am'], ['ORDER BY', 'bucket', 'bu']] as const) {
+      stage = clause + ' 接受普通查询输出别名，只读取当前会话的来源列目录';
+      let beforeReads = 0;
+      await choose(outputAliasSql.replace(clause + ' "' + name + '"', clause + ' ' + prefix + '|suffix'), name, outputAliasSql, undefined, async () => {
+        // 整段输入时 Monaco 也可能自动补全行尾。只从手动触发前开始记录这一次请求。
+        await settleMetadata();
+        beforeReads = completionFacts(await step(audit)).length;
+      });
+      await settleMetadata(); await metadataReadOnly(baseline, beforeAliases);
+      const reads = completionFacts(await step(audit)).slice(beforeReads).filter(fact => succeeded(fact) && fact.request.kind === 'columns');
+      expect(reads.map(fact => fact.request)).toEqual([expect.objectContaining({ table: 'subject', schema: 'main', prefix, sessionId: sessionA })]);
+    }
+    stage = '显式执行由别名补全构成的分组查询';
+    await execute(outputAliasSql, 7, true);
+    expect(result(operations(await step(audit), 'query.execute').at(-1)!.reply)).toMatchObject({ results: [{ rows: [{ c0: 'high' }, { c0: 'one' }] }] });
+    stage = '独立排序名称悬停显示输出别名，无需读取同名来源字段';
+    const beforeAliasHover = { tasks: await tasks(), history: await history(), executions: 7, sessions: 2 };
+    await showHover('SELECT id AS main_marker FROM main.subject ORDER BY main_|marker', ['查询输出别名', 'main_marker'], true);
+    await metadataReadOnly(baseline, beforeAliasHover);
     const transactions = operations(await step(audit), 'query.transaction'); expect(transactions.map(fact => fact.request.action)).toEqual(['begin', 'rollback']); const firstTasks = await tasks(), firstHistory = await history(); expect(firstTasks.filter(task => task.kind === 'query.execute')).toHaveLength(explicitSql.length); expect(firstHistory.map(record => record.sql).sort()).toEqual([...explicitSql].sort()); expect(disk()).toEqual(baseline);
     stage = '保留一个无session新草稿，明确关闭原A/B释放真实会话及所有SQLite worker';
     const tabC = await createQuery(), retainedDraft = '-- SQLITE_COMPLETION_RETAINED_DRAFT\nSELECT main_marker FROM main.subject;'; await write(retainedDraft); await closeQuery(tabA); await closeQuery(tabB); await switchTab(tabC); await expectSql(retainedDraft); await settleMetadata(); await step(() => expect.poll(async () => { const facts = await audit(); return facts.pending === 0 && facts.workers.every(worker => worker.exit === 0); }).toBe(true));

@@ -24,8 +24,33 @@ describe('SQLite字段悬停完整词法与准确目录', () => {
   it.each(['SELECT -- fi|eld_🚢', "SELECT 'fi|eld_🚢' FROM subject", 'SELECT :fi|eld_🚢 FROM subject', 'SELECT 12|34 FROM subject', 'SEL|ECT field_🚢 FROM subject', 'SELECT COU|NT(field_🚢) FROM subject', 'SELECT s."fi|eld_🚢 FROM subject s', 'SELECT CAST(field_🚢 AS TE|XT) FROM subject', 'SELECT field_🚢 COLLATE no|case FROM subject'])('非字段不请求目录：%s', async marked => {
     const result = await hover(marked); expect(result.value).toBeUndefined(); expect(result.port.load).not.toHaveBeenCalled();
   });
-  it.each(['SELECT id AS field_🚢 FROM subject ORDER BY fi|eld_🚢', 'SELECT id field_🚢 FROM subject WHERE fi|eld_🚢 > 0', 'SELECT id AS fi|eld_🚢 FROM subject', 'WITH c(fi|eld_🚢) AS (SELECT id FROM subject) SELECT * FROM c'])('输出别名／声明不伪装同名物理列：%s', async marked => {
+  it.each(['SELECT id AS fi|eld_🚢 FROM subject', 'WITH c(fi|eld_🚢) AS (SELECT id FROM subject) SELECT * FROM c'])('声明不伪装同名物理列：%s', async marked => {
     const result = await hover(marked); expect(result.value).toBeUndefined(); expect(result.port.load).not.toHaveBeenCalled();
+  });
+  it('独立排序名称优先显示输出别名，排序表达式和过滤按实际来源解析', async () => {
+    const sort = await hover('SELECT id AS field_🚢 FROM subject ORDER BY (fi|eld_🚢) DESC');
+    expect(sort.value).toContain('查询输出别名');
+    expect(sort.value).toContain(text.unknown);
+    expect(sort.value).not.toContain('INTEGER');
+    expect(sort.port.load).not.toHaveBeenCalled();
+    for (const sql of ['SELECT id field_🚢 FROM subject WHERE fi|eld_🚢 > 0', 'SELECT id field_🚢 FROM subject ORDER BY fi|eld_🚢 + 0']) {
+      const actual = await hover(sql);
+      expect(actual.value).toContain(text.declaredType + '："INTEGER"');
+      expect(actual.port.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'subject', prefix: 'field_🚢' });
+      const output = await hover(sql, directory([]));
+      expect(output.value).toContain('查询输出别名');
+      expect(output.port.load).toHaveBeenCalledOnce();
+    }
+  });
+  it('相关子查询先于同名外层物理列显示本层别名，支持没有输入关系的查询块', async () => {
+    const result = await hover('SELECT (SELECT 1 AS field_🚢 WHERE fi|eld_🚢 = 1) FROM parent');
+    expect(result.value).toContain('查询输出别名');
+    expect(result.port.load).not.toHaveBeenCalled();
+    const rowid = await hover('SELECT 1 AS rowid FROM subject WHERE row|id = 1', directory([]));
+    expect(rowid.value).toBeUndefined();
+    const anonymous = await hover('SELECT 1 AS field_🚢 FROM (SELECT 0 AS field_🚢) WHERE fi|eld_🚢 = 1');
+    expect(anonymous.value).toBeUndefined();
+    expect(anonymous.port.load).not.toHaveBeenCalled();
   });
   it('显式限定仍可解析真实列，不把另一个输出别名套到它', async () => {
     expect((await hover('SELECT id AS field_🚢, s.fi|eld_🚢 FROM subject s')).value).toContain(text.declaredType);

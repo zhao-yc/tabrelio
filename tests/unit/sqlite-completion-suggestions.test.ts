@@ -8,6 +8,58 @@ type Ready = Extract<SqliteCompletionAnalysis, { status: 'ready' }>;
 const ready = (patch: Partial<Ready> = {}): Ready => ({ status: 'ready', target: { start: 9, end: 9, prefix: '', quoted: false }, syntax: ['column'], qualifiers: ['s'], relations: [{ kind: 'physical', name: 'subject', alias: 's' }], ...patch });
 const column = (name: string, table = 'subject', schema: 'main' | 'temp' = 'main'): Extract<SqliteCompletionEntry, { kind: 'column' }> => ({ name, table, schema, kind: 'column', declaredType: 'TEXT', generated: false, hidden: false });
 function directory(entries: SqliteCompletionEntry[], incomplete = false) { return { load: vi.fn(async (_query: SqliteCompletionLookup) => ({ entries, incomplete, stamp: '1:0' })) }; }
+
+it('普通查询别名候选可原样执行，区分排序、分组和过滤同名来源', async () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE subject(id, value, chosen); INSERT INTO subject VALUES (1,2,9),(2,9,2),(3,4,1); CREATE TABLE parent(chosen); INSERT INTO parent VALUES(0)');
+    const d = { load: vi.fn(async (lookup: SqliteCompletionLookup) => {
+      const entries = lookup.kind === 'columns' ? (db.prepare('SELECT name FROM pragma_table_xinfo(?)').all(lookup.table) as { name: string }[])
+        .filter(row => row.name.startsWith(lookup.prefix)).map(row => column(row.name, lookup.table)) : [];
+      return { entries, incomplete: false, stamp: '1:0' };
+    }) };
+    const check = async (marked: string, expectedInsertion: string, expected: unknown[]) => {
+      const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
+      if (analysis.status !== 'ready') throw Error(analysis.reason);
+      const { items, incomplete } = await sqliteCompletionSuggestions(analysis, d);
+      expect(incomplete).toBe(false);
+      const item = items.find(item => item.kind === 'column');
+      expect(item).toMatchObject({ insertText: expectedInsertion });
+      expect(items.some(item => item.detail === '查询输出别名')).toBe(!expectedInsertion.startsWith('"subject".'));
+      const sql = source.slice(0, analysis.target.start) + item!.insertText + source.slice(analysis.target.end);
+      expect(db.prepare(sql).all()).toEqual(expected);
+    };
+    await check('SELECT value AS chosen,id FROM subject ORDER BY ch|osen', '"chosen"', [{ chosen: 2, id: 1 }, { chosen: 4, id: 3 }, { chosen: 9, id: 2 }]);
+    await check('SELECT value AS chosen,id FROM subject ORDER BY ch|osen + 0', '"subject"."chosen"', [{ chosen: 4, id: 3 }, { chosen: 9, id: 2 }, { chosen: 2, id: 1 }]);
+    await check('SELECT value AS chosen,id FROM subject WHERE ch|osen=2', '"subject"."chosen"', [{ chosen: 9, id: 2 }]);
+    await check('SELECT value%2 AS bucket, count(*) AS qty FROM subject GROUP BY bu|cket ORDER BY qty', '"bucket"', [{ bucket: 1, qty: 1 }, { bucket: 0, qty: 2 }]);
+    await check('SELECT value%2 AS bucket, count(*) AS qty FROM subject GROUP BY bucket HAVING qt|y>1', '"qty"', [{ bucket: 0, qty: 2 }]);
+    await check('SELECT 1 AS "重""量🚢" ORDER BY "重""|量🚢"', '"重""量🚢"', [{ '重"量🚢': 1 }]);
+    const marked = 'SELECT (SELECT 1 AS chosen WHERE ch|osen=1) AS outcome FROM parent';
+    const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+    if (analysis.status !== 'ready') throw Error(analysis.reason);
+    const { items } = await sqliteCompletionSuggestions(analysis, d);
+    expect(items).toContainEqual(expect.objectContaining({ insertText: '"chosen"', detail: '查询输出别名' }));
+    expect(items).toContainEqual(expect.objectContaining({ insertText: '"parent"."chosen"' }));
+    const sql = marked.slice(0, analysis.target.start) + '"chosen"' + marked.replace('|', '').slice(analysis.target.end);
+    expect(db.prepare(sql).all()).toEqual([{ outcome: 1 }]);
+  } finally { db.close(); }
+});
+
+it.each([
+  ['SELECT 1 AS picked FROM (SELECT value+1 FROM subject) d ORDER BY pi|cked', true],
+  ['SELECT 1 AS picked FROM (SELECT value+1 FROM subject) d WHERE pi|cked > 0', false],
+  ['SELECT 1 AS picked FROM subject ORDER BY pi|cked', true],
+  ['SELECT 1 AS picked FROM subject GROUP BY pi|cked', false],
+  ['SELECT 1 AS rowid FROM subject WHERE ro|wid > 0', false],
+] as const)('目录不完整时只提供可确认的输出别名：%s', async (marked, showAlias) => {
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const { items, incomplete } = await sqliteCompletionSuggestions(analysis, directory([], !marked.includes('AS rowid')));
+  expect(incomplete).toBe(true);
+  expect(items.some(item => item.detail === '查询输出别名')).toBe(showAlias);
+});
+
 /** 真实分析结果直接进入候选生成，避免两个端口各自模拟而遗漏字段上下文契约。 */
 it.each([
   ['SELECT s.na|suffix FROM main.subject AS s', '"name"', { kind: 'columns', table: 'subject', schema: 'main', prefix: 'na' }],

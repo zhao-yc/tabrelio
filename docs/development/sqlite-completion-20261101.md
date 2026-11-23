@@ -4,6 +4,8 @@
 
 SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段、表别名，明确输出列的 CTE／派生表，以及 `main`／`temp` 限定。建议按准确名称使用 SQLite 双引号转义，以普通文本插入；同名字段保留各自别名限定。INSERT 字段清单、UPDATE 赋值左侧及 RETURNING 使用目标表字段。
 
+普通 `SELECT` 的 `ORDER BY`、`GROUP BY`、`HAVING` 和 `WHERE` 可补全及悬停当前查询块的输出别名。独立排序名称优先解析为输出别名。排序表达式、分组和过滤依次查当前查询块的来源列、输出别名和相关外层列。别名悬停显示来源说明，表达式类型标为未知。聚合、窗口函数及无法确认的函数按所在位置判断可用性。需先确认来源列时，目录缺失或无法判定隐式行号会限制别名候选。[SQLite SELECT](https://www.sqlite.org/lang_select.html#orderby) · [SQLite 名称解析源码](https://github.com/sqlite/sqlite/blob/version-3.53.0/src/resolve.c#L628)
+
 CTE 和派生表的字段补全、悬停也能逐层展开 `SELECT *` 和 `SELECT 别名.*`。显式 CTE 列清单优先，复合定义沿用首分支输出。读取沿声明作用域追到原表、视图或表值函数，按投影顺序生成确定的重名后缀。已确认来源的字段悬停显示物理类型。循环引用、未命名表达式和不完整目录保留已确认的前序列并提示部分结果。外层 `USING`、复合排序星号及连接组字段复用这些局部输出，同一次补全共用来源目录。[SQLite WITH](https://www.sqlite.org/lang_with.html) · [SQLite 来源投影](https://www.sqlite.org/lang_select.html#fromclause)
 
 尚无查询会话的草稿通过授权文件的独立只读连接读取目录，不创建查询会话。已有会话使用原物理连接，临时表遮蔽规则及未提交 DDL 保持；显式 `main`／`temp` 只读取指定命名空间。切换标签、修改正文、连接变更及模态会撤销旧结果。
@@ -31,6 +33,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-23 普通查询输出别名增量。WIN11-TEST 不可达，本机 macOS arm64 严格类型、源码构建和 17 份相关套件的 536 项通过。Electron 源码专项在 `GROUP BY`、`HAVING` 和 `ORDER BY` 接受别名，每次手动触发只读取一次 `main.subject` 列目录。显式执行返回 `high`、`one` 两行。独立排序别名的悬停不发起目录读取，两次应用均正常退出。日志和报告位于忽略目录 `.cache/sqlite-output-aliases/confirmed/`。Windows 界面和安装包待验。
 
 2026-11-23 局部星号外层查询增量，WIN11-TEST 不可达，未派发任务。本机 macOS arm64 严格类型、源码构建和 17 份相关套件的 509 项通过。Electron 源码专项分别在字段、`USING` 和复合 `ORDER BY` 接受 `main_marker:1`。每次补全只读取一次 `main.subject` 列目录。显式执行返回预期的两行升序结果，两次应用正常退出。日志和报告位于忽略目录 `.cache/sqlite-local-projection-outer/`。Windows 界面和安装包待验。
 

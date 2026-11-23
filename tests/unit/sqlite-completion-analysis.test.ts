@@ -4,6 +4,60 @@ import { sqliteCompletionLimits as limits } from '../../src/shared/sqliteComplet
 function query(marked:string){const offset=marked.indexOf('|');if(offset<0)throw Error('缺少光标');const source=marked.slice(0,offset)+marked.slice(offset+1);return{source,offset};}
 function analyze(marked:string){const input=query(marked);return analyzeSqliteCompletion(input.source,input.offset);}
 function ready(marked:string){const input=query(marked),value=analyzeSqliteCompletion(input.source,input.offset);expect(value.status).toBe('ready');if(value.status!=='ready')throw Error(value.reason);expect(validateSqliteCompletionAnalysis(value,input.source,input.offset)).toEqual(value);return value;}
+
+it.each([
+  ['SELECT v AS picked FROM subject ORDER BY (pi|cked COLLATE nocase) DESC NULLS LAST', 'order', true],
+  ['SELECT v AS picked FROM subject ORDER BY abs(pi|cked)', 'order', undefined],
+  ['SELECT v AS picked FROM subject ORDER BY v, pi|cked', 'order', true],
+  ['SELECT max(v, 1) picked FROM subject GROUP BY v, pi|cked', 'group', undefined],
+  ['SELECT count(*) picked FROM subject HAVING pi|cked > 0', 'having', undefined],
+  ['SELECT (SELECT count(*) FROM others) AS picked FROM subject WHERE pi|cked > 0', 'where', undefined],
+] as const)('普通查询按使用位置提供别名和解析顺序：%s', (sql, clause, outputFirst) => {
+  const value = ready(sql);
+  expect(value.outputAliases).toEqual({ clause, scopeDepth: 0, names: ['picked'], ...(outputFirst ? { outputFirst } : {}) });
+  expect(value.relations).toEqual([{ kind: 'physical', name: 'subject', scopeDepth: 0 }]);
+});
+
+it.each([
+  'SELECT sum(v) AS picked FROM subject GROUP BY pi|cked',
+  'SELECT min(v) AS picked FROM subject WHERE pi|cked > 0',
+  'SELECT row_number() OVER () AS picked FROM subject GROUP BY v HAVING pi|cked > 0',
+  'SELECT row_number() OVER () AS picked FROM subject WHERE pi|cked > 0',
+  'SELECT v AS picked FROM subject ORDER BY row_number() OVER (ORDER BY pi|cked)',
+  'SELECT v AS picked FROM subject ORDER BY count(*) FILTER (WHERE pi|cked > 0)',
+  'SELECT v AS picked FROM subject ORDER BY v COLLATE pi|cked',
+  'SELECT v AS picked FROM subject ORDER BY v NULLS LAST |',
+  'SELECT v AS picked FROM subject ORDER BY v LIMIT pi|cked',
+  'SELECT v AS picked FROM subject ORDER BY subject.pi|cked',
+  'SELECT v AS picked FROM subject WHERE EXISTS (SELECT 1 WHERE pi|cked > 0)',
+  'SELECT v COLLATE picked FROM subject ORDER BY pi|cked',
+  'SELECT v BETWEEN 0 AND picked FROM subject ORDER BY pi|cked',
+])('排除当前位置不可用的输出别名：%s', sql => {
+  const value = analyze(sql);
+  if (value.status === 'ready') expect(value.outputAliases).toBeUndefined();
+});
+
+it('在相关子查询记录别名自身层级和当前块来源，不把未知外层来源算作同级', () => {
+  const value = ready('SELECT (SELECT 1 AS picked WHERE pi|cked > 0) FROM parent');
+  expect(value.outputAliases).toEqual({ clause: 'where', scopeDepth: 1, names: ['picked'] });
+  expect(value.relations).toEqual([{ kind: 'physical', name: 'parent', scopeDepth: 0 }]);
+  const unknown = ready('SELECT 1 AS picked FROM (SELECT v+1 FROM subject) d WHERE pi|cked > 0');
+  expect(unknown.outputAliases).toEqual({ clause: 'where', scopeDepth: 0, names: ['picked'], sourcesIncomplete: true });
+  const unknownOuter = ready('SELECT (SELECT 1 AS picked WHERE pi|cked > 0) FROM (SELECT v+1 FROM subject) d');
+  expect(unknownOuter.outputAliases).toEqual(value.outputAliases);
+});
+
+it('回包校验要求别名前缀、使用位置和来源层级匹配', () => {
+  const marked = 'SELECT v AS picked FROM subject GROUP BY pi|cked', value = ready(marked);
+  const { source, offset } = query(marked);
+  for (const patch of [{ names: ['other'] }, { names: [] }, { outputFirst: true }, { scopeDepth: -1 }]) {
+    expect(() => validateSqliteCompletionAnalysis({ ...value, outputAliases: { ...value.outputAliases, ...patch } }, source, offset)).toThrow();
+  }
+  for (const scopeDepth of [undefined, 1]) {
+    const relations = [{ ...value.relations[0], scopeDepth }];
+    expect(() => validateSqliteCompletionAnalysis({ ...value, relations }, source, offset)).toThrow();
+  }
+});
 it('SELECT别名可向后读取准确FROM，限定字段只替当前标识符而不借MySQL词法',()=>{const value=ready('SELECT t.na|me FROM main."用户🚢" AS t');expect(value.target).toMatchObject({prefix:'na',quoted:false});expect(value.qualifiers).toEqual(['t']);expect(value.relations).toEqual([{kind:'physical',schema:'main',name:'用户🚢',alias:'t'}]);expect(value.syntax).toEqual(['column','keyword']);});
 it('未限定物理表保schema省略让后端temp优先，main/temp显式目标保独立',()=>{expect(ready('SELECT | FROM subject').relations).toEqual([{kind:'physical',name:'subject'}]);expect(ready('SELECT t.| FROM temp.subject t').relations).toEqual([{kind:'physical',schema:'temp',name:'subject',alias:'t'}]);expect(ready('SELECT main.subject.| FROM main.subject').qualifiers).toEqual(['main','subject']);expect(ready('SELECT * FROM temp.|').syntax).toContain('relation');});
 it('JOIN和同物理表不同alias保准确两个绑定；重复alias明确阻断歧义',()=>{expect(ready('SELECT a.| FROM subject a JOIN subject b ON a.id=b.id').relations).toEqual([{kind:'physical',name:'subject',alias:'a'},{kind:'physical',name:'subject',alias:'b'}]);expect(analyze('SELECT x.| FROM a x JOIN b x')).toMatchObject({status:'blocked',reason:'ambiguous'});});
