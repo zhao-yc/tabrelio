@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 查询编辑器在执行计划、预处理语句、游标声明和查询导出正文中沿用查询补全和原文导航。计划选项、参数类型与导出目标和正文作用域隔离。Q01、R01 继续为部分覆盖。 [EXPLAIN](https://www.postgresql.org/docs/18/sql-explain.html) · [PREPARE](https://www.postgresql.org/docs/18/sql-prepare.html) · [DECLARE](https://www.postgresql.org/docs/18/sql-declare.html) · [COPY](https://www.postgresql.org/docs/18/sql-copy.html)
+
 2026-11-24 源码增量。PostgreSQL MERGE 的 ON、分支条件和值表达式按实际可见来源和 SELECT 权限补全。更新和插入按各自的目标列权限筛选，动作表达式保留来源 JOIN 的合并键。Q01、R01 继续为部分覆盖。 [PostgreSQL MERGE](https://www.postgresql.org/docs/18/sql-merge.html)
 
 2026-11-24 源码增量。PostgreSQL 的 UPDATE 和 DELETE 条件按 SELECT 权限补全目标和连接来源，支持相关子查询并区分 `CURRENT OF` 游标位置。写入语句的返回列、新旧行别名及 CTE 星号继承读取权限。Q01、R01 继续为部分覆盖。 [PostgreSQL UPDATE](https://www.postgresql.org/docs/18/sql-update.html) · [PostgreSQL DELETE](https://www.postgresql.org/docs/18/sql-delete.html)

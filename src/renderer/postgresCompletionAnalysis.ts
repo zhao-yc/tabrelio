@@ -110,6 +110,57 @@ function groupStatement(tokens: PostgresEditorToken[], offset: number, length: n
   return strict && stack.length ? undefined : root;
 }
 
+/** 只把实际查询交给语义分析，保留原文位置，排除选项、参数类型和导出目标。 */
+function statementQuery(parts: Part[], offset: number): Part[] | undefined {
+  const command = keyword(parts[0]);
+  if (!['EXPLAIN', 'PREPARE', 'DECLARE', 'COPY'].includes(command)) return parts;
+
+  const first = parts[1];
+  let start = 1;
+  let end = parts.length;
+  if (command === 'EXPLAIN') {
+    // 首个括号也可以是 SELECT 本身。只有选项括号才应跳过。
+    if (first?.kind === 'group' && !startsReferenceQuery(first)) {
+      if (first.closing !== ')' || !first.closed) return;
+      start++;
+    } else {
+      if (['ANALYZE', 'ANALYSE'].includes(keyword(parts[start]))) start++;
+      if (keyword(parts[start]) === 'VERBOSE') start++;
+    }
+  }
+  if (command === 'PREPARE') {
+    if (!identifier(first)) return;
+    const types = parts[2];
+    if (types?.kind === 'group' && (types.closing !== ')' || !types.closed)) return;
+    const as = types?.kind === 'group' ? 3 : 2;
+    if (keyword(parts[as]) !== 'AS') return;
+    start = as + 1;
+  }
+  if (command === 'DECLARE') {
+    if (!identifier(first)) return;
+    const cursor = parts.findIndex((part, index) => index >= 2 && keyword(part) === 'CURSOR');
+    if (cursor < 0 || !/^(?:(?:NO SCROLL|SCROLL|BINARY|ASENSITIVE|INSENSITIVE) )*$/.test(
+      parts.slice(2, cursor).map(part => keyword(part) + ' ').join(''))) return;
+    const hold = ['WITH', 'WITHOUT'].includes(keyword(parts[cursor + 1]));
+    if (hold && keyword(parts[cursor + 2]) !== 'HOLD') return;
+    const forIndex = cursor + (hold ? 3 : 1);
+    if (keyword(parts[forIndex]) !== 'FOR') return;
+    start = forIndex + 1;
+  }
+  if (command === 'COPY') {
+    if (first?.kind !== 'group' || first.closing !== ')' || !contains(first, offset) || parts[2] && keyword(parts[2]) !== 'TO') return;
+    end = 2;
+  }
+  const body = parts[start];
+  if (!body || offset < body.start) return;
+  if (command === 'EXPLAIN' && keyword(body) === 'DECLARE') return statementQuery(parts.slice(start), offset);
+  if (!startsReferenceQuery(body)) {
+    const write = command === 'COPY' && body.kind === 'group' ? body.parts[0] : body;
+    if (command === 'DECLARE' || !['INSERT', 'UPDATE', 'DELETE', 'MERGE'].includes(keyword(write))) return;
+  }
+  return parts.slice(start, end);
+}
+
 /** 位置别名覆盖已知输出；通配展开缺少位置时只保留显式声明。 */
 function rename(projection: Projection, names: string[], aliases?: Part, trace?: ReferenceTrace): Projection {
   if (!names.length) return projection;
@@ -2272,13 +2323,14 @@ function tracePostgresStatement(source: string, offset: number, mode: boolean,
   const tokens = scanned.map(token => ({ ...token, start: token.start + statement.start, end: token.end + statement.start }));
   if (intent !== 'relation' && !tokens.some(token => identifier(token) && offset >= token.start && offset <= token.end)) return noLocalReference;
   const parts = groupStatement(tokens, offset, statement.end, true);
-  if (!parts) return noLocalReference;
+  const query = parts && statementQuery(parts, offset);
+  if (!query) return noLocalReference;
   const trace: ReferenceTrace = { edges: new Map(), declarations: new Map(), implicitNames: new Map(), windowSlots: new Map(),
     joinAliases: new Set(), joinColumnTokens: new Set(), unsupported: false,
     ...(intent === 'relation' ? { physicalRelations: [] } : intent === 'field' ? { field: { offset } } :
       intent === 'references' || intent === 'projectionRename' ? { projected: true } : {}),
     ...(intent === 'projectionRename' ? { projectionRename: { explicit: new Set(), separate: new Set(), uncertain: new Set(), outputs: [] } } : {}) };
-  parseQuery(parts, new Map(), [], undefined, trace);
+  parseQuery(query, new Map(), [], undefined, trace);
   return trace.unsupported ? noLocalReference : { tokens, trace };
 }
 
@@ -2540,15 +2592,18 @@ export function analyzePostgresCompletion(source: string, offset: number, standa
   const prefix = quoted ? raw.slice(1, !target?.open && offset === end ? -1 : undefined).replaceAll('""', '"') : raw;
   if (prefix.length > limits.name) return;
   const parts = groupStatement(all, offset, source.length);
-  const left = all.filter(token => token !== target && token.end <= start && !(token.kind === 'blocked' && token.text === 'comment'));
+  const query = parts && statementQuery(parts, offset);
+  const queryStart = query !== parts ? query?.[0]?.start ?? 0 : 0;
+  const left = all.filter(token => token !== target && token.start >= queryStart && token.end <= start &&
+    !(token.kind === 'blocked' && token.text === 'comment'));
   const previous = left.at(-1);
   const prefixUpper = prefix.toUpperCase();
-  const clause = parts && !quoted && !punct(previous, '.') && (clauseStarts.some(word => word === keyword(previous) ||
+  const clause = query && !quoted && !punct(previous, '.') && (clauseStarts.some(word => word === keyword(previous) ||
     prefix && word.startsWith(prefixUpper)) || paginationWords.some(word => word.startsWith(prefixUpper)) &&
     left.some(part => ['FETCH', 'OFFSET'].includes(keyword(part))))
-    ? selectClauseKeywords(source, parts, { start, end, offset, prefix: prefixUpper }) : undefined;
+    ? selectClauseKeywords(source, query, { start, end, offset, prefix: prefixUpper }) : undefined;
   if (clause?.continuation) return { start, end, prefix, quoted, keywords: clause.items };
-  const parsed = parts && parseQuery(parts, new Map(), [], { offset, start, left });
+  const parsed = query && parseQuery(query, new Map(), [], { offset, start, left });
   if (parsed?.query?.kind === 'using' || parsed?.query?.kind === 'conflictTarget' || parsed?.query?.kind === 'columns' && parsed.query.joinOutput) {
     // 目录目标必须在离线的两种字符串模式下有一致的词法边界。
     if (standardStrings === undefined && source.includes('\\') &&

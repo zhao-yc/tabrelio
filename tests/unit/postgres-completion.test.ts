@@ -4,7 +4,8 @@ import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../src/shared/postgresCompletion';
 import { createPostgresCompletionProvider } from '../../src/renderer/postgresCompletionProvider';
 import { describe, expect, it, vi } from 'vitest';
-import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresObjectDefinition, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
+import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresLocalReferences, analyzePostgresObjectDefinition,
+  analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from '../../src/renderer/postgresNamedParameterReferences';
 import { postgresConflictExpression } from '../../src/shared/postgresConflictExpression';
 
@@ -13,6 +14,53 @@ function at(marked: string) {
   const offset = marked.indexOf('|');
   return analyzePostgresCompletion(marked.slice(0, offset) + marked.slice(offset + 1), offset);
 }
+
+it.each([
+  'EXPLAIN (FORMAT JSON, COSTS OFF) SELECT q.am|ount FROM public.records q',
+  'EXPLAIN ANALYSE VERBOSE SELECT q.am|ount FROM public.records q',
+  'EXPLAIN (SELECT q.am|ount FROM public.records q)',
+  'EXPLAIN (FORMAT JSON) DECLARE c CURSOR FOR SELECT q.am|ount FROM public.records q',
+  'PREPARE "plan" (numeric(20,4), double precision) AS SELECT q.am|ount FROM public.records q WHERE q.amount > $1',
+  'DECLARE "cursor" BINARY NO SCROLL CURSOR WITH HOLD FOR SELECT q.am|ount FROM public.records q',
+  'COPY (SELECT q.am|ount FROM public.records q) TO STDOUT WITH (FORMAT CSV)',
+  'SELECT 1; COPY (SELECT q.am|ount FROM public.records q',
+])('查询正文保留关系作用域和原文替换范围：%s', marked => {
+  const analysis = at(marked)!;
+  expect(analysis.query).toEqual({ kind: 'columns', qualified: true, relations: [{ name: 'records', schema: 'public', alias: 'q' }] });
+  expect(marked.replace('|', '').slice(analysis.start, analysis.end)).toBe('amount');
+});
+
+it('包装语句沿用局部引用、目录导航、函数参数及普通写入权限', () => {
+  const marked = 'SELECT 1; COPY (WITH local_data AS (SELECT v.amount FROM public.records v) SELECT * FROM local_|data) TO STDOUT';
+  const query = marked.replace('|', '');
+  const declaration = query.indexOf('local_data');
+  expect(analyzePostgresLocalReferences(query, marked.indexOf('|'))).toMatchObject({ status: 'ready',
+    declaration: { start: declaration, end: declaration + 'local_data'.length } });
+  expect(analyzePostgresObjectDefinition(query, query.indexOf('records') + 3)).toMatchObject({ schema: 'public', name: 'records' });
+  expect(analyzePostgresFieldHover(query, query.indexOf('amount') + 3)).toMatchObject({ name: 'amount',
+    relations: [{ schema: 'public', name: 'records', alias: 'v' }] });
+  const call = 'PREPARE p AS SELECT sum(|) FROM public.records';
+  expect(analyzePostgresSignature(call.replace('|', ''), call.indexOf('|'))).toMatchObject({ name: 'sum', argument: 0 });
+  expect(at('EXPLAIN (FORMAT JSON) UPDATE public.records SET am|ount = 1')?.query).toMatchObject({
+    kind: 'columns', relations: [{ name: 'records', schema: 'public', columnAccess: 'update' }] });
+  expect(at('COPY (UPDATE public.records r SET amount=1 RETURNING r.am|ount) TO STDOUT')?.query).toMatchObject({
+    kind: 'columns', relations: [{ name: 'records', schema: 'public', alias: 'r', columnAccess: 'select' }] });
+  expect(at('DECLARE c CURSOR FOR SELECT q.amount FROM public.records q ORDER BY q.amount NULLS F|')?.keywords).toEqual(['FIRST']);
+});
+
+it.each([
+  'EXPLAIN (FORM|AT JSON) SELECT q.amount FROM public.records q',
+  'EXPLAIN (FORMAT JSON SELECT q.am|ount FROM public.records q',
+  'PREPARE p (numeric(20,4), pub|lic.numeric) AS SELECT amount FROM public.records',
+  'DECLARE c INSEN|SITIVE CURSOR FOR SELECT amount FROM public.records',
+  'DECLARE c CURSOR FOR UPDATE public.records SET am|ount = 1',
+  'COPY (SELECT q.amount FROM public.records q) TO STD|OUT',
+  'COPY (SELECT q.am|ount FROM public.records q) FROM STDIN',
+  'COPY public.records (am|ount) TO STDOUT',
+])('包装选项、目标和无效正文没有查询语义：%s', marked => {
+  expect(at(marked)?.query).toBeUndefined();
+  expect(analyzePostgresFieldHover(marked.replace('|', ''), marked.indexOf('|'))).toBeUndefined();
+});
 
 it('对象定义只解析光标所在关系原名，保留限定名称及嵌套作用域', () => {
   const relation = (marked: string, mode?: boolean) => analyzePostgresObjectDefinition(marked.replace('|', ''), marked.indexOf('|'), mode);
