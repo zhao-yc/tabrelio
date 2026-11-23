@@ -52,6 +52,15 @@ it.each([
   ['WITH c AS (SELECT 1 AS id) SELECT id FROM c ORDER BY id DESC NULLS |', 'LAST', 'WITH c AS (SELECT 1 AS id) SELECT id FROM c ORDER BY id DESC NULLS LAST'],
   ['SELECT 1 ORDER BY 1 NULLS LAST, 2 NU|', 'NULLS FIRST', 'SELECT 1 ORDER BY 1 NULLS LAST, 2 NULLS FIRST'],
   ['SELECT 1 UNION ALL SELECT 2 ORDER BY 1 NULLS F|', 'FIRST', 'SELECT 1 UNION ALL SELECT 2 ORDER BY 1 NULLS FIRST'],
+  ['SELECT 1 OFFSET $2 RO|suffix', 'ROWS', 'SELECT 1 OFFSET $2 ROWS'],
+  ['SELECT 1 OFFSET (1 + 2) R|', 'ROW', 'SELECT 1 OFFSET (1 + 2) ROW'],
+  ['SELECT 1 FETCH FIRST R|', 'ROW', 'SELECT 1 FETCH FIRST ROW'],
+  ['SELECT 1 OFFSET 2 ROWS FETCH NEXT +10 RO| ONLY', 'ROWS', 'SELECT 1 OFFSET 2 ROWS FETCH NEXT +10 ROWS ONLY'],
+  ['SELECT 1 FETCH FIRST $1 ROWS ON|suffix', 'ONLY', 'SELECT 1 FETCH FIRST $1 ROWS ONLY'],
+  ['SELECT 1 FETCH FIRST ROWS |', 'ONLY', 'SELECT 1 FETCH FIRST ROWS ONLY'],
+  ['SELECT 1 ORDER BY 1 FETCH FIRST 1_000 ROWS W|', 'WITH TIES', 'SELECT 1 ORDER BY 1 FETCH FIRST 1_000 ROWS WITH TIES'],
+  ['SELECT 1 ORDER BY 1 FETCH FIRST (1 + $2) ROWS WITH T|suffix', 'TIES', 'SELECT 1 ORDER BY 1 FETCH FIRST (1 + $2) ROWS WITH TIES'],
+  ['SELECT 1 UNION ALL SELECT 2 ORDER BY 1 FETCH FIRST 2 ROWS W|ITH TIES', 'WITH', 'SELECT 1 UNION ALL SELECT 2 ORDER BY 1 FETCH FIRST 2 ROWS WITH TIES'],
 ])('排序与分页短语按真实光标范围插入：%s', async (marked, label, expected) => {
   const request = vi.fn(async () => ({ items: [], incomplete: false }));
   const { provider, suggest } = editor(marked, request);
@@ -61,7 +70,7 @@ it.each([
     if (!item || !('startColumn' in item.range)) throw Error('缺少单一替换范围');
     const source = marked.replace('|', '');
     expect(source.slice(0, item.range.startColumn - 1) + item.insertText + source.slice(item.range.endColumn - 1)).toBe(expected);
-    if (!label.includes(' ') && label !== 'NULLS' && label !== 'FETCH') expect(request).not.toHaveBeenCalled();
+    if (!/^(?:NULLS|FETCH)(?: |$)/.test(label)) expect(request).not.toHaveBeenCalled();
   } finally { provider.dispose(); }
 });
 
@@ -70,6 +79,12 @@ it.each([
   'SELECT a ORDER BY a, NU|', 'SELECT t.fet| FROM t', 'SELECT a LIMIT 1 FE|',
   'SELECT a ORDER BY a "NU|"', "SELECT 'NULLS F|'", 'SELECT 1; SELECT NULLS F|',
   'SELECT a ORDER BY a NULLS LAST NU|', 'SELECT a ORDER BY a OFFSET 2 NULLS F|',
+  'SELECT OFFSET t RO|', 'SELECT 1 OFFSET RO|', 'SELECT 1 OFFSET 2 ROWS O|',
+  'SELECT 1 FETCH FIRST 1 + 2 RO|', 'SELECT 1 FETCH FIRST 2 ROWS W|',
+  'SELECT 1 ORDER BY 1 FETCH FIRST 2 ROWS W| FOR UPDATE SKIP LOCKED',
+  'SELECT (SELECT 1 ORDER BY 1) FETCH FIRST 2 ROWS WITH T|',
+  'SELECT (SELECT 1 FETCH FIRST 2 ROWS ONLY) RO|',
+  'SELECT 1 FETCH FIRST 2 ROWS ONLY RO|', 'SELECT 1 OFFSET 2 | ROWS',
 ])('无对应子句时不生成排序或分页短语：%s', marked => {
   expect(at(marked)?.keywords).toBeUndefined();
 });

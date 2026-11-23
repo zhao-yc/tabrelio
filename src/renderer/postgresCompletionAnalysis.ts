@@ -1489,31 +1489,82 @@ export function analyzePostgresLocalRename(source: string, offset: number, stand
 
 const nullPlacement = ['FIRST', 'LAST'] as const;
 const fetchDirection = ['FIRST', 'NEXT'] as const;
+const rowUnits = ['ROW', 'ROWS'] as const;
+const clauseStarts = ['NULLS', 'FETCH'] as const;
+const paginationWords = [...rowUnits, 'ONLY', 'WITH', 'TIES'];
+const paginationCountKeywords = new Set([...paginationWords, ...fetchDirection]);
 const unfinishedClause = new Set([...stop, ...expressionEntries, 'IS', 'IN', 'LIKE', 'ILIKE', 'BETWEEN', 'NULLS']
   .filter(word => !['NULL', 'TRUE', 'FALSE'].includes(word)));
 
+/** 识别常用的独立行数写法。复杂表达式放进带括号的一个词法组，内部关键字不参与分页补全。 */
+function paginationCount(parts: Part[], source: string): boolean {
+  const first = parts[0], last = parts.at(-1);
+  if (!first || !last) return false;
+  if (parts.length === 1) {
+    if (first.kind === 'group') return first.closing === ')' && first.closed && first.parts.length > 0;
+    if (first.kind === 'identifier') return !first.open;
+    if (first.kind === 'word') return !unfinishedClause.has(keyword(first)) &&
+      !paginationCountKeywords.has(keyword(first));
+    if (first.kind === 'blocked' && !first.open) return true;
+  }
+  const count = source.slice(first.start, last.end);
+  return /^(?:\$[0-9]+|[+-]?\s*[0-9]+(?:_[0-9]+)*)$/.test(count);
+}
+
+/** 仅从当前查询块的分页子句续写，并按当前 ORDER BY 和锁定语法决定是否提供 WITH TIES。 */
+function paginationKeywords(source: string, query: Part[], following: Part[]): readonly string[] {
+  const words = query.map(keyword);
+  const clause = Math.max(words.lastIndexOf('FETCH'), words.lastIndexOf('OFFSET'));
+  if (clause <= 0 || punct(query[clause - 1], '.') || unfinishedClause.has(words[clause - 1])) return [];
+  const fetch = words[clause] === 'FETCH';
+  if (fetch && !fetchDirection.some(word => word === words[clause + 1])) return [];
+  const count = query.slice(clause + (fetch ? 2 : 1));
+  const withWord = fetch && keyword(count.at(-1)) === 'WITH';
+  if (withWord) count.pop();
+  if (fetch && rowUnits.some(word => word === keyword(count.at(-1)))) {
+    count.pop();
+    if (count.length && !paginationCount(count, source)) return [];
+    const ordered = words.slice(0, clause).some((word, i) => word === 'ORDER' && words[i + 1] === 'BY');
+    const tail = following.map(keyword);
+    const skipLocked = [words.slice(0, clause), tail].some(segment =>
+      segment.some((word, i) => word === 'SKIP' && segment[i + 1] === 'LOCKED'));
+    const ties = ordered && !skipLocked;
+    if (withWord) return ties ? ['TIES'] : [];
+    if (tail[0] === 'TIES') return ties ? ['WITH'] : [];
+    return ties ? ['ONLY', 'WITH TIES'] : ['ONLY'];
+  }
+  if (withWord || !(fetch && !count.length || paginationCount(count, source))) return [];
+  return rowUnits;
+}
+
 /** 按当前查询块判断排序和分页短语。集中处理两个词的插入范围，已写好的另一半留在原处。 */
-function selectClauseKeywords(parts: Part[], position: { start: number; end: number; offset: number; prefix: string }):
+function selectClauseKeywords(source: string, parts: Part[], position: { start: number; end: number; offset: number; prefix: string }):
   { items: readonly string[]; continuation: boolean } | undefined {
   const { start, end, offset, prefix } = position;
   const nested = parts.find((part): part is Group => part.kind === 'group' && contains(part, offset));
-  if (nested) return selectClauseKeywords(nested.parts, position);
+  if (nested) return selectClauseKeywords(source, nested.parts, position);
 
   const before = parts.filter(part => part.end <= start && part.start < start);
   const command = keyword(before[0]);
   if (command !== 'SELECT' && command !== 'WITH' && !(before[0]?.kind === 'group' && before.some(part => setOperators.has(keyword(part))))) return;
   const branch = before.map(part => setOperators.has(keyword(part))).lastIndexOf(true);
   const query = before.slice(branch + 1);
+  if (command === 'WITH' && !query.some(part => keyword(part) === 'SELECT') && branch < 0) return;
+  if (paginationWords.some(word => word.startsWith(prefix))) {
+    const following = parts.filter(part => part.start >= end && part.end > start);
+    const items = paginationKeywords(source, query, following).filter(word => word.startsWith(prefix));
+    const next = keyword(following[0]);
+    if (items.length && (start !== end || !items.some(item => item.split(' ')[0] === next))) return { items, continuation: true };
+  }
   const previous = keyword(query.at(-1));
   const continuation = previous === 'NULLS' || previous === 'FETCH';
-  const head = continuation ? previous : ['NULLS', 'FETCH'].find(word => word.startsWith(prefix));
+  const head = continuation ? previous : prefix && clauseStarts.find(word => word.startsWith(prefix));
   if (!head) return;
   if (continuation) query.pop();
   const last = query.at(-1);
   const lastWord = keyword(last);
   // 编辑器词法把数字按单字符记为标点，数字仍可结束排序表达式或偏移量。
   if (!last || last.kind === 'punct' && !/^[0-9]$/.test(last.text) || unfinishedClause.has(lastWord)) return;
-  if (command === 'WITH' && !query.some(part => keyword(part) === 'SELECT') && branch < 0) return;
 
   if (head === 'NULLS') {
     const order = query.map((part, index) => keyword(part) === 'ORDER' && keyword(query[index + 1]) === 'BY').lastIndexOf(true);
@@ -1545,9 +1596,10 @@ export function analyzePostgresCompletion(source: string, offset: number): Postg
   const left = all.filter(token => token !== target && token.end <= start && !(token.kind === 'blocked' && token.text === 'comment'));
   const previous = left.at(-1);
   const prefixUpper = prefix.toUpperCase();
-  const clause = parts && !quoted && !punct(previous, '.') && (['NULLS', 'FETCH'].includes(keyword(previous)) ||
-    prefix && ['NULLS', 'FETCH'].some(word => word.startsWith(prefixUpper)))
-    ? selectClauseKeywords(parts, { start, end, offset, prefix: prefixUpper }) : undefined;
+  const clause = parts && !quoted && !punct(previous, '.') && (clauseStarts.some(word => word === keyword(previous) ||
+    prefix && word.startsWith(prefixUpper)) || paginationWords.some(word => word.startsWith(prefixUpper)) &&
+    left.some(part => ['FETCH', 'OFFSET'].includes(keyword(part))))
+    ? selectClauseKeywords(source, parts, { start, end, offset, prefix: prefixUpper }) : undefined;
   if (clause?.continuation) return { start, end, prefix, quoted, keywords: clause.items };
   const parsed = parts && parseQuery(parts, new Map(), [], { offset, start, left });
   const next = parsed?.routine && all.find(token => token !== target && token.start >= end && !(token.kind === 'blocked' && token.text === 'comment'));
