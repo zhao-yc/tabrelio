@@ -3,7 +3,7 @@ import type { PostgresCompletionInput, PostgresCompletionReference, PostgresComp
 import { postgresCompletionLimits } from '../shared/postgresCompletion';
 import { postgresIdentifier } from '../shared/postgresSql';
 import { postgresConflictExpression } from '../shared/postgresConflictExpression';
-import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresSignature, catalogColumnReferences,
+import { analyzePostgresCollationHover, analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresSignature, catalogColumnReferences,
   isJoinedProjection, type PostgresFieldTarget } from './postgresCompletionAnalysis';
 import { joinCatalogRelations, joinedOutputColumns, sharedJoinColumns } from './postgresJoinColumns';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from './postgresNamedParameterReferences';
@@ -18,6 +18,19 @@ const keywords = ['SELECT','FROM','JOIN','LEFT JOIN','RIGHT JOIN','INNER JOIN','
   'HAVING','LIMIT','OFFSET','INSERT INTO','VALUES','UPDATE','SET','DELETE FROM','RETURNING','ON CONFLICT',
   'DISTINCT','WITH','UNION ALL','IS NULL','IS NOT NULL','CASE','WHEN','THEN','ELSE','END','BEGIN','COMMIT','ROLLBACK',
   'WINDOW','OVER','FILTER','PARTITION BY','ROWS','RANGE','BETWEEN','UNBOUNDED','PRECEDING','FOLLOWING','CURRENT ROW'];
+
+/** 目录中的名称和 locale 作为纯文本展示，保持原样而不解释为 Markdown 链接。 */
+function collationHoverText(result: PostgresCompletionResult, name: string, schema?: string): string | undefined {
+  if (result.incomplete || result.deferred || result.items.length !== 1 || result.items[0].kind !== 'collation') return;
+  const item = result.items[0];
+  if (item.name !== name || schema && item.schema !== schema) return;
+  const label = [item.schema, item.name].map(postgresIdentifier).join('.');
+  return [postgresZh.collationName + '：' + label, postgresZh.collationProvider + '：' + postgresZh.collationProviders[item.provider],
+    postgresZh.collationDeterministic + '：' + (item.deterministic ? fieldText.yes : fieldText.no),
+    ...(item.locale ? [postgresZh.collationLocale + '：' + item.locale] : []),
+    postgresZh.collationEncoding + '：' + (item.encoding ?? postgresZh.collationAnyEncoding),
+  ].join('\n').split(/\r\n|\r|\n/).map(line => '    ' + line).join('\n');
+}
 
 /** 名称、默认值和备注均作为纯文本显示，不能在悬停中产生HTML或可点击命令。 */
 function fieldHoverText(field: PostgresFieldTarget, result: PostgresCompletionResult): string | undefined {
@@ -125,11 +138,19 @@ export function createPostgresCompletionProvider(options: {
         if (fact) return { range: range(fact), contents: [{ value: '`[$' + fact.name + ']` · ' + parameterText.title },
           { value: parameterText.references(fact.statementCount, fact.draftCount) }] };
         if (active) return null;
-        const field = analyzePostgresFieldHover(source, offset, options.standardStrings);
-        if (!field) return null;
         const current = () => !disposed && !active && hoverGeneration === generation && !token.isCancellationRequested &&
           options.current() && options.model() === model && !model.isDisposed() && model.getVersionId() === version;
         try {
+          const collation = analyzePostgresCollationHover(source, offset, options.standardStrings);
+          if (collation) {
+            if (!sessionId) return null;
+            const result = await request({ ...target, kind: 'collations', prefix: collation.name, exact: true,
+              ...(collation.schema ? { schema: collation.schema } : {}) }, current);
+            const value = result && current() ? collationHoverText(result, collation.name, collation.schema) : undefined;
+            return value ? { range: range(collation), contents: [{ value, isTrusted: false, supportHtml: false }] } : null;
+          }
+          const field = analyzePostgresFieldHover(source, offset, options.standardStrings);
+          if (!field) return null;
           const result = await request({ ...target, kind: 'columnDetails', prefix: field.name,
             relations: field.relations.map(({ alias: _, ...relation }) => relation) }, current);
           if (!result || !current()) return null;
@@ -177,6 +198,28 @@ export function createPostgresCompletionProvider(options: {
         const start = model.getPositionAt(analysis.start), end = model.getPositionAt(analysis.end);
         if (start.lineNumber !== end.lineNumber) return empty;
         const range = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+        if (query?.kind === 'collations') {
+          let result: PostgresCompletionResult | undefined;
+          if (sessionId) {
+            await debounce(controller.signal, 100);
+            try { result = await request({ ...target, kind: 'collations', prefix, ...(query.schema ? { schema: query.schema } : {}) }, current); }
+            catch { if (current()) options.status('unavailable'); }
+            if (!current()) return empty;
+          }
+          if (result?.deferred) options.status(result.deferred === 'transaction' ? 'sessionUnknown' : 'unavailable');
+          else if (result?.incomplete) options.status('partial');
+          const catalog = result && !result.deferred ? result.items.filter(item => item.kind === 'collation') : undefined;
+          const names = catalog ?? (!query.schema || query.schema === 'pg_catalog'
+            ? ['C', 'POSIX', 'default'].map(name => ({ schema: 'pg_catalog', name })) : []);
+          const fold = (name: string) => quoted ? name : name.replace(/[A-Z]/g, letter => letter.toLowerCase());
+          const key = fold(prefix);
+          return { incomplete: true, suggestions: names.filter(item => (!query.schema || query.schema === item.schema) &&
+            fold(item.name).startsWith(key)).slice(0, postgresCompletionLimits.items).map(({ schema, name }, index) => ({
+              range, kind: options.kinds.variable, label: { label: name, description: postgresZh.collationName + ' · ' + schema },
+              insertText: (query.schema ? '' : postgresIdentifier(schema) + '.') + postgresIdentifier(name),
+              filterText: quoted ? postgresIdentifier(name) : name, sortText: String(index).padStart(3, '0'),
+            })) };
+        }
         if (query?.kind === 'recursiveKeys') {
           let names = query.names;
           const relations = query.source && joinCatalogRelations([query.source]);
@@ -397,7 +440,7 @@ export function createPostgresCompletionProvider(options: {
             sortText: '0' + String(suggestions.length).padStart(3, '0') });
         }
         for (const item of result.items) {
-          if (item.kind === 'columnDetail' || item.kind === 'joinColumns' || item.kind === 'sampleMethod' || item.kind === 'conflictConstraint' ||
+          if (item.kind === 'columnDetail' || item.kind === 'joinColumns' || item.kind === 'sampleMethod' || item.kind === 'collation' || item.kind === 'conflictConstraint' ||
               item.kind === 'conflictKey' || item.kind === 'conflictIndex') continue;
           const filterText = quoted ? '"' + item.name.replaceAll('"', '""') : item.name;
           const common = { range, kind: options.kinds[item.kind], filterText, sortText: '0' + String(suggestions.length).padStart(3, '0') };

@@ -1006,6 +1006,8 @@ PostgreSQL 的 `JOIN USING` 和 `NATURAL JOIN` 合并键在结果里只建议一
 
 编写 PostgreSQL 的递归 CTE 时，`SEARCH … BY` 和 `CYCLE` 可补全原投影的键列。显式列可离线补全，通配展开可读取当前会话中的来源列。排序列、循环标记列和路径列在 CTE 正文之后可补全，外层引用可用 F12 定位对应声明。后续 CTE 或子查询需要显式选出这些生成列，才能将其传给外层。已确认的引用会随生成列改名一起更新。 [PostgreSQL 递归查询](https://www.postgresql.org/docs/18/queries-with.html)
 
+在 PostgreSQL 查询、列定义或索引定义的 `COLLATE` 后，可按当前会话的搜索路径或显式 schema 补全排序规则。接受候选会用正确的引号写入名称，规则悬停可查看提供程序、区域设置、字符编码和确定性。离线可选 `C`、`POSIX` 和 `default`。 [PostgreSQL 排序规则](https://www.postgresql.org/docs/18/collation.html)
+
 编写 PostgreSQL 的 `INSERT … ON CONFLICT … DO UPDATE` 时，`SET` 左侧按 `UPDATE` 权限补全目标列。在赋值右侧和动作 `WHERE` 中，可用目标表别名读取既有行，用 `excluded.` 读取待插入行，两者都按 `SELECT` 权限补全。存在已连接会话时，权限及表目录按该会话解析。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)
 
 在 PostgreSQL 的 `ON CONFLICT` 后按 Ctrl+空格，可选择由普通列组成且无谓词的完整主键或唯一键。括号内已填的列会保留，接受候选会补齐缺项。`ON CONSTRAINT` 后可选用目标表的约束名，写明 `DO NOTHING` 时也可选择排斥约束。列权限和同名表以当前会话为准。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)

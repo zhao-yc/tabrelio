@@ -441,6 +441,38 @@ async function sampleMethods(connection: PostgresConnection, input: Extract<Post
   return { items, incomplete: result.truncated || result.rows.length === rowLimit };
 }
 
+/** 同名排序规则按原会话和当前库编码解析。不同 PostgreSQL 版本的 locale 字段经目录行兼容读取。 */
+async function collations(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'collations' }>, session: boolean): Promise<PostgresCompletionResult> {
+  const ownTemp = session ? `n.oid ${eq} pg_catalog.pg_my_temp_schema()` : 'false';
+  const schema = `(CASE WHEN ${ownTemp} THEN 'pg_temp' ELSE n.nspname::pg_catalog.text END)`;
+  const json = 'pg_catalog.to_jsonb(c) OPERATOR(pg_catalog.->>)';
+  const limit = input.exact ? 2 : rowLimit;
+  const result = await connection.query(`
+    SELECT ${schema}, c.collname::pg_catalog.text, c.collprovider::pg_catalog.text,
+      COALESCE((${json} 'collisdeterministic')::pg_catalog.bool, true),
+      COALESCE(${json} 'colllocale', ${json} 'colliculocale', c.collcollate),
+      CASE WHEN c.collencoding ${eq} -1 THEN NULL ELSE pg_catalog.pg_encoding_to_char(c.collencoding)::pg_catalog.text END
+    FROM pg_catalog.pg_collation c JOIN pg_catalog.pg_namespace n ON n.oid ${eq} c.collnamespace
+    WHERE c.collencoding ${eq} ANY (ARRAY[-1,pg_catalog.pg_char_to_encoding(pg_catalog.getdatabaseencoding())])
+      AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
+      AND (${ownTemp} OR n.nspname OPERATOR(pg_catalog.!~) '^pg_(toast_)?temp_')
+      AND (CASE WHEN $2::pg_catalog.text IS NULL THEN NOT (${ownTemp}) AND pg_catalog.pg_collation_is_visible(c.oid)
+        ELSE ${schema} ${eq} $2 END)
+      AND (CASE WHEN $4::pg_catalog.bool THEN c.collname::pg_catalog.text ${eq} $1
+        ELSE pg_catalog.strpos(pg_catalog.lower(c.collname::pg_catalog.text), pg_catalog.lower($1::pg_catalog.text)) ${eq} 1 END)
+    ORDER BY c.collname, n.nspname LIMIT $3
+  `, [input.prefix, input.schema ?? null, limit, !!input.exact], { rows: limit, bytes: 128 * 1024 });
+  const items: PostgresCompletionItem[] = [];
+  for (const row of result.rows.slice(0, limit - 1)) {
+    const { c0: schemaName, c1: name, c2: provider, c3: deterministic, c4: locale, c5: encoding } = row;
+    if (!isCatalogName(schemaName) || !isCatalogName(name) || (provider !== 'b' && provider !== 'c' && provider !== 'd' && provider !== 'i') ||
+        (deterministic !== 't' && deterministic !== 'f') || (locale !== null && typeof locale !== 'string') ||
+        (encoding !== null && typeof encoding !== 'string')) continue;
+    items.push({ kind: 'collation', schema: schemaName, name, provider, deterministic: deterministic === 't', locale, encoding });
+  }
+  return { items, incomplete: result.truncated || result.rows.length === limit };
+}
+
 /** 查实际可执行的重载。原会话由 PostgreSQL 解析 search_path，同名不同签名仍保留。 */
 async function routines(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'relations' | 'columns' | 'routines' | 'signatures' }>, session: boolean): Promise<PostgresCompletionResult> {
   const target = input.routine!;
@@ -502,6 +534,7 @@ export async function readPostgresCompletion(connection: PostgresConnection, inp
     if (input.kind === 'joinColumns') return joinColumns(connection, input, session);
     if (input.kind === 'conflictTargets') return conflictTargets(connection, input, session);
     if (input.kind === 'sampleMethods') return sampleMethods(connection, input, session);
+    if (input.kind === 'collations') return collations(connection, input, session);
     const base = await (input.kind === 'relations' ? relations(connection, input, session) : columns(connection, input, session));
     if (!input.routine) return base;
     const supplemental = await routines(connection, input, session);

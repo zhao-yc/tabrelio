@@ -4,7 +4,7 @@ import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../src/shared/postgresCompletion';
 import { createPostgresCompletionProvider } from '../../src/renderer/postgresCompletionProvider';
 import { describe, expect, it, vi } from 'vitest';
-import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresLocalReferences, analyzePostgresLocalRename,
+import { analyzePostgresCollationHover, analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresLocalReferences, analyzePostgresLocalRename,
   analyzePostgresObjectDefinition, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from '../../src/renderer/postgresNamedParameterReferences';
 import { postgresConflictExpression } from '../../src/shared/postgresConflictExpression';
@@ -14,6 +14,64 @@ function at(marked: string) {
   const offset = marked.indexOf('|');
   return analyzePostgresCompletion(marked.slice(0, offset) + marked.slice(offset + 1), offset);
 }
+
+it.each([
+  ['SELECT label COLLATE | FROM records', undefined],
+  ['SELECT * FROM records ORDER BY label COLLATE "Locale NS"."Sort|Rule" DESC', 'Locale NS'],
+  ['SELECT row_number() OVER (ORDER BY label COLLATE pg_catalog.|) FROM records', 'pg_catalog'],
+  ["SELECT 'a' = ('A' COLLATE pub.C|tail)", 'pub'],
+  ['CREATE TEMP TABLE t (name text COLLATE loc.C|tail)', 'loc'],
+  ['CREATE UNIQUE INDEX i ON t (name COLLATE loc."C|tail")', 'loc'],
+  ['ALTER TABLE t ALTER COLUMN c TYPE varchar(7) COLLATE loc.|', 'loc'],
+  ['CREATE DOMAIN d AS text COLLATE pub.C|tail', 'pub'],
+  ['EXPLAIN (FORMAT JSON) SELECT x FROM t ORDER BY x COLLATE pg_catalog.C|tail', 'pg_catalog'],
+])('COLLATE 进入独立排序规则名称空间：%s', (sql, schema) => {
+  expect(at(sql)?.query).toEqual({kind: 'collations', ...(schema ? {schema} : {})});
+});
+
+it.each([
+  'SELECT r.collate | FROM records r', 'SELECT COLLATE c|', 'SELECT \'COLLATE x|\'', 'SELECT 1 /* COLLATE x| */',
+  'SELECT label COLLATE catalog.loc.ru|le FROM records',
+  'CREATE DATABASE d WITH LC_COLLATE \'C|\'', 'CREATE FUNCTION f() RETURNS text AS $$SELECT \'x\' COLLATE c|$$ LANGUAGE SQL',
+])('普通名称、其它命令和引号内部不误用 COLLATE 目录：%s', marked => {
+  expect(at(marked)?.query?.kind).not.toBe('collations');
+  expect(analyzePostgresCollationHover(marked.replace('|', ''), marked.indexOf('|'))).toBeUndefined();
+});
+
+it('排序规则离线插入安全限定名，在线补全和悬停查询实际名称和元数据', async () => {
+  const local = vi.fn(async () => ({items: [], incomplete: false}));
+  const offline = editor('SELECT label COLLATE "P|tail" FROM records', local);
+  const catalog = vi.fn(async (): Promise<PostgresCompletionResult> => ({items: [{kind: 'collation', schema: 'Case Space',
+    name: 'Sort Rule', provider: 'i', deterministic: false, locale: '<b>und-u-ks-level2</b>', encoding: null}], incomplete: false}));
+  const exact = editor('SELECT label COLLATE "Case Space"."So|rt Rule" FROM records', catalog, '原会话');
+  try {
+    const qualifier = 'SELECT label COLLATE loc|.Rule FROM records';
+    expect(at(qualifier)?.query?.kind).not.toBe('collations');
+    expect(analyzePostgresCollationHover(qualifier.replace('|', ''), qualifier.indexOf('|'))).toMatchObject({schema: 'loc', name: 'rule'});
+    expect((await offline.suggest())?.suggestions).toMatchObject([{label: {label: 'POSIX'}, insertText: '"pg_catalog"."POSIX"'}]);
+    expect(await offline.hover()).toBeNull();
+    expect(local).not.toHaveBeenCalled();
+    expect((await exact.suggest())?.suggestions).toMatchObject([{label: {label: 'Sort Rule'}, insertText: '"Sort Rule"'}]);
+    const hover = await exact.hover();
+    expect(hover?.contents[0]).toMatchObject({supportHtml: false, isTrusted: false});
+    expect(hover?.contents[0].value).toContain('    排序规则："Case Space"."Sort Rule"');
+    expect(hover?.contents[0].value).toContain('    区域设置：<b>und-u-ks-level2</b>');
+    expect(catalog).toHaveBeenNthCalledWith(1, {kind: 'collations', prefix: 'So', schema: 'Case Space',
+      connectionId: '原连接', database: '原库', sessionId: '原会话'});
+    expect(catalog).toHaveBeenNthCalledWith(2, {kind: 'collations', prefix: 'Sort Rule', exact: true, schema: 'Case Space',
+      connectionId: '原连接', database: '原库', sessionId: '原会话'});
+  } finally { offline.provider.dispose(); exact.provider.dispose(); }
+});
+
+it('排序规则目录解码驱动的布尔原文并参数化精确名称', async () => {
+  const query = vi.fn(async (_sql: string, _values?: unknown[]) => ({rows: [{c0: 'locale', c1: 'Sort Rule',
+    c2: 'i', c3: 'f', c4: 'und-u-ks-level2', c5: null}], truncated: false}));
+  const connection = {database: '原库', query} as unknown as PostgresConnection;
+  expect(await readPostgresCompletion(connection, {kind: 'collations', connectionId: '原连接', database: '原库',
+    prefix: 'Sort Rule', schema: 'locale', exact: true})).toEqual({items: [{kind: 'collation', schema: 'locale', name: 'Sort Rule',
+    provider: 'i', deterministic: false, locale: 'und-u-ks-level2', encoding: null}], incomplete: false});
+  expect(query.mock.calls.at(-1)?.slice(0, 2)).toEqual([expect.stringContaining('pg_collation_is_visible'), ['Sort Rule', 'locale', 2, true]]);
+});
 
 const recursiveWalk = 'WITH RECURSIVE walk(node_id,parent_id) AS (SELECT 1 AS n,2 AS p UNION ALL ' +
   'SELECT w.parent_id,0 FROM walk w WHERE w.node_id<2)';

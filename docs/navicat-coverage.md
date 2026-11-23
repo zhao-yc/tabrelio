@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 的 `COLLATE` 在查询、列与索引定义中按原会话搜索路径、schema 和数据库编码补全排序规则，并支持悬停查看目录属性。离线提供标准内置候选。Q01、R01 继续为部分覆盖。 [PostgreSQL 排序规则](https://www.postgresql.org/docs/18/collation.html)
+
 2026-11-24 源码增量。PostgreSQL 递归 CTE 的 `SEARCH` 和 `CYCLE` 可按原投影补全键列，生成列可显式引用并支持已确认的声明跳转和改名。通配键沿用原会话列目录，生成列按实际查询层级参与星号展开。Q01、R01 继续为部分覆盖。 [PostgreSQL 递归查询](https://www.postgresql.org/docs/18/queries-with.html)
 
 2026-11-24 源码增量。PostgreSQL `TABLESAMPLE` 按原会话搜索路径或显式 schema 建议实际抽样方法，离线提供内置方法。抽样来源保留字段和别名导航，实参及 `REPEATABLE` 种子遵循原查询作用域。Q01、R01 继续为部分覆盖。 [PostgreSQL TABLESAMPLE](https://www.postgresql.org/docs/18/sql-select.html#SQL-FROM)

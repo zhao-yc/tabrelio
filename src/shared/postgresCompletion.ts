@@ -46,6 +46,7 @@ export const postgresCompletionSchema = z.discriminatedUnion('kind', [
     relations: z.array(catalogRelation).min(1).max(postgresCompletionLimits.relations) }).strict(),
   target.extend({ kind: z.literal('conflictTargets'), relation: catalogRelation, selection: conflictSelection }).strict(),
   target.extend({ kind: z.literal('sampleMethods'), schema: fieldIdentifier.optional() }).strict(),
+  target.extend({ kind: z.literal('collations'), schema: fieldIdentifier.optional(), exact: z.literal(true).optional() }).strict(),
   target.extend({ kind: z.literal('routines'), routine }).strict(),
   target.extend({ kind: z.literal('signatures'), prefix: name, routine }).strict(),
 ]);
@@ -59,6 +60,8 @@ export type PostgresCompletionItem =
   | { kind: 'table' | 'view'; schema: string; name: string }
   | { kind: 'column'; reference: number; name: string; type: string }
   | { kind: 'sampleMethod'; schema: string; name: string }
+  | { kind: 'collation'; schema: string; name: string; provider: 'b' | 'c' | 'd' | 'i';
+    deterministic: boolean; locale: string | null; encoding: string | null }
   | { kind: 'joinColumns'; reference: number; names: string[] }
   | { kind: 'conflictConstraint'; name: string; constraint: 'primary' | 'unique' | 'exclusion' }
   | { kind: 'conflictKey'; name: string; columns: string[]; primary: boolean }

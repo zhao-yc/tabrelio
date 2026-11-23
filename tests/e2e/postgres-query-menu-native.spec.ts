@@ -2594,6 +2594,81 @@ test('PostgreSQL 普通 UPDATE 和 DELETE 按会话权限补全赋值、条件�
   await quitDesktop();
 });
 
+test('PostgreSQL COLLATE 按原会话解析同名规则并悬停目录信息', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query(`CREATE SCHEMA compare_binary;
+      CREATE SCHEMA compare_ci;
+      CREATE COLLATION compare_binary."SortRule" FROM pg_catalog."C";
+      CREATE COLLATION compare_ci."SortRule" (provider=icu,locale='und-u-ks-level2',deterministic=false);
+      CREATE TABLE public.collate_ui_rows (label text);
+      INSERT INTO public.collate_ui_rows VALUES ('A'), ('a');`);
+    const ciPath = 'SET search_path TO compare_ci, compare_binary, pg_catalog, public';
+    const binaryPath = 'SET search_path TO compare_binary, compare_ci, pg_catalog, public';
+    await prepare({id: '', name: '隔离 PostgreSQL 排序规则目录', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, ciPath);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const runPath = async (sql: string) => {
+      await command('execute-all');
+      await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === sql)).toBe(true);
+      await expect.poll(() => enabled('execute-all')).toBe(true);
+    };
+    const accept = async (draft: string, schema: string, explicit = false) => {
+      await replaceDraft(draft);
+      await modelSelection(1, draft.indexOf('Sorttail') + 'Sort'.length + 1);
+      await triggerSuggestions();
+      const widget = tab().locator('.suggest-widget.visible');
+      await expect(widget.locator('.monaco-list-row .label-name')).toHaveText(['SortRule']);
+      await expect(widget).toContainText(schema);
+      await page.keyboard.press('Enter');
+      const name = postgresIdentifier('SortRule');
+      const completed = draft.replace('"Sorttail"', explicit ? name : postgresIdentifier(schema) + '.' + name);
+      await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+      return completed;
+    };
+    await runPath(ciPath);
+    const baseline = await history(), identity = (await inspectModel()).identity;
+    const comparison = `SELECT 'a'::text = ('A'::text COLLATE "Sorttail") AS same`;
+    const ci = await accept(comparison, 'compare_ci');
+    const hoverSql = comparison.replace('Sorttail', 'SortRule');
+    await replaceDraft(hoverSql);
+    await modelSelection(1, hoverSql.indexOf('SortRule') + 3);
+    await page.keyboard.press('ControlOrMeta+K');
+    await page.keyboard.press('ControlOrMeta+I');
+    const hover = tab().locator('.monaco-hover:visible');
+    for (const term of ['"compare_ci"."SortRule"', 'ICU', '确定性：否', 'und-u-ks-level2']) await expect(hover).toContainText(term);
+    await page.screenshot({path: info.outputPath('PostgreSQL-COLLATE目录悬停.png'), animations: 'disabled'});
+    await page.keyboard.press('Escape');
+    expect(await history()).toEqual(baseline);
+    await replaceDraft(binaryPath);
+    await runPath(binaryPath);
+    const secondBaseline = await history();
+    const binary = await accept(comparison, 'compare_binary');
+    const index = await accept('CREATE INDEX collate_ui_idx ON public.collate_ui_rows (label COLLATE compare_ci."Sorttail")', 'compare_ci', true);
+    expect(await history()).toEqual(secondBaseline);
+    expect((await inspectModel()).identity).toEqual(identity);
+    expect((await observer.query(ci)).rows).toEqual([{same: true}]);
+    expect((await observer.query(binary)).rows).toEqual([{same: false}]);
+    await observer.query('BEGIN');
+    try {
+      await observer.query(index);
+      const definition = await observer.query("SELECT pg_get_indexdef('public.collate_ui_idx'::regclass) AS sql");
+      expect(definition.rows[0].sql).toContain('compare_ci."SortRule"');
+    } finally { await observer.query('ROLLBACK'); }
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL 递归 SEARCH 和 CYCLE 补全真实键并定位生成列', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

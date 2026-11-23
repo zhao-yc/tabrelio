@@ -16,6 +16,7 @@ interface Projection {
 export interface PostgresCompletionRelation extends PostgresCompletionReference { alias?: string; projection?: Projection; qualifiedOnly?: boolean; }
 interface ScopedRelation extends PostgresCompletionRelation { declaration?: LocalReferenceRange; usingColumns?: string[]; physical?: true; }
 interface PhysicalRelation extends LocalReferenceRange { name: string; schema?: string; }
+interface CollationTarget extends LocalReferenceRange { name: string; schema?: string; }
 interface ProjectionRenameFacts {
   explicit: Set<number>;
   separate: Set<number>;
@@ -46,6 +47,7 @@ type Query = { kind: 'relations'; schema?: string; ctes?: string[]; mergeTarget?
   { kind: 'lockTargets'; names: string[] } |
   { kind: 'lockKeywords'; items: string[] } |
   { kind: 'sampleMethods'; schema?: string } |
+  { kind: 'collations'; schema?: string } |
   { kind: 'recursiveKeys'; names: string[]; source?: PostgresJoinSource; excluded: string[] } |
   { kind: 'conflictTarget'; relation: PostgresCatalogRelation; selection: PostgresConflictSelection } | PostgresUsingColumns;
 export interface PostgresCompletionAnalysis {
@@ -83,6 +85,11 @@ const identifier = (part?: Part) => part?.kind === 'identifier' && !part.open ? 
 const keyword = (part?: Part) => part?.kind === 'word' ? part.text.toUpperCase() : '';
 const punct = (part: Part | undefined, value: string) => part?.kind === 'punct' && part.text === value;
 const contains = (part: Group, offset: number) => part.start < offset && (part.closed ? offset < part.end : offset <= part.end);
+
+function collationIdentifier(part?: Part): string | undefined {
+  const name = identifier(part);
+  if (name && !stop.has(keyword(part)) && new TextEncoder().encode(name).length <= 63) return name;
+}
 
 /** 只建当前语句的括号树，保留未闭合括号以处理编辑中的 SQL。 */
 function groupStatement(tokens: PostgresEditorToken[], offset: number, length: number, strict = false): Part[] | undefined {
@@ -2983,6 +2990,59 @@ function selectClauseKeywords(source: string, parts: Part[], position: { start: 
   return items.length ? { items, continuation } : undefined;
 }
 
+/** 查询表达式和列定义可用 COLLATE，其他工具命令中的同名选项属于自己的语法。 */
+function collationFrame(parts: Part[], offset: number, query: StatementQuery | undefined): Part[] | undefined {
+  const head = parts.slice(0, 5).map(keyword).join(' ');
+  const ddl = /^(?:CREATE (?:TABLE|(?:GLOBAL |LOCAL )?TEMP(?:ORARY)? TABLE|UNLOGGED TABLE|(?:UNIQUE )?INDEX|DOMAIN)|ALTER (?:TABLE|DOMAIN))(?: |$)/.test(head);
+  const body = ddl ? parts : query?.parts;
+  if (!body || !ddl && !commands.has(keyword(body[0])) && keyword(body[0]) !== 'MERGE' && !startsReferenceQuery(body[0])) return;
+  let frame = body;
+  for (let group = frame.find((part): part is Group => part.kind === 'group' && contains(part, offset)); group;
+    group = frame.find((part): part is Group => part.kind === 'group' && contains(part, offset))) frame = group.parts;
+  return frame;
+}
+
+function collationEntry(parts: Part[], index: number): boolean {
+  const value = parts[index - 1];
+  return mergeKeyword(parts, index) === 'COLLATE' && !!value && (value.kind === 'group' ? value.closed
+    : value.kind === 'blocked' ? !value.open : value.kind === 'punct' ? /^[0-9]$/.test(value.text)
+      : !stop.has(keyword(value)) || keyword(value) === 'NULL');
+}
+
+function completeCollation(parts: Part[], start: number, end: number): Query | undefined {
+  const next = parts.findIndex(part => part.start >= start);
+  const slot = next < 0 ? parts.length : next;
+  const dotted = punct(parts[slot - 1], '.');
+  const entry = slot - (dotted ? 3 : 1);
+  if (!collationEntry(parts, entry) || punct(parts[slot + 1], '.') ||
+      start === end && collationIdentifier(parts[slot])) return;
+  const schema = dotted ? collationIdentifier(parts[slot - 2]) : undefined;
+  if (!dotted || schema) return { kind: 'collations', ...(schema ? { schema } : {}) };
+}
+
+/** 悬停解析整个限定名，目录按服务器的精确引号与搜索路径规则查找。 */
+export function analyzePostgresCollationHover(source: string, offset: number, standardStrings?: boolean): CollationTarget | undefined {
+  if (source.length > limits.source || offset < 0 || offset > source.length || !/\bcollate\b/i.test(source)) return;
+  const resolve = (mode: boolean) => {
+    const tokens = scanPostgresEditorTokens(source, limits.tokens, mode);
+    if (!tokens || tokens.some(token => token.kind === 'blocked' && token.start <= offset && offset < token.end)) return;
+    const parts = groupStatement(tokens, offset, source.length);
+    const frame = parts && collationFrame(parts, offset, statementQuery(parts, offset));
+    if (!frame) return;
+    for (let index = 0; index < frame.length; index++) {
+      if (!collationEntry(frame, index)) continue;
+      const first = frame[index + 1];
+      const dotted = punct(frame[index + 2], '.');
+      const namePart = frame[index + (dotted ? 3 : 1)];
+      const name = collationIdentifier(namePart), schema = dotted ? collationIdentifier(first) : undefined;
+      if (!name || dotted && !schema || punct(frame[index + (dotted ? 4 : 2)], '.')) continue;
+      if (first.start <= offset && offset <= namePart.end) return { name, start: first.start, end: namePart.end, ...(schema ? { schema } : {}) };
+    }
+  };
+  const result = resolve(standardStrings ?? true);
+  if (result && (standardStrings !== undefined || !source.includes('\\') || JSON.stringify(result) === JSON.stringify(resolve(false)))) return result;
+}
+
 /** 定位当前标识符，屏蔽注释、字符串和参数，再解析当前语句的查询作用域。 */
 export function analyzePostgresCompletion(source: string, offset: number, standardStrings?: boolean): PostgresCompletionAnalysis | undefined {
   if (source.length > limits.source || offset < 0 || offset > source.length || source.includes('\0')) return;
@@ -3001,6 +3061,15 @@ export function analyzePostgresCompletion(source: string, offset: number, standa
     !(token.kind === 'blocked' && token.text === 'comment'));
   const previous = left.at(-1);
   const prefixUpper = prefix.toUpperCase();
+  if (parts && (keyword(previous) === 'COLLATE' || punct(previous, '.') && keyword(left.at(-3)) === 'COLLATE')) {
+    const frame = collationFrame(parts, offset, query);
+    const collation = frame && completeCollation(frame, start, end);
+    if (collation) {
+      if (standardStrings === undefined && source.includes('\\') &&
+          JSON.stringify(all) !== JSON.stringify(scanPostgresEditorTokens(source, limits.tokens, false))) return;
+      return { start, end, prefix, quoted, query: collation };
+    }
+  }
   const clause = query && !quoted && !punct(previous, '.') && (clauseStarts.some(word => word === keyword(previous) ||
     prefix && word.startsWith(prefixUpper)) || paginationWords.some(word => word.startsWith(prefixUpper)) &&
     left.some(part => ['FETCH', 'OFFSET'].includes(keyword(part))))
