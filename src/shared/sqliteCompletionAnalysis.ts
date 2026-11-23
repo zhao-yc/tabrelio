@@ -7,7 +7,7 @@ export type SqliteCompletionRelation = ({ kind: 'physical'; alias?: string; visi
 export type SqliteAnalysisIntent = 'hover' | 'definition' | 'object';
 export interface SqliteLocalDefinition { start: number; end: number; }
 type OutputSource = SqliteCompletionSource;
-interface OutputProjection { columns: string[]; sources: OutputSource[]; joinStars?: SqliteJoinStars[]; incomplete?: true; }
+interface OutputProjection { columns: string[]; sources: OutputSource[]; projections?: number[]; joinStars?: SqliteJoinStars[]; incomplete?: true; }
 export type SqliteJoinOperand = { source: OutputSource } | { columns: string[] } | { group: number } | { projection: number };
 type JoinInput = { operand: SqliteJoinOperand; merged?: true | string[]; binding?: string };
 export interface SqliteJoinGroup { inputs: JoinInput[]; uniqueLeft?: true; }
@@ -288,10 +288,10 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
     const stagedSources: ProjectionSource[] = [], compiled = new Map<ProjectionSource, number>(), compiling = new Set<ProjectionSource>();
     const projectionSource = (start: number, end: number, ctes: Map<string, Cte>) =>
       projectionItems(tokens, start, end).some(item => item.star !== undefined) ? { start, end, ctes } : undefined;
-    function sourceOperand(binding: Binding, localPlan: boolean): SqliteJoinOperand {
+    function sourceOperand(binding: Binding): SqliteJoinOperand {
       const { relation, projectionSource } = binding;
       if (relation.kind === 'physical') return { source: columnSource(relation) };
-      if (!localPlan || !projectionSource) return { columns: relation.columns };
+      if (!projectionSource) return { columns: relation.columns };
       let index = sourceIndex.get(projectionSource);
       if (index === undefined) {
         index = stagedSources.length;
@@ -300,6 +300,15 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       }
       return { projection: index };
     }
+    /** 完成候选实际引用的局部节点，按依赖顺序分配回包编号。 */
+    function resolveOperand(operand: SqliteJoinOperand): SqliteJoinOperand {
+      if (!('projection' in operand)) return operand;
+      const index = compileProjection(stagedSources[operand.projection]);
+      return index === undefined ? { columns: [] } : { projection: index };
+    }
+    const resolveInput = <T extends JoinInput>(input: T): T => ({ ...input, operand: resolveOperand(input.operand) });
+    const resolveGroups = (groups: SqliteJoinGroup[]): SqliteJoinGroup[] => groups.map(group => ({ ...group, inputs: group.inputs.map(resolveInput) }));
+    const resolveStar = (star: SqliteJoinStars): SqliteJoinStars => ({ ...star, ...(star.all ? { all: star.all.map(resolveInput) } : {}), groups: resolveGroups(star.groups) });
     function saveProjection(descriptor: ProjectionSource, parts: SqliteLocalProjection): number {
       const index = localProjections.length;
       if (index >= limits.relations) fail('budget');
@@ -316,11 +325,6 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       const { start, end, ctes } = descriptor;
       try {
         const { bindings, joinStarScope } = scope(start, end, ctes, [], compiling.size, true, true);
-        const resolveInput = (input: JoinInput): JoinInput => {
-          if (!('projection' in input.operand)) return input;
-          const index = compileProjection(stagedSources[input.operand.projection]);
-          return { ...input, operand: index === undefined ? { columns: [] } : { projection: index } };
-        };
         function projectItem(item: ProjectionItem): SqliteLocalProjection[number] {
           if (item.name) return { name: item.name };
           if (item.star === undefined || !joinStarScope) return { unknown: true };
@@ -331,11 +335,10 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
             const matches = bindings.filter(({ relation }) => fold(relation.alias ?? relation.name) === alias);
             if (matches.length !== 1) return { unknown: true };
             const binding = matches[0], group = joinStarScope.owners.get(binding);
-            star = group === undefined ? { groups: [], all: [{ operand: sourceOperand(binding, true) }], sole: true }
+            star = group === undefined ? { groups: [], all: [{ operand: sourceOperand(binding) }], sole: true }
               : joinStarProjection(joinStarScope, false, [{ group, binding: item.star }]);
           }
-          return { star: { ...star, ...(star.all ? { all: star.all.map(input => ({ ...input, ...resolveInput(input) })) } : {}),
-            groups: star.groups.map(group => ({ ...group, inputs: group.inputs.map(resolveInput) })) } };
+          return { star: resolveStar(star) };
         }
         const parts: SqliteLocalProjection = [];
         for (const item of projectionItems(tokens, start, end)) {
@@ -408,7 +411,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
           const next = tokens.slice(tail + 2, end).find(token => token.start >= target.end && token.end > target.start);
           if (next && !(next.kind === 'symbol' && next.value === ',') &&
             !['collate', 'asc', 'desc', 'nulls', 'limit'].some(word => keyword(next, word))) fail('compound');
-          const columns = new Map<string, string>(), sources = new Map<string, OutputSource>();
+          const columns = new Map<string, string>(), sources = new Map<string, OutputSource>(), projections = new Set<number>();
           const joinStars: SqliteJoinStars[] = [];
           let incomplete = false;
           const addColumn = (name: string) => {
@@ -443,16 +446,20 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
                 else if (relation.kind === 'physical') {
                   const source = columnSource(relation), key = sqliteCompletionSourceKey(source);
                   if (!sources.has(key)) sources.set(key, source);
-                } else if (unknown || binding.projectionSource) incomplete = true;
+                } else if (binding.projectionSource) {
+                  const projection = compileProjection(binding.projectionSource);
+                  if (projection === undefined) incomplete = true;
+                  else projections.add(projection);
+                } else if (unknown) incomplete = true;
                 else for (const name of relation.columns) addColumn(name);
               }
             }
-            if (starScope && (all || members.length)) joinStars.push(joinStarProjection(starScope, all, members));
+            if (starScope && (all || members.length)) joinStars.push(resolveStar(joinStarProjection(starScope, all, members)));
           }
-          if (!columns.size && !sources.size && !joinStars.length && !incomplete) fail('compound');
+          if (!columns.size && !sources.size && !projections.size && !joinStars.length && !incomplete) fail('compound');
           return { bindings: [], ctes: new Map(), syntax: ['column'], output: {
             columns: [...columns.values()].slice(0, limits.entries), sources: [...sources.values()],
-            ...(joinStars.length ? { joinStars } : {}), ...(incomplete ? { incomplete: true } : {}),
+            ...(projections.size ? { projections: [...projections] } : {}), ...(joinStars.length ? { joinStars } : {}), ...(incomplete ? { incomplete: true } : {}),
           } };
         }
         const branch = compounds.filter(index => tokens[index].end <= offset).length;
@@ -483,7 +490,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         const inputs: { end: number; join?: ReturnType<Joins['get']>; input: JoinInput }[] = [];
         for (let at = 0; at < bindings.length; at++) {
           const binding = bindings[at], { relation } = binding, group = groupedOperands.get(binding), join = joins.get(binding);
-          const operand: SqliteJoinOperand = group ? { group: group.group } : sourceOperand(binding, localPlan);
+          const operand: SqliteJoinOperand = group ? { group: group.group } : sourceOperand(binding);
           const merged = join?.natural ? true : join?.merged;
           const name = includeBindings && !group && (relation.alias || relation.kind === 'local' && relation.name);
           inputs.push({ end: group?.end ?? binding.end, join, input: { operand, ...(merged ? { merged } : {}), ...(name ? { binding: name } : {}) } });
@@ -517,9 +524,9 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         }
         const compact = compactJoinGroups(groups, [...left.map(({ operand }) => operand), rightOperand]);
         return {
-          left: left.map((input, index) => ({ ...input, operand: compact.operands[index] })), right: compact.operands.at(-1)!,
+          left: left.map((input, index) => ({ ...input, operand: resolveOperand(compact.operands[index]) })), right: resolveOperand(compact.operands.at(-1)!),
           used: usingNames(tokens, using + 1, tokens[using + 1].pair ?? end, target),
-          ...(uniqueLeft ? { uniqueLeft: true } : {}), ...(compact.groups.length ? { groups: compact.groups } : {}),
+          ...(uniqueLeft ? { uniqueLeft: true } : {}), ...(compact.groups.length ? { groups: resolveGroups(compact.groups) } : {}),
           ...(starGroupSides ? { starGroupSides } : {}),
         };
       }
@@ -708,7 +715,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
           for (const member of own.slice(at, at + group.size)) owners.set(member, group.group);
           at += group.size - 1;
         }
-        const inputs: JoinStarInput[] = owners.size || localPlan ? joinInputs(own, joins).map(({ input, join }) => ({
+        const inputs: JoinStarInput[] = owners.size || localPlan || own.some(binding => binding.projectionSource) ? joinInputs(own, joins).map(({ input, join }) => ({
           ...input, ...(join?.rightOrFull ? { outer: join.full ? 'full' : 'right' } : {}),
         })) : [];
         const joinStarScope = inputs.length ? { groups, owners, inputs, uniqueLeft: uniqueJoinLeft(joins, head, end, base) } : undefined;
@@ -829,7 +836,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
     if (relations.filter(relation => relation.kind !== 'local' || relation.source !== 'group').length > limits.relations) fail('budget');
     if (parsed.syntax.includes('relation') && qualifiers.some(name => !['main', 'temp'].includes(fold(name))) || qualifiers.length === 2 && !['main', 'temp'].includes(fold(qualifiers[0]))) fail('schema');
     const joinGroup: QualifiedJoinGroup | undefined = alias?.group ? {
-      alias: alias.relation.name, groups: compactJoinGroups(alias.group.groups, [{ group: alias.group.root }]).groups,
+      alias: alias.relation.name, groups: resolveGroups(compactJoinGroups(alias.group.groups, [{ group: alias.group.root }]).groups),
     } : undefined;
     return { status: 'ready', target, syntax: parsed.syntax, qualifiers, relations,
       ...(parsed.output ? { output: parsed.output } : {}),
@@ -870,9 +877,10 @@ const usingProjection = z.object({ left: z.array(joinInput).min(1).max(limits.re
 }).strict().refine(({ left, right, groups = [], uniqueLeft, starGroupSides }) => {
   if (starGroupSides && (!uniqueLeft || starGroupSides !== 'right' && !left.some(({ operand }) => 'group' in operand) ||
     starGroupSides !== 'left' && !('group' in right))) return false;
-  return left[0].merged === undefined && left.every(input => !input.binding) && validJoinGroups(groups, [...left.map(({ operand }) => operand), right]);
+  return left[0]?.merged === undefined && left.every(input => !input.binding) && validJoinGroups(groups, [...left.map(({ operand }) => operand), right], limits.relations);
 });
-const qualifiedGroup = z.object({ alias: nameSchema, groups: joinGroups }).strict().refine(({ groups }) => validJoinGroups(groups, [{ group: groups.length - 1 }]));
+const qualifiedGroup = z.object({ alias: nameSchema, groups: joinGroups }).strict()
+  .refine(({ groups }) => validJoinGroups(groups, [{ group: groups.length - 1 }], limits.relations));
 const starSchema = z.object({ groups: joinGroupList, all: z.array(joinInput.extend({ outer: z.enum(['right', 'full']).optional() })).min(1).max(limits.relations).optional(),
   members: z.array(z.object({ group: z.number().int().min(0).max(limits.relations - 2), binding: nameSchema }).strict()).min(1).max(limits.relations).optional(),
   sole: z.literal(true).optional(), uniqueLeft: z.literal(true).optional(),
@@ -892,7 +900,7 @@ function validJoinStars({ groups, all, members = [], sole, uniqueLeft }: SqliteJ
   const roots = [...inputs.filter(operand => !('group' in operand)), ...[...selectedGroups].map(group => ({ group }))];
   return validJoinGroups(groups, roots, projectionBound);
 }
-const joinStars = starSchema.refine(star => star.groups.length > 0 && validJoinStars(star));
+const joinStars = starSchema.refine(star => (star.groups.length > 0 || star.all?.some(({ operand }) => 'projection' in operand)) && validJoinStars(star, limits.relations));
 function starOperands(star: SqliteJoinStars): SqliteJoinOperand[] {
   return [...(star.all ?? []), ...star.groups.flatMap(group => group.inputs)].map(({ operand }) => operand);
 }
@@ -908,8 +916,10 @@ const localProjectionSchema = z.array(z.array(z.union([z.object({ name: nameSche
     }));
   });
 const outputProjection = z.object({ columns: columnNames, sources: outputSources,
-  joinStars: z.array(joinStars).min(1).max(Math.floor(limits.relations / 2)).optional(), incomplete: z.literal(true).optional(),
-}).strict().refine(({ sources, joinStars = [] }) => {
+  projections: z.array(projectionIndex).min(1).max(limits.relations).optional(),
+  joinStars: z.array(joinStars).min(1).max(limits.relations).optional(), incomplete: z.literal(true).optional(),
+}).strict().refine(({ sources, joinStars = [], projections = [] }) => {
+  if (new Set(projections).size !== projections.length) return false;
   const catalog = new Set(sources.map(sqliteCompletionSourceKey));
   let count = 0;
   for (const star of joinStars) {
@@ -934,7 +944,7 @@ export function validateSqliteCompletionAnalysis(raw: unknown, source: string, o
   const value = resultSchema.parse(raw) as SqliteCompletionAnalysis;
   if (new TextEncoder().encode(JSON.stringify(value)).length > limits.outputBytes) fail('budget');
   if (value.status === 'blocked') return value;
-  if (value.output && !(value.output.columns.length || value.output.sources.length || value.output.joinStars?.length || value.output.incomplete) ||
+  if (value.output && !(value.output.columns.length || value.output.sources.length || value.output.projections?.length || value.output.joinStars?.length || value.output.incomplete) ||
     value.output && value.using) fail('response');
   if ((value.output || value.using) && (intent || value.relations.length || value.qualifiers.length || value.unqualifiedColumns ||
     value.syntax.length !== 1 || value.syntax[0] !== 'column')) fail('response');
@@ -945,22 +955,36 @@ export function validateSqliteCompletionAnalysis(raw: unknown, source: string, o
   const qualified = value.qualifiers.length === 1 && groupRelations.find(relation => fold(relation.name) === fold(value.qualifiers[0]));
   if (value.joinGroup ? !qualified || value.joinGroup.alias !== qualified.name || intent === 'definition' || intent === 'object' ||
     !value.syntax.includes('column') || value.output || value.using || value.unqualifiedColumns : qualified && (!intent || intent === 'hover') && value.syntax.includes('column')) fail('response');
-  const localProjections = value.localProjections ?? [], visited = new Set<number>();
+  const localProjections = value.localProjections ?? [], visited = new Set<number>(), catalog = new Set<string>();
+  function consume(operand: SqliteJoinOperand) {
+    if ('projection' in operand) visit(operand.projection);
+    else if ('source' in operand) catalog.add(sqliteCompletionSourceKey(operand.source));
+  }
   function visit(index: number) {
     if (index >= localProjections.length) fail('response');
     if (visited.has(index)) return;
     visited.add(index);
     for (const part of localProjections[index]) if ('star' in part) {
-      for (const operand of starOperands(part.star)) if ('projection' in operand) visit(operand.projection);
+      for (const operand of starOperands(part.star)) consume(operand);
     }
   }
+  if (value.using) {
+    consume(value.using.right);
+    for (const { operand } of value.using.left) consume(operand);
+  }
+  for (const group of value.using?.groups ?? value.joinGroup?.groups ?? []) {
+    for (const { operand } of group.inputs) consume(operand);
+  }
+  for (const source of value.output?.sources ?? []) consume({ source });
+  for (const projection of value.output?.projections ?? []) visit(projection);
+  for (const star of value.output?.joinStars ?? []) for (const operand of starOperands(star)) consume(operand);
   for (const relation of value.relations) if (relation.kind === 'local' && relation.projection !== undefined) {
     if (intent === 'definition' || intent === 'object' || !value.syntax.includes('column') || value.joinGroup || value.using || value.output ||
       relation.source === 'group' || relation.declaration || relation.columns.length || value.qualifiers.length > 1 ||
       value.qualifiers.length === 1 && fold(value.qualifiers[0]) !== fold(relation.alias ?? relation.name)) fail('response');
     visit(relation.projection);
   }
-  if (visited.size !== localProjections.length) fail('response');
+  if (visited.size !== localProjections.length || catalog.size > limits.relations) fail('response');
   if (value.relations.some(relation => relation.kind === 'local' && relation.declaration && relation.source !== 'cte')) fail('response');
   if (value.relations.some(relation => intent === 'hover' ? (relation.kind !== 'local' || !relation.declaration) && relation.scopeDepth === undefined : relation.scopeDepth !== undefined)) fail('response');
   const target = value.target;

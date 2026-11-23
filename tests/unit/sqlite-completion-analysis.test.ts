@@ -310,9 +310,38 @@ it('复合排序按星号实际投影的来源读目录，裸星号展开同一�
   expect(result.output).toEqual({ columns: [], sources: [{ name: 'first', schema: 'main' }, { name: 'second', schema: 'temp' }, { name: 'third', schema: 'main' }] });
 });
 
-it('明确的 CTE 和匿名派生表输出可以直接展开，未知局部来源保留部分补全', () => {
+it('明确的 CTE 和匿名派生表直接展开，动态局部来源保留投影引用', () => {
   const result = ready('WITH c(item) AS (SELECT 1), u AS (SELECT * FROM hidden_table) SELECT c.*, u.* FROM c, u UNION ALL SELECT * FROM (SELECT 2 AS next, 3 AS flag) ORDER BY |');
-  expect(result.output).toEqual({ columns: ['item', 'next', 'flag'], sources: [], incomplete: true });
+  expect(result.output).toEqual({ columns: ['item', 'next', 'flag'], sources: [], projections: [0] });
+  expect(result.localProjections).toEqual([[{ star: { groups: [], all: [{ operand: { source: { name: 'hidden_table' } } }], sole: true } }]]);
+});
+
+it('局部投影按实际使用范围接入外层 USING、复合排序和连接组', () => {
+  const common = 'WITH c AS (SELECT * FROM main.subject), unused AS (SELECT * FROM ignored) ';
+  const using = ready(common + 'SELECT 1 FROM c JOIN (SELECT c.* FROM c) d USING(i|d)');
+  expect(using.using).toEqual({ left: [{ operand: { projection: 0 } }], right: { projection: 1 }, used: [] });
+  expect(using.localProjections).toHaveLength(2);
+  const compound = ready(common + 'SELECT c.* FROM c UNION ALL SELECT d.* FROM (SELECT c.* FROM c) d ORDER BY i|d');
+  expect(compound.output).toEqual({ columns: [], sources: [], projections: [0, 1] });
+  expect(compound.localProjections).toEqual(using.localProjections);
+  const expanded = ready(common + 'SELECT * FROM c JOIN side USING(id) UNION ALL SELECT 1 ORDER BY i|d');
+  expect(expanded.output?.joinStars).toEqual([{ groups: [], all: [{ operand: { projection: 0 } }, { operand: { source: { name: 'side' } }, merged: ['id'] }] }]);
+  const grouped = ready(common + 'SELECT g.i|d FROM upfront JOIN (c JOIN side ON 1) g ON 1');
+  expect(grouped.joinGroup?.groups).toEqual([{ inputs: [{ operand: { projection: 0 }, binding: 'c' }, { operand: { source: { name: 'side' } } }] }]);
+  expect(grouped.localProjections).toHaveLength(1);
+});
+
+it('外层局部投影回包拒绝缺失、越界和重复的投影根', () => {
+  const usingMarked = 'WITH c AS (SELECT * FROM base) SELECT 1 FROM c JOIN peer USING(|)';
+  const using = ready(usingMarked), usingInput = query(usingMarked);
+  expect(() => validateSqliteCompletionAnalysis({ ...using, localProjections: undefined }, usingInput.source, usingInput.offset)).toThrow();
+  expect(() => validateSqliteCompletionAnalysis({ ...using, using: { ...using.using, right: { projection: 1 } } }, usingInput.source, usingInput.offset)).toThrow();
+  const outputMarked = 'WITH c AS (SELECT * FROM base) SELECT c.* FROM c UNION ALL SELECT 1 ORDER BY |';
+  const output = ready(outputMarked), outputInput = query(outputMarked);
+  for (const references of [[1], [0, 0]]) {
+    expect(() => validateSqliteCompletionAnalysis({ ...output, output: { ...output.output, projections: references } }, outputInput.source, outputInput.offset)).toThrow();
+  }
+  expect(() => validateSqliteCompletionAnalysis({ ...output, output: { ...output.output, projections: undefined } }, outputInput.source, outputInput.offset)).toThrow();
 });
 
 it('重复读取同一物理目录仅登记一次，名称歧义的星号保留其它已知输出', () => {

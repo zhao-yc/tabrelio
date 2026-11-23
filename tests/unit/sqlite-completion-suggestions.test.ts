@@ -85,6 +85,78 @@ it('局部投影遇到未知表达式保留前序已知列，循环不会触发�
   expect(await sqliteCompletionSuggestions(analyze(cyclic), d)).toEqual({ items: [], incomplete: true });
   expect(d.load).not.toHaveBeenCalled();
 });
+
+it('外层 USING 和复合排序直接使用实际 SQLite 局部投影的稳定重名列', async () => {
+  const prefix = 'WITH base AS (SELECT s.*, s.label AS label FROM main.subject s) ';
+  const cases = [
+    [prefix + 'SELECT r."label:1" FROM base l JOIN (SELECT * FROM base) r USING (id, "label:|suffix")', ['A']],
+    [prefix + 'SELECT d.* FROM (SELECT * FROM base) d JOIN main.subject m ON m.id=d.id UNION ALL SELECT 9,\'Z\',\'Z\' ORDER BY "label:|suffix" DESC', ['Z', 'A']],
+  ] as const;
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec("CREATE TABLE subject(id INTEGER, label TEXT); INSERT INTO subject VALUES(1,'A'); CREATE TABLE base(wrong TEXT);");
+    for (const [marked, expected] of cases) {
+      const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
+      if (analysis.status !== 'ready') throw Error(analysis.reason);
+      const directory = { load: vi.fn(async (lookup: SqliteCompletionLookup) => {
+        if (lookup.kind !== 'columns') throw Error('预期准确来源列');
+        const entries = db.prepare('SELECT name,hidden FROM pragma_table_xinfo(?,?) ORDER BY cid').all(lookup.table, lookup.schema ?? 'main')
+          .map(row => ({ ...column(String(row.name), lookup.table), hidden: row.hidden === 1 }));
+        return { entries, incomplete: false, stamp: '1:0' };
+      }) };
+      const result = await sqliteCompletionSuggestions(analysis, directory);
+      expect(result.incomplete).toBe(false);
+      expect(result.items.map(item => item.insertText)).toEqual(['"label:1"']);
+      expect(directory.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'subject', schema: 'main', prefix: '' });
+      const completed = source.slice(0, analysis.target.start) + result.items[0].insertText + source.slice(analysis.target.end);
+      expect(db.prepare(completed).all().map(row => row['label:1'])).toEqual(expected);
+    }
+  } finally { db.close(); }
+});
+
+it('动态局部列参与裸星号和连接组，未投影的外层来源不读目录', async () => {
+  const prefix = 'WITH c AS (SELECT s.* FROM base s) ';
+  const d = directory([]);
+  d.load.mockImplementation(async lookup => {
+    if (lookup.kind !== 'columns') throw Error('预期来源列');
+    const names = lookup.table === 'base' ? ['id', 'label'] : ['id', 'note'];
+    return { entries: names.map(name => column(name, lookup.table)), incomplete: false, stamp: '1:0' };
+  });
+  const analyze = (sql: string) => {
+    const marked = prefix + sql, value = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+    if (value.status !== 'ready') throw Error(value.reason);
+    return value;
+  };
+  const output = await sqliteCompletionSuggestions(analyze('SELECT * FROM c JOIN side USING(id) UNION ALL SELECT 0,0,0 ORDER BY |'), d);
+  expect(output.items.map(item => item.label)).toEqual(['id', 'label', 'note']);
+  d.load.mockClear();
+  const group = await sqliteCompletionSuggestions(analyze('SELECT grp."id:|suffix" FROM unrelated JOIN (c JOIN side ON 1) grp ON 1'), d);
+  expect(group.items.map(item => item.label)).toEqual(['id:1']);
+  expect(d.load.mock.calls).toEqual([[{ kind: 'columns', table: 'base', prefix: '' }], [{ kind: 'columns', table: 'side', prefix: '' }]]);
+});
+
+it('局部目录部分可知时保留普通 USING 的已证实项，外连接保留消歧门槛', async () => {
+  const prefix = 'WITH c AS (SELECT *, id+1 FROM base) SELECT 1 FROM c ';
+  const d = directory([column('id')]);
+  const analyze = (operator: string) => {
+    const marked = prefix + operator + ' peer USING(i|d)', value = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+    if (value.status !== 'ready') throw Error(value.reason);
+    return value;
+  };
+  const inner = await sqliteCompletionSuggestions(analyze('JOIN'), d);
+  expect(inner.items.map(item => item.label)).toEqual(['id']);
+  expect(inner.incomplete).toBe(true);
+  expect(await sqliteCompletionSuggestions(analyze('FULL JOIN'), d)).toEqual({ items: [], incomplete: true });
+});
+
+it('局部来源没有可展开列时，复合排序保留其他分支并提示部分结果', async () => {
+  const marked = 'WITH c AS (SELECT * FROM missing) SELECT c.* FROM c UNION ALL SELECT 1 AS known ORDER BY |';
+  const analysis = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const result = await sqliteCompletionSuggestions(analysis, directory([]));
+  expect(result.items.map(item => item.label)).toEqual(['known']);
+  expect(result.incomplete).toBe(true);
+});
 it('UNION ALL 的右分支只读取自己的物理表目录', async () => {
   const marked = 'SELECT s.name FROM main.first s UNION ALL SELECT s.na|suffix FROM temp.second s';
   const result = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));

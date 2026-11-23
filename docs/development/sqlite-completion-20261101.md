@@ -4,7 +4,7 @@
 
 SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段、表别名，明确输出列的 CTE／派生表，以及 `main`／`temp` 限定。建议按准确名称使用 SQLite 双引号转义，以普通文本插入；同名字段保留各自别名限定。INSERT 字段清单、UPDATE 赋值左侧及 RETURNING 使用目标表字段。
 
-CTE 和派生表的字段补全、悬停也能逐层展开 `SELECT *` 和 `SELECT 别名.*`。显式 CTE 列清单优先，复合定义沿用首分支输出。读取沿声明作用域追到原表、视图或表值函数，按投影顺序生成确定的重名后缀。已确认来源的字段悬停显示物理类型。循环引用、未命名表达式和不完整目录保留已确认的前序列并提示部分结果。使用这类动态局部投影作为外层 `USING` 或复合排序星号来源仍需继续扩展。[SQLite WITH](https://www.sqlite.org/lang_with.html) · [SQLite 来源投影](https://www.sqlite.org/lang_select.html#fromclause)
+CTE 和派生表的字段补全、悬停也能逐层展开 `SELECT *` 和 `SELECT 别名.*`。显式 CTE 列清单优先，复合定义沿用首分支输出。读取沿声明作用域追到原表、视图或表值函数，按投影顺序生成确定的重名后缀。已确认来源的字段悬停显示物理类型。循环引用、未命名表达式和不完整目录保留已确认的前序列并提示部分结果。外层 `USING`、复合排序星号及连接组字段复用这些局部输出，同一次补全共用来源目录。[SQLite WITH](https://www.sqlite.org/lang_with.html) · [SQLite 来源投影](https://www.sqlite.org/lang_select.html#fromclause)
 
 尚无查询会话的草稿通过授权文件的独立只读连接读取目录，不创建查询会话。已有会话使用原物理连接，临时表遮蔽规则及未提交 DDL 保持；显式 `main`／`temp` 只读取指定命名空间。切换标签、修改正文、连接变更及模态会撤销旧结果。
 
@@ -31,6 +31,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-23 局部星号外层查询增量，WIN11-TEST 不可达，未派发任务。本机 macOS arm64 严格类型、源码构建和 17 份相关套件的 509 项通过。Electron 源码专项分别在字段、`USING` 和复合 `ORDER BY` 接受 `main_marker:1`。每次补全只读取一次 `main.subject` 列目录。显式执行返回预期的两行升序结果，两次应用正常退出。日志和报告位于忽略目录 `.cache/sqlite-local-projection-outer/`。Windows 界面和安装包待验。
 
 2026-11-23 CTE 与派生表星号增量，WIN11-TEST 不可达，未派发任务。本机 macOS arm64 严格类型、源码构建和 17 份相关套件的 503 项通过。Electron 源码专项接受多层投影产生的 `main_marker:1`，补全只读取 `main.subject` 的列目录。显式执行返回预期的一行，两次应用正常退出。原生 SQLite 单元用例同时核对 `temp` 来源和声明类型悬停。日志和报告位于忽略目录 `.cache/sqlite-local-star-projection/`。Windows 界面和安装包待验。
 

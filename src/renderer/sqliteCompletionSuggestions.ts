@@ -1,7 +1,7 @@
 import type { SqliteCompletionAnalysis, SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
-import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionColumns, sqliteCompletionLimits, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
+import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionLimits, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
-import { sqliteJoinColumnReader, sqliteJoinRowidName, sqliteJoinStarColumns, sqliteLocalProjectionColumns, sqliteQualifiedJoinColumns } from './sqliteJoinColumns';
+import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns } from './sqliteJoinColumns';
 
 export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
@@ -10,6 +10,8 @@ const keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 
 /** 建议只引用准确目录名；同名字段保留不同别名的限定插入，CTE声明不伪装成FROM绑定。 */
 export async function sqliteCompletionSuggestions(analysis: Extract<SqliteCompletionAnalysis, { status: 'ready' }>, directory: SqliteCompletionDirectory): Promise<{ items: SqliteCompletionItem[]; incomplete: boolean }> {
   const items: SqliteCompletionItem[] = [], seen = new Set<string>(), prefix = fold(analysis.target.prefix), qualifiers = analysis.qualifiers;
+  // 同一次补全共享目录，局部星号与外层物理来源重合时复用原读取。
+  const reader = await sqliteProjectionReader(analysis.localProjections ?? [], directory);
   let incomplete = false;
   const add = (item: SqliteCompletionItem) => {
     if (!fold(item.label).startsWith(prefix)) return;
@@ -20,7 +22,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   };
   if (analysis.using) {
     const { left, right, used, uniqueLeft, groups = [], starGroupSides } = analysis.using;
-    const { readColumns, projectGroups } = sqliteJoinColumnReader(directory);
+    const { readColumns, projectGroups } = reader;
     await projectGroups(groups);
     const names = new Map<string, { count: number; visible: boolean }>();
     const ambiguous = new Set<string>();
@@ -55,7 +57,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   }
   if (analysis.joinGroup) {
     const { alias, groups } = analysis.joinGroup;
-    const projected = await sqliteQualifiedJoinColumns(alias, groups, directory);
+    const projected = await sqliteQualifiedJoinColumns(alias, groups, reader);
     incomplete = projected.incomplete;
     for (const { name, entry } of projected.columns) {
       const info = [alias, text.joinGroup, entry?.declaredType].filter(Boolean).join(' · ');
@@ -69,9 +71,13 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     incomplete = analysis.output.incomplete === true;
     const addOutput = (name: string) => add({ label: name, kind: 'column', insertText: quote(name), detail: text.outputColumn });
     for (const name of analysis.output.columns) addOutput(name);
-    const reader = sqliteJoinColumnReader(directory);
     for (const star of analysis.output.joinStars ?? []) {
       const result = await sqliteJoinStarColumns(star, reader);
+      incomplete ||= result.incomplete;
+      for (const column of result.columns) addOutput(column.name);
+    }
+    for (const projection of analysis.output.projections ?? []) {
+      const result = await reader.readColumns({ projection }, '');
       incomplete ||= result.incomplete;
       for (const column of result.columns) addOutput(column.name);
     }
@@ -103,7 +109,6 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   if (analysis.syntax.includes('column')) {
     const selected = bound.filter(matches);
     if (qualifiers.length && selected.length > 1) return { items: [], incomplete: true };
-    const localResults = await sqliteLocalProjectionColumns(analysis.localProjections ?? [], directory);
     for (const relation of selected) {
       const binding = relation.alias ?? relation.name;
       // INSERT列清单由分析器仅投影目标表；已有点限定时只替换最后的字段。
@@ -113,7 +118,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
         if (relation.projection === undefined) {
           for (const name of relation.columns) add({ label: name, kind: 'column', insertText: insert(name), detail: binding + ' · ' + kind });
         } else {
-          const projection = localResults[relation.projection];
+          const projection = await reader.readColumns({ projection: relation.projection }, '');
           incomplete ||= projection.incomplete;
           for (const { name, entry } of projection.columns) {
             const detail = [binding, kind, entry?.declaredType].filter(Boolean).join(' · ');
@@ -121,9 +126,9 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
           }
         }
       } else {
-        const metadata = await directory.load(sqliteCompletionColumns(relation, analysis.target.prefix)); incomplete ||= metadata.incomplete;
+        const metadata = await reader.readColumns({ source: relation }, analysis.target.prefix); incomplete ||= metadata.incomplete;
         const source = relation.tableFunction ? text.tableFunction : undefined;
-        for (const entry of metadata.entries) if (entry.kind === 'column' && !(relation.visibleColumnsOnly && entry.hidden)) add({ label: entry.name, kind: 'column', insertText: insert(entry.name), detail: binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : '') });
+        for (const { entry } of metadata.columns) if (entry && !(relation.visibleColumnsOnly && entry.hidden)) add({ label: entry.name, kind: 'column', insertText: insert(entry.name), detail: binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : '') });
       }
       if (!qualifiers.length) add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail: relation.kind === 'local' && relation.source === 'group' ? text.joinGroup : text.alias, trigger: true });
     }

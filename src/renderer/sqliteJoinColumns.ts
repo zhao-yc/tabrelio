@@ -87,7 +87,7 @@ function projectJoinGroup(inputs: JoinGroupInput[], uniqueLeft: boolean): JoinCo
 }
 
 /** 按已验证的来源编号读取。只读成员目录，不请求分组名、原 SQL 或任何实参。 */
-export function sqliteJoinColumnReader(directory: SqliteCompletionDirectory, localResults: JoinColumns[] = []) {
+function sqliteJoinColumnReader(directory: SqliteCompletionDirectory, localResults: JoinColumns[]) {
   const cache = new Map<string, SqliteCompletionOutput>();
   const projectedGroups: JoinColumns[] = [];
   async function readColumns(operand: SqliteJoinOperand, lookupPrefix: string): Promise<JoinColumns> {
@@ -122,7 +122,7 @@ export function sqliteJoinColumnReader(directory: SqliteCompletionDirectory, loc
 }
 
 /** 局部投影逐层展开并保留槽位顺序，已有列的名称不受后方未知表达式影响。 */
-export async function sqliteLocalProjectionColumns(projections: SqliteLocalProjection[], directory: SqliteCompletionDirectory): Promise<JoinColumns[]> {
+export async function sqliteProjectionReader(projections: SqliteLocalProjection[], directory: SqliteCompletionDirectory): Promise<ReturnType<typeof sqliteJoinColumnReader>> {
   const results: JoinColumns[] = [], reader = sqliteJoinColumnReader(directory, results);
   for (const projection of projections) {
     const ordered: SqliteJoinColumn[] = [];
@@ -133,7 +133,7 @@ export async function sqliteLocalProjectionColumns(projections: SqliteLocalProje
       else {
         const star = await sqliteJoinStarColumns(slot.star, reader);
         // 未知槽可能改变后续重名后缀。只交付已确定的前序投影。
-        if (star.incomplete) { incomplete = true; break; }
+        if (star.incomplete || !star.columns.length) { incomplete = true; break; }
         ordered.push(...star.columns);
       }
       if (ordered.length > sqliteCompletionLimits.entries) { incomplete = true; break; }
@@ -150,7 +150,7 @@ export async function sqliteLocalProjectionColumns(projections: SqliteLocalProje
     }
     results.push({ columns: [...names.values()], incomplete });
   }
-  return results;
+  return reader;
 }
 
 /** 仅展开实际结果列表。未限定 * 隐藏合并副本，成员.* 仍可输出这些有确定名称的列。 */
@@ -170,7 +170,7 @@ export async function sqliteJoinStarColumns(star: SqliteJoinStars, reader: Retur
       resolved.push(result);
       inputs.push({ columns: result.columns, merged });
     }
-    const mergedNames = joinNames(inputs, star.uniqueLeft === true);
+    const mergedNames = star.uniqueLeft && incomplete ? undefined : joinNames(inputs, star.uniqueLeft === true);
     // RIGHT/FULL 可让星号把合并项作为未限定名称解析，组内原始重名会引发歧义。
     const ambiguous = star.uniqueLeft && mergedNames?.some((names, index) => {
       if (!names.length) return false;
@@ -198,8 +198,7 @@ export async function sqliteJoinStarColumns(star: SqliteJoinStars, reader: Retur
 }
 
 /** 组别名与成员同名时，SQLite 优先按照成员的原始字段名解析，再查组输出名。 */
-export async function sqliteQualifiedJoinColumns(alias: string, groups: SqliteJoinGroup[], directory: SqliteCompletionDirectory): Promise<JoinColumns> {
-  const reader = sqliteJoinColumnReader(directory);
+export async function sqliteQualifiedJoinColumns(alias: string, groups: SqliteJoinGroup[], reader: ReturnType<typeof sqliteJoinColumnReader>): Promise<JoinColumns> {
   await reader.projectGroups(groups);
   const result = await reader.readColumns({ group: groups.length - 1 }, '');
   const columns = new Map(result.columns.map(column => [fold(column.name), column]));
