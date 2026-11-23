@@ -1,4 +1,4 @@
-import { sqliteCompletionRelationMatches, sqliteQueryBodyKeywords, type SqliteCompletionAnalysis, type SqliteForeignKeyContext } from '../shared/sqliteCompletionAnalysis';
+import { sqliteCompletionRelationMatches, sqliteQueryBodyKeywords, type SqliteCompletionAnalysis, type SqliteForeignKeyContext, type SqliteTriggerContext } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 import { sqliteTableImportAffinity } from '../shared/sqliteTableImport';
@@ -38,6 +38,17 @@ export async function sqliteForeignKeyCatalog(
   }
   return directory.load(context.kind === 'parent' ? { kind: 'relations', schema, prefix, foreignKey: true } :
     { kind: 'columns', table: context.table, schema, prefix, foreignKey: hover ? true : { arity: context.arity, used: context.used } });
+}
+
+/** 行名和触发条件保留在编辑器，目录只接收目标身份和匹配前缀。 */
+export function sqliteTriggerCatalog(
+  context: Exclude<SqliteTriggerContext, { kind: 'rows' }>, prefix: string, directory: SqliteCompletionDirectory,
+): Promise<SqliteCompletionOutput> {
+  if (context.kind === 'target') return directory.load({
+    kind: 'relations', triggerTarget: context.object, prefix, ...(context.schema ? { schema: context.schema } : {}),
+  });
+  const { name: table, schema } = context.source;
+  return directory.load({ kind: 'columns', table, prefix, ...(schema ? { schema } : {}) });
 }
 
 const keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'ON', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'WITH', 'AS', 'DISTINCT', 'UNION ALL', 'IS NULL', 'IS NOT NULL', 'RETURNING', 'WINDOW', 'OVER', 'FILTER', 'PARTITION BY', 'ROWS', 'RANGE', 'BETWEEN', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'CURRENT ROW', 'EXPLAIN QUERY PLAN'];
@@ -108,6 +119,33 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
         add({ label: entry.name, kind: 'table', insertText: quote(entry.name), detail: text.foreignParent + ' · ' + entry.schema });
       } else if (context.kind === 'parent-column' && entry.kind === 'column' && !entry.hidden) {
         const detail = [text.foreignParentColumn, entry.schema + '.' + entry.table, entry.declaredType].filter(Boolean).join(' · ');
+        add({ label: entry.name, kind: 'column', insertText: quote(entry.name), detail });
+      }
+    }
+    return { items, incomplete };
+  }
+  if (analysis.trigger) {
+    const context = analysis.trigger;
+    if (context.kind === 'rows') {
+      for (const row of context.rows) {
+        const label = row.toUpperCase();
+        add({ label, kind: 'alias', insertText: label + '.', detail: text.triggerRow[row], trigger: true });
+      }
+      return { items, incomplete };
+    }
+    if (context.kind === 'target' && !context.schema) for (const namespace of ['main', 'temp']) {
+      add({ label: namespace, kind: 'database', insertText: quote(namespace) + '.', detail: text.schema, trigger: true });
+    }
+    const catalog = await sqliteTriggerCatalog(context, analysis.target.prefix, directory);
+    incomplete ||= catalog.incomplete;
+    for (const entry of catalog.entries) {
+      if (context.kind === 'target' && entry.kind === context.object) {
+        const detail = (entry.kind === 'view' ? text.triggerView : text.triggerTable) + ' · ' + entry.schema;
+        add({ label: entry.name, kind: entry.kind, insertText: quote(entry.name), detail });
+      } else if (context.kind !== 'target' && entry.kind === 'column' && !entry.hidden &&
+        (context.kind !== 'update-of' || !entry.generated && !context.used.includes(fold(entry.name)))) {
+        const role = context.kind === 'row' ? text.triggerRow[context.row] : text.triggerUpdateColumn;
+        const detail = [role, entry.schema + '.' + entry.table, entry.declaredType].filter(Boolean).join(' · ');
         add({ label: entry.name, kind: 'column', insertText: quote(entry.name), detail });
       }
     }

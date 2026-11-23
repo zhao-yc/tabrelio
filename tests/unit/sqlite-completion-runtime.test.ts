@@ -59,6 +59,27 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('触发目标区分普通表与 INSTEAD OF 视图，未限定名按原会话判断遮蔽', async () => {
+    const p = profile('触发器目标', 'CREATE TABLE subject(main_id INTEGER); CREATE VIEW subject_view AS SELECT * FROM subject; ' +
+      'CREATE VIRTUAL TABLE subject_search USING fts5(label);');
+    const { app, events } = runtime([p]), { sessionId } = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, sessionId, 'BEGIN; CREATE TEMP VIEW subject AS SELECT 2 AS temp_id;');
+    const count = events.length, state = await app.request('query.completionState', { sessionId });
+    const relations = async (triggerTarget: 'table' | 'view', schema?: 'main' | 'temp') => (await completion(app, p.id,
+      { kind: 'relations', triggerTarget, prefix: 'subject', ...(schema ? { schema } : {}) }, sessionId)).entries;
+    expect(await relations('table')).toEqual([]);
+    expect(await relations('table', 'main')).toEqual([{ kind: 'table', name: 'subject', schema: 'main' }]);
+    expect(await relations('view')).toEqual([{ kind: 'view', name: 'subject', schema: 'temp' }, { kind: 'view', name: 'subject_view', schema: 'main' }]);
+    expect((await completion(app, p.id, { kind: 'columns', table: 'subject' }, sessionId)).entries)
+      .toEqual([expect.objectContaining({ name: 'temp_id', schema: 'temp' })]);
+    expect((await completion(app, p.id, { kind: 'columns', table: 'subject', schema: 'main' }, sessionId)).entries)
+      .toEqual([expect.objectContaining({ name: 'main_id', schema: 'main' })]);
+    expect(await app.request('query.completionState', { sessionId })).toEqual(state);
+    expect(await app.request('query.sessionState', { sessionId })).toMatchObject({ transactionOpen: true });
+    expect(events).toHaveLength(count);
+    await execute(app, sessionId, 'ROLLBACK');
+  });
+
   it('外键父键按列数、已填列和原生排序规则筛选，保留合法的主键及唯一索引', async () => {
     const p = profile('外键父键', `
       CREATE TABLE parent(id INTEGER PRIMARY KEY, plain TEXT, partial TEXT, expression TEXT,

@@ -135,7 +135,8 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
   };
   if (input.kind === 'relations') {
     const scope = input.schema ? 'schema = ?' : "schema IN ('main','temp') AND (schema = 'temp' OR NOT EXISTS (SELECT 1 FROM pragma_table_list() t WHERE t.schema = 'temp' AND t.name = p.name COLLATE NOCASE))";
-    const visible = visibleSql + (input.indexTable || input.foreignKey ? " AND type = 'table'" : input.alterTable ? " AND type <> 'view'" : '');
+    const visible = visibleSql + (input.triggerTarget === 'view' ? " AND type = 'view'" :
+      input.indexTable || input.foreignKey || input.triggerTarget === 'table' ? " AND type = 'table'" : input.alterTable ? " AND type <> 'view'" : '');
     const result = await read(driver, 'SELECT name,type,schema FROM pragma_table_list() p WHERE ' + scope + ' AND ' + visible + ' AND ' + prefixSql + " ORDER BY schema DESC,name COLLATE NOCASE,name LIMIT 257", [...(input.schema ? [input.schema] : []), input.prefix, input.prefix], control, 257);
     incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
     for (const row of result.rows.slice(0, sqliteCompletionLimits.entries)) {

@@ -12,6 +12,7 @@ const functionName = z.string().max(sqliteCompletionLimits.prefixUnits).regex(/^
 const functionSignatures = z.array(z.object({ arity: z.number().int().min(-32768).max(32767), type: z.enum(['scalar', 'aggregate', 'window']) }).strict()).min(1).max(sqliteCompletionLimits.entries)
   .refine(value => new Set(value.map(({ arity, type }) => type + ':' + arity)).size === value.length);
 export const sqliteAlterColumnMode = z.enum(['rename', 'drop', 'nullability']);
+export const sqliteTriggerTargetMode = z.enum(['table', 'view']);
 export const sqliteForeignKeySelectionSchema = z.object({
   arity: z.number().int().min(1).max(sqliteCompletionLimits.entries),
   used: z.array(name).max(sqliteCompletionLimits.entries),
@@ -23,8 +24,8 @@ const oneColumnMode = (value: { tableFunction?: true; indexTable?: true; alterCo
 const base = { connectionId: id, sessionId: id.optional(), taskId: id.refine(value => value.startsWith(sqliteCompletionTaskPrefix) && value.length > sqliteCompletionTaskPrefix.length), prefix: z.string().max(sqliteCompletionLimits.prefixUnits).refine(value => value.length <= sqliteCompletionLimits.prefixUnits && unicode(value)) };
 export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('relations'), schema: schema.optional(), indexTable: z.literal(true).optional(),
-    alterTable: z.literal(true).optional(), foreignKey: z.literal(true).optional() }).strict()
-    .refine(value => [value.indexTable, value.alterTable, value.foreignKey].filter(Boolean).length <= 1 && (!value.foreignKey || value.schema !== undefined)),
+    alterTable: z.literal(true).optional(), foreignKey: z.literal(true).optional(), triggerTarget: sqliteTriggerTargetMode.optional() }).strict()
+    .refine(value => [value.indexTable, value.alterTable, value.foreignKey, value.triggerTarget].filter(Boolean).length <= 1 && (!value.foreignKey || value.schema !== undefined)),
   z.object({ ...base, kind: z.literal('columns'), schema: schema.optional(), table: name, ...columnMode,
     foreignKey: z.union([z.literal(true), sqliteForeignKeySelectionSchema]).optional() })
     .strict().refine(value => oneColumnMode(value) && (!value.foreignKey || value.schema !== undefined && !value.indexTable && !value.tableFunction && !value.alterColumn)),

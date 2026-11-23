@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite 触发器编辑支持目标表或视图、`UPDATE OF` 列和 `NEW`／`OLD` 行字段补全及悬停。按实际触发事件和目标命名空间读取目录。Q01 继续为部分覆盖。 [SQLite 触发器](https://www.sqlite.org/lang_createtrigger.html)
+
 2026-11-23 源码增量。SQLite 外键补全对现有父表按子键列数、已选父列和默认排序规则筛选主键及完整唯一索引，支持复合键反序。Q01 继续为部分覆盖。 [SQLite 父键规则](https://www.sqlite.org/foreignkeys.html#fk_indexes)
 
 2026-11-23 源码增量。SQLite 建表和加列支持外键父表、父列补全及悬停。表级外键子列和自引用从建表声明取候选，父表目录限定为子表所在的 `main` 或 `temp`。Q01 继续为部分覆盖。 [SQLite 外键](https://www.sqlite.org/foreignkeys.html)

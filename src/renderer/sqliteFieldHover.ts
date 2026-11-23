@@ -1,6 +1,6 @@
 import { sqliteCompletionRelationMatches, type SqliteCompletionAnalysis, type SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry } from '../shared/sqliteCompletion';
-import { sqliteCollationDetails, sqliteColumnTypeDetails, sqliteColumnTypeMode, sqliteForeignKeyCatalog, sqliteFunctionDetails, sqliteIndexDetails, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
+import { sqliteCollationDetails, sqliteColumnTypeDetails, sqliteColumnTypeMode, sqliteForeignKeyCatalog, sqliteFunctionDetails, sqliteIndexDetails, sqliteTriggerCatalog, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 import { sqliteFieldHoverZh as text } from './locales/sqliteFieldHover.zh-CN';
 import { sqliteCompletionZh } from './locales/sqliteCompletion.zh-CN';
 import { sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
@@ -50,6 +50,20 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
     }
     if (context.kind === 'parent-column' && entry?.kind === 'column' && !entry.hidden) {
       return markdown([sqliteCompletionZh.foreignParentColumn, display(entry.schema) + '.' + display(entry.table) + '.' + display(entry.name),
+        text.declaredType + '：' + (entry.declaredType ? display(entry.declaredType) : text.noDeclaredType)]);
+    }
+    return;
+  }
+  if (analysis.trigger && analysis.trigger.kind !== 'rows') {
+    const context = analysis.trigger, result = await sqliteTriggerCatalog(context, prefix, directory);
+    if (result.incomplete) return;
+    const entry = result.entries.find(entry => fold(entry.name) === fold(name));
+    if (context.kind === 'target' && entry?.kind === context.object) {
+      return markdown([entry.kind === 'view' ? sqliteCompletionZh.triggerView : sqliteCompletionZh.triggerTable, display(entry.schema) + '.' + display(entry.name)]);
+    }
+    if (context.kind !== 'target' && entry?.kind === 'column' && !entry.hidden) {
+      const role = context.kind === 'row' ? sqliteCompletionZh.triggerRow[context.row] : sqliteCompletionZh.triggerUpdateColumn;
+      return markdown([role, display(entry.schema) + '.' + display(entry.table) + '.' + display(entry.name),
         text.declaredType + '：' + (entry.declaredType ? display(entry.declaredType) : text.noDeclaredType)]);
     }
     return;
