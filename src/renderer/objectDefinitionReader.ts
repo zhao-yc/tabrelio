@@ -141,7 +141,7 @@ export class ObjectDefinitionReader {
         const latest = await this.ports.state(this.scope.sessionId); this.check(operation);
         if (!sameCompletionState(cached!, latest)) { this.dead = true; throw new ReaderFailure(text.stale); }
       }
-      // 永久 SQLite 视图使用所属库，其它未限定名称交给原会话按 TEMP 优先解析。
+      // SQLite 按原 DDL 上下文取得固定库，没有固定库的单段名称交给原会话解析。
       const database = analysis.object.database ?? analysis.object.defaultDatabase ?? (this.dialect === 'sqlite' ? undefined : cached ? cached.databaseKnown ? cached.database ?? undefined : undefined : this.scope.databaseUnknown ? undefined : this.scope.database);
       if (this.dialect !== 'sqlite' && database === undefined) throw new ReaderFailure(text.context);
       const input = objectDefinitionInputSchema.parse({ connectionId: this.scope.connectionId, ...(this.scope.sessionId ? { sessionId: this.scope.sessionId } : {}), ...(database === undefined ? {} : { database }), table: analysis.object.table, taskId: objectDefinitionTaskPrefix + this.ports.id() });

@@ -36,6 +36,8 @@ const flag = (value: SqliteValue): boolean | undefined => value && typeof value 
   (value.value === '0' || value.value === '1') ? value.value === '1' : undefined;
 const functionTypes = { s: 'scalar', a: 'aggregate', w: 'window' } as const;
 const publicSqliteFunctions = new Set(['sqlite_compileoption_get', 'sqlite_compileoption_used', 'sqlite_offset', 'sqlite_source_id', 'sqlite_version']);
+// SQLite 公共函数标志。允许索引使用确定性标量，但不建议只能在顶层调用的函数。
+const sqliteDeterministic = 0x800, sqliteDirectOnly = 0x80000;
 /** 仅暴露main/temp用户关系；table_list的shadow标记不能靠名称猜测，temp命名空间优先遮蔽main。 */
 export async function readSqliteCompletion(driver: SqliteDriverSession, input: SqliteCompletionLookup, control: CompletionControl): Promise<SqliteCompletionOutput> {
   const before = await stamp(driver, control), entries: SqliteCompletionEntry[] = []; let incomplete = false;
@@ -48,7 +50,8 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
   };
   if (input.kind === 'relations') {
     const scope = input.schema ? 'schema = ?' : "schema IN ('main','temp') AND (schema = 'temp' OR NOT EXISTS (SELECT 1 FROM pragma_table_list() t WHERE t.schema = 'temp' AND t.name = p.name COLLATE NOCASE))";
-    const result = await read(driver, 'SELECT name,type,schema FROM pragma_table_list() p WHERE ' + scope + ' AND ' + visibleSql + ' AND ' + prefixSql + " ORDER BY schema DESC,name COLLATE NOCASE,name LIMIT 257", [...(input.schema ? [input.schema] : []), input.prefix, input.prefix], control, 257);
+    const visible = input.indexTable ? visibleSql + " AND type = 'table'" : visibleSql;
+    const result = await read(driver, 'SELECT name,type,schema FROM pragma_table_list() p WHERE ' + scope + ' AND ' + visible + ' AND ' + prefixSql + " ORDER BY schema DESC,name COLLATE NOCASE,name LIMIT 257", [...(input.schema ? [input.schema] : []), input.prefix, input.prefix], control, 257);
     incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
     for (const row of result.rows.slice(0, sqliteCompletionLimits.entries)) {
       if (typeof row[0] !== 'string' || !['table', 'view', 'virtual'].includes(row[1] as string) || !['main', 'temp'].includes(row[2] as string)) throw Error('SQLite补全关系目录无效');
@@ -60,7 +63,8 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
     const target = found.rows[0];
     const table = target ? target[0] : input.table;
     const schema = target ? target[1] : input.schema ?? 'main';
-    const allowed = target ? input.tableFunction ? target[2] === 'virtual' : ['table', 'view', 'virtual'].includes(target[2] as string) : input.tableFunction === true;
+    const allowed = input.indexTable ? target?.[2] === 'table' : target ? input.tableFunction ? target[2] === 'virtual' :
+      ['table', 'view', 'virtual'].includes(target[2] as string) : input.tableFunction === true;
     if (allowed && typeof table === 'string' && !/^sqlite_/i.test(table)) {
       if (schema !== 'main' && schema !== 'temp') throw Error('SQLite补全字段所属库无效');
       // 自带表值模块通常不在 table_list 内。无同名关系遮蔽时只读 xinfo，不准备或执行原调用。
@@ -98,11 +102,16 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
     incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
     const prefix = fold(input.prefix);
     const functions = new Map<string, Extract<SqliteCompletionEntry, { kind: 'function' }>>();
-    for (const [name, rawBuiltin, type, , rawArity] of result.rows.slice(0, sqliteCompletionLimits.entries)) {
+    for (const [name, rawBuiltin, type, , rawArity, rawFlags] of result.rows.slice(0, sqliteCompletionLimits.entries)) {
       const builtin = flag(rawBuiltin);
       if (typeof name !== 'string' || builtin === undefined) throw Error('SQLite补全函数目录无效');
       if (!builtin || !name.startsWith(prefix) || !/^[a-z][a-z0-9_]*$/.test(name) || name === 'load_extension' ||
         name.startsWith('sqlite_') && !publicSqliteFunctions.has(name)) continue;
+      if (input.deterministicOnly) {
+        if (!rawFlags || typeof rawFlags !== 'object' || rawFlags.type !== 'integer') throw Error('SQLite补全函数标志无效');
+        const flags = Number(rawFlags.value);
+        if (type !== 's' || !(flags & sqliteDeterministic) || flags & sqliteDirectOnly) continue;
+      }
       if (type !== 's' && type !== 'a' && type !== 'w' || !rawArity || typeof rawArity !== 'object' || rawArity.type !== 'integer') throw Error('SQLite补全函数签名无效');
       const arity = Number(rawArity.value);
       let entry = functions.get(name);

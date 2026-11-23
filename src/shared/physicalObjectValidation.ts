@@ -1,12 +1,12 @@
 import { completionLimits } from './sqlCompletion';
 import { sqliteCompletionLimits } from './sqliteCompletion';
 
-export type PhysicalObjectTokenContext = { status: 'blocked'; reason: string } | { status: 'ready'; tokens: { start: number; end: number; value: string; kind: string; closed?: boolean }[]; target: { start: number; end: number }; defaultDatabase?: 'main' };
+export type PhysicalObjectTokenContext = { status: 'blocked'; reason: string } | { status: 'ready'; tokens: { start: number; end: number; value: string; kind: string; closed?: boolean }[]; target: { start: number; end: number }; defaultDatabase?: 'main' | 'temp' };
 
 export interface PhysicalObjectRange { start: number; end: number; }
 export type PhysicalObjectAnalysis = { status: 'blocked'; reason: string } | {
   status: 'ready'; target: PhysicalObjectRange;
-  object: { table: string; database?: string; tableRange: PhysicalObjectRange; databaseRange?: PhysicalObjectRange; defaultDatabase?: 'main' };
+  object: { table: string; database?: string; tableRange: PhysicalObjectRange; databaseRange?: PhysicalObjectRange; defaultDatabase?: 'main' | 'temp' };
 };
 
 /** 只接受固定字段的普通记录；线程不得夹带URI、SQL、动作或目录结果。 */
@@ -30,8 +30,8 @@ export function validPhysicalObjectTokens(value: unknown, source: string, offset
   if (!name(object.table) || qualified && (!name(object.database) || dialect === 'sqlite' && !['main', 'temp'].includes(object.database.replace(/[A-Z]/g, character => character.toLowerCase())))) return false;
   if (bytes(object.table) + (qualified ? bytes(object.database as string) : 0) > 4096) return false;
   if (context.status !== 'ready') return false;
-  // 永久 SQLite 视图有固定查找库，即使 SQL 没有显式库名 token 也要核对该语义。
-  if (inferred && (dialect !== 'sqlite' || object.defaultDatabase !== 'main') ||
+  // SQLite 的永久视图或指定库的索引可决定物理表查找库，单段表名仍按原 token 核对。
+  if (inferred && (dialect !== 'sqlite' || object.defaultDatabase !== 'main' && object.defaultDatabase !== 'temp') ||
     !qualified && object.defaultDatabase !== context.defaultDatabase ||
     qualified && context.defaultDatabase && String(object.database).toLowerCase() !== context.defaultDatabase) return false;
   const tokens = context.tokens, origin = context.target;

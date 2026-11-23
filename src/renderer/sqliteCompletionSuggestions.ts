@@ -19,10 +19,11 @@ export function sqliteCollationDetails(name: string): string[] {
 }
 
 const windowOnlyFunctions = new Set(['row_number', 'rank', 'dense_rank', 'percent_rank', 'cume_dist', 'ntile', 'lag', 'lead', 'first_value', 'last_value', 'nth_value']);
+const conditionalDateTime = new Set(['date', 'time', 'datetime', 'strftime', 'julianday', 'unixepoch']);
 type FunctionContext = NonNullable<Extract<SqliteCompletionAnalysis, { status: 'ready' }>['functions']>;
 
 /** function_list 将必须带 OVER 的内置窗口函数和可独立使用的聚合都标为 w。 */
-export function sqliteFunctionDetails(entry: Extract<SqliteCompletionEntry, { kind: 'function' }>, mode: FunctionContext['mode']) {
+export function sqliteFunctionDetails(entry: Extract<SqliteCompletionEntry, { kind: 'function' }>, mode: FunctionContext['mode'], deterministicOnly?: true) {
   const windowOnly = windowOnlyFunctions.has(entry.name);
   if (windowOnly && mode !== 'result') return;
   const signatures = entry.signatures.filter(signature => mode !== 'scalar' || signature.type === 'scalar');
@@ -30,7 +31,9 @@ export function sqliteFunctionDetails(entry: Extract<SqliteCompletionEntry, { ki
   const kind = windowOnly ? text.windowFunction : signatures.some(signature => signature.type !== 'scalar') ? text.aggregateFunction : text.scalarFunction;
   // SQLite 内置变参重载可能使用小于 -1 的目录标记，一律显示为可变参数。
   const arities = [...new Set(signatures.map(({ arity }) => Math.max(-1, arity)))].sort((a, b) => a - b);
-  return { windowOnly, needsArguments: arities.some(arity => arity !== 0), details: [kind, text.functionArity + '：' + arities.map(arity => arity < 0 ? text.variadicFunction : String(arity)).join(' / ')] };
+  const details = [kind, text.functionArity + '：' + arities.map(arity => arity < 0 ? text.variadicFunction : String(arity)).join(' / ')];
+  if (deterministicOnly && conditionalDateTime.has(entry.name)) details.push(text.indexDateTime);
+  return { windowOnly, needsArguments: arities.some(arity => arity !== 0), details };
 }
 
 /** 建议只引用准确目录名；同名字段保留不同别名的限定插入，CTE声明不伪装成FROM绑定。 */
@@ -49,10 +52,10 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     return { items, incomplete };
   }
   const addFunctions = async (context: FunctionContext) => {
-    const metadata = await directory.load({ kind: 'functions', prefix: analysis.target.prefix });
+    const metadata = await directory.load({ kind: 'functions', prefix: analysis.target.prefix, ...(context.deterministicOnly ? { deterministicOnly: true } : {}) });
     incomplete ||= metadata.incomplete;
     for (const entry of metadata.entries) if (entry.kind === 'function') {
-      const info = sqliteFunctionDetails(entry, context.mode);
+      const info = sqliteFunctionDetails(entry, context.mode, context.deterministicOnly);
       if (!info) continue;
       // 通过目录协议的 ASCII 内置函数名可用于固定片段，已有括号时只替换名称。
       const call = info.windowOnly ? (info.needsArguments ? '($1) OVER ($0)' : '() OVER ($0)') : info.needsArguments ? '($0)' : '()';
@@ -165,13 +168,14 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   }
   if (analysis.syntax.includes('relation') && qualifiers.length <= 1) {
     const explicit = qualifiers.length === 1 && ['main', 'temp'].includes(fold(qualifiers[0])) ? fold(qualifiers[0]) as 'main' | 'temp' : undefined;
-    const schema = explicit ?? analysis.viewSchema;
+    const schema = explicit ?? analysis.viewSchema ?? analysis.indexTarget?.schema;
     if (!qualifiers.length || explicit) {
-      if (!explicit) {
+      if (!explicit && !analysis.indexTarget) {
         for (const local of declarations) add({ label: local.name, kind: 'table', insertText: quote(local.name), detail: text.cte });
         for (const namespace of analysis.viewSchema ? [analysis.viewSchema] : ['main', 'temp']) add({ label: namespace, kind: 'database', insertText: quote(namespace) + '.', detail: text.schema, trigger: true });
       }
-      const metadata = await directory.load({ kind: 'relations', prefix: analysis.target.prefix, ...(schema ? { schema } : {}) }); incomplete ||= metadata.incomplete;
+      const metadata = await directory.load({ kind: 'relations', prefix: analysis.target.prefix, ...(schema ? { schema } : {}),
+        ...(analysis.indexTarget ? { indexTable: true } : {}) }); incomplete ||= metadata.incomplete;
       const shadowed = new Set(declarations.map(relation => fold(relation.name)));
       for (const entry of metadata.entries) {
         if (entry.kind !== 'table' && entry.kind !== 'view' || !explicit && shadowed.has(fold(entry.name))) continue;

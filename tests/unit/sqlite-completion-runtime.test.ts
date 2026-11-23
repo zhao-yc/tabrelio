@@ -59,6 +59,27 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('索引目标只返回普通表、准确库和确定性标量，原会话临时视图仍可遮蔽', async () => {
+    const p = profile('建索引目录', 'CREATE TABLE subject(main_value TEXT,generated TEXT GENERATED ALWAYS AS (lower(main_value))); CREATE VIEW subject_view AS SELECT * FROM subject; CREATE VIRTUAL TABLE subject_search USING fts5(main_value)');
+    const { app, events } = runtime([p]), { sessionId } = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, sessionId, 'BEGIN; CREATE TEMP VIEW subject AS SELECT 1 AS hidden_by_view');
+    const state = await app.request('query.completionState', { sessionId }), count = events.length;
+    const read = (lookup: OptionalPrefix<SqliteCompletionLookup>) => completion(app, p.id, lookup, sessionId);
+    expect((await read({ kind: 'relations', prefix: 'subject', indexTable: true })).entries).toEqual([]);
+    expect((await read({ kind: 'relations', schema: 'main', prefix: 'subject', indexTable: true })).entries).toEqual([{ kind: 'table', name: 'subject', schema: 'main' }]);
+    expect((await read({ kind: 'columns', table: 'subject', indexTable: true })).entries).toEqual([]);
+    expect((await read({ kind: 'columns', table: 'subject_search', schema: 'main', indexTable: true })).entries).toEqual([]);
+    expect((await read({ kind: 'columns', table: 'subject', schema: 'main', indexTable: true })).entries).toContainEqual(expect.objectContaining({ name: 'generated', generated: true }));
+    expect((await read({ kind: 'functions', prefix: 'lower', deterministicOnly: true })).entries).toEqual([{ kind: 'function', name: 'lower', signatures: [{ arity: 1, type: 'scalar' }] }]);
+    expect((await read({ kind: 'functions', prefix: 'random', deterministicOnly: true })).entries).toEqual([]);
+    expect((await read({ kind: 'functions', prefix: 'sum', deterministicOnly: true })).entries).toEqual([]);
+    expect((await read({ kind: 'functions', prefix: 'random' })).entries.some(entry => entry.name === 'random')).toBe(true);
+    expect(await app.request('query.completionState', { sessionId })).toEqual(state);
+    expect(await app.request('query.sessionState', { sessionId })).toMatchObject({ transactionOpen: true });
+    expect(events).toHaveLength(count);
+    await execute(app, sessionId, 'ROLLBACK');
+  });
+
   it('排序规则目录只读原物理连接，保持事务且不受同名临时表遮蔽', async () => {
     const p = profile('排序规则目录'), { app, events } = runtime([p]);
     const load = (prefix = '', sessionId?: string) => completion(app, p.id, { kind: 'collations', prefix }, sessionId);

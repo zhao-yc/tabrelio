@@ -34,11 +34,11 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
     return;
   }
   if (analysis.functions) {
-    const result = await directory.load({ kind: 'functions', prefix });
+    const result = await directory.load({ kind: 'functions', prefix, ...(analysis.functions.deterministicOnly ? { deterministicOnly: true } : {}) });
     if (result.incomplete) return;
     const entry = result.entries.find(entry => entry.kind === 'function' && fold(entry.name) === fold(name));
     if (entry?.kind === 'function') {
-      const info = sqliteFunctionDetails(entry, analysis.functions.mode);
+      const info = sqliteFunctionDetails(entry, analysis.functions.mode, analysis.functions.deterministicOnly);
       if (info) return markdown([entry.name + '(…)', ...info.details]);
     }
     return;

@@ -25,6 +25,8 @@ const scenarios = [
     trail: '', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'a' },
   { verb: 'CREATE VIEW', prefix: 'CREATE VIEW completion_view(display_value) AS SELECT s.', typed: 'vir', column: 'virtual_value',
     trail: ' FROM subject s', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: '旧!' },
+  { verb: 'CREATE INDEX', prefix: 'CREATE UNIQUE INDEX main.completion_index ON subject(', typed: 'vir', column: 'virtual_value',
+    trail: ") WHERE value='旧'", incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'completion_index' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
@@ -47,8 +49,11 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     const db = new DatabaseSync(filePath, { readOnly: true });
     try {
       const view = db.prepare("SELECT sql FROM sqlite_schema WHERE name='completion_view' AND type='view'").get();
+      const index = db.prepare("SELECT name,\"unique\",partial FROM pragma_index_list('subject','main') WHERE name='completion_index'").get();
+      const indexed = index ? { index, keys: db.prepare("SELECT name FROM pragma_index_info('completion_index','main') ORDER BY seqno").all() } : undefined;
       return { row: db.prepare('SELECT id,value,virtual_value FROM subject').get(), other: db.prepare('SELECT * FROM excluded').get(),
-        inbox: db.prepare('SELECT * FROM inbox').get(), ...(view ? { view: { sql: view.sql, rows: db.prepare('SELECT display_value FROM completion_view').all() } } : {}) };
+        inbox: db.prepare('SELECT * FROM inbox').get(), ...(view ? { view: { sql: view.sql, rows: db.prepare('SELECT display_value FROM completion_view').all() } } : {}),
+        ...(indexed ? { indexed } : {}) };
     }
     finally { db.close(); }
   };
@@ -79,8 +84,9 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
           if (command === 'sqlite.completion') {
             if ('sql' in input) throw Error('目录接收了编辑器原文');
             if (input.kind === 'functions' || input.kind === 'collations') {
-              if (input.kind !== setup.lookupKind || input.prefix !== setup.catalogName && input.prefix !== setup.typed || 'table' in input || 'schema' in input) throw Error('连接目录越出本例');
-            } else if (input.kind === setup.lookupKind && (input.table !== 'subject' || input.schema !== 'main')) throw Error('目录越出真实目标');
+              const indexFunction = setup.createIndex && input.kind === 'functions' && input.deterministicOnly === true && input.prefix === setup.typed;
+              if (!indexFunction && (input.kind !== setup.lookupKind || input.prefix !== setup.catalogName && input.prefix !== setup.typed) || 'table' in input || 'schema' in input) throw Error('连接目录越出本例');
+            } else if (input.kind === setup.lookupKind && (input.table !== 'subject' || input.schema !== 'main' || setup.createIndex && input.indexTable !== true)) throw Error('目录越出真实目标');
           }
           const fact: Fact = { command, input }; facts.push(fact);
           const reply = await entry(event, payload);
@@ -91,7 +97,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         }
         return entry(event, payload);
       });
-    }, { filePath, connectionId, accepted, lookupKind, typed, catalogName: column });
+    }, { filePath, connectionId, accepted, lookupKind, typed, catalogName: column, createIndex: scenario.verb === 'CREATE INDEX' });
 
     await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
     await page.evaluate(async ({ id, sql }) => {
@@ -133,7 +139,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     const requests = completion.map(fact => sqliteCompletionInputSchema.parse(fact.input));
     expect(requests.filter(input => input.kind !== 'stamp')).toEqual([
       lookupKind === 'functions' || lookupKind === 'collations' ? expect.objectContaining({ kind: lookupKind, prefix: typed }) :
-        expect.objectContaining({ kind: lookupKind, table: 'subject', schema: 'main', prefix: typed }),
+        expect.objectContaining({ kind: lookupKind, table: 'subject', schema: 'main', prefix: typed, ...(scenario.verb === 'CREATE INDEX' ? { indexTable: true } : {}) }),
+      ...(scenario.verb === 'CREATE INDEX' ? [expect.objectContaining({ kind: 'functions', prefix: typed, deterministicOnly: true })] : []),
     ]);
     expect(completion.every(fact => fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true)).toBe(true);
     if (scenario.verb === '函数') {
@@ -157,10 +164,11 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(disk()).toEqual(before);
     await (await navigationMenuItem(query, { name: zh.query.text011, exact: true })).click();
-    const created = scenario.verb === 'CREATE VIEW' ? { view: { sql: accepted, rows: [{ display_value: scenario.output }] } } : {};
+    const created = scenario.verb === 'CREATE VIEW' ? { view: { sql: accepted, rows: [{ display_value: scenario.output }] } } :
+      scenario.verb === 'CREATE INDEX' ? { indexed: { index: { name: scenario.output, unique: 1, partial: 1 }, keys: [{ name: column }] } } : {};
     await expect.poll(disk).toEqual({ ...before, row: scenario.row, ...created });
     const grid = query.locator('.result-body').getByRole('grid');
-    if (scenario.verb !== 'CREATE VIEW') await expect(grid).toContainText(scenario.output);
+    if (scenario.verb !== 'CREATE VIEW' && scenario.verb !== 'CREATE INDEX') await expect(grid).toContainText(scenario.output);
     if (lookupKind === 'collations') {
       await expect(grid.getByRole('row').nth(1).getByText('a', { exact: true })).toBeVisible();
       await expect(grid.getByRole('row').nth(2).getByText('Z', { exact: true })).toBeVisible();
@@ -181,7 +189,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
 
 for (const scenario of scenarios) {
   test.describe(scenario.verb, () => {
-    const enabled = scenario.verb === 'CREATE VIEW' ? process.env.DBARK_SQLITE_CREATE_QUERY_COMPLETION_NATIVE === '1' :
+    const enabled = scenario.verb === 'CREATE INDEX' ? process.env.DBARK_SQLITE_CREATE_INDEX_COMPLETION_NATIVE === '1' :
+      scenario.verb === 'CREATE VIEW' ? process.env.DBARK_SQLITE_CREATE_QUERY_COMPLETION_NATIVE === '1' :
       scenario.verb === 'COLLATE' ? process.env.DBARK_SQLITE_COLLATION_COMPLETION_NATIVE === '1' :
       scenario.verb === '函数' ? process.env.DBARK_SQLITE_FUNCTION_COMPLETION_NATIVE === '1' : scenario.verb === 'INDEXED BY' ? process.env.DBARK_SQLITE_INDEX_COMPLETION_NATIVE === '1' :
       process.env.DBARK_SQLITE_DML_COMPLETION_NATIVE === '1' || scenario.verb === 'UPSERT' && process.env.DBARK_SQLITE_UPSERT_COMPLETION_NATIVE === '1';

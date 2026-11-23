@@ -16,6 +16,7 @@ export const sqliteCompletionZh = {
   aggregateFunction: 'SQLite 聚合／窗口函数',
   windowFunction: 'SQLite 窗口函数',
   functionArity: '参数个数',
+  indexDateTime: '索引表达式需要确定的时间参数，不使用 now、localtime 或 utc。',
   variadicFunction: '可变',
   joinColumn: '连接两侧共有列',
   joinGroup: '连接组输出列',
