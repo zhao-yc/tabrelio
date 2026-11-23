@@ -1,7 +1,10 @@
 import { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { QueryOutcome, QueryResult } from '../../src/shared/contracts';
-import { sqliteExplainLimits } from '../../src/shared/sqliteExplain';
+import { buildSqliteExplainPlan, sqliteExplainLimits } from '../../src/shared/sqliteExplain';
+import { capturePlanSnapshot } from '../../src/shared/explainSnapshot';
+import { explainSnapshotZh as snapshotText } from '../../src/shared/explainSnapshot.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteExplainZh as text } from '../../src/renderer/locales/sqliteExplain.zh-CN';
 import { explainZh as findText } from '../../src/renderer/locales/explain.zh-CN';
 import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
@@ -29,12 +32,12 @@ function fixture(): QueryOutcome {
     { id: '4', parent: '9007199254740993', depth: 1, auxiliary: '0', detail: 'USE TEMP B-TREE FOR ORDER BY' },
   ] } };
 }
-async function mount(outcome = fixture(), busy = false) {
-  let allowed = true; const invoke = vi.fn(() => { throw Error('本地计划阅读禁止 IPC'); }); Reflect.set(window, 'dbark', { invoke }); const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as unknown as Element);
-  const render = async (next = outcome, nextBusy = busy) => { await act(async () => root!.render(<View outcome={next} busy={nextBusy} isCurrent={() => allowed}/>)); }; await render();
+async function mount(outcome = fixture(), busy = false, fileActions = false) {
+  let allowed = true; const invoke = vi.fn<(command: string, payload: unknown) => Promise<unknown>>(() => { throw Error('本地计划阅读禁止 IPC'); }); Reflect.set(window, 'dbark', { invoke }); const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as unknown as Element);
+  const render = async (next = outcome, nextBusy = busy) => { await act(async () => root!.render(<View outcome={next} busy={nextBusy} isCurrent={() => allowed} fileActions={fileActions}/>)); }; await render();
   return { outcome, invoke, render, async allowed(value: boolean) { allowed = value; await render(); } };
 }
-function button(label: string): MemoryNode { const node = document.querySelectorAll('button').find(node => node.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
+function button(label: string): MemoryNode { const node = document.querySelectorAll('button').find(node => (node.getAttribute('aria-label') ?? node.textContent) === label); expect(node, label).toBeDefined(); return node!; }
 function tree(): MemoryNode[] { return document.querySelectorAll('[role="treeitem"]'); }
 function selected() { return tree().find(node => node.getAttribute('aria-selected') === 'true'); }
 function callback(node: MemoryNode, name = 'onClick'): (...args: any[]) => unknown { const key = Object.keys(node).find(key => key.startsWith('__reactProps$')); if (!key) throw Error('缺少真实React事件'); return Reflect.get(node, key)[name]; }
@@ -44,7 +47,51 @@ function searchInput() { return document.querySelector(`input[aria-label="${text
 function searchCount() { return document.querySelector(`[aria-label="${findText.findCount}"]`)!.textContent; }
 async function search(value: string) { await act(async () => { const input = searchInput(); input.value = value; input.dispatchEvent(new MemoryEvent('input')); }); }
 
+function currentPlan(detail: string): QueryOutcome {
+  const original = fixture().results[0];
+  const result = { ...original, rows: [{ ...original.rows[0], c3: detail }] };
+  return { results: [result], elapsedMs: 0, sqliteExplain: buildSqliteExplainPlan(result, '3.53.4') };
+}
+
 describe('SQLite 计划专属视图真实 React RAM', () => {
+  it('当前计划与基准共用只读差异视图，关闭后保留查找和节点', async () => {
+    const f = await mount(currentPlan('SEARCH 表 USING INDEX idx_name'), false, true);
+    const baseline = capturePlanSnapshot(currentPlan('SCAN 表'));
+    f.invoke.mockResolvedValueOnce({ name: '基准.json', snapshot: baseline });
+    await search('idx_name'); await click(findText.next);
+    const original = selected();
+    await click(snapshotText.sqliteCompareBaseline);
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain('基准.json · 3.53.4');
+    expect(dialog?.textContent).toContain(snapshotText.sqliteCompareCurrent);
+    expect(dialog?.textContent).toContain('SCAN 表');
+    expect(dialog?.textContent).toContain('SEARCH 表 USING INDEX idx_name');
+    expect(dialog?.textContent).toContain(snapshotText.compareCount(1, 1));
+    expect(f.invoke.mock.calls).toEqual([['explainFiles.open', {}]]);
+    await click(zh.dialogs.text001);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(selected()).toBe(original);
+    expect(searchInput().value).toBe('idx_name');
+  });
+
+  it('文件选择期间阻止重复对比和保存，换代后忽略之前的回执', async () => {
+    const f = await mount(currentPlan('SEARCH 表'), false, true);
+    const baseline = capturePlanSnapshot(currentPlan('SCAN 表'));
+    let finish!: (value: unknown) => void;
+    const pending = new Promise(resolve => { finish = resolve; });
+    f.invoke.mockReturnValueOnce(pending);
+    const compare = callback(button(snapshotText.sqliteCompareBaseline));
+    const save = callback(button(snapshotText.save));
+    await act(async () => { compare(); compare(); save(); });
+    expect(f.invoke.mock.calls).toEqual([['explainFiles.open', {}]]);
+    await f.render(currentPlan('SCAN 新计划'));
+    await act(async () => finish({ name: '迟到.json', snapshot: baseline }));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(selected()?.textContent).toContain('SCAN 新计划');
+    expect(document.body.textContent).not.toContain('迟到.json');
+    expect(button(snapshotText.sqliteCompareBaseline).disabled).toBe(false);
+  });
+
   it('原数值id和detail逐字保留，不解释脚本或构造MySQL估计指标', async () => {
     const f = await mount(); expect(document.querySelector('[data-sqlite-explain-view]')).not.toBeNull(); expect(tree()).toHaveLength(4); expect(tree()[0].textContent).toContain('9007199254740993'); expect(tree()[1].textContent).toContain(f.outcome.sqliteExplain!.nodes[1].detail); expect(tree()[2].textContent).toContain('<script>不得运行</script>'); expect(document.querySelectorAll('script')).toHaveLength(0); expect(document.body.textContent).toContain(text.estimates); expect(document.body.textContent).toContain('原生输出不包含实际耗时。'); expect(f.invoke).not.toHaveBeenCalled();
   });

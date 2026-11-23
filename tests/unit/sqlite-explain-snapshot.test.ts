@@ -4,7 +4,7 @@ import type { QueryOutcome, QueryResult } from '../../src/shared/contracts';
 import { capturePlanSnapshot, decodePlanSnapshot, encodePlanSnapshot, parseExplainSnapshot, parsePlanSnapshot, planSnapshotOutcome } from '../../src/shared/explainSnapshot';
 import { explainSnapshotZh as text } from '../../src/shared/explainSnapshot.zh-CN';
 import { buildSqliteExplainPlan, sqliteExplainMessages } from '../../src/shared/sqliteExplain';
-import { compareSqlitePlanSnapshots } from '../../src/shared/sqlitePlanComparison';
+import { compareCurrentSqlitePlan, compareSqlitePlanSnapshots } from '../../src/shared/sqlitePlanComparison';
 
 const names = ['id', 'parent', 'notused', 'detail'];
 const secretSql = 'SELECT 原草稿不进入文件';
@@ -122,4 +122,14 @@ it('拒绝部分或无法重建的 SQLite 树，原文预览截断时仍比较�
   for (const original of [result(rows, true), result([{ ...rows[0], parent: '88' }]), result([])]) {
     expect(() => compareSqlitePlanSnapshots(before, capturePlanSnapshot(outcome(original)))).toThrow(text.compareIncomplete);
   }
+});
+
+it('当前计划超过文件预算时仍可与基准比较，保留原节点说明', () => {
+  const rows = Array.from({ length: 80 }, (_, index) => ({ id: String(index + 1), parent: '0', notused: '0', detail: 'a'.repeat(15000) }));
+  const live = outcome(result(rows));
+  const baseline = capturePlanSnapshot(outcome(result(rows.slice(0, 1))));
+  expect(() => capturePlanSnapshot(live)).toThrow(/预算/);
+  const compared = compareCurrentSqlitePlan(baseline, live.sqliteExplain!);
+  expect(compared.different).toBe(79);
+  expect(compared.nodes.at(-1)).toMatchObject({ path: '80', status: 'added', fields: [{ name: 'detail', right: rows[79].detail }] });
 });

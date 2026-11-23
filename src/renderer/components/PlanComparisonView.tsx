@@ -3,11 +3,12 @@ import type { PlanComparison } from '../../shared/planComparison';
 import { explainSnapshotZh as text } from '../../shared/explainSnapshot.zh-CN';
 
 /** 两列都读取已经打开的文件。变化节点与字段在本地选择，不再访问数据库。 */
-export function PlanComparisonView({ comparison, dialect, left, right }: {
+export function PlanComparisonView({ comparison, dialect, left, right, rightLabel = text.compareRight }: {
   comparison: PlanComparison;
   dialect: 'postgresql' | 'sqlite';
   left: string;
   right: string;
+  rightLabel?: string;
 }) {
   const [showAll, setShowAll] = useState(false);
   const [selected, setSelected] = useState<string>();
@@ -16,7 +17,7 @@ export function PlanComparisonView({ comparison, dialect, left, right }: {
   const sqlite = dialect === 'sqlite';
   return <section className="explain-comparison" aria-label={sqlite ? text.sqliteCompareTitle : text.compareTitle}>
     <div className="explain-comparison-sources">
-      <span>{text.compareLeft}　{left}</span><span>{text.compareRight}　{right}</span>
+      <span>{text.compareLeft}　{left}</span><span>{rightLabel}　{right}</span>
     </div>
     <p className="muted small">{sqlite ? text.sqliteCompareHint : text.compareHint}</p>
     <div className="explain-comparison-summary">
@@ -33,7 +34,7 @@ export function PlanComparisonView({ comparison, dialect, left, right }: {
       <div className="explain-comparison-detail">
         <div className="explain-comparison-sources"><span>{current.left ?? '—'}</span><span>{current.right ?? '—'}</span></div>
         {current.fields.length ? <table>
-          <thead><tr><th scope="col">{text.compareField}</th><th scope="col">{text.compareLeft}</th><th scope="col">{text.compareRight}</th></tr></thead>
+          <thead><tr><th scope="col">{text.compareField}</th><th scope="col">{text.compareLeft}</th><th scope="col">{rightLabel}</th></tr></thead>
           <tbody>{current.fields.map(field => <tr key={field.name}>
             <th scope="row">{field.name}</th><td>{field.left ?? '—'}</td><td>{field.right ?? '—'}</td>
           </tr>)}</tbody>

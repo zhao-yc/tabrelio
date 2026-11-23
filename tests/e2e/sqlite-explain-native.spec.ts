@@ -83,7 +83,7 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     const check = () => { if (root.__sqliteExplainNative !== state || handlers.get('dbark:request') !== wrapped || dialog.showOpenDialog !== picker || dialog.showSaveDialog !== save || utilityProcess.fork !== fork || window.webContents.send !== send || children.some(port => port.child.postMessage !== port.wrapped) || window.isDestroyed() || BrowserWindow.getAllWindows().length !== 1 || window.webContents.mainFrame !== frame || state.denied.length) throw Error('SQLite执行计划原Main/文档/child观察器失效'); };
     const picker = (async (...args: unknown[]) => {
       check(); const options = args.at(-1) as Electron.OpenDialogOptions;
-      if (snapshotRequest?.mode === 'open' && restored && args[0] === window && options?.title === input.snapshotChoose && options.filters?.[0]?.extensions.includes('json')) return { canceled: false, filePaths: [snapshotRequest.path] };
+      if (snapshotRequest?.mode === 'open' && args[0] === window && options?.title === input.snapshotChoose && options.filters?.[0]?.extensions.includes('json')) return { canceled: false, filePaths: [snapshotRequest.path] };
       if (restored || !pickerRequest || state.pickerIds.includes(pickerRequest) || state.pickerIds.length >= 2 || !options?.properties?.includes('openFile')) return deny('非本例SQLite-picker');
       state.pickerIds.push(pickerRequest); return { canceled: false, filePaths: [input.database] };
     }) as typeof dialog.showOpenDialog;
@@ -126,7 +126,7 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
         if (snapshotRequest || pickerRequest) return deny('快照请求重叠');
         const opened = state.operations.filter(fact => fact.command === 'explainFiles.open').length;
         const saved = state.operations.filter(fact => fact.command === 'explainFiles.save').length;
-        const openPath = restored && !saved && [input.snapshotPath, input.snapshotTarget][opened];
+        const openPath = restored ? !saved && [input.snapshotPath, input.snapshotTarget][opened] : saved === 1 && !opened && input.snapshotPath;
         const savePath = restored ? opened === 2 && !saved && input.snapshotCopy : [input.snapshotPath, input.snapshotTarget][saved];
         if (command === 'explainFiles.open' && openPath && !Object.keys(value).length) snapshotRequest = { mode: 'open', path: openPath };
         else if (command === 'explainFiles.save' && Object.keys(value).join(',') === 'snapshot' && value.snapshot && typeof value.snapshot === 'object' &&
@@ -288,15 +288,31 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     if (!dml.outcome) throw Error('对比快照缺少原生 DML 计划');
     const targetPlan = inspectPlan(dml.outcome);
     expect(targetPlan.expectedNodes).toHaveLength(1);
-    const beforeTargetSave = await step(audit);
+    stage = '当前原生计划直接读取基准，关闭后保留结果视图';
+    await step(() => view().getByRole('button', { name: sqliteExplainZh.rawLabel, exact: true }).click());
+    const beforeLiveCompare = await step(audit);
+    await step(() => view().getByRole('button', { name: snapshotText.sqliteCompareBaseline, exact: true }).click());
+    const live = page.getByRole('dialog', { name: snapshotText.sqliteCompareTitle, exact: true });
+    await step(() => expect(live.getByRole('status')).toHaveText(snapshotText.compareCount(plan.expectedNodes.length, plan.expectedNodes.length)));
+    await step(() => expect(live.getByText(`${snapshotText.sqliteCompareCurrent}　${targetPlan.version}`, { exact: true })).toBeVisible());
+    const liveDiff = live.getByRole('row', { name: /^detail / }).getByRole('cell');
+    await step(() => expect(liveDiff.nth(0)).toHaveText(plan.expectedNodes[0].detail));
+    await step(() => expect(liveDiff.nth(1)).toHaveText(targetPlan.expectedNodes[0].detail));
+    await step(() => page.screenshot({ path: info.outputPath('SQLite当前计划对照快照.png') }));
+    await step(() => live.getByRole('button', { name: zh.dialogs.text001, exact: true }).click());
+    await step(() => expect(view().getByLabel(sqliteExplainZh.rawContent, { exact: true })).toHaveText(targetPlan.raw));
+    const afterLiveCompare = await step(audit);
+    expect(afterLiveCompare.driverSql).toEqual(beforeLiveCompare.driverSql);
+    expect(afterLiveCompare.events).toEqual(beforeLiveCompare.events);
+    expect(afterLiveCompare.operations.slice(beforeLiveCompare.operations.length).map(fact => fact.command)).toEqual(['explainFiles.open']);
     await step(() => view().getByRole('button', { name: snapshotText.save, exact: true }).click());
     await step(() => expect(view().getByText(snapshotText.saved(basename(snapshotTarget)), { exact: true })).toBeVisible());
     const targetBytes = readFileSync(snapshotTarget, 'utf8'), target = JSON.parse(targetBytes);
     expect(target).toMatchObject({ kind: 'dbark.sqlite-explain-snapshot', version: 1, result: { truncated: false } });
     expect(target.result.rows.map((row: Record<string, string>) => columns.map(column => row[column.key]))).toEqual(targetPlan.rows);
     const afterTargetSave = await step(audit);
-    expect(afterTargetSave.driverSql).toEqual(beforeTargetSave.driverSql);
-    expect(afterTargetSave.operations.slice(beforeTargetSave.operations.length).map(fact => fact.command)).toEqual(['explainFiles.save']);
+    expect(afterTargetSave.driverSql).toEqual(afterLiveCompare.driverSql);
+    expect(afterTargetSave.operations.slice(afterLiveCompare.operations.length).map(fact => fact.command)).toEqual(['explainFiles.save']);
     stage = '按光标生成 DML 计划、定位原文且零执行';
     const current = await explain(currentScript, false, {offset: currentOffset, target: dmlSql});
     const sourceRange = {start: currentStart, end: currentStart + dmlSql.length - 1};
