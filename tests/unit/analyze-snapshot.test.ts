@@ -171,7 +171,9 @@ describe('实际快照严格结构与预算，不接受未知字段或静默截�
     const extra = actualSnapshot(); extra.result.rows[0].notDeclared = null; expect(() => parsePlanSnapshot(extra)).toThrow();
   });
   it('超额raw、单元格、累计JSON转义、行列警告预算明确拒绝，不悄悄截成前缀', () => {
-    const exact = actualSnapshot(actualOutcome('mysql', 'a'.repeat(explainSnapshotLimits.raw))); expect(parsePlanSnapshot(exact).raw.length).toBe(explainSnapshotLimits.raw);
+    const exact = actualSnapshot(actualOutcome('mysql', 'a'.repeat(explainSnapshotLimits.raw))), parsed = parsePlanSnapshot(exact);
+    if (parsed.kind !== 'dbark.analyze-snapshot') throw Error('本例缺少实际计划快照');
+    expect(parsed.raw.length).toBe(explainSnapshotLimits.raw);
     const raw = actualSnapshot(); raw.raw = '中'.repeat(explainSnapshotLimits.raw / 3) + '中'; expect(() => parsePlanSnapshot(raw)).toThrow();
     expect(() => capturePlanSnapshot(partialOutcome(['a'.repeat(explainSnapshotLimits.cell + 1)]))).toThrow();
     const tooManyCells = Array(6).fill('a'.repeat(180000));
@@ -189,7 +191,7 @@ describe('实际快照严格结构与预算，不接受未知字段或静默截�
     expect(() => decodePlanSnapshot(' '.repeat(explainSnapshotLimits.bytes + 1))).toThrow();
     for (const invalid of ['\ud800', '\udc00', 'a\ud800b']) { const changed = actualSnapshot(); changed.serverVersion = invalid; expect(() => parsePlanSnapshot(changed)).toThrow(); }
     const encoded = encodePlanSnapshot(actualSnapshot()), remaining = explainSnapshotLimits.bytes - new TextEncoder().encode(encoded).byteLength;
-    expect(decodePlanSnapshot(encoded + ' '.repeat(remaining)).raw).toBe(mysqlRaw);
+    expect(decodePlanSnapshot(encoded + ' '.repeat(remaining))).toHaveProperty('raw', mysqlRaw);
     expect(() => decodePlanSnapshot('{损坏JSON}')).toThrow();
   });
   it('捕获必须正好一个有限结果，额外结果和空结果不静默丢弃', () => {

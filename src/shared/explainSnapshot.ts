@@ -2,6 +2,7 @@ import type { CellValue, QueryOutcome, QueryResult } from './contracts';
 import { parseExplainPlan } from './explain';
 import { parseQueryAnalyzePlan } from './queryAnalyze';
 import { parsePostgresAnalyze, parsePostgresExplain } from './postgresExplain';
+import { buildSqliteExplainPlan } from './sqliteExplain';
 import { explainSnapshotZh as text } from './explainSnapshot.zh-CN';
 
 export const explainSnapshotLimits = { bytes: 1048576, columns: 64, rows: 1000, warnings: 64, version: 256, cell: 196608, raw: 196608, column: 2048, warning: 16000, items: 70000 } as const;
@@ -17,7 +18,12 @@ export interface AnalyzeSnapshotDocument {
   raw: string; rawTruncated: boolean; warnings: string[];
   result: ExplainSnapshotDocument['result'];
 }
-export type PlanSnapshotDocument = ExplainSnapshotDocument | AnalyzeSnapshotDocument;
+/** SQLite 的原文和关系树都从原始四列恢复，文件不保存第二份可矛盾的计划。 */
+export interface SqliteExplainSnapshotDocument {
+  kind: 'dbark.sqlite-explain-snapshot'; version: 1; dialect: 'sqlite'; serverVersion: string; format: 'eqp';
+  warnings: string[]; result: ExplainSnapshotDocument['result'];
+}
+export type PlanSnapshotDocument = ExplainSnapshotDocument | AnalyzeSnapshotDocument | SqliteExplainSnapshotDocument;
 type Budget = { bytes: number; items: number };
 const invalid = (): never => { throw Error(text.invalid); };
 const large = (): never => { throw Error(text.tooLarge); };
@@ -142,7 +148,7 @@ function result(value: unknown, budget: Budget, capture: boolean): ExplainSnapsh
 }
 
 /** PostgreSQL 原文必须与单列协议结果一致，JSON 超限时只允许完整缺失的那一格。 */
-function validatePostgresPlanRows(snapshot: PlanSnapshotDocument) {
+function validatePostgresPlanRows(snapshot: ExplainSnapshotDocument | AnalyzeSnapshotDocument) {
   const { result, raw, format, rawTruncated } = snapshot;
   if (result.columns.length !== 1 || rawTruncated !== result.truncated ||
       format === 'json' && result.rows.length > 1 || !result.rows.length && !rawTruncated) return invalid();
@@ -182,6 +188,26 @@ export function captureExplainSnapshot(outcome: QueryOutcome): ExplainSnapshotDo
 /** 严格版本化文件入口；验证失败不会修改源对象。 */
 export function parseExplainSnapshot(value: unknown): ExplainSnapshotDocument { return document(value); }
 
+/** 还原精确单元格，只创建只读结果展示需要的数据。 */
+function restoredResult(result: ExplainSnapshotDocument['result']): QueryResult {
+  const rows = result.rows.map(row => {
+    const output = Object.create(null) as Record<string, CellValue>;
+    for (const column of result.columns) {
+      const value = row[column.key];
+      output[column.key] = value && typeof value === 'object' && value.type === 'number' ? Number(value.text) : value;
+    }
+    return output;
+  });
+  return { columns: result.columns, rows, truncated: result.truncated, elapsedMs: 0, statement: '' };
+}
+
+/** 新版解析器诊断始终保留，同一警告不会在多次往返中增长。 */
+function restoreWarnings(saved: string[], warnings: string[]): string[] {
+  const diagnostics = [...new Set(warnings)].slice(0, explainSnapshotLimits.warnings);
+  const preserved = [...new Set(saved)].filter(warning => !diagnostics.includes(warning));
+  return [...preserved.slice(0, explainSnapshotLimits.warnings - diagnostics.length), ...diagnostics];
+}
+
 /** 离线恢复仅重建展示树，始终清空语句和耗时，不保留活动事务状态。 */
 export function explainSnapshotOutcome(value: ExplainSnapshotDocument): QueryOutcome {
   const snapshot = parseExplainSnapshot(value);
@@ -191,20 +217,8 @@ export function explainSnapshotOutcome(value: ExplainSnapshotDocument): QueryOut
     : { dialect: snapshot.dialect, version: snapshot.serverVersion, format: 'text' as const, raw: '', rawTruncated: false, nodes: [], warnings: [] };
   plan.rawTruncated = snapshot.rawTruncated;
   if (snapshot.dialect === 'postgresql') plan.raw = snapshot.raw;
-  // 保存的警告保留顺序；新解析器诊断不能被文件中的空数组抹掉，也不能反复往返增长。
-  const diagnostics = [...new Set(plan.warnings)].slice(0, explainSnapshotLimits.warnings);
-  const savedWarnings = [...new Set(snapshot.warnings)].filter(warning => !diagnostics.includes(warning));
-  plan.warnings = [...savedWarnings.slice(0, explainSnapshotLimits.warnings - diagnostics.length), ...diagnostics];
-  const rows = snapshot.result.rows.map(row => {
-    const output = Object.create(null) as Record<string, CellValue>;
-    for (const column of snapshot.result.columns) {
-      const value = row[column.key];
-      output[column.key] = value && typeof value === 'object' && value.type === 'number' ? Number(value.text) : value;
-    }
-    return output;
-  });
-  const restored: QueryResult = { columns: snapshot.result.columns, rows, truncated: snapshot.result.truncated, elapsedMs: 0, statement: '' };
-  return { results: [restored], elapsedMs: 0, explain: plan };
+  plan.warnings = restoreWarnings(snapshot.warnings, plan.warnings);
+  return { results: [restoredResult(snapshot.result)], elapsedMs: 0, explain: plan };
 }
 
 /** 只编码校验后的独立副本；文件固定 UTF-8 JSON 加一个换行。 */
@@ -239,48 +253,66 @@ function analyzeDocument(value: unknown, capture = false): AnalyzeSnapshotDocume
   return output;
 }
 
+/** SQLite v1 只接收已知的四列 EQP 协议，行数据与网络方言快照共用预算。 */
+function sqliteDocument(value: unknown, capture = false): SqliteExplainSnapshotDocument {
+  record(value, ['kind', 'version', 'dialect', 'serverVersion', 'format', 'warnings', 'result']);
+  if (own(value, 'kind') !== 'dbark.sqlite-explain-snapshot' || own(value, 'version') !== 1 ||
+      own(value, 'dialect') !== 'sqlite' || own(value, 'format') !== 'eqp') return invalid();
+  const budget: Budget = { bytes: 0, items: 0 };
+  const serverVersion = string(own(value, 'serverVersion'), explainSnapshotLimits.version, budget);
+  if (!/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(serverVersion)) return invalid();
+  const warnings = array(own(value, 'warnings'), explainSnapshotLimits.warnings).map(item => string(item, explainSnapshotLimits.warning, budget));
+  const original = result(own(value, 'result'), budget, capture);
+  const names = ['id', 'parent', 'notused', 'detail'];
+  if (original.columns.length !== names.length || original.columns.some((column, index) => column.name !== names[index])) return invalid();
+  const output: SqliteExplainSnapshotDocument = { kind: 'dbark.sqlite-explain-snapshot', version: 1, dialect: 'sqlite', serverVersion, format: 'eqp', warnings, result: original };
+  if (new TextEncoder().encode(JSON.stringify(output) + '\n').byteLength > explainSnapshotLimits.bytes) return large();
+  return output;
+}
+
 /** 通用捕获只选择一种计划来源；原文条件可能含业务字面值，但不会主动保存原SQL字段。 */
 export function capturePlanSnapshot(outcome: QueryOutcome): PlanSnapshotDocument {
   record(outcome);
-  const estimated = Object.hasOwn(outcome, 'explain'), actual = Object.hasOwn(outcome, 'analysis');
-  if (estimated === actual) return invalid();
+  const estimated = Object.hasOwn(outcome, 'explain'), actual = Object.hasOwn(outcome, 'analysis'), sqlite = Object.hasOwn(outcome, 'sqliteExplain');
+  if (Number(estimated) + Number(actual) + Number(sqlite) !== 1) return invalid();
   if (estimated) return captureExplainSnapshot(outcome);
   const results = array(own(outcome, 'results'), 1);
   if (results.length !== 1) return invalid();
+  if (sqlite) {
+    const plan = own(outcome, 'sqliteExplain'); record(plan);
+    return sqliteDocument({ kind: 'dbark.sqlite-explain-snapshot', version: 1, dialect: own(plan, 'dialect'), serverVersion: own(plan, 'version'),
+      format: 'eqp', warnings: own(plan, 'warnings'), result: results[0] }, true);
+  }
   const plan = own(outcome, 'analysis'); record(plan);
   return analyzeDocument({ kind: 'dbark.analyze-snapshot', version: 1, dialect: own(plan, 'dialect'), serverVersion: own(plan, 'version'), format: own(plan, 'format'), raw: own(plan, 'raw'), rawTruncated: own(plan, 'rawTruncated'), warnings: own(plan, 'warnings'), result: results[0] }, true);
 }
 
-/** 文件kind严格分流，旧估算v1和新实测v1不能互相冒充或借用另一方的格式。 */
+/** 文件种类和格式由各自解析器严格核验。 */
 export function parsePlanSnapshot(value: unknown): PlanSnapshotDocument {
-  record(value, ['kind', 'version', 'dialect', 'serverVersion', 'format', 'raw', 'rawTruncated', 'warnings', 'result']);
   const kind = own(value, 'kind');
   if (kind === 'dbark.explain-snapshot') return parseExplainSnapshot(value);
   if (kind === 'dbark.analyze-snapshot') return analyzeDocument(value);
+  if (kind === 'dbark.sqlite-explain-snapshot') return sqliteDocument(value);
   return invalid();
 }
 
-/** 只从文件重建展示，不建立会话；两种截断事实都禁止将实测前缀解析为完整树。 */
+/** 离线只重建展示。SQLite 与实测计划沿原解析器保留截断事实。 */
 export function planSnapshotOutcome(value: PlanSnapshotDocument): QueryOutcome {
   const snapshot = parsePlanSnapshot(value);
   if (snapshot.kind === 'dbark.explain-snapshot') return explainSnapshotOutcome(snapshot);
+  const original = restoredResult(snapshot.result);
+  if (snapshot.kind === 'dbark.sqlite-explain-snapshot') {
+    const sqliteExplain = buildSqliteExplainPlan(original, snapshot.serverVersion);
+    sqliteExplain.warnings = restoreWarnings(snapshot.warnings, sqliteExplain.warnings);
+    return { results: [original], elapsedMs: 0, sqliteExplain };
+  }
   const truncated = snapshot.rawTruncated || snapshot.result.truncated;
   const analysis = snapshot.dialect === 'postgresql'
     ? parsePostgresAnalyze(truncated ? '' : snapshot.raw, snapshot.serverVersion, truncated)
     : parseQueryAnalyzePlan(snapshot.raw, snapshot.dialect, snapshot.serverVersion, snapshot.format, truncated);
   if (snapshot.dialect === 'postgresql' && truncated) analysis.raw = snapshot.raw;
-  const diagnostics = [...new Set(analysis.warnings)].slice(0, explainSnapshotLimits.warnings);
-  const savedWarnings = [...new Set(snapshot.warnings)].filter(warning => !diagnostics.includes(warning));
-  analysis.warnings = [...savedWarnings.slice(0, explainSnapshotLimits.warnings - diagnostics.length), ...diagnostics];
-  const rows = snapshot.result.rows.map(row => {
-    const output = Object.create(null) as Record<string, CellValue>;
-    for (const column of snapshot.result.columns) {
-      const value = row[column.key];
-      output[column.key] = value && typeof value === 'object' && value.type === 'number' ? Number(value.text) : value;
-    }
-    return output;
-  });
-  return { results: [{ columns: snapshot.result.columns, rows, truncated: snapshot.result.truncated, elapsedMs: 0, statement: '' }], elapsedMs: 0, analysis };
+  analysis.warnings = restoreWarnings(snapshot.warnings, analysis.warnings);
+  return { results: [original], elapsedMs: 0, analysis };
 }
 
 /** 编码独立校验副本；离线另存应传原文件文档，不能重捕获派生展示状态。 */

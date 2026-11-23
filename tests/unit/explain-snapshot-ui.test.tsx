@@ -15,7 +15,9 @@ import ts from 'typescript';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import type { QueryOutcome } from '../../src/shared/contracts';
 import { parseExplainPlan } from '../../src/shared/explain';
-import { captureExplainSnapshot, encodeExplainSnapshot, explainSnapshotLimits } from '../../src/shared/explainSnapshot';
+import { captureExplainSnapshot, capturePlanSnapshot, encodeExplainSnapshot, explainSnapshotLimits } from '../../src/shared/explainSnapshot';
+import { buildSqliteExplainPlan } from '../../src/shared/sqliteExplain';
+import { sqliteExplainZh } from '../../src/renderer/locales/sqliteExplain.zh-CN';
 import { explainSnapshotZh as text } from '../../src/shared/explainSnapshot.zh-CN';
 import { explainZh as planText } from '../../src/renderer/locales/explain.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -83,6 +85,22 @@ it('打开原请求 pending 时同步拦截双击、关闭按钮与 Escape，完
   const choose = props(button(text.choose)).onClick; await act(async () => { choose(); choose(); }); expect(bridge).toHaveBeenCalledTimes(1); expect(button(text.close).disabled).toBe(true);
   await click(zh.dialogs.text001); await act(async () => document.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'Escape' }))); expect(onClose).not.toHaveBeenCalled();
   await act(async () => pending.resolve(null)); expect(button(text.choose).disabled).toBe(false); await click(zh.dialogs.text001); expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it('无连接离线打开 SQLite 四列计划并按原文件另存', async () => {
+  const original = { columns: ['id', 'parent', 'notused', 'detail'].map(name => ({ key: name, name, type: 'SQLITE' })),
+    rows: [{ id: '7', parent: '0', notused: '0', detail: 'SEARCH subject USING INDEX subject_index' }],
+    truncated: false, statement: '原查询不入文件', elapsedMs: 4 };
+  const snapshot = capturePlanSnapshot({ elapsedMs: 4, results: [original], sqliteExplain: buildSqliteExplainPlan(original, '3.53.0') });
+  await mount(<Dialog onClose={vi.fn()}/>);
+  bridge.mockResolvedValueOnce({ name: 'SQLite.dbark-plan.json', snapshot }); await click(text.choose);
+  expect(document.body.textContent).toContain(text.sqlite);
+  expect(document.body.textContent).not.toContain(original.statement);
+  const tree = document.querySelector('[role="tree"]');
+  expect(tree?.getAttribute('aria-label')).toBe(sqliteExplainZh.treeLabel);
+  expect(tree?.textContent).toContain('subject_index');
+  bridge.mockResolvedValueOnce({ name: 'SQLite副本.dbark-plan.json' }); await click(text.saveAs);
+  expect(bridge.mock.calls).toEqual([['explainFiles.open', {}], ['explainFiles.save', { snapshot }]]);
 });
 
 it('取消和不合法新文件保留原计划、查找、节点选择和文件名', async () => {

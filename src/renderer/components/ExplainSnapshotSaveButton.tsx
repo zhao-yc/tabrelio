@@ -5,19 +5,21 @@ import { explainSnapshotZh as text } from '../../shared/explainSnapshot.zh-CN';
 import { errorMessage, invoke } from '../lib';
 
 /** 显式捕获当前结果；本地文件回执不替换计划对象或重置阅读状态。 */
-export function ExplainSnapshotSaveButton({ outcome, fileSnapshot, busy, saveAs = false, onFileBusyChange }: { outcome: QueryOutcome; fileSnapshot?: PlanSnapshotDocument; busy: boolean; saveAs?: boolean; onFileBusyChange?(busy: boolean): void }) {
+export function ExplainSnapshotSaveButton({ outcome, fileSnapshot, busy, saveAs = false, isCurrent, onFileBusyChange }: { outcome: QueryOutcome; fileSnapshot?: PlanSnapshotDocument; busy: boolean; saveAs?: boolean; isCurrent?(): boolean; onFileBusyChange?(busy: boolean): void }) {
   const [pending, setPending] = useState(false), [notice, setNotice] = useState<{ value: string; error?: boolean }>();
   const operation = useRef<object | null>(null), lifetime = useRef(0), alive = useRef(false);
   const source = useRef({ outcome, fileSnapshot, generation: 0 });
   if (source.current.outcome !== outcome || source.current.fileSnapshot !== fileSnapshot) source.current = { outcome, fileSnapshot, generation: source.current.generation + 1 };
   const renderedSource = source.current, unavailable = useRef(busy); unavailable.current = busy;
+  const owner = useRef(isCurrent); owner.current = isCurrent;
   useLayoutEffect(() => { alive.current = true; lifetime.current++; return () => { alive.current = false; lifetime.current++; }; }, []);
+  const ownerCurrent = () => { try { return owner.current?.() ?? true; } catch { return false; } };
   /** 同步占有入口，原请求结束后才释放；旧生命周期或 A→B→A 回执不再发布。 */
   async function save() {
-    if (!alive.current || unavailable.current || source.current !== renderedSource || operation.current) return;
+    if (!alive.current || unavailable.current || source.current !== renderedSource || operation.current || !ownerCurrent()) return;
     const token = {}, epoch = lifetime.current, captured = renderedSource; operation.current = token;
     let claimed = false;
-    const current = () => alive.current && lifetime.current === epoch && source.current === captured && operation.current === token;
+    const current = () => alive.current && lifetime.current === epoch && source.current === captured && operation.current === token && ownerCurrent();
     try {
       onFileBusyChange?.(true); claimed = true; setPending(true); setNotice(undefined);
       // 导入文件保留原始文档；本次版本新增的解析诊断仅用于显示，不能挤占另存预算。

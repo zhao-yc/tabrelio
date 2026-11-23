@@ -25,9 +25,9 @@ function ordered(value: unknown): unknown {
 }
 
 /** 按原树路径收集节点自己的字段，子节点另成记录。 */
-function sourceNodes(snapshot: PlanSnapshotDocument): Map<string, SourceNode> {
+function sourceNodes(raw: string): Map<string, SourceNode> {
   const nodes = new Map<string, SourceNode>();
-  const warnings = visitPostgresPlans(snapshot.raw, (node, position, entry) => {
+  const warnings = visitPostgresPlans(raw, (node, position, entry) => {
     const fields = new Map<string, string>();
     for (const [key, value] of Object.entries(node)) {
       if (key !== 'Plans') fields.set(key, JSON.stringify(ordered(value)));
@@ -56,7 +56,7 @@ export function comparePostgresPlanSnapshots(left: PlanSnapshotDocument, right: 
   if (left.kind !== right.kind || left.dialect !== 'postgresql' || right.dialect !== 'postgresql' ||
       left.format !== 'json' || right.format !== 'json') throw Error(text.compareUnsupported);
   if (left.rawTruncated || right.rawTruncated || left.result.truncated || right.result.truncated) throw Error(text.compareIncomplete);
-  const before = sourceNodes(left), after = sourceNodes(right);
+  const before = sourceNodes(left.raw), after = sourceNodes(right.raw);
   const nodes: ComparedNode[] = [];
   let different = 0;
   for (const path of new Set([...before.keys(), ...after.keys()])) {

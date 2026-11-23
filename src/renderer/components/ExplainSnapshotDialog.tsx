@@ -5,6 +5,7 @@ import { explainSnapshotZh as text } from '../../shared/explainSnapshot.zh-CN';
 import { errorMessage, invoke } from '../lib';
 import { ExplainPlanView } from './ExplainPlanView';
 import { QueryAnalyzeView } from './QueryAnalyzeView';
+import { SqliteExplainPlanView } from './SqliteExplainPlanView';
 import { PostgresPlanComparisonView } from './PostgresPlanComparisonView';
 import { comparePostgresPlanSnapshots, type PostgresPlanComparison } from '../../shared/postgresPlanComparison';
 import { ErrorBox, Modal } from './ui';
@@ -40,7 +41,7 @@ export function ExplainSnapshotDialog({ onClose }: { onClose(): void }) {
           return;
         }
         const outcome = planSnapshotOutcome(snapshot);
-        if (snapshot.kind === 'dbark.analyze-snapshot' ? !outcome.analysis : !outcome.explain) throw Error(text.invalid);
+        if (!outcome.analysis && !outcome.explain && !outcome.sqliteExplain) throw Error(text.invalid);
         if (current()) {
           setLoaded({ name: selected.name, snapshot, outcome });
           setComparison(undefined);
@@ -54,9 +55,13 @@ export function ExplainSnapshotDialog({ onClose }: { onClose(): void }) {
       {loaded?.snapshot.dialect === 'postgresql' && loaded.snapshot.format === 'json' && <button disabled={!!busy} onClick={() => void open(true)}>{text.compareChoose}</button>}
       {comparison && <button disabled={!!busy} onClick={() => { setComparison(undefined); setError(''); }}>{text.compareClose}</button>}
       <button disabled={!!busy} onClick={close}>{text.close}</button></div>
-    <ErrorBox message={error}/>{loaded && <><p role="status">{text.opened(loaded.name)}</p><p className="muted small">{loaded.snapshot.kind === 'dbark.analyze-snapshot' ? text.actual : text.estimated}</p>
+    <ErrorBox message={error}/>{loaded && <><p role="status">{text.opened(loaded.name)}</p><p className="muted small">{loaded.snapshot.kind === 'dbark.sqlite-explain-snapshot' ? text.sqlite : loaded.snapshot.kind === 'dbark.analyze-snapshot' ? text.actual : text.estimated}</p>
       {comparison ? <PostgresPlanComparisonView comparison={comparison.value}
         left={loaded.name + ' · ' + loaded.snapshot.serverVersion} right={comparison.name + ' · ' + comparison.version}/> :
-        <div className="explain-snapshot-plan">{loaded.snapshot.kind === 'dbark.analyze-snapshot' ? <QueryAnalyzeView plan={loaded.outcome.analysis!} outcome={loaded.outcome} fileSnapshot={loaded.snapshot} busy={!!busy} fileActions saveAs onFileBusyChange={fileBusy}/> : <ExplainPlanView outcome={loaded.outcome} fileSnapshot={loaded.snapshot} busy={!!busy} fileActions saveAs onFileBusyChange={fileBusy}/>}</div>}</>}
+        <div className="explain-snapshot-plan">
+          {loaded.snapshot.kind === 'dbark.sqlite-explain-snapshot' ? <SqliteExplainPlanView outcome={loaded.outcome} fileSnapshot={loaded.snapshot} busy={!!busy} fileActions onFileBusyChange={fileBusy}/> :
+            loaded.snapshot.kind === 'dbark.analyze-snapshot' ? <QueryAnalyzeView plan={loaded.outcome.analysis!} outcome={loaded.outcome} fileSnapshot={loaded.snapshot} busy={!!busy} fileActions saveAs onFileBusyChange={fileBusy}/> :
+              <ExplainPlanView outcome={loaded.outcome} fileSnapshot={loaded.snapshot} busy={!!busy} fileActions saveAs onFileBusyChange={fileBusy}/>}
+        </div>}</>}
   </div></Modal>;
 }

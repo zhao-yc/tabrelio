@@ -2,6 +2,7 @@ import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteExplainZh } from '../../src/renderer/locales/sqliteExplain.zh-CN';
 import { explainZh as findText } from '../../src/renderer/locales/explain.zh-CN';
+import { explainSnapshotZh as snapshotText } from '../../src/shared/explainSnapshot.zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import type { QueryResult } from '../../src/shared/contracts';
 import type { SqliteExplainNode } from '../../src/shared/sqliteExplain';
@@ -35,9 +36,10 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
   const runtime = require('./desktop-fixture') as Desktop;
   const { join, resolve, dirname, basename } = require('node:path') as typeof import('node:path');
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
-  const { realpathSync } = require('node:fs') as typeof import('node:fs');
+  const { realpathSync, readFileSync } = require('node:fs') as typeof import('node:fs');
   let owner = runtime.ownedDesktopResources(info), application = owner.application, page = owner.page, originalProcess = application.process();
   const directory = runtime.dataDir, database = join(directory, 'sqlite-explain-native.sqlite');
+  const snapshotPath = join(directory, 'sqlite-original.dbark-plan.json'), snapshotCopy = join(directory, 'sqlite-copy.dbark-plan.json');
   let closed = false, armed = false, stage = '独占合成SQLite准备';
   /** 所有异步边界只承认本例准确owner与原120秒单次期限。 */
   const check = () => { const current = runtime.ownedDesktopResources(info); if (current.application !== application || current.page !== page || current.closed !== closed || runtime.dataDir !== directory || info.timeout !== 120000 || info.retry !== 0 || info.repeatEachIndex !== 0 || info.config.workers !== 1) throw Error('SQLite执行计划owner/profile/120秒单次期限变化'); };
@@ -64,7 +66,7 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
   const restoredSql = "-- 正常重启仅恢复原草稿🚢\r\nUPDATE subject SET v=8888 WHERE id=1;";
   /** 原磁盘观察每次独立只读句柄，明确看不到用户会话中尚未提交的id99。 */
   const disk = () => { check(); if (dirname(resolve(database)) !== resolve(directory)) throw Error('计划专项磁盘观察越过本例目录'); const db = new DatabaseSync(database, { readOnly: true }); try { return { rows: db.prepare('SELECT CAST(id AS TEXT) AS id,label,CAST(v AS TEXT) AS v,typeof(v) AS value_type FROM subject ORDER BY id').all(), control: db.prepare('SELECT * FROM control').all(), schema: db.prepare('SELECT type,name,sql FROM sqlite_schema WHERE name NOT LIKE \'sqlite_%\' ORDER BY type,name').all(), userVersion: db.prepare('PRAGMA user_version').get() }; } finally { db.close(); check(); } };
-  /** 仅替换两次自身文件chooser的准确路径；IPC、授权、SQLite任务和事件全部真实透传。 */
+  /** 仅替换本例数据库和计划文件选择器路径，文件读写、IPC 与 SQLite 任务全部真实透传。 */
   const arm = (savedProfiles: Record<string, boolean> = {}) => step(() => application.evaluate(({ ipcMain, BrowserWindow, dialog, utilityProcess }, input) => {
     type Handler = (event: Electron.IpcMainInvokeEvent, payload: unknown) => Promise<unknown>;
     type State = Audit & { check(): void; restore(): void };
@@ -74,11 +76,21 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     if (typeof original !== 'function' || windows.length !== 1 || !frame || !originalSend || root.__sqliteExplainNative) throw Error('SQLite执行计划原Main入口未知');
     const state: State = { pending: 0, denied: [], forks: [], pickerIds: [], profiles: { ...input.savedProfiles }, sessions: {}, commands: [], operations: [], events: [], driverSql: [], check() {}, restore() {} };
     const children: { child: Electron.UtilityProcess; original: Electron.UtilityProcess['postMessage']; wrapped: Electron.UtilityProcess['postMessage'] }[] = [];
-    let pickerRequest: string | undefined;
+    let pickerRequest: string | undefined, snapshotRequest: 'open' | 'save' | undefined;
+    const restored = Object.keys(input.savedProfiles).length > 0;
     const deny = (command: string): never => { state.denied.push(command); throw Error('SQLite执行计划专项拒绝越界：' + command); };
     const check = () => { if (root.__sqliteExplainNative !== state || handlers.get('dbark:request') !== wrapped || dialog.showOpenDialog !== picker || dialog.showSaveDialog !== save || utilityProcess.fork !== fork || window.webContents.send !== send || children.some(port => port.child.postMessage !== port.wrapped) || window.isDestroyed() || BrowserWindow.getAllWindows().length !== 1 || window.webContents.mainFrame !== frame || state.denied.length) throw Error('SQLite执行计划原Main/文档/child观察器失效'); };
-    const picker = (async (...args: unknown[]) => { check(); const options = args.at(-1) as Electron.OpenDialogOptions; if (Object.keys(input.savedProfiles).length || !pickerRequest || state.pickerIds.includes(pickerRequest) || state.pickerIds.length >= 2 || !options?.properties?.includes('openFile')) return deny('非本例SQLite-picker'); state.pickerIds.push(pickerRequest); return { canceled: false, filePaths: [input.database] }; }) as typeof dialog.showOpenDialog;
-    const save = (() => deny('未授权保存对话框')) as typeof dialog.showSaveDialog;
+    const picker = (async (...args: unknown[]) => {
+      check(); const options = args.at(-1) as Electron.OpenDialogOptions;
+      if (snapshotRequest === 'open' && restored && args[0] === window && options?.title === input.snapshotChoose && options.filters?.[0]?.extensions.includes('json')) return { canceled: false, filePaths: [input.snapshotPath] };
+      if (restored || !pickerRequest || state.pickerIds.includes(pickerRequest) || state.pickerIds.length >= 2 || !options?.properties?.includes('openFile')) return deny('非本例SQLite-picker');
+      state.pickerIds.push(pickerRequest); return { canceled: false, filePaths: [input.database] };
+    }) as typeof dialog.showOpenDialog;
+    const save = (async (...args: unknown[]) => {
+      check(); const options = args.at(-1) as Electron.SaveDialogOptions;
+      if (snapshotRequest !== 'save' || args[0] !== window || options?.title !== input.snapshotSave || !options.filters?.[0]?.extensions.includes('json')) return deny('非本例快照保存');
+      return { canceled: false, filePath: restored ? input.snapshotCopy : input.snapshotPath };
+    }) as typeof dialog.showSaveDialog;
     const fork = ((modulePath: string, ...args: unknown[]) => {
       check(); state.forks.push(modulePath); if (!/(?:^|[\\/])sqliteWorker\.cjs$/.test(modulePath)) return deny('非SQLite utility'); const child: Electron.UtilityProcess = Reflect.apply(originalFork, utilityProcess, [modulePath, ...args]), original = child.postMessage, worker = state.forks.length;
       // 只旁观准确child的原消息，绝不改写、阻断cleanup/ACK或构造worker回执。
@@ -109,14 +121,22 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
           : typeof value.sql === 'string' && input.plans.includes(value.sql) && current === undefined;
         if (!sourceAllowed || value.format !== 'auto') return deny('非本例原文计划请求');
       }
-      const fact: Fact | undefined = command.startsWith('query.') || command.startsWith('sessions.') ? { command, request: structuredClone(value) } : undefined; if (fact) state.operations.push(fact); state.commands.push(command); state.pending++;
+      if (command.startsWith('explainFiles.')) {
+        if (snapshotRequest || pickerRequest || state.operations.some(fact => fact.command === command)) return deny('重复的快照请求');
+        if (command === 'explainFiles.open' && restored && !Object.keys(value).length) snapshotRequest = 'open';
+        else if (command === 'explainFiles.save' && Object.keys(value).join(',') === 'snapshot' && value.snapshot && typeof value.snapshot === 'object' &&
+          'kind' in value.snapshot && value.snapshot.kind === 'dbark.sqlite-explain-snapshot' &&
+          (!restored || state.operations.some(fact => fact.command === 'explainFiles.open'))) snapshotRequest = 'save';
+        else return deny('非本例快照流程');
+      }
+      const fact: Fact | undefined = command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('explainFiles.') ? { command, request: structuredClone(value) } : undefined; if (fact) state.operations.push(fact); state.commands.push(command); state.pending++;
       try { const reply = await original(event, payload); check(); if (fact) fact.reply = structuredClone(reply);
         if (command === 'sessions.open' && reply && typeof reply === 'object' && 'ok' in reply && reply.ok === true && 'result' in reply && reply.result && typeof reply.result === 'object' && 'sessionId' in reply.result && typeof reply.result.sessionId === 'string') { if (!reply.result.sessionId.startsWith('sqlite:')) return deny('会话未由SQLite签发'); state.sessions[reply.result.sessionId] = String(value.connectionId); } return reply;
-      } catch (reason) { if (fact) fact.failure = reason instanceof Error ? reason.message : String(reason); throw reason; } finally { state.pending--; if (command === 'files.choose') pickerRequest = undefined; }
+      } catch (reason) { if (fact) fact.failure = reason instanceof Error ? reason.message : String(reason); throw reason; } finally { state.pending--; if (command === 'files.choose') pickerRequest = undefined; if (command.startsWith('explainFiles.')) snapshotRequest = undefined; }
     };
     state.check = check; state.restore = () => { check(); if (state.pending) throw Error('SQLite执行计划请求仍在途'); for (const port of children) { port.child.postMessage = port.original; if (port.child.postMessage !== port.original) throw Error('原SQLite child消息端口未准确恢复'); } handlers.set('dbark:request', original); dialog.showOpenDialog = originalPicker; dialog.showSaveDialog = originalSave; utilityProcess.fork = originalFork; window.webContents.send = originalSend; delete root.__sqliteExplainNative; };
     root.__sqliteExplainNative = state; handlers.set('dbark:request', wrapped); dialog.showOpenDialog = picker; dialog.showSaveDialog = save; utilityProcess.fork = fork; window.webContents.send = send; check();
-  }, { database, savedProfiles, rwName, roName, plans: allowedPlans, currentScript, currentOffset, executions: [temporarySql, transactionSql] }));
+  }, { database, savedProfiles, rwName, roName, plans: allowedPlans, currentScript, currentOffset, executions: [temporarySql, transactionSql], snapshotPath, snapshotCopy, snapshotSave: snapshotText.save, snapshotChoose: snapshotText.choose }));
   /** 两个连接都通过真实表单保存；读写连接必须明确取消产品默认只读。 */
   const createConnection = async (name: string, readOnly: boolean) => {
     await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
@@ -231,7 +251,7 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     await step(() => view().getByRole('button', { name: findText.clear, exact: true }).click());
     await step(() => expect(found).toHaveAttribute('aria-selected', 'true'));
     await step(() => view().getByRole('button', { name: sqliteExplainZh.expand, exact: true }).click());
-    await step(() => expect(tree.getByRole('treeitem')).toHaveCount(plan.expectedNodes.length)); await step(() => expect(view().getByRole('button', { name: /快照/ })).toHaveCount(0));
+    await step(() => expect(tree.getByRole('treeitem')).toHaveCount(plan.expectedNodes.length)); await step(() => expect(view().getByRole('button', { name: snapshotText.save, exact: true })).toBeEnabled());
     const after = await step(audit); expect(after.commands).toEqual(before.commands); expect(after.operations).toEqual(before.operations); expect(after.events).toEqual(before.events); expect(after.driverSql).toEqual(before.driverSql); expect(after.pending).toBe(0); return { savedContext, before, after };
   };
   try {
@@ -242,6 +262,20 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     const canonicalDatabase = realpathSync(database), baseline = disk(); expect(baseline.rows).toEqual([1, 2, 3, 4].map(id => ({ id: String(id), label: '标签' + id + '🚢', v: String(id * 10), value_type: 'integer' }))); expect(baseline.userVersion).toEqual({ user_version: 0 }); await arm(); armed = true;
     stage = '真实RW/RO表单与原QueryTab'; await createConnection(rwName, false); await createConnection(roName, true); const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(2); const rw = profiles.find(profile => profile.name === rwName), ro = profiles.find(profile => profile.name === roName); if (!rw || rw.dialect !== 'sqlite' || !ro || ro.dialect !== 'sqlite') throw Error('SQLite计划本例连接方言不正确'); expect(rw.sqlite).toMatchObject({ filePath: canonicalDatabase, readOnly: false }); expect(ro.sqlite).toMatchObject({ filePath: canonicalDatabase, readOnly: true }); for (const profile of [rw, ro]) { expect(profile.sqlite.fileToken).toBeUndefined(); for (const field of ['host', 'port', 'user', 'password', 'rememberPassword', 'hasPassword', 'ssh', 'tls']) expect(profile).not.toHaveProperty(field); } await openQuery(rwName);
     stage = '原菜单索引SELECT计划与原始关系独立核对'; const first = await explain(indexedSql); if (!first.outcome) throw Error('有效SQLite计划没有回执'); const plan = inspectPlan(first.outcome); expect(plan.expectedNodes.some(node => node.detail.includes(indexName))).toBe(true); expect(plan.expectedNodes.some(node => node.depth > 0)).toBe(true); const rwSession = first.fact.request.sessionId; expect(typeof rwSession).toBe('string'); expect(disk()).toEqual(baseline); expect(await history()).toEqual([]); const localEvidence = await localViews(plan, first.fact); expect((await model()).source).toBe(indexedSql);
+    stage = '保存当前四列计划快照';
+    const beforeSave = await step(audit);
+    await step(() => view().getByRole('button', { name: snapshotText.save, exact: true }).click());
+    await step(() => expect(view().getByText(snapshotText.saved(basename(snapshotPath)), { exact: true })).toBeVisible());
+    const bytes = readFileSync(snapshotPath, 'utf8'), snapshot = JSON.parse(bytes);
+    expect(snapshot).toMatchObject({ kind: 'dbark.sqlite-explain-snapshot', version: 1, dialect: 'sqlite', format: 'eqp', result: { truncated: false } });
+    expect(Object.keys(snapshot).sort()).toEqual(['dialect', 'format', 'kind', 'result', 'serverVersion', 'version', 'warnings']);
+    expect(bytes).not.toMatch(/sourceRange|sessionId|connectionId|elapsedMs|statement|transactionOpen/);
+    expect(snapshot.result.columns.map((column: { name: string }) => column.name)).toEqual(['id', 'parent', 'notused', 'detail']);
+    const columns: { key: string }[] = snapshot.result.columns;
+    expect(snapshot.result.rows.map((row: Record<string, string>) => columns.map(column => row[column.key]))).toEqual(plan.rows);
+    const afterSave = await step(audit);
+    expect(afterSave.driverSql).toEqual(beforeSave.driverSql);
+    expect(afterSave.operations.slice(beforeSave.operations.length).map(fact => fact.command)).toEqual(['explainFiles.save']);
     stage = '原同会话TEMP和BEGIN未提交环境只规划'; const temporary = await prepare(temporarySql); expect(temporary.request.sessionId).toBe(rwSession); const afterTemporaryHistory = await history(); expect(afterTemporaryHistory.map(entry => entry.sql)).toEqual([temporarySql]); expect(disk()).toEqual(baseline);
     await step(() => query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click()); await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeEnabled()); const inserted = await prepare(transactionSql); expect(inserted.request.sessionId).toBe(rwSession); expect(result(inserted.reply).transactionOpen).toBe(true); expect(disk()).toEqual(baseline);
     const transactionPlan = await explain(temporaryPlanSql); expect(transactionPlan.fact.request.sessionId).toBe(rwSession); expect(transactionPlan.outcome?.transactionOpen).toBe(true); if (!transactionPlan.outcome) throw Error('原TEMP计划结果丢失'); const temporaryPlan = inspectPlan(transactionPlan.outcome); expect(temporaryPlan.expectedNodes.some(node => /\b(?:SCAN|SEARCH) t\b/.test(node.detail) || node.detail.includes(temporaryName))).toBe(true); expect(disk()).toEqual(baseline);
@@ -269,6 +303,28 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     stage = '保存未执行写草稿并正常退出'; await write(restoredSql); const persisted = await settings(); await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); const beforeQuit = await step(audit); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteExplainNative?: { restore(): void } }).__sqliteExplainNative; if (!state) throw Error('原观察器失效'); state.restore(); }), true); armed = false;
     stage = '第一owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); const firstPid = originalProcess.pid;
     stage = '同profile恢复草稿不重放计划或执行'; await runtime.restartOwnedDesktop(info); owner = runtime.ownedDesktopResources(info); application = owner.application; page = owner.page; originalProcess = application.process(); closed = false; check(); expect(originalProcess.pid).not.toBe(firstPid); await arm({ [rw.id]: false, [ro.id]: true }); armed = true; await step(() => expect(query().locator('.monaco-editor').getByRole('textbox')).toBeVisible()); expect(await settings()).toEqual(persisted); expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(profiles); expect(await history()).toEqual(firstHistory); expect(await tasks()).toEqual(firstTasks); expect(disk()).toEqual(baseline); await step(() => expect(query().locator('.monaco-editor .view-lines')).toContainText('8888')); const secondFacts = await step(audit); expect(secondFacts.denied).toEqual([]); expect(secondFacts.pickerIds).toEqual([]); expect(operations(secondFacts, 'query.explain')).toEqual([]); expect(operations(secondFacts, 'query.execute')).toEqual([]); expect(secondFacts.driverSql).toEqual([]); expect(runtime.pageErrors).toEqual([]);
+    stage = '重启后离线重开、定位与另存 SQLite 快照';
+    await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: snapshotText.entry, exact: true }, check)).click());
+    const snapshotDialog = page.getByRole('dialog', { name: snapshotText.title, exact: true });
+    await step(() => snapshotDialog.getByRole('button', { name: snapshotText.choose, exact: true }).click());
+    await step(() => expect(snapshotDialog.getByText(snapshotText.opened(basename(snapshotPath)), { exact: true })).toBeVisible());
+    const offline = snapshotDialog.getByRole('region', { name: sqliteExplainZh.title, exact: true });
+    await step(() => expect(offline.getByRole('treeitem')).toHaveCount(plan.expectedNodes.length));
+    await step(() => offline.getByRole('button', { name: sqliteExplainZh.rawLabel, exact: true }).click());
+    expect(await step(() => offline.getByLabel(sqliteExplainZh.rawContent, { exact: true }).textContent())).toBe(plan.raw);
+    const search = offline.getByRole('textbox', { name: sqliteExplainZh.find, exact: true });
+    await step(() => search.fill(indexName)); await step(() => search.press('Enter'));
+    const selected = offline.locator('[role="treeitem"][aria-selected="true"]');
+    await step(() => expect(selected).toContainText(indexName));
+    await step(() => offline.getByRole('button', { name: snapshotText.saveAs, exact: true }).click());
+    await step(() => expect(offline.getByText(snapshotText.saved(basename(snapshotCopy)), { exact: true })).toBeVisible());
+    expect(readFileSync(snapshotCopy, 'utf8')).toBe(bytes);
+    await step(() => expect(selected).toContainText(indexName));
+    await step(() => snapshotDialog.getByRole('button', { name: snapshotText.close, exact: true }).click());
+    const afterReopen = await step(audit);
+    expect(afterReopen.driverSql).toEqual([]);
+    expect(afterReopen.operations.slice(secondFacts.operations.length).map(fact => fact.command)).toEqual(['explainFiles.open', 'explainFiles.save']);
+    expect(await history()).toEqual(firstHistory); expect(await tasks()).toEqual(firstTasks);
     await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteExplainNative?: { restore(): void } }).__sqliteExplainNative; if (!state) throw Error('原观察器失效'); state.restore(); }), true); armed = false;
     stage = '第二owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); expect(disk()).toEqual(baseline);
     await info.attach('SQLite执行计划原请求driver帧及独立磁盘原件', { body: JSON.stringify({ platform: process.platform, rawDatabase: database, mainSavedPathBeforePicker: canonicalDatabase, firstPid, secondPid: originalProcess.pid, baseline, finalDisk: disk(), first, localEvidence, temporary, inserted, transactionPlan, dml, current, beforeLocate, afterLocate, sourceRange, pragma, multiple, recovered, readonly, firstFacts, beforeQuit, secondFacts, firstTasks, firstHistory, modelFacts, rawPlan: plan.raw, expectedNodesFromOriginalRows: plan.expectedNodes, originalPlannedSqlExecutions: 0, explicitFixturePreparations: [temporarySql, transactionSql], explainHistoryAdded: 0, rejectedInputDriverFrames: 0, independentDiskWritesAfterRollback: 0, allChildPostMessagePortsRestoredBeforeQuit: true, automaticRetry: false, automaticTrace: false, firstExitCode: 0, secondExitCode: originalProcess.exitCode, systemClipboardOperations: 0, inputScope: '仅本例官方Monaco API设置全文/EOL/caret，原菜单执行；不冒称实体键盘文字输入验收', pickerScope: '只替换自身Main chooser准确路径，不冒称验证OS对话框输入', observationScope: '每个原窗口就绪后安装至正常退出前恢复，child消息原样透传，不补造恢复前事实' }), contentType: 'application/json' }); completed = { directory, database, platform: process.platform, firstPid, secondPid: originalProcess.pid };

@@ -1,13 +1,19 @@
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { QueryOutcome } from '../../shared/contracts';
+import type { SqliteExplainSnapshotDocument } from '../../shared/explainSnapshot';
 import { sqliteExplainLimits, type SqliteExplainNode } from '../../shared/sqliteExplain';
 import { explainZh as findText } from '../locales/explain.zh-CN';
 import { sqliteExplainZh as text } from '../locales/sqliteExplain.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
+import { ExplainSnapshotSaveButton } from './ExplainSnapshotSaveButton';
 import '../explain.css';
+import '../explainSnapshot.css';
 import '../sqliteExplain.css';
 
-interface Props { outcome: QueryOutcome; busy: boolean; isCurrent?(): boolean; }
+interface Props {
+  outcome: QueryOutcome; busy: boolean; isCurrent?(): boolean;
+  fileActions?: boolean; fileSnapshot?: SqliteExplainSnapshotDocument; onFileBusyChange?(busy: boolean): void;
+}
 const maxSearchUnits = 200;
 /** 原 outcome/plan 换代同步撤销旧子树；A→B→A也不能复活旧按钮、折叠或勾选状态。 */
 export function SqliteExplainPlanView(props: Props) {
@@ -17,8 +23,8 @@ export function SqliteExplainPlanView(props: Props) {
   return <OwnedSqliteExplain key={captured.generation} {...props} isCurrent={() => owner.current === captured && (props.isCurrent?.() ?? true)}/>;
 }
 
-/** 所有阅读操作只改变本地状态；表格复用后端原行列，绝不生成编辑或文件快照能力。 */
-function OwnedSqliteExplain({ outcome, busy, isCurrent }: Props) {
+/** 阅读操作只改变本地状态。文件动作由共用快照入口显式触发。 */
+function OwnedSqliteExplain({ outcome, busy, isCurrent, fileActions, fileSnapshot, onFileBusyChange }: Props) {
   const plan = outcome.sqliteExplain!;
   const bounded = plan.nodes.length <= sqliteExplainLimits.nodes && plan.nodes.every(node => Number.isSafeInteger(node.depth) && node.depth >= 0 && node.depth < sqliteExplainLimits.depth);
   const nodes = bounded ? plan.nodes : [];
@@ -80,7 +86,11 @@ function OwnedSqliteExplain({ outcome, busy, isCurrent }: Props) {
   }
   const result = outcome.results[0], raw = plan.raw.slice(0, sqliteExplainLimits.rawBytes);
   return <section className="explain-view sqlite-explain-view" aria-label={text.title} data-sqlite-explain-view>
-    <div className="explain-toolbar" role="group" aria-label={text.title}>{(['tree', 'table', 'raw'] as const).map(mode => <button key={mode} aria-label={text[mode + 'Label' as 'treeLabel' | 'tableLabel' | 'rawLabel']} aria-pressed={view === mode} onClick={() => { if (current()) setView(mode); }}>{text[mode]}</button>)}<span>{text.source} · {plan.version}</span></div>
+    <div className="explain-toolbar" role="group" aria-label={text.title}>
+      {(['tree', 'table', 'raw'] as const).map(mode => <button key={mode} aria-label={text[mode + 'Label' as 'treeLabel' | 'tableLabel' | 'rawLabel']} aria-pressed={view === mode} onClick={() => { if (current()) setView(mode); }}>{text[mode]}</button>)}
+      {fileActions && <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={busy} saveAs={!!fileSnapshot} isCurrent={current} onFileBusyChange={onFileBusyChange}/>}
+      <span>{text.source} · {plan.version}</span>
+    </div>
     {!!nodes.length && <div className="explain-search" role="search" aria-label={text.find}>
       <input aria-label={text.find} aria-invalid={searchError || undefined} maxLength={maxSearchUnits} placeholder={text.findPlaceholder} value={search}
         onInput={event => {

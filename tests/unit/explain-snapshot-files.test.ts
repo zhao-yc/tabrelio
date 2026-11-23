@@ -66,7 +66,7 @@ describe('执行计划快照原生文件生命周期', () => {
     const dependency = ports(path); dependency.choose.mockImplementationOnce(() => choice.promise);
     const files = new ExplainSnapshotFiles(dependency), saving = files.save(original, owner);
     original.raw = '{}'; original.result.rows[0].EXPLAIN = '{}'; choice.resolve(path); await saving;
-    const restored = await files.open(owner); expect(restored?.snapshot.raw).toBe(raw); expect(restored?.snapshot.result.rows[0].EXPLAIN).toBe(raw);
+    const restored = await files.open(owner); expect(restored?.snapshot).toHaveProperty('raw', raw); expect(restored?.snapshot.result.rows[0].EXPLAIN).toBe(raw);
   });
 
   it.each(['open', 'save'] as const)('%s 拒绝非绝对路径，绝不占用或打开磁盘', async mode => {

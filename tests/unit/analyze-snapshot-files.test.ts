@@ -4,7 +4,7 @@ import type { FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { ExplainSnapshotFiles, type ExplainSnapshotFilePorts } from '../../src/main/explainSnapshotFiles';
-import { capturePlanSnapshot, encodePlanSnapshot, explainSnapshotLimits, type PlanSnapshotDocument } from '../../src/shared/explainSnapshot';
+import { capturePlanSnapshot, encodePlanSnapshot, explainSnapshotLimits, type AnalyzeSnapshotDocument, type PlanSnapshotDocument } from '../../src/shared/explainSnapshot';
 import { parseQueryAnalyzePlan } from '../../src/shared/queryAnalyze';
 import { explainSnapshotZh as text } from '../../src/shared/explainSnapshot.zh-CN';
 
@@ -13,14 +13,16 @@ const mysqlRaw = '-> Table scan on subject  (cost=12.34567890123456789 rows=9007
 const mariaRaw = '{"query_block":{"select_id":1,"r_total_time_ms":1.234567890123456789,"nested_loop":[{"table":{"table_name":"subject","rows":9007199254740993,"r_rows":9007199254740993,"r_loops":2,"r_table_time_ms":0.000000000000000123}}]}}';
 
 /** 通过正式捕获器剥离原SQL、事务、耗时与派生节点，再把实际计划交给真实文件服务。 */
-function snapshot(dialect: 'mysql' | 'mariadb' = 'mysql'): PlanSnapshotDocument {
+function snapshot(dialect: 'mysql' | 'mariadb' = 'mysql'): AnalyzeSnapshotDocument {
   const raw = dialect === 'mysql' ? mysqlRaw : mariaRaw;
   const analysis = parseQueryAnalyzePlan(raw, dialect, dialect === 'mysql' ? '8.4.11' : '11.4.13', dialect === 'mysql' ? 'tree' : 'json');
   if (analysis.nodes[0]) analysis.nodes[0].label = '派生节点_不得落盘';
-  return capturePlanSnapshot({
+  const captured = capturePlanSnapshot({
     analysis, transactionOpen: true, elapsedMs: 456789,
     results: [{ columns: [{ key: 'PLAN', name: 'ANALYZE', type: 'LONGTEXT' }], rows: [{ PLAN: raw }], truncated: false, statement: 'SELECT 用户SQL_不得落盘 FROM subject', elapsedMs: 987654 }],
   });
+  if (captured.kind !== 'dbark.analyze-snapshot') throw Error('本例缺少实际计划快照');
+  return captured;
 }
 
 /** 每例独占真实临时目录；递归清理前核绝对位置及本测试专属前缀。 */
