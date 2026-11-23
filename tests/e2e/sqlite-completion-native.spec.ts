@@ -88,8 +88,10 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
         const hasFunction = Object.hasOwn(value, 'tableFunction');
         const targetAllowed = value.kind === 'columns' ? hasFunction
           ? value.tableFunction === true && value.table === 'json_each' : input.tables.includes(String(value.table))
+          : value.kind === 'functions' ? !Object.hasOwn(value, 'table') && !Object.hasOwn(value, 'schema') && !hasFunction &&
+            typeof value.prefix === 'string' && /^[a-z][a-z0-9_]{0,127}$/i.test(value.prefix)
           : !Object.hasOwn(value, 'table') && !hasFunction;
-        if (!targetAllowed || !['relations', 'columns', 'stamp'].includes(String(value.kind)) ||
+        if (!targetAllowed || !['relations', 'columns', 'functions', 'stamp'].includes(String(value.kind)) ||
           Object.keys(value).some(key => !['connectionId', 'sessionId', 'taskId', 'kind', 'prefix', 'schema', 'table', 'tableFunction'].includes(key)) ||
           typeof value.taskId !== 'string' || !value.taskId.startsWith('sqlite-completion:') || typeof value.prefix !== 'string' ||
           value.prefix.length > 128 || value.schema !== undefined && !['main', 'temp'].includes(String(value.schema))) return deny('补全不是受限准确元数据目标');
@@ -265,9 +267,9 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     stage = '原session同名TEMP优先，显式main与temp严格分离，未提交DDL仅本会话可见';
     await showHover('SELECT s.te|mp_marker FROM subject s', ['temp_marker', hoverText.temporary, hoverText.declaredType + '："TEXT"']);
     await showHover('SELECT m.ma|in_marker FROM main.subject m', ['main_marker', hoverText.permanent]);
-    await choose('SELECT s.| FROM subject AS s', 'temp_marker', 'SELECT s."temp_marker" FROM subject AS s', 'main_marker'); const shadow = lastColumns(await step(audit), sessionA); expect(sqliteCompletionOutputSchema.parse(result(shadow.reply)).entries.map(entry => entry.name).sort()).toEqual(['id', 'temp_marker']); expect(sqliteCompletionOutputSchema.parse(result(shadow.reply)).entries.every(entry => entry.schema === 'temp')).toBe(true);
-    await choose('SELECT m.| FROM main.subject AS m', 'main_marker', 'SELECT m."main_marker" FROM main.subject AS m', 'temp_marker'); const main = lastColumns(await step(audit), sessionA, 'main'); expect(sqliteCompletionOutputSchema.parse(result(main.reply)).entries.every(entry => entry.schema === 'main')).toBe(true);
-    await choose('SELECT t.| FROM temp.subject AS t', 'temp_marker', 'SELECT t."temp_marker" FROM temp.subject AS t', 'main_marker'); const temp = lastColumns(await step(audit), sessionA, 'temp'); expect(sqliteCompletionOutputSchema.parse(result(temp.reply)).entries.every(entry => entry.schema === 'temp')).toBe(true);
+    await choose('SELECT s.| FROM subject AS s', 'temp_marker', 'SELECT s."temp_marker" FROM subject AS s', 'main_marker'); const shadow = lastColumns(await step(audit), sessionA); expect(sqliteCompletionOutputSchema.parse(result(shadow.reply)).entries.map(entry => entry.name).sort()).toEqual(['id', 'temp_marker']); expect(sqliteCompletionOutputSchema.parse(result(shadow.reply)).entries.every(entry => entry.kind === 'column' && entry.schema === 'temp')).toBe(true);
+    await choose('SELECT m.| FROM main.subject AS m', 'main_marker', 'SELECT m."main_marker" FROM main.subject AS m', 'temp_marker'); const main = lastColumns(await step(audit), sessionA, 'main'); expect(sqliteCompletionOutputSchema.parse(result(main.reply)).entries.every(entry => entry.kind === 'column' && entry.schema === 'main')).toBe(true);
+    await choose('SELECT t.| FROM temp.subject AS t', 'temp_marker', 'SELECT t."temp_marker" FROM temp.subject AS t', 'main_marker'); const temp = lastColumns(await step(audit), sessionA, 'temp'); expect(sqliteCompletionOutputSchema.parse(result(temp.reply)).entries.every(entry => entry.kind === 'column' && entry.schema === 'temp')).toBe(true);
     await choose('SELECT * FROM uncomm|suffix', 'uncommitted_completion_only', 'SELECT * FROM "uncommitted_completion_only"'); await settleMetadata(); expect(await passiveState(sessionA)).toEqual(beforeAState); await metadataReadOnly(baseline, beforeAMetadata); for (const fact of completionFacts(await step(audit)).slice(aCompletionStart).filter(fact => fact.request.sessionId === sessionA && succeeded(fact))) expect(sqliteCompletionOutputSchema.parse(result(fact.reply)).sessionRevision).toBe(beforeAState.completion.objectsRevision);
     stage = '第二query明确执行main只读脚本建立独立session，同名对象不借用A的temp';
     const tabB = await createQuery(); await execute(secondSessionSql, 3); const sessions = (await step(audit)).sessions; expect(sessions).toHaveLength(2); const sessionB = sessions[1]; expect(sessionB).not.toBe(sessionA); const beforeBState = await passiveState(sessionB); expect(beforeBState.state).toEqual({ transactionOpen: false, transactionKnown: true, broken: false });
@@ -345,7 +347,7 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     ] }] });
     const beforeAliases = { tasks: await tasks(), history: await history(), executions: 6, sessions: 2 };
     for (const [clause, name, prefix] of [['GROUP BY', 'bucket', 'bu'], ['HAVING', 'amount', 'am'], ['ORDER BY', 'bucket', 'bu']] as const) {
-      stage = clause + ' 接受普通查询输出别名，只读取当前会话的来源列目录';
+      stage = clause + ' 接受普通查询输出别名，准确读取原会话的字段与函数目录';
       let beforeReads = 0;
       await choose(outputAliasSql.replace(clause + ' "' + name + '"', clause + ' ' + prefix + '|suffix'), name, outputAliasSql, undefined, async () => {
         // 整段输入时 Monaco 也可能自动补全行尾。只从手动触发前开始记录这一次请求。
@@ -353,8 +355,10 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
         beforeReads = completionFacts(await step(audit)).length;
       });
       await settleMetadata(); await metadataReadOnly(baseline, beforeAliases);
-      const reads = completionFacts(await step(audit)).slice(beforeReads).filter(fact => succeeded(fact) && fact.request.kind === 'columns');
+      const scopedReads = completionFacts(await step(audit)).slice(beforeReads).filter(succeeded);
+      const reads = scopedReads.filter(fact => fact.request.kind === 'columns');
       expect(reads.map(fact => fact.request)).toEqual([expect.objectContaining({ table: 'subject', schema: 'main', prefix, sessionId: sessionA })]);
+      expect(scopedReads.filter(fact => fact.request.kind === 'functions').map(fact => fact.request)).toEqual([expect.objectContaining({ prefix, sessionId: sessionA })]);
     }
     stage = '显式执行由别名补全构成的分组查询';
     await execute(outputAliasSql, 7, true);
@@ -382,12 +386,14 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
       beforeOnReads = completionFacts(await step(audit)).length;
     });
     await settleMetadata(); await metadataReadOnly(baseline, beforeOn);
-    const onReads = completionFacts(await step(audit)).slice(beforeOnReads).filter(fact => succeeded(fact) && fact.request.kind === 'columns');
+    const scopedOnReads = completionFacts(await step(audit)).slice(beforeOnReads).filter(succeeded);
+    const onReads = scopedOnReads.filter(fact => fact.request.kind === 'columns');
     expect(onReads.map(fact => fact.request)).toEqual([
       expect.objectContaining({ table: 'subject', schema: 'main', prefix: 'pi', sessionId: sessionA }),
       expect.objectContaining({ table: 'subject', schema: 'temp', prefix: 'pi', sessionId: sessionA }),
       expect.objectContaining({ table: 'outside_control', schema: 'main', prefix: 'pi', sessionId: sessionA }),
     ]);
+    expect(scopedOnReads.filter(fact => fact.request.kind === 'functions').map(fact => fact.request)).toEqual([expect.objectContaining({ prefix: 'pi', sessionId: sessionA })]);
     stage = '显式执行接受 ON 别名后的原SQL';
     await execute(joinOnAliasSql, 9, true);
     expect(result(operations(await step(audit), 'query.execute').at(-1)!.reply)).toMatchObject({ results: [{ rows: [

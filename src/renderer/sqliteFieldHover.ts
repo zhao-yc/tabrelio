@@ -1,6 +1,6 @@
 import { sqliteCompletionRelationMatches, type SqliteCompletionAnalysis, type SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry } from '../shared/sqliteCompletion';
-import { sqliteIndexDetails, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
+import { sqliteFunctionDetails, sqliteIndexDetails, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 import { sqliteFieldHoverZh as text } from './locales/sqliteFieldHover.zh-CN';
 import { sqliteCompletionZh } from './locales/sqliteCompletion.zh-CN';
 import { sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
@@ -26,6 +26,16 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   const name = analysis.target.prefix, qualifiers = analysis.qualifiers;
   let prefix = name.slice(0, sqliteCompletionLimits.prefixUnits);
   if (/[\uD800-\uDBFF]$/.test(prefix)) prefix = prefix.slice(0, -1);
+  if (analysis.functions) {
+    const result = await directory.load({ kind: 'functions', prefix });
+    if (result.incomplete) return;
+    const entry = result.entries.find(entry => entry.kind === 'function' && fold(entry.name) === fold(name));
+    if (entry?.kind === 'function') {
+      const info = sqliteFunctionDetails(entry, analysis.functions.mode);
+      if (info) return markdown([entry.name + '(…)', ...info.details]);
+    }
+    return;
+  }
   if (analysis.indexSource) {
     const result = await directory.load(sqliteCompletionIndexes(analysis.indexSource, prefix));
     if (result.incomplete) return;

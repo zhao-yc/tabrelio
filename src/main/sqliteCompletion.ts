@@ -1,6 +1,6 @@
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
-import { sqliteCompletionLimits, sqliteCompletionOutputSchema, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
+import { foldSqliteCompletionName as fold, sqliteCompletionLimits, sqliteCompletionOutputSchema, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 
 interface CompletionControl { check(): void; sessionRevision?: number; }
 /** 元数据读完和取消检查共用原driver，绝不创建查询任务、触碰事务边界或读取用户行值。 */
@@ -34,6 +34,8 @@ function tableIdentity(driver: SqliteDriverSession, input: { schema?: 'main' | '
 
 const flag = (value: SqliteValue): boolean | undefined => value && typeof value === 'object' && value.type === 'integer' &&
   (value.value === '0' || value.value === '1') ? value.value === '1' : undefined;
+const functionTypes = { s: 'scalar', a: 'aggregate', w: 'window' } as const;
+const publicSqliteFunctions = new Set(['sqlite_compileoption_get', 'sqlite_compileoption_used', 'sqlite_offset', 'sqlite_source_id', 'sqlite_version']);
 /** 仅暴露main/temp用户关系；table_list的shadow标记不能靠名称猜测，temp命名空间优先遮蔽main。 */
 export async function readSqliteCompletion(driver: SqliteDriverSession, input: SqliteCompletionLookup, control: CompletionControl): Promise<SqliteCompletionOutput> {
   const before = await stamp(driver, control), entries: SqliteCompletionEntry[] = []; let incomplete = false;
@@ -89,6 +91,29 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
           if (!append({ kind: 'index', name, schema, table, origin, unique: isUnique, partial: isPartial })) break;
         }
       }
+    }
+  } else if (input.kind === 'functions') {
+    // 直接 PRAGMA 不受同名临时表遮蔽。只从有界目录读取内置重载，不执行实际函数。
+    const result = await read(driver, 'PRAGMA function_list', [], control, sqliteCompletionLimits.entries + 1);
+    incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
+    const prefix = fold(input.prefix);
+    const functions = new Map<string, Extract<SqliteCompletionEntry, { kind: 'function' }>>();
+    for (const [name, rawBuiltin, type, , rawArity] of result.rows.slice(0, sqliteCompletionLimits.entries)) {
+      const builtin = flag(rawBuiltin);
+      if (typeof name !== 'string' || builtin === undefined) throw Error('SQLite补全函数目录无效');
+      if (!builtin || !name.startsWith(prefix) || !/^[a-z][a-z0-9_]*$/.test(name) || name === 'load_extension' ||
+        name.startsWith('sqlite_') && !publicSqliteFunctions.has(name)) continue;
+      if (type !== 's' && type !== 'a' && type !== 'w' || !rawArity || typeof rawArity !== 'object' || rawArity.type !== 'integer') throw Error('SQLite补全函数签名无效');
+      const arity = Number(rawArity.value);
+      let entry = functions.get(name);
+      if (!entry) { entry = { kind: 'function', name, signatures: [] }; functions.set(name, entry); }
+      const signature = { arity, type: functionTypes[type] };
+      if (!entry.signatures.some(current => current.arity === signature.arity && current.type === signature.type)) entry.signatures.push(signature);
+    }
+    for (const name of [...functions.keys()].sort()) {
+      const entry = functions.get(name)!;
+      entry.signatures.sort((a, b) => a.arity - b.arity);
+      if (!append(entry)) break;
     }
   }
   const after = await stamp(driver, control); control.check();

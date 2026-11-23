@@ -3,13 +3,28 @@ import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, s
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
 
-export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'index' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; }
+export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'index' | 'function' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; snippet?: true; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
 const keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'ON', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'WITH', 'AS', 'DISTINCT', 'UNION ALL', 'IS NULL', 'IS NOT NULL', 'RETURNING', 'WINDOW', 'OVER', 'FILTER', 'PARTITION BY', 'ROWS', 'RANGE', 'BETWEEN', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'CURRENT ROW', 'EXPLAIN QUERY PLAN'];
 const windowSpecKeywords = ['PARTITION BY', 'ORDER BY', 'ROWS', 'RANGE', 'GROUPS'];
 
 export function sqliteIndexDetails(entry: Extract<SqliteCompletionEntry, { kind: 'index' }>): string[] {
   return [text.indexOrigin[entry.origin], ...(entry.unique ? [text.uniqueIndex] : []), ...(entry.partial ? [text.partialIndex] : [])];
+}
+
+const windowOnlyFunctions = new Set(['row_number', 'rank', 'dense_rank', 'percent_rank', 'cume_dist', 'ntile', 'lag', 'lead', 'first_value', 'last_value', 'nth_value']);
+type FunctionContext = NonNullable<Extract<SqliteCompletionAnalysis, { status: 'ready' }>['functions']>;
+
+/** function_list 将必须带 OVER 的内置窗口函数和可独立使用的聚合都标为 w。 */
+export function sqliteFunctionDetails(entry: Extract<SqliteCompletionEntry, { kind: 'function' }>, mode: FunctionContext['mode']) {
+  const windowOnly = windowOnlyFunctions.has(entry.name);
+  if (windowOnly && mode !== 'result') return;
+  const signatures = entry.signatures.filter(signature => mode !== 'scalar' || signature.type === 'scalar');
+  if (!signatures.length) return;
+  const kind = windowOnly ? text.windowFunction : signatures.some(signature => signature.type !== 'scalar') ? text.aggregateFunction : text.scalarFunction;
+  // SQLite 内置变参重载可能使用小于 -1 的目录标记，一律显示为可变参数。
+  const arities = [...new Set(signatures.map(({ arity }) => Math.max(-1, arity)))].sort((a, b) => a - b);
+  return { windowOnly, needsArguments: arities.some(arity => arity !== 0), details: [kind, text.functionArity + '：' + arities.map(arity => arity < 0 ? text.variadicFunction : String(arity)).join(' / ')] };
 }
 
 /** 建议只引用准确目录名；同名字段保留不同别名的限定插入，CTE声明不伪装成FROM绑定。 */
@@ -23,6 +38,22 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     if (items.length >= sqliteCompletionLimits.suggestions) { incomplete = true; return; }
     seen.add(key); items.push(item);
   };
+  const addFunctions = async (context: FunctionContext) => {
+    const metadata = await directory.load({ kind: 'functions', prefix: analysis.target.prefix });
+    incomplete ||= metadata.incomplete;
+    for (const entry of metadata.entries) if (entry.kind === 'function') {
+      const info = sqliteFunctionDetails(entry, context.mode);
+      if (!info) continue;
+      // 通过目录协议的 ASCII 内置函数名可用于固定片段，已有括号时只替换名称。
+      const call = info.windowOnly ? (info.needsArguments ? '($1) OVER ($0)' : '() OVER ($0)') : info.needsArguments ? '($0)' : '()';
+      const insertText = (analysis.target.quoted ? quote(entry.name) : entry.name) + (context.existingCall ? '' : call);
+      add({ label: entry.name, kind: 'function', insertText, detail: info.details.join(' · '), ...(insertText.includes('$') ? { snippet: true } : {}) });
+    }
+  };
+  if (analysis.functions?.existingCall) {
+    await addFunctions(analysis.functions);
+    return { items, incomplete };
+  }
   if (analysis.indexSource) {
     const metadata = await directory.load(sqliteCompletionIndexes(analysis.indexSource, analysis.target.prefix));
     incomplete = metadata.incomplete;
@@ -186,6 +217,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
       }
     }
   }
+  if (analysis.functions) await addFunctions(analysis.functions);
   if (analysis.syntax.includes('keyword') && !analysis.target.quoted && !qualifiers.length) for (const keyword of keywords) add({ label: keyword, kind: 'keyword', insertText: keyword, detail: text.keyword });
   return { items, incomplete };
 }

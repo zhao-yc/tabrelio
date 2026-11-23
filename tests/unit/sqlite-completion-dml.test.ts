@@ -83,7 +83,9 @@ it('待插入行与旧行共用一次真实列目录，接受候选后按原生�
     const { source } = input(marked), value = ready(marked);
     const { items, incomplete } = await sqliteCompletionSuggestions(value, directory);
     expect(incomplete).toBe(false);
-    expect(directory.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'subject', schema: 'main', prefix: 'va' });
+    expect(directory.load.mock.calls.map(([query]) => query)).toEqual([
+      { kind: 'columns', table: 'subject', schema: 'main', prefix: 'va' }, { kind: 'functions', prefix: 'va' },
+    ]);
     expect(items.map(item => item.insertText)).toEqual(['"t"."value"', '"excluded"."value"']);
     const candidate = items.find(item => item.detail.includes('待插入行'))!;
     const sql = source.slice(0, value.target.start) + candidate.insertText + source.slice(value.target.end);
@@ -138,7 +140,7 @@ it('三段目标别名按原 INSERT 的 schema 验证，RETURNING 限定实际�
 });
 
 it.each([
-  ['INSERT INTO subject(id,value) VALUES(1,va|lue) ON CONFLICT DO NOTHING', 'values'],
+  ['INSERT INTO subject(id,value) VALUES(1,subject.va|lue) ON CONFLICT DO NOTHING', 'values'],
   ['INSERT INTO subject(id,value) VALUES(1,\'new\') ON CONFLICT(id COLLATE no|case) DO NOTHING', 'collation'],
   ['INSERT INTO subject(id,value) VALUES(1,\'new\') ON CONFLICT DO UP|DATE SET value=excluded.value', 'upsert-action'],
   ['INSERT INTO subject(id,value) VALUES(1,\'new\') ON CONFLICT DO UPDATE SET subject.va|lue=excluded.value', 'qualified-target'],

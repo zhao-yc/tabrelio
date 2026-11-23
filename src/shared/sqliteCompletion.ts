@@ -8,17 +8,22 @@ const unicode = (value: string) => !value.includes('\0') && !/[\uD800-\uDBFF](?!
 const name = z.string().min(1).max(sqliteCompletionLimits.nameUnits).refine(value => value.length <= sqliteCompletionLimits.nameUnits && unicode(value));
 const id = z.string().min(1).max(200).refine(value => value.length <= 200 && unicode(value));
 const schema = z.enum(['main', 'temp']);
+const functionName = z.string().max(sqliteCompletionLimits.prefixUnits).regex(/^[a-z][a-z0-9_]*$/);
+const functionSignatures = z.array(z.object({ arity: z.number().int().min(-32768).max(32767), type: z.enum(['scalar', 'aggregate', 'window']) }).strict()).min(1).max(sqliteCompletionLimits.entries)
+  .refine(value => new Set(value.map(({ arity, type }) => type + ':' + arity)).size === value.length);
 const base = { connectionId: id, sessionId: id.optional(), taskId: id.refine(value => value.startsWith(sqliteCompletionTaskPrefix) && value.length > sqliteCompletionTaskPrefix.length), prefix: z.string().max(sqliteCompletionLimits.prefixUnits).refine(value => value.length <= sqliteCompletionLimits.prefixUnits && unicode(value)) };
 export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('relations'), schema: schema.optional() }).strict(),
   z.object({ ...base, kind: z.literal('columns'), schema: schema.optional(), table: name, tableFunction: z.literal(true).optional() }).strict(),
   z.object({ ...base, kind: z.literal('indexes'), schema: schema.optional(), table: name }).strict(),
+  z.object({ ...base, kind: z.literal('functions'), prefix: base.prefix.regex(/^[a-z][a-z0-9_]*$/i) }).strict(),
   z.object({ ...base, kind: z.literal('stamp') }).strict(),
 ]);
 export const sqliteCompletionEntrySchema = z.discriminatedUnion('kind', [
   z.object({ name, kind: z.enum(['table', 'view']), schema }).strict(),
   z.object({ name, kind: z.literal('column'), schema, table: name, declaredType: z.string().max(4096).refine(value => value.length <= 4096 && unicode(value)), generated: z.boolean(), hidden: z.boolean() }).strict(),
   z.object({ name, kind: z.literal('index'), schema, table: name, unique: z.boolean(), partial: z.boolean(), origin: z.enum(['c', 'u', 'pk']) }).strict(),
+  z.object({ name: functionName, kind: z.literal('function'), signatures: functionSignatures }).strict(),
 ]);
 export const sqliteCompletionOutputSchema = z.object({ entries: z.array(sqliteCompletionEntrySchema).max(sqliteCompletionLimits.entries), incomplete: z.boolean(), stamp: z.string().regex(/^-?\d{1,10}:-?\d{1,10}$/), sessionRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional() }).strict().refine(value => new TextEncoder().encode(JSON.stringify(value)).byteLength <= sqliteCompletionLimits.outputBytes, 'SQLite补全目录超过传输预算');
 export type SqliteCompletionInput = z.infer<typeof sqliteCompletionInputSchema>;

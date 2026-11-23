@@ -19,6 +19,8 @@ const scenarios = [
     typed: 'vir', column: 'virtual_value', trail: '', incoming: false, row: undefined, output: '旧!' },
   { verb: 'INDEXED BY', prefix: 'EXPLAIN QUERY PLAN SELECT id FROM main.subject INDEXED BY ', typed: 'subject_', column: 'subject_by_value',
     trail: " WHERE value='旧'", incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'subject_by_value' },
+  { verb: '函数', prefix: 'SELECT ', typed: 'json_ex', column: 'json_extract', trail: ' AS extracted', args: `'{"id":7}', '$.id'`,
+    incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: '7' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
@@ -26,9 +28,10 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     !['darwin', 'win32'].includes(process.platform)) throw Error('只允许 Windows 或 macOS 的离线源码验收');
   const filePath = join(realpathSync(dataDir), 'sqlite-editor-completion.sqlite');
   const connectionId = 'sqlite-editor-completion';
-  const lookupKind = scenario.verb === 'INDEXED BY' ? 'indexes' : 'columns';
+  const lookupKind = scenario.verb === 'INDEXED BY' ? 'indexes' : scenario.verb === '函数' ? 'functions' : 'columns';
   const { prefix, trail, typed, column } = scenario;
-  const draft = prefix + typed + 'suffix' + trail, accepted = prefix + '"' + column + '"' + trail;
+  const draft = prefix + typed + 'suffix' + trail;
+  const accepted = prefix + (scenario.verb === '函数' ? column + '(' + scenario.args + ')' : '"' + column + '"') + trail;
   const db = new DatabaseSync(filePath);
   try {
     db.exec(`CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT,virtual_value TEXT GENERATED ALWAYS AS (value||'!'));
@@ -66,7 +69,10 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
           if ((command === 'query.execute' || command === 'sessions.close') && (!sessionId || input.sessionId !== sessionId)) throw Error('不是本例原查询会话');
           if (command === 'query.execute' && (typeof input.sql !== 'string' || input.sql.replaceAll('\r\n', '\n') !== setup.accepted ||
             facts.some(fact => fact.command === 'query.execute'))) throw Error('SQL 不是本例唯一明确操作');
-          if (command === 'sqlite.completion' && (input.kind === setup.lookupKind && (input.table !== 'subject' || input.schema !== 'main') || 'sql' in input)) throw Error('目录越出真实目标');
+          if (command === 'sqlite.completion') {
+            if ('sql' in input || input.kind === 'functions' && (!setup.functionName || input.prefix !== setup.functionName && input.prefix !== setup.typed)) throw Error('函数目录越出本例');
+            if (input.kind === setup.lookupKind && input.kind !== 'functions' && (input.table !== 'subject' || input.schema !== 'main')) throw Error('目录越出真实目标');
+          }
           const fact: Fact = { command, input }; facts.push(fact);
           const reply = await entry(event, payload);
           fact.reply = reply;
@@ -76,7 +82,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         }
         return entry(event, payload);
       });
-    }, { filePath, connectionId, accepted, lookupKind });
+    }, { filePath, connectionId, accepted, lookupKind, typed, functionName: lookupKind === 'functions' ? column : undefined });
 
     await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
     await page.evaluate(async ({ id, sql }) => {
@@ -112,20 +118,30 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     await expect(widget.locator('.monaco-list-row .label-name').filter({ hasText: new RegExp('^' + column + '$') })).toHaveCount(1);
     await expect(widget.locator('.monaco-list-row.focused .label-name')).toHaveText(column);
     await page.keyboard.press('Enter');
-    await expect.poll(async () => (await inspect()).sql).toBe(accepted);
+    const inserted = scenario.verb === '函数' ? prefix + column + '()' + trail : accepted;
+    await expect.poll(async () => (await inspect()).sql).toBe(inserted);
     const completion = (await snapshot()).slice(previous).filter(fact => fact.command === 'sqlite.completion');
     const requests = completion.map(fact => sqliteCompletionInputSchema.parse(fact.input));
     expect(requests.filter(input => input.kind !== 'stamp')).toEqual([
-      expect.objectContaining({ kind: lookupKind, table: 'subject', schema: 'main', prefix: typed }),
+      lookupKind === 'functions' ? expect.objectContaining({ kind: 'functions', prefix: typed }) :
+        expect.objectContaining({ kind: lookupKind, table: 'subject', schema: 'main', prefix: typed }),
     ]);
     expect(completion.every(fact => fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true)).toBe(true);
-    await page.keyboard.press('ArrowLeft');
+    if (scenario.verb === '函数') {
+      expect((await inspect()).offset).toBe(prefix.length + column.length + 1);
+      await page.keyboard.insertText(scenario.args);
+      await expect.poll(async () => (await inspect()).sql).toBe(accepted);
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowLeft' : 'Home');
+      for (const _point of prefix + column.slice(0, 2)) await page.keyboard.press('ArrowRight');
+      expect((await inspect()).offset).toBe(prefix.length + 2);
+    } else await page.keyboard.press('ArrowLeft');
     await page.keyboard.press(modifier + '+K');
     await page.keyboard.press(modifier + '+I');
     const hover = query.locator('.monaco-hover:visible');
     if (scenario.incoming) await expect(hover).toContainText('UPSERT 待插入行');
     if (lookupKind === 'indexes') await expect(hover).toContainText('SQLite 索引');
-    await expect(hover).toContainText('"main"."subject"');
+    if (lookupKind === 'functions') await expect(hover).toContainText('SQLite 标量函数');
+    else await expect(hover).toContainText('"main"."subject"');
     await page.keyboard.press('Escape');
     expect((await snapshot()).filter(fact => fact.command === 'query.execute' || fact.command === 'sessions.open')).toEqual([]);
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
@@ -149,7 +165,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
 
 for (const scenario of scenarios) {
   test.describe(scenario.verb, () => {
-    const enabled = scenario.verb === 'INDEXED BY' ? process.env.DBARK_SQLITE_INDEX_COMPLETION_NATIVE === '1' :
+    const enabled = scenario.verb === '函数' ? process.env.DBARK_SQLITE_FUNCTION_COMPLETION_NATIVE === '1' : scenario.verb === 'INDEXED BY' ? process.env.DBARK_SQLITE_INDEX_COMPLETION_NATIVE === '1' :
       process.env.DBARK_SQLITE_DML_COMPLETION_NATIVE === '1' || scenario.verb === 'UPSERT' && process.env.DBARK_SQLITE_UPSERT_COMPLETION_NATIVE === '1';
     test.skip(!enabled || process.argv.includes('--list'), '需要显式启用离线 SQLite 编辑器专项');
     test(`SQLite ${scenario.verb} 补全、悬停和明确提交`, ({}, info) => exercise(scenario, info));

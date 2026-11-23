@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite 编辑器按实际运行时目录建议内置标量、聚合和窗口函数，支持参数位置、现有调用的名称替换，以及固定或可变参数悬停。函数候选按查询子句和写入表达式作用域过滤。Q01 继续为部分覆盖。 [SQLite 函数目录](https://www.sqlite.org/pragma.html#pragma_function_list)
+
 2026-11-23 源码增量。SQLite 支持实际表的 `INDEXED BY` 候选和索引悬停。`EXPLAIN` 和 `EXPLAIN QUERY PLAN` 内的语句沿用原字段、对象和索引作用域。索引目录遵循当前会话的临时对象和显式命名空间。Q01 继续为部分覆盖。 [SQLite INDEXED BY](https://www.sqlite.org/lang_indexedby.html)
 
 2026-11-23 源码增量。SQLite `UPDATE … FROM` 区分可写列组、来源表连接条件及目标过滤；`UPDATE` 和 `DELETE` 的 `RETURNING` 可用实际表名补全和悬停目标列，相关子查询沿用实际作用域。Q01 与 O05 继续为部分覆盖。 [SQLite UPDATE](https://www.sqlite.org/lang_update.html#update_from) · [SQLite RETURNING](https://www.sqlite.org/lang_returning.html)

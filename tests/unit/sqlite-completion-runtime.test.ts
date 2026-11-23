@@ -59,6 +59,29 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('真实函数目录保留标量、聚合和变参重载，元数据读取不影响原会话', async () => {
+    const p = profile('函数目录'), { app, events } = runtime([p]);
+    const standalone = await completion(app, p.id, { kind: 'functions', prefix: 'JSON_EX' });
+    expect(standalone).toMatchObject({ entries: [{ kind: 'function', name: 'json_extract', signatures: [{ arity: -1, type: 'scalar' }] }], incomplete: false });
+    expect(events).toEqual([]);
+    expect(statements(processes[0]).filter(sql => sql === 'PRAGMA function_list')).toHaveLength(1);
+    expect(await processes[0].exited).toEqual({ code: 0, signal: null });
+    const session = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, session.sessionId, 'BEGIN; CREATE TEMP TABLE pragma_function_list(name,type,narg)');
+    const state = await app.request('query.completionState', session), lastEventCount = events.length;
+    const functions = (prefix: string) => completion(app, p.id, { kind: 'functions', prefix }, session.sessionId);
+    expect(await functions('max')).toMatchObject({ sessionRevision: state.objectsRevision, entries: [{ kind: 'function', name: 'max', signatures: [
+      { arity: expect.any(Number), type: 'scalar' }, { arity: 1, type: 'window' },
+    ] }] });
+    expect((await functions('row_n')).entries).toEqual([{ kind: 'function', name: 'row_number', signatures: [{ arity: 0, type: 'window' }] }]);
+    expect((await functions('load_ext')).entries).toEqual([]);
+    expect((await functions('sqlite_rename')).entries).toEqual([]);
+    expect(events).toHaveLength(lastEventCount);
+    expect(await app.request('query.completionState', session)).toEqual(state);
+    expect((await app.request('query.sessionState', session)).transactionOpen).toBe(true);
+    await execute(app, session.sessionId, 'ROLLBACK');
+  });
+
   it('索引目录只查真实目标并保留字面前缀、唯一和部分属性，实际计划采用候选', async () => {
     const p = profile('索引测试', `CREATE TABLE subject(id INTEGER PRIMARY KEY,note TEXT UNIQUE); CREATE TABLE other(note TEXT);
       CREATE UNIQUE INDEX "ix%_""🚢" ON subject(note) WHERE note IS NOT NULL; CREATE INDEX ixother ON other(note);`);
