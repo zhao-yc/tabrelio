@@ -2594,6 +2594,64 @@ test('PostgreSQL 普通 UPDATE 和 DELETE 按会话权限补全赋值、条件�
   await quitDesktop();
 });
 
+test('PostgreSQL 行锁 OF 补全实际目标并定位分组连接中的别名', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const options = {host, port, user, password, database: user, connectionTimeoutMillis: 3000};
+  const blocker = new Client(options), observer = new Client(options);
+  await blocker.connect();
+  try {
+    await observer.connect();
+    await observer.query(`CREATE TABLE public.lock_claim_jobs (id int PRIMARY KEY);
+      CREATE TABLE public.lock_claim_notes (id int PRIMARY KEY);
+      INSERT INTO public.lock_claim_jobs VALUES (1), (2);
+      INSERT INTO public.lock_claim_notes VALUES (1);`);
+    const draft = 'SELECT pair.id FROM (public.lock_claim_jobs "Claim Jobs" ' +
+      'LEFT JOIN public.lock_claim_notes "Claim Notes" USING (id)) pair ORDER BY pair.id FOR UPDATE OF "Cltail" SKIP LOCKED';
+    await prepare({id: '', name: '离线 PostgreSQL 行锁目标', dialect: 'postgresql', group: '', color: '#123456',
+      host, port: 1, user: 'offline', database: 'postgres'}, draft);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const identity = (await inspectModel()).identity;
+    await modelSelection(1, draft.indexOf('Cltail') + 'Cl'.length + 1);
+    await triggerSuggestions();
+    await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText(['Claim Jobs']);
+    await page.keyboard.press('Enter');
+    const sql = draft.replace('Cltail', 'Claim Jobs');
+    await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+    await modelSelection(1, sql.lastIndexOf('Claim Jobs') + 2);
+    await page.keyboard.press('F12');
+    await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 1, column: sql.indexOf('"Claim Jobs"') + 1});
+    await page.keyboard.press('F2');
+    const rename = editor().locator('.rename-box input.rename-input');
+    await expect(rename).toHaveValue('Claim Jobs');
+    await rename.fill('Claim Rows');
+    await rename.press('Enter');
+    await expect.poll(async () => (await inspectModel()).sql).toBe(sql.replaceAll('Claim Jobs', 'Claim Rows'));
+    await page.keyboard.press('ControlOrMeta+Z');
+    await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+    await page.keyboard.press('ControlOrMeta+Z');
+    await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+    expect((await inspectModel()).identity).toEqual(identity);
+    await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+
+    await blocker.query('BEGIN');
+    try {
+      await blocker.query('SELECT id FROM public.lock_claim_jobs WHERE id=1 FOR UPDATE');
+      await observer.query("SET statement_timeout='3s'");
+      expect((await observer.query(sql)).rows).toEqual([{id: 2}]);
+      await expect(observer.query(sql.replace('SKIP LOCKED', 'NOWAIT'))).rejects.toMatchObject({code: '55P03'});
+    } finally { await blocker.query('ROLLBACK'); }
+    expect((await observer.query(sql)).rows).toEqual([{id: 1}, {id: 2}]);
+    await page.screenshot({path: info.outputPath('PostgreSQL-行锁目标导航.png'), animations: 'disabled'});
+    expect(pageErrors).toEqual([]);
+  } finally { await Promise.all([observer.end(), blocker.end()]); }
+  await quitDesktop();
+});
+
 test('PostgreSQL 从查询创建表和视图时补全正文与递归字段', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

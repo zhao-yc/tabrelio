@@ -177,6 +177,14 @@ export function createPostgresCompletionProvider(options: {
         const start = model.getPositionAt(analysis.start), end = model.getPositionAt(analysis.end);
         if (start.lineNumber !== end.lineNumber) return empty;
         const range = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+        if (query?.kind === 'lockTargets') {
+          const normalize = (value: string) => quoted ? value : value.replace(/[A-Z]/g, letter => letter.toLowerCase());
+          const suggestions = query.names.filter(name => normalize(name).startsWith(normalize(prefix)))
+            .slice(0, postgresCompletionLimits.items).map((name, index) => ({ range, kind: options.kinds.table,
+              label: { label: name, description: postgresZh.rowLockTarget }, insertText: postgresIdentifier(name),
+              filterText: quoted ? postgresIdentifier(name) : name, sortText: String(index).padStart(3, '0') }));
+          return { suggestions, incomplete: true };
+        }
         const windows = analysis.windows;
         if (windows) {
           const normalized = (name: string) => quoted ? name : name.replace(/[A-Z]/g, character => character.toLowerCase());

@@ -16,6 +16,46 @@ function at(marked: string) {
 }
 
 it.each([
+  ['SELECT * FROM app.job AS "Job" FOR NO KEY UPDATE OF "Jo|b" NOWAIT', ['Job']],
+  ['SELECT * FROM a CROSS JOIN b CROSS JOIN c FOR KEY SHARE OF a, |, c SKIP LOCKED', ['b']],
+  ['SELECT * FROM a LEFT JOIN b USING (id) AS j FOR UPDATE OF |', ['a']],
+  ['SELECT * FROM a RIGHT JOIN b ON a.k=b.k FOR SHARE OF |', ['b']],
+  ['SELECT * FROM (a JOIN b ON a.k=b.k) pair FOR UPDATE OF |', ['a', 'b']],
+  ['SELECT * FROM a FULL OUTER JOIN b ON a.k=b.k FOR UPDATE OF |', []],
+  ['WITH shadow AS (SELECT 1 n) SELECT * FROM shadow JOIN a q ON true, (VALUES (1)) v(n), generate_series(1,2) g, (SELECT * FROM b) d FOR UPDATE OF |', ['q', 'd']],
+  ['SELECT (SELECT i.id FROM a i FOR UPDATE OF |) FROM b outer_row', ['i']],
+  ['SELECT * FROM a CROSS JOIN b FOR UPDATE OF a NOWAIT FOR SHARE OF | LIMIT 10', ['a', 'b']],
+  ['TABLE app.jobs FOR UPDATE OF | SKIP LOCKED', ['jobs']],
+  ['SELECT * FROM a FOR UPDATE OF s.a|', []],
+  ['SELECT DISTINCT id FROM a FOR UPDATE OF |', []],
+  ['SELECT id FROM a UNION SELECT id FROM b FOR UPDATE OF |', []],
+  ['SELECT id FROM a UNION (SELECT id FROM b FOR UPDATE OF |)', ['b']],
+])('行锁 OF 按原查询关系和 JOIN 类型给出裸名称：%s', (sql, names) => {
+  expect(at(sql)?.query).toEqual({kind: 'lockTargets', names});
+});
+
+it('定位行锁引用时区分别名与裸物理对象，整组改名更新 OF 清单', () => {
+  const source = 'SELECT q.id FROM app.jobs q JOIN app.meta ON q.id=meta.id FOR UPDATE OF q, meta NOWAIT';
+  const offset = source.lastIndexOf('q,');
+  const declaration = source.indexOf(' q JOIN') + 1;
+  expect(analyzePostgresLocalReferences(source, offset)).toMatchObject({ status: 'ready', declaration: {start: declaration, end: declaration + 1} });
+  expect(analyzePostgresLocalRename(source, offset, true, 'claim')).toMatchObject({ status: 'ready', kind: 'alias', edits: [
+    {start: source.indexOf('q.id'), text: '"claim"'}, {start: declaration, text: '"claim"'},
+    {start: source.lastIndexOf('q.id'), text: '"claim"'}, {start: offset, text: '"claim"'},
+  ] });
+  expect(analyzePostgresObjectDefinition(source, source.lastIndexOf('meta') + 1)).toMatchObject({ name: 'meta', schema: 'app' });
+});
+
+it('行锁目标整词替换并保留带引号大小写，离线补全无需目录', async () => {
+  const request = vi.fn(async () => ({items: [], incomplete: false}));
+  const edit = editor('SELECT * FROM jobs AS "Job Queue", stats s FOR UPDATE OF "Jo|unk" NOWAIT', request);
+  try {
+    expect((await edit.suggest())?.suggestions).toMatchObject([{label: {label: 'Job Queue'}, insertText: '"Job Queue"'}]);
+    expect(request).not.toHaveBeenCalled();
+  } finally { edit.provider.dispose(); }
+});
+
+it.each([
   'CREATE LOCAL TEMP TABLE IF NOT EXISTS stage(amount) USING heap WITH (fillfactor=90) ON COMMIT PRESERVE ROWS AS SELECT q.am|ount FROM public.records q WITH NO DATA',
   'CREATE UNLOGGED TABLE "stage" USING heap WITHOUT OIDS TABLESPACE pg_default AS SELECT q.am|ount FROM public.records q WITH DATA',
   'CREATE OR REPLACE TEMP VIEW "as"(total) WITH (security_invoker=true) AS SELECT q.am|ount FROM public.records q WITH CASCADED CHECK OPTION',
