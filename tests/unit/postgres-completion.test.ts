@@ -271,6 +271,51 @@ it('普通 RETURNING 的 OLD/NEW 使用写入目标，隔离 INSERT 来源和冲
     .toMatchObject({relations: [{name: 'parent', alias: 'old'}]});
 });
 
+it('ON CONFLICT DO UPDATE 区分赋值目标、既有行、EXCLUDED 和条件作用域', () => {
+  const insert = 'INSERT INTO app.items AS target SELECT x.id FROM a x JOIN b ON conflict UNION ALL SELECT id FROM c ';
+  const update = 'ON CONFLICT (id) WHERE visible DO UPDATE SET ';
+  expect(at(insert + update + 'na|me = excluded.name')?.query).toMatchObject({qualified: false,
+    relations: [{schema: 'app', name: 'items', alias: 'target', columnAccess: 'update'}]});
+  expect(at(insert + update + 'id=excluded.id, (na|me, status)=(excluded.name, true)')?.query)
+    .toMatchObject({relations: [{name: 'items', columnAccess: 'update'}]});
+  expect(at(insert + update + 'name=excluded.na|me, status=true')?.query).toMatchObject({qualified: true,
+    relations: [{schema: 'app', name: 'items', alias: 'excluded', columnAccess: 'select'}]});
+  expect(at(insert + update + 'name=target.na|me')?.query).toMatchObject({relations: [{name: 'items', alias: 'target', columnAccess: 'select'}]});
+  expect(at(insert + update + 'name=(SELECT excluded.| FROM metadata m)')?.query)
+    .toMatchObject({relations: [{name: 'items', alias: 'excluded', columnAccess: 'select'}]});
+  expect(at(insert + update + 'name=(SELECT excluded.| FROM metadata excluded)')?.query)
+    .toMatchObject({relations: [{name: 'metadata', alias: 'excluded'}]});
+  expect(at(insert + update + 'name=excluded.name WHERE target.|')?.query)
+    .toMatchObject({relations: [{name: 'items', alias: 'target', columnAccess: 'select'}]});
+  expect(at(insert + update + 'name=excluded.name WHERE tools.low|er(target.name)')?.routine)
+    .toEqual({context: 'expression', schema: 'tools'});
+  for (const sample of [
+    insert + update + 'excluded.| = target.name',
+    insert + update + 'name=x.|',
+    insert + update + 'name=app.items.|',
+    insert + 'ON CONFLICT (excluded.|) DO NOTHING',
+    insert + update + 'name=excluded.name RETURNING excluded.|',
+    'INSERT INTO app.items VALUES (excluded.|) ON CONFLICT (id) DO UPDATE SET name=excluded.name',
+    'INSERT INTO app.excluded VALUES (1) ON CONFLICT (id) DO UPDATE SET name=excluded.|',
+  ]) expect(at(sample)?.query, sample).toBeUndefined();
+});
+
+it('冲突更新目录传实际表和所需列权限，现有标签和完整替换范围保留', async () => {
+  const sql = 'INSERT INTO app.items AS t VALUES (1) ON CONFLICT (id) DO UPDATE SET ';
+  for (const [clause, columnAccess] of [['na|_tail=excluded.name', 'update'], ['name=excluded.na|_tail', 'select']] as const) {
+    const request = vi.fn(async (): Promise<PostgresCompletionResult> => ({incomplete: false,
+      items: [{kind: 'column', reference: 0, name: 'name', type: 'text'}]}));
+    const {provider, suggest} = editor(sql + clause, request, '原会话');
+    try {
+      const item = (await suggest())?.suggestions.find(candidate => candidate.insertText === '"name"');
+      const start = sql.length + clause.indexOf('na|_tail') + 1;
+      expect(item?.range).toMatchObject({startColumn: start, endColumn: start + 'na_tail'.length});
+      expect(request).toHaveBeenCalledExactlyOnceWith({kind: 'columns', prefix: 'na', connectionId: '原连接', database: '原库',
+        sessionId: '原会话', relations: [{schema: 'app', name: 'items', columnAccess}]});
+    } finally { provider.dispose(); }
+  }
+});
+
 it('RETURNING 结果可传给外层查询，暴露 JOIN 输出及显式行别名的星号', () => {
   const cte = 'WITH data(id, label) AS (VALUES (1, \'a\')), meta(id, info) AS (VALUES (1, \'b\')), changed AS (';
   const update = 'UPDATE app.items SET id=1 FROM data JOIN meta USING (id)';

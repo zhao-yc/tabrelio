@@ -22,7 +22,9 @@ const functionLayout = z.object({
 }).strict();
 export const postgresCompletionReferenceSchema = z.object({ schema: name.optional(), name,
   functionCall: functionCall.optional(), functionLayout: functionLayout.optional(),
-}).strict().refine(ref => !(ref.functionCall && ref.functionLayout));
+  columnAccess: z.enum(['select', 'update']).optional(),
+}).strict().refine(ref => !(ref.functionCall && ref.functionLayout) &&
+  (!ref.columnAccess || !ref.functionCall && !ref.functionLayout));
 export type PostgresCompletionReference = z.infer<typeof postgresCompletionReferenceSchema>;
 const routine = z.object({ context: z.enum(['expression', 'from', 'call']), schema: name.optional() }).strict();
 export type PostgresRoutineCompletionTarget = z.infer<typeof routine>;

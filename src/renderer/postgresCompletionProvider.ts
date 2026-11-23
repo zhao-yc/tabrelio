@@ -237,8 +237,8 @@ export function createPostgresCompletionProvider(options: {
         if (query?.kind === 'columns' && !joined) {
           for (const [index, ref] of query.relations.entries()) {
             if (isJoinedProjection(ref)) continue;
-            const { name, schema, projection } = ref;
-            const directory = projection?.stars ?? [{ name, ...(schema ? { schema } : {}) }];
+            const { name, schema, projection, columnAccess } = ref;
+            const directory = projection?.stars ?? [{ name, ...(schema ? { schema } : {}), ...(columnAccess ? { columnAccess } : {}) }];
             for (const source of directory) {
               references.push(source);
               origins.push(index);

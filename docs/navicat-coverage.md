@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 冲突更新分别按 `UPDATE` 列权限补全赋值目标、按 `SELECT` 列权限补全既有行和 `excluded` 待插入行。动作谓词和相关子查询沿用各自可见范围，`RETURNING` 保持独立作用域。Q01、R01 继续为部分覆盖。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)
+
 2026-11-24 源码增量。PostgreSQL 的 `INSERT`、`UPDATE`、`DELETE` 支持 `RETURNING` 中的新旧行字段补全。显式行别名遵循实际限定名，`UPDATE FROM` 和 `DELETE USING` 可补全可见来源，返回列和星号可传到外层 CTE。Q01、R01 继续为部分覆盖。 [PostgreSQL RETURNING](https://www.postgresql.org/docs/18/dml-returning.html)
 
 2026-11-24 源码增量。PostgreSQL 的 `JOIN … ON` 字段补全遵循当前连接作用域，覆盖括号连接、相关子查询、`UPDATE FROM` 和 `DELETE USING`。后续条件可补全前序连接的合并键，目录请求限定在实际输入。Q01、R01 继续为部分覆盖。 [PostgreSQL 连接作用域](https://www.postgresql.org/docs/18/queries-table-expressions.html#QUERIES-JOIN)

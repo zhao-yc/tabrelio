@@ -824,6 +824,17 @@ function readInsertTarget(parts: Part[], trace?: ReferenceTrace): { target: Scop
   return { target, next: index };
 }
 
+/** 来源的 JOIN 条件也可能写作 ON conflict。只有与动作配对的最后一组关键字才是冲突子句。 */
+function readConflictAction(parts: Part[], start: number, end: number): { on: number; action: number } | null | undefined {
+  const action = parts.findIndex((_, index) => index >= start && index + 1 < end && mergeKeyword(parts, index) === 'DO' &&
+    ['UPDATE', 'NOTHING'].includes(mergeKeyword(parts, index + 1)));
+  if (action < 0) return;
+  for (let on = action - 2; on >= start; on--) {
+    if (mergeKeyword(parts, on) === 'ON' && mergeKeyword(parts, on + 1) === 'CONFLICT') return { on, action };
+  }
+  return null;
+}
+
 /** INSERT 来源独立解析。目标只在冲突索引、更新动作和 RETURNING 的相应范围可见。 */
 function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], trace: ReferenceTrace): Projection | undefined {
   const destination = readInsertTarget(parts, trace);
@@ -839,26 +850,19 @@ function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], tra
     if (!['SYSTEM', 'USER'].includes(keyword(parts[index + 1])) || keyword(parts[index + 2]) !== 'VALUE') return;
     index += 3;
   }
-  const returning = parts.findIndex((part, i) => i >= index && keyword(part) === 'RETURNING');
+  const returning = parts.findIndex((_, position) => position >= index && mergeKeyword(parts, position) === 'RETURNING');
   const end = returning < 0 ? parts.length : returning;
-  const action = parts.findIndex((part, i) => i >= index && i + 1 < end && keyword(part) === 'DO' &&
-    ['UPDATE', 'NOTHING'].includes(keyword(parts[i + 1])));
-  let conflict = action;
-  if (action >= 0) {
-    // JOIN ON conflict 可以出现在来源中，只有与 DO 动作配对的后置子句才切分来源。
-    for (conflict = action - 2; conflict >= index; conflict--) {
-      if (keyword(parts[conflict]) === 'ON' && keyword(parts[conflict + 1]) === 'CONFLICT') break;
-    }
-    if (conflict < index) return;
-  }
-  const source = parts.slice(index, conflict < 0 ? end : conflict);
+  const conflict = readConflictAction(parts, index, end);
+  if (conflict === null) return;
+  const source = parts.slice(index, conflict?.on ?? end);
   const defaults = source.length === 2 && keyword(source[0]) === 'DEFAULT' && keyword(source[1]) === 'VALUES';
   if (!defaults) {
     if (!startsReferenceQuery(source[0])) return;
     parseQuery(source, scope, outer, undefined, trace);
   }
-  if (action >= 0 && !trace.unsupported) {
-    const arbiter = parts.slice(conflict + 2, action);
+  if (conflict && !trace.unsupported) {
+    const { on, action } = conflict;
+    const arbiter = parts.slice(on + 2, action);
     if (!traceConflictTarget(arbiter, scope, target, outer, trace)) return;
     if (keyword(parts[action + 1]) === 'UPDATE') {
       if (!arbiter.length || keyword(parts[action + 2]) !== 'SET') return;
@@ -1653,14 +1657,19 @@ function traceMergeAction(parts: Part[], inserts: boolean, scope: Scope, refs: S
   return !trace.unsupported;
 }
 
-/** 写入列来自目标；赋值右侧和 VALUES 表达式继续使用各 WHEN 的作用域。 */
-function completeMergeAction(parts: Part[], refs: ScopedRelation[], target: ScopedRelation, analysis: MergeAnalysis, end: number): void {
+/** 写入列来自目标；赋值右侧、谓词和 VALUES 表达式使用调用方限定的关系。 */
+function completeWriteAction(parts: Part[], refs: ScopedRelation[], target: ScopedRelation, analysis: MergeAnalysis, end: number): void {
   const { context } = analysis;
   if (!context || analysis.active || context.offset > end) return;
   const targetColumns = () => {
     if (!punct(context.left.at(-1), '.')) analysis.active = { projection: unknown, query: columns([target], [], context.left) };
   };
   if (keyword(parts[0]) === 'UPDATE' && keyword(parts[1]) === 'SET' && context.offset >= parts[1].end) {
+    const where = parts.findIndex((_, index) => index > 1 && mergeKeyword(parts, index) === 'WHERE');
+    if (where >= 0 && context.offset >= parts[where].start) {
+      mergeExpression(parts.slice(where + 1), refs, analysis, parts[where].end, end);
+      return;
+    }
     let equals = -1;
     for (let i = 2; i < parts.length && parts[i].end <= context.start; i++) {
       if (punct(parts[i], ',')) equals = -1;
@@ -1759,7 +1768,7 @@ function parseMerge(parts: Part[], analysis: MergeAnalysis): Parsed | undefined 
       if (trace) {
         if (!traceMergeAction(action, inserts, scope, visible, outer, trace)) return;
       } else if (context && context.offset >= parts[then].end) {
-        completeMergeAction(action, visible, relation, analysis, parts[nextClause]?.start ?? Infinity);
+        completeWriteAction(action, visible, relation, analysis, parts[nextClause]?.start ?? Infinity);
       }
     }
   }
@@ -1838,13 +1847,27 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       const projection = traceInsert(main, scope, outer, trace);
       return projection ? { projection } : unsupported();
     }
-    // INSERT SELECT 的来源（包括 UNION）及冲突动作都不会向 RETURNING 公开关系。
-    if (returningHere) {
-      const destination = readInsertTarget(main);
-      if (!destination) return { projection: unknown };
+    const destination = readInsertTarget(main);
+    if (destination) {
       const { target } = destination;
-      return parseReturning(main.slice(returning), [target], target, { scope, outer, context, names: new Set() }) ?? { projection: unknown };
+      // INSERT SELECT 的来源和冲突动作都不会向 RETURNING 公开关系。
+      if (returningHere) return parseReturning(main.slice(returning), [target], target,
+        { scope, outer, context, names: new Set() }) ?? { projection: unknown };
+      if (context) {
+        const end = returning < 0 ? main.length : returning;
+        const conflict = readConflictAction(main, destination.next, end);
+        if (conflict && context.offset >= main[conflict.action].end && context.offset < (main[end]?.start ?? Infinity)) {
+          const analysis: MergeAnalysis = { scope, outer, context, names: new Set() };
+          // EXCLUDED 读取目标目录，只有动作表达式可见。写入位置使用独立的 UPDATE 列权限。
+          const current: ScopedRelation = { ...target, columnAccess: 'select' };
+          const pending: ScopedRelation = { ...current, alias: 'excluded', declaration: undefined, qualifiedOnly: true };
+          completeWriteAction(main.slice(conflict.action + 1, end), [current, pending],
+            { ...target, columnAccess: 'update' }, analysis, main[end]?.start ?? Infinity);
+          return analysis.active ?? { projection: unknown };
+        }
+      }
     }
+    if (returningHere) return { projection: unknown };
   }
   if (command === 'MERGE') {
     if (first === 'WITH' && keyword(parts[1]) === 'RECURSIVE') return unsupported();

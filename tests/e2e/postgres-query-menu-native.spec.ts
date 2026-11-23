@@ -2457,6 +2457,62 @@ test('PostgreSQL 普通 RETURNING 补全前后行、来源及写入 CTE 的返�
   await quitDesktop();
 });
 
+test('PostgreSQL 冲突更新按真实会话的 SELECT 和 UPDATE 列权限补全', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query(`CREATE TABLE public.upsert_access (id int PRIMARY KEY, count_read int, count_write int, count_hidden int);
+      INSERT INTO public.upsert_access VALUES (1,3,0,4);
+      CREATE ROLE upsert_column_role NOLOGIN;
+      GRANT USAGE ON SCHEMA public TO upsert_column_role;
+      GRANT INSERT (id,count_read), SELECT (id,count_read), UPDATE (count_write) ON public.upsert_access TO upsert_column_role;`);
+    const setRole = 'SET ROLE upsert_column_role';
+    await prepare({id: '', name: '隔离 PostgreSQL 冲突更新补全', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, setRole);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await command('execute-all');
+    await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === setRole)).toBe(true);
+    await expect.poll(() => enabled('execute-all')).toBe(true);
+    const baseline = await history(), identity = (await inspectModel()).identity;
+    const accept = async (draft: string, column: string) => {
+      await replaceDraft(draft);
+      await modelSelection(1, draft.indexOf('count_tail') + 'count_'.length + 1);
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText([column]);
+      await page.keyboard.press('Enter');
+      const completed = draft.replace('count_tail', postgresIdentifier(column));
+      await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+      expect(await history()).toEqual(baseline);
+      expect((await inspectModel()).identity).toEqual(identity);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+      return completed;
+    };
+    const header = 'INSERT INTO public.upsert_access AS t (id,count_read) VALUES (1,9) ON CONFLICT (id) DO UPDATE SET ';
+    const left = await accept(header + 'count_tail=excluded.count_read WHERE excluded.count_read>t.count_read', 'count_write');
+    const right = await accept(left.replace('=excluded.count_read', '=excluded.count_tail'), 'count_read');
+    const predicate = await accept(right.replace('WHERE excluded.count_read', 'WHERE excluded.count_tail'), 'count_read');
+    // 独立连接用相同角色执行完整语句，验收后回滚以保留原行和权限状态。
+    await observer.query('BEGIN');
+    try {
+      await observer.query('SET LOCAL ROLE upsert_column_role');
+      expect((await observer.query(predicate)).rowCount).toBe(1);
+      await observer.query('RESET ROLE');
+      expect((await observer.query({text: 'SELECT * FROM public.upsert_access', rowMode: 'array'})).rows).toEqual([[1,3,9,4]]);
+    } finally { await observer.query('ROLLBACK'); }
+    expect((await observer.query({text: 'SELECT * FROM public.upsert_access', rowMode: 'array'})).rows).toEqual([[1,3,0,4]]);
+    await page.screenshot({path: info.outputPath('PostgreSQL冲突更新列权限.png'), animations: 'disabled'});
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL 字段悬停读取真实目录并区分同名、临时和歧义来源', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

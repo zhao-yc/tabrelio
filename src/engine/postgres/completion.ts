@@ -145,8 +145,8 @@ function functionColumnCtes(session: boolean): string {
 
 /** 原会话使用服务器实际可见性；独立连接继续对未限定的重名关系保持保守。 */
 async function columns(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'columns' }>, session: boolean): Promise<PostgresCompletionResult> {
-  const refs = JSON.stringify(input.relations.map(({ name, schema, functionCall, functionLayout }, index) =>
-    ({ name, schema, index, ...(functionCall || functionLayout ? { function_source: true } : {}) })));
+  const refs = JSON.stringify(input.relations.map(({ name, schema, functionCall, functionLayout, columnAccess }, index) =>
+    ({ name, schema, index, column_access: columnAccess, ...(functionCall || functionLayout ? { function_source: true } : {}) })));
   const members = input.relations.flatMap((ref, index) => {
     const layout = ref.functionLayout;
     const sources = layout?.members ?? (ref.functionCall ? [{ kind: 'function' as const, name: ref.name, schema: ref.schema, call: ref.functionCall }] : []);
@@ -159,9 +159,9 @@ async function columns(connection: PostgresConnection, input: Extract<PostgresCo
   const result = await connection.query(`
     WITH ${namespaces(session)}, refs AS (
       SELECT * FROM pg_catalog.jsonb_to_recordset($1::pg_catalog.jsonb)
-        AS r(index pg_catalog.int4, schema pg_catalog.text, name pg_catalog.text, function_source pg_catalog.bool)
+        AS r(index pg_catalog.int4, schema pg_catalog.text, name pg_catalog.text, function_source pg_catalog.bool, column_access pg_catalog.text)
     ), matched AS (
-      SELECT r.index, c.oid
+      SELECT r.index, c.oid, r.column_access
       FROM refs r JOIN pg_catalog.pg_class c ON c.relname::pg_catalog.text ${eq} r.name
       JOIN namespaces n ON n.oid ${eq} c.relnamespace
       WHERE r.function_source IS NOT TRUE AND c.relkind::pg_catalog.text ${eq} ANY ${relationKinds} AND ${relationPermission}
@@ -177,7 +177,7 @@ async function columns(connection: PostgresConnection, input: Extract<PostgresCo
     SELECT r.index, a.attname::pg_catalog.text AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type
     FROM matched r JOIN pg_catalog.pg_attribute a ON a.attrelid ${eq} r.oid
     WHERE a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped
-      AND pg_catalog.has_column_privilege(r.oid, a.attnum, 'SELECT,INSERT,UPDATE,REFERENCES')
+      AND pg_catalog.has_column_privilege(r.oid, a.attnum, coalesce(r.column_access, 'SELECT,INSERT,UPDATE,REFERENCES'))
       AND pg_catalog.strpos(pg_catalog.lower(a.attname::pg_catalog.text), pg_catalog.lower($2::pg_catalog.text)) ${eq} 1
     ${functions ? `UNION ALL SELECT index, name, type FROM function_columns
       WHERE pg_catalog.strpos(pg_catalog.lower(name), pg_catalog.lower($2::pg_catalog.text)) ${eq} 1` : ''}

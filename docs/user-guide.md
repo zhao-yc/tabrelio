@@ -988,6 +988,8 @@ PostgreSQL 的 `JOIN USING` 和 `NATURAL JOIN` 合并键在结果里只建议一
 
 编写 PostgreSQL 18 及以上版本的 `RETURNING` 时，可在 `old.`、`new.` 或 `WITH (OLD AS …, NEW AS …)` 声明的别名后补全目标表列。`UPDATE FROM` 和 `DELETE USING` 的来源列也可补全。写入 CTE 的返回列可在外层查询继续补全，包括展开的星号。接受候选只修改草稿。 [PostgreSQL RETURNING](https://www.postgresql.org/docs/18/dml-returning.html)
 
+编写 PostgreSQL 的 `INSERT … ON CONFLICT … DO UPDATE` 时，`SET` 左侧按 `UPDATE` 权限补全目标列。在赋值右侧和动作 `WHERE` 中，可用目标表别名读取既有行，用 `excluded.` 读取待插入行，两者都按 `SELECT` 权限补全。存在已连接会话时，权限及表目录按该会话解析。 [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)
+
 把光标放在 PostgreSQL 的整体 JOIN 别名或 `USING (...) AS alias` 的别名限定符上，可用 F12 跳到声明、Shift+F12 查找引用、F2 整组改名。改名保留内部同名别名和同名连接键。能确认来源的整体 JOIN 列清单也可按 F2 改名。遇到无法确认的裸名称时，编辑器会保留原草稿。 [PostgreSQL SELECT](https://www.postgresql.org/docs/18/sql-select.html)
 
 在 PostgreSQL 的显式投影别名、列清单或已确认引用上按 F2，可整组更新当前语句，按 Ctrl／Cmd+Z 一次撤销。名称冲突、未确认的同名依赖及 `NATURAL JOIN` 会阻止整组修改，保留草稿。[PostgreSQL SELECT 名称规则](https://www.postgresql.org/docs/18/sql-select.html)
