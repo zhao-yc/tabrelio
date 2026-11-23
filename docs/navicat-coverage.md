@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite 触发体复用普通 SQL 的表和字段补全，按实际触发器归属处理永久与临时库。同名 `NEW` 或 `OLD` 优先匹配真实来源字段，缺列时回退到触发行。Q01 继续为部分覆盖。 [SQLite 触发器](https://www.sqlite.org/lang_createtrigger.html)
+
 2026-11-23 源码增量。SQLite 触发器编辑支持目标表或视图、`UPDATE OF` 列和 `NEW`／`OLD` 行字段补全及悬停。按实际触发事件和目标命名空间读取目录。Q01 继续为部分覆盖。 [SQLite 触发器](https://www.sqlite.org/lang_createtrigger.html)
 
 2026-11-23 源码增量。SQLite 外键补全对现有父表按子键列数、已选父列和默认排序规则筛选主键及完整唯一索引，支持复合键反序。Q01 继续为部分覆盖。 [SQLite 父键规则](https://www.sqlite.org/foreignkeys.html#fk_indexes)

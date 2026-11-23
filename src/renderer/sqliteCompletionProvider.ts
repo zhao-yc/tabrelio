@@ -86,6 +86,7 @@ export function createSqliteCompletionProvider(ports: Ports) {
                   query.kind === 'functions' && query.deterministicOnly === true && entry.kind === 'function' && entry.signatures.some(signature => signature.type !== 'scalar');
               }
               if (entry.kind === 'function' || entry.kind === 'collation') return true;
+              if (query.kind === 'trigger-owner') return entry.kind !== query.triggerTarget || fold(entry.name) !== fold(query.table);
               if (query.schema !== undefined && entry.schema !== query.schema) return true;
               if (query.kind === 'table-options') return entry.kind !== 'table-options' || fold(entry.name) !== fold(query.table);
               if (query.kind === 'relations') return query.triggerTarget ? entry.kind !== query.triggerTarget :

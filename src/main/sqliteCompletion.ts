@@ -214,6 +214,14 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
       entry.signatures.sort((a, b) => a.arity - b.arity);
       if (!append(entry)) break;
     }
+  } else if (input.kind === 'trigger-owner') {
+    // 先按原会话定位，再核对触发目标类型。同名临时对象遮蔽时不回退到主库。
+    const { rows: [target] } = await tableIdentity(driver, input, control);
+    if (target?.[2] === input.triggerTarget && typeof target[0] === 'string' && !/^sqlite_/i.test(target[0])) {
+      const [name, schema] = target;
+      if (typeof name !== 'string' || schema !== 'main' && schema !== 'temp') throw Error('SQLite触发目标目录无效');
+      append({ kind: input.triggerTarget, name, schema });
+    }
   } else if (input.kind === 'table-options') {
     const { rows: [target] } = await tableIdentity(driver, input, control, true);
     if (target?.[2] === 'table' && typeof target[0] === 'string' && !/^sqlite_/i.test(target[0])) {

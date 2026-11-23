@@ -33,6 +33,7 @@ export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('functions'), prefix: base.prefix.regex(/^[a-z][a-z0-9_]*$/i), deterministicOnly: z.literal(true).optional() }).strict(),
   z.object({ ...base, kind: z.literal('collations') }).strict(),
   z.object({ ...base, kind: z.literal('table-options'), schema: schema.optional(), table: name, prefix: z.literal('') }).strict(),
+  z.object({ ...base, kind: z.literal('trigger-owner'), table: name, triggerTarget: sqliteTriggerTargetMode, prefix: z.literal('') }).strict(),
   z.object({ ...base, kind: z.literal('stamp') }).strict(),
 ]);
 export const sqliteCompletionEntrySchema = z.discriminatedUnion('kind', [

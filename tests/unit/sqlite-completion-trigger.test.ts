@@ -44,11 +44,13 @@ it.each([
   'CREATE TRIGGER tr DELETE ON source WHEN NEW.va|lue IS NULL BEGIN SELECT 1; END',
   'CREATE TRIGGER tr UPDATE ON source BEGIN UPDATE log SET NEW.i|d = 2; END',
   'CREATE TRIGGER tr UPDATE ON source BEGIN INSERT INTO log(NEW.i|d) VALUES(1); END',
-  'CREATE TRIGGER tr UPDATE ON source BEGIN SELECT NEW.i|d FROM other AS NEW; END',
   'CREATE TRIGGER tr UPDATE ON source BEGIN SELECT 1 FROM NEW.i|d; END',
   'CREATE TRIGGER tr UPDATE ON source BEGIN UPDATE log SET message = 2 RETURNING NEW.i|d; END',
   'CREATE TRIGGER main.tr UPDATE ON temp.so|urce',
-  'CREATE TRIGGER tr UPDATE ON source BEGIN SELECT x.| FROM other x; END',
+  'CREATE TRIGGER tr UPDATE ON source BEGIN UPDATE main.other SET va|lue = 1; END',
+  'CREATE TRIGGER tr UPDATE ON main.source BEGIN SELECT x.| FROM temp.other x; END',
+  'CREATE TRIGGER tr UPDATE ON source BEGIN DELETE FROM other WHERE va|lue = 1 ORDER BY id LIMIT 1; END',
+  'CREATE TRIGGER tr UPDATE ON source BEGIN INSERT INTO oth|er DEFAULT VALUES; END',
 ])('不可用事件、遮蔽和非表达式位置保留原隔离：%s', sql => {
   expect(analyze(sql).status).toBe('blocked');
 });
@@ -75,10 +77,66 @@ it('UPDATE OF 从目标目录排除已选列，后继正文及局部重命名不
     .toMatchObject({ status: 'ready', relations: [{ name: 'actual', alias: 'a' }] });
 });
 
-it('行名候选可直接插入限定点号，直到请求字段才读原目标目录', async () => {
-  const load = vi.fn<(_: SqliteCompletionLookup) => Promise<SqliteCompletionOutput>>();
-  const context = ready('CREATE TRIGGER tr INSERT ON source BEGIN INSERT INTO log VALUES(NE|); END');
+it('行名候选可直接插入限定点号，同行的原生函数候选复用独立函数目录', async () => {
+  const load = vi.fn(async (_query: SqliteCompletionLookup): Promise<SqliteCompletionOutput> => ({ stamp: '1:0', incomplete: false, entries: [] }));
+  const context = analyze('CREATE TEMP TRIGGER tr INSERT ON source BEGIN INSERT INTO log VALUES(NE|); END');
+  if (context.status !== 'ready') throw Error(context.reason);
   expect((await sqliteCompletionSuggestions(context, { load })).items)
     .toEqual([expect.objectContaining({ label: 'NEW', insertText: 'NEW.', trigger: true })]);
-  expect(load).not.toHaveBeenCalled();
+  expect(load).toHaveBeenCalledExactlyOnceWith({ kind: 'functions', prefix: 'NE' });
+});
+
+it('动作目录以实际触发器归属为准，DML 目标只插入不带库名的单段名称', async () => {
+  const load = vi.fn(async (query: SqliteCompletionLookup): Promise<SqliteCompletionOutput> => ({
+    stamp: '1:0', incomplete: false, entries: query.kind === 'trigger-owner' ?
+      [{ kind: 'table', name: 'source', schema: 'main' }] :
+      [{ kind: 'table', name: 'memo', schema: 'main' }],
+  }));
+  const selected = analyze('CREATE TRIGGER tr UPDATE ON source BEGIN UPDATE m|emo SET text=1; END;');
+  if (selected.status !== 'ready') throw Error(selected.reason);
+  expect(selected.triggerBody).toEqual({ owner: { table: 'source', triggerTarget: 'table' }, writeTarget: true });
+  expect((await sqliteCompletionSuggestions(selected, { load })).items).toContainEqual(expect.objectContaining({ label: 'memo', insertText: '"memo"' }));
+  expect((await sqliteCompletionSuggestions({ ...selected, target: { ...selected.target, prefix: '' } }, { load })).items
+    .filter(item => item.kind === 'database')).toEqual([]);
+  expect(load.mock.calls.slice(0, 2).map(([input]) => input)).toEqual([
+    { kind: 'trigger-owner', table: 'source', triggerTarget: 'table', prefix: '' }, { kind: 'relations', schema: 'main', prefix: 'm' },
+  ]);
+  const temp = analyze('CREATE TEMP TRIGGER tr UPDATE ON main.source BEGIN SELECT note.| FROM memo note; END;');
+  expect(temp).toMatchObject({ status: 'ready', triggerBody: { owner: 'session' }, relations: [{ name: 'memo', alias: 'note' }] });
+  const implicitTemp = analyze('CREATE TRIGGER tr UPDATE ON temp.source BEGIN SELECT note.| FROM memo note; END;');
+  expect(implicitTemp).toMatchObject({ status: 'ready', triggerBody: { owner: 'session' }, relations: [{ name: 'memo', alias: 'note' }] });
+});
+
+it('同名 NEW 来源优先使用真实列，列不存在时回退到触发行，悬停采用同一规则', async () => {
+  const load = vi.fn(async (query: SqliteCompletionLookup): Promise<SqliteCompletionOutput> => {
+    const columns = (table: string, names: string[]) => names.map(name => ({
+      kind: 'column' as const, name, schema: 'main' as const, table, declaredType: 'TEXT', generated: false, hidden: false,
+    }));
+    return { stamp: '1:0', incomplete: false, entries: query.kind === 'columns' ?
+      columns(query.table, (query.table === 'source' ? ['Value', 'verified_only'] : ['value']).filter(name => name.toLowerCase().startsWith(query.prefix))) : [] };
+  });
+  const sql = (field: string) => 'CREATE TRIGGER tr UPDATE ON main.source BEGIN SELECT NEW.' + field + ' FROM other AS NEW; END;';
+  const context = analyze(sql('v|'));
+  if (context.status !== 'ready') throw Error(context.reason);
+  expect((await sqliteCompletionSuggestions(context, { load })).items.map(item => [item.label, item.detail.includes('触发器 NEW 行')]))
+    .toEqual([['value', false], ['verified_only', true]]);
+  const real = analyze(sql('va|lue'), 'hover'), pseudo = analyze(sql('verified_o|nly'), 'hover');
+  if (real.status !== 'ready' || pseudo.status !== 'ready') throw Error('触发行悬停范围错误');
+  expect(await sqliteFieldHover(real, { load })).toContain('"main"."other"');
+  expect(await sqliteFieldHover(pseudo, { load })).toContain('SQLite 触发器 NEW 行');
+});
+
+it('隐式永久触发器在定位到主库后，也能解析三段限定列名', async () => {
+  const load = vi.fn(async (query: SqliteCompletionLookup): Promise<SqliteCompletionOutput> => ({
+    stamp: '1:0', incomplete: false, entries: query.kind === 'trigger-owner' ?
+      [{ kind: 'table', schema: 'main', name: 'source' }] :
+      [{ kind: 'column', name: 'label', schema: 'main', table: 'memo', declaredType: 'TEXT', generated: false, hidden: false }],
+  }));
+  const context = analyze('CREATE TRIGGER tr UPDATE ON source BEGIN SELECT main.memo.la|bel FROM memo; END;');
+  const hover = analyze('CREATE TRIGGER tr UPDATE ON source BEGIN SELECT main.memo.la|bel FROM memo; END;', 'hover');
+  if (context.status !== 'ready' || hover.status !== 'ready') throw Error('触发体三段限定范围错误');
+  expect((await sqliteCompletionSuggestions(context, { load })).items).toContainEqual(expect.objectContaining({ label: 'label', insertText: '"label"' }));
+  expect(await sqliteFieldHover(hover, { load })).toContain('"main"."memo"');
+  expect(load.mock.calls.map(([input]) => input.kind === 'columns' ? input.schema : input.kind))
+    .toEqual(['trigger-owner', 'main', 'trigger-owner', 'main']);
 });

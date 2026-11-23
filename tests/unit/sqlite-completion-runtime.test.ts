@@ -70,6 +70,11 @@ describe('SQLite补全真实运行时与原会话边界', () => {
     expect(await relations('table')).toEqual([]);
     expect(await relations('table', 'main')).toEqual([{ kind: 'table', name: 'subject', schema: 'main' }]);
     expect(await relations('view')).toEqual([{ kind: 'view', name: 'subject', schema: 'temp' }, { kind: 'view', name: 'subject_view', schema: 'main' }]);
+    expect((await completion(app, p.id, { kind: 'trigger-owner', triggerTarget: 'table', table: 'subject' }, sessionId)).entries).toEqual([]);
+    expect((await completion(app, p.id, { kind: 'trigger-owner', triggerTarget: 'view', table: 'subject' }, sessionId)).entries)
+      .toEqual([{ kind: 'view', name: 'subject', schema: 'temp' }]);
+    expect((await completion(app, p.id, { kind: 'trigger-owner', triggerTarget: 'view', table: 'subject_view' }, sessionId)).entries)
+      .toEqual([{ kind: 'view', name: 'subject_view', schema: 'main' }]);
     expect((await completion(app, p.id, { kind: 'columns', table: 'subject' }, sessionId)).entries)
       .toEqual([expect.objectContaining({ name: 'temp_id', schema: 'temp' })]);
     expect((await completion(app, p.id, { kind: 'columns', table: 'subject', schema: 'main' }, sessionId)).entries)

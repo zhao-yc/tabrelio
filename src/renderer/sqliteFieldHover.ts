@@ -1,6 +1,6 @@
 import { sqliteCompletionRelationMatches, type SqliteCompletionAnalysis, type SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry } from '../shared/sqliteCompletion';
-import { sqliteCollationDetails, sqliteColumnTypeDetails, sqliteColumnTypeMode, sqliteForeignKeyCatalog, sqliteFunctionDetails, sqliteIndexDetails, sqliteTriggerCatalog, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
+import { resolveSqliteTriggerBody, sqliteCollationDetails, sqliteColumnTypeDetails, sqliteColumnTypeMode, sqliteForeignKeyCatalog, sqliteFunctionDetails, sqliteIndexDetails, sqliteTriggerCatalog, type SqliteCompletionDirectory } from './sqliteCompletionSuggestions';
 import { sqliteFieldHoverZh as text } from './locales/sqliteFieldHover.zh-CN';
 import { sqliteCompletionZh } from './locales/sqliteCompletion.zh-CN';
 import { sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
@@ -26,6 +26,11 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   const name = analysis.target.prefix, qualifiers = analysis.qualifiers;
   let prefix = name.slice(0, sqliteCompletionLimits.prefixUnits);
   if (/[\uD800-\uDBFF]$/.test(prefix)) prefix = prefix.slice(0, -1);
+  const body = analysis.triggerBody ? await resolveSqliteTriggerBody(analysis.triggerBody, directory) : undefined;
+  if (body?.status === 'unavailable') return;
+  if (body) directory = body.directory;
+  const fallbackRow = () => analysis.triggerBody?.fallback && !sqliteRowidName.test(name) ?
+    sqliteFieldHover({ ...analysis, triggerBody: undefined, trigger: analysis.triggerBody.fallback }, directory) : undefined;
   if (analysis.columnType) {
     const { strict } = await sqliteColumnTypeMode(analysis.columnType, directory);
     if (strict === undefined) return;
@@ -105,10 +110,10 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
     if (result.incomplete) return;
     const column = result.columns.find(column => fold(column.name) === fold(name));
     if (column) return fieldHover(alias, column.name, column.entry, column.tableFunction === true, sqliteCompletionZh.joinGroup);
-    return;
+    return fallbackRow();
   }
   const bound = analysis.relations.filter(relation => relation.kind === 'physical' || !relation.declaration);
-  const selected = bound.filter(relation => sqliteCompletionRelationMatches(relation, qualifiers) &&
+  const selected = bound.filter(relation => sqliteCompletionRelationMatches(relation, qualifiers, body?.schema) &&
     (qualifiers.length || relation.kind !== 'physical' || relation.dmlRole !== 'excluded'));
   if (qualifiers.length && selected.length !== 1) return;
   const candidates: { relation: SqliteCompletionRelation; column: string; entry?: Extract<SqliteCompletionEntry, { kind: 'column' }>; tableFunction?: true }[] = [];
@@ -143,6 +148,7 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
       return aliasHover();
     }
   }
+  if (!candidates.length) return fallbackRow();
   if (candidates.length !== 1) return;
   const { relation, column, entry, tableFunction } = candidates[0];
   if (relation.afterOuterJoin) return;

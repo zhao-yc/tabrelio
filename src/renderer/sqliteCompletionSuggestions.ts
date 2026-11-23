@@ -1,4 +1,4 @@
-import { sqliteCompletionRelationMatches, sqliteQueryBodyKeywords, type SqliteCompletionAnalysis, type SqliteForeignKeyContext, type SqliteTriggerContext } from '../shared/sqliteCompletionAnalysis';
+import { sqliteCompletionRelationMatches, sqliteQueryBodyKeywords, type SqliteCompletionAnalysis, type SqliteForeignKeyContext, type SqliteTriggerBodyContext, type SqliteTriggerContext } from '../shared/sqliteCompletionAnalysis';
 import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionIndexes, sqliteCompletionLimits, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 import { sqliteTableImportAffinity } from '../shared/sqliteTableImport';
@@ -51,6 +51,25 @@ export function sqliteTriggerCatalog(
   return directory.load({ kind: 'columns', table, prefix, ...(schema ? { schema } : {}) });
 }
 
+/** 非 TEMP 触发器的所有动作目录固定到主库。未限定 ON 目标时先由原会话确定实际归属。 */
+export async function resolveSqliteTriggerBody(
+  context: SqliteTriggerBodyContext, directory: SqliteCompletionDirectory,
+): Promise<{ status: 'ready'; directory: SqliteCompletionDirectory; schema?: 'main' } | { status: 'unavailable'; incomplete: boolean }> {
+  const { owner } = context;
+  if (owner === 'session') return { status: 'ready', directory };
+  if (owner !== 'main') {
+    const catalog = await directory.load({ kind: 'trigger-owner', table: owner.table, triggerTarget: owner.triggerTarget, prefix: '' });
+    const entry = catalog.entries[0];
+    if (catalog.incomplete || entry?.kind !== owner.triggerTarget || fold(entry.name) !== fold(owner.table)) return { status: 'unavailable', incomplete: catalog.incomplete };
+    if (entry.schema === 'temp') return { status: 'ready', directory };
+  }
+  return { status: 'ready', schema: 'main', directory: { load(query) {
+    if (query.kind !== 'columns' && query.kind !== 'relations' && query.kind !== 'indexes') return directory.load(query);
+    if (query.schema === 'temp') throw Error('SQLite永久触发体不能读取TEMP关系');
+    return directory.load({ ...query, schema: 'main' });
+  } } };
+}
+
 const keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'ON', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'WITH', 'AS', 'DISTINCT', 'UNION ALL', 'IS NULL', 'IS NOT NULL', 'RETURNING', 'WINDOW', 'OVER', 'FILTER', 'PARTITION BY', 'ROWS', 'RANGE', 'BETWEEN', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'CURRENT ROW', 'EXPLAIN QUERY PLAN'];
 const windowSpecKeywords = ['PARTITION BY', 'ORDER BY', 'ROWS', 'RANGE', 'GROUPS'];
 
@@ -94,6 +113,10 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     if (items.length >= sqliteCompletionLimits.suggestions) { incomplete = true; return; }
     seen.add(key); items.push(item);
   };
+  const triggerBody = analysis.triggerBody;
+  const body = triggerBody ? await resolveSqliteTriggerBody(triggerBody, directory) : undefined;
+  if (body?.status === 'unavailable') return { items, incomplete: body.incomplete };
+  if (body) directory = body.directory;
   if (analysis.columnType) {
     const { strict, incomplete } = await sqliteColumnTypeMode(analysis.columnType, directory);
     if (strict !== undefined) for (const name of strict ? strictColumnTypes : ordinaryColumnTypes) {
@@ -272,11 +295,12 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   }
   if (analysis.syntax.includes('relation') && qualifiers.length <= 1) {
     const explicit = qualifiers.length === 1 && ['main', 'temp'].includes(fold(qualifiers[0])) ? fold(qualifiers[0]) as 'main' | 'temp' : undefined;
-    const schema = explicit ?? analysis.viewSchema ?? analysis.indexTarget?.schema;
-    if (!qualifiers.length || explicit) {
-      if (!explicit && !analysis.indexTarget) {
+    const fixed = body?.schema ?? analysis.viewSchema;
+    const schema = explicit ?? fixed ?? analysis.indexTarget?.schema;
+    if ((!qualifiers.length || explicit) && (!explicit || !fixed || explicit === fixed)) {
+      if (!explicit && !analysis.indexTarget && !triggerBody?.writeTarget) {
         for (const local of declarations) add({ label: local.name, kind: 'table', insertText: quote(local.name), detail: text.cte });
-        for (const namespace of analysis.viewSchema ? [analysis.viewSchema] : ['main', 'temp']) add({ label: namespace, kind: 'database', insertText: quote(namespace) + '.', detail: text.schema, trigger: true });
+        for (const namespace of fixed ? [fixed] : ['main', 'temp']) add({ label: namespace, kind: 'database', insertText: quote(namespace) + '.', detail: text.schema, trigger: true });
       }
       const metadata = await directory.load({ kind: 'relations', prefix: analysis.target.prefix, ...(schema ? { schema } : {}),
         ...(analysis.indexTarget ? { indexTable: true } : {}), ...(analysis.alterTable ? { alterTable: true } : {}) }); incomplete ||= metadata.incomplete;
@@ -288,7 +312,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     }
   }
   if (analysis.syntax.includes('column')) {
-    const selected = bound.filter(relation => sqliteCompletionRelationMatches(relation, qualifiers));
+    const selected = bound.filter(relation => sqliteCompletionRelationMatches(relation, qualifiers, body?.schema));
     if (qualifiers.length && selected.length > 1) return { items: [], incomplete: true };
     const outputAliases = analysis.outputAliases, sourceNames = new Set<string>();
     const addOutputAlias = (name: string) => add({ label: name, kind: 'column', insertText: quote(name), detail: text.outputAlias });
@@ -335,6 +359,20 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
         add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail, trigger: true });
       }
     }
+    for (const row of triggerBody?.rows ?? []) {
+      const label = row.toUpperCase();
+      add({ label, kind: 'alias', insertText: label + '.', detail: text.triggerRow[row], trigger: true });
+    }
+    const fallback = triggerBody?.fallback;
+    if (fallback && selected.length === 1 && !incomplete) {
+      const catalog = await sqliteTriggerCatalog(fallback, analysis.target.prefix, directory);
+      incomplete ||= catalog.incomplete;
+      for (const entry of catalog.entries) if (entry.kind === 'column' && !entry.hidden && !sqliteRowidName.test(entry.name) &&
+        !items.some(item => item.kind === 'column' && fold(item.label) === fold(entry.name))) {
+        add({ label: entry.name, kind: 'column', insertText: quote(entry.name),
+          detail: [text.triggerRow[fallback.row], entry.schema + '.' + entry.table, entry.declaredType].filter(Boolean).join(' · ') });
+      }
+    }
     // 当前查询块的来源列优先于输出别名，外层列在输出别名之后。目录无法确认隐式 rowid。
     if (outputAliases && !outputAliases.outputFirst && !aliasSourcesIncomplete) {
       for (const name of outputAliases.names) {
@@ -345,6 +383,10 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     }
   }
   if (analysis.functions) await addFunctions(analysis.functions);
-  if (analysis.syntax.includes('keyword') && !analysis.target.quoted && !qualifiers.length) for (const keyword of keywords) add({ label: keyword, kind: 'keyword', insertText: keyword, detail: text.keyword });
+  if (analysis.syntax.includes('keyword') && !analysis.target.quoted && !qualifiers.length && !triggerBody?.writeTarget) {
+    for (const keyword of keywords) if (!triggerBody || keyword !== 'RETURNING' && keyword !== 'EXPLAIN QUERY PLAN') {
+      add({ label: keyword, kind: 'keyword', insertText: keyword, detail: text.keyword });
+    }
+  }
   return { items, incomplete };
 }
