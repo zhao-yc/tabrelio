@@ -28,13 +28,15 @@ it.each([
 
 it('父列按所属库查找，复合列同时排除光标两边已填写的名称', () => {
   expect(ready('CREATE TABLE child(a,b,c,FOREIGN KEY(a,b,c) REFERENCES [Parent](X, fo|o, Y))').foreignKey)
-    .toEqual({ kind: 'parent-column', owner: { schema: 'main' }, table: 'Parent', used: ['x', 'y'] });
+    .toEqual({ kind: 'parent-column', owner: { schema: 'main' }, table: 'Parent', used: ['x', 'y'], arity: 3 });
+  expect(ready('CREATE TABLE child(a,b,c,FOREIGN KEY(a,b,c) REFERENCES parent(x, i|d, X))').foreignKey)
+    .toMatchObject({ kind: 'parent-column', used: ['x', 'x'], arity: 3 });
   expect(ready('ALTER TABLE TEMP.[child] ADD COLUMN Owner INTEGER REFERENCES parent(i|d)').foreignKey)
-    .toEqual({ kind: 'parent-column', owner: { child: { name: 'child', schema: 'temp' } }, table: 'parent', used: [] });
+    .toEqual({ kind: 'parent-column', owner: { child: { name: 'child', schema: 'temp' } }, table: 'parent', used: [], arity: 1 });
   expect(ready('ALTER TABLE child ADD owner INTEGER REFERENCES par|ent').foreignKey)
     .toEqual({ kind: 'parent', owner: { child: { name: 'child' } } });
   expect(ready('CREATE TABLE child(owner INTEGER REFERENCES a(id) REFERENCES b(ke|y))').foreignKey)
-    .toEqual({ kind: 'parent-column', owner: { schema: 'main' }, table: 'b', used: [] });
+    .toEqual({ kind: 'parent-column', owner: { schema: 'main' }, table: 'b', used: [], arity: 1 });
 });
 
 it.each([
@@ -67,8 +69,12 @@ it('ALTER 以命中子表所在库读取父表，候选及悬停都采用同一�
   const suggestion = ready('ALTER TABLE child ADD owner INTEGER REFERENCES parent(i|d)');
   expect((await sqliteCompletionSuggestions(suggestion, { load })).items[0]?.detail).toContain('temp.parent');
   expect(load.mock.calls.map(([query]) => query)).toEqual([
-    { kind: 'table-options', table: 'child', prefix: '' }, { kind: 'columns', table: 'parent', schema: 'temp', foreignKey: true, prefix: 'i' },
+    { kind: 'table-options', table: 'child', prefix: '' }, { kind: 'columns', table: 'parent', schema: 'temp', foreignKey: { arity: 1, used: [] }, prefix: 'i' },
   ]);
   expect(await sqliteFieldHover(ready('ALTER TABLE child ADD owner INTEGER REFERENCES parent(i|d)', 'hover'), { load })).toContain('"temp"."parent"."Id"');
+  expect(load).toHaveBeenLastCalledWith({ kind: 'columns', table: 'parent', schema: 'temp', foreignKey: true, prefix: 'id' });
   expect(sqliteCompletionInputSchema.safeParse({ kind: 'columns', foreignKey: true, table: 'parent', prefix: '', connectionId: 'test', taskId: 'sqlite-completion:1' }).success).toBe(false);
+  const request = { kind: 'columns', schema: 'temp', table: 'parent', prefix: '', connectionId: 'test', taskId: 'sqlite-completion:1' };
+  expect(sqliteCompletionInputSchema.safeParse({ ...request, foreignKey: { arity: 0, used: [] } }).success).toBe(false);
+  expect(sqliteCompletionInputSchema.safeParse({ ...request, foreignKey: { arity: 2, used: ['id', ''] } }).success).toBe(false);
 });

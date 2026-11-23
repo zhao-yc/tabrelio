@@ -1,6 +1,7 @@
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
-import { foldSqliteCompletionName as fold, sqliteCompletionLimits, sqliteCompletionOutputSchema, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
+import { foldSqliteCompletionName as fold, sqliteCompletionLimits, sqliteCompletionOutputSchema, type SqliteCompletionEntry, type SqliteCompletionLookup, type SqliteCompletionOutput, type SqliteForeignKeySelection } from '../shared/sqliteCompletion';
+import { inspectSqliteTableColumnCollations, sqliteTableRebuildPlanLimits } from '../shared/sqliteTableRebuildPlan';
 
 interface CompletionControl { check(): void; sessionRevision?: number; }
 /** 元数据读完和取消检查共用原driver，绝不创建查询任务、触碰事务边界或读取用户行值。 */
@@ -40,6 +41,82 @@ function tableIdentity(driver: SqliteDriverSession, input: { schema?: 'main' | '
   return read(driver, 'SELECT name,schema,type' + (includeOptions ? ',strict' : '') + ' FROM pragma_table_list() WHERE ' + scope + " AND name = ? COLLATE NOCASE ORDER BY schema DESC LIMIT 1", [...(input.schema ? [input.schema] : []), input.table], control, 1);
 }
 
+/** 只接受 SQLite 能用于外键的完整唯一键。读取原库目录和定义，不准备编辑器语句或读取业务行。 */
+async function foreignKeyColumns(driver: SqliteDriverSession, table: string, schema: 'main' | 'temp',
+  prefix: string, selection: SqliteForeignKeySelection, control: CompletionControl): Promise<{ rows: SqliteValue[][]; truncated: boolean }> {
+  const { arity } = selection, used = selection.used.map(fold);
+  if (used.length >= arity) return { rows: [], truncated: false };
+  const xinfo = await read(driver, 'SELECT name,type,hidden,pk FROM pragma_table_xinfo(?,?) ORDER BY cid LIMIT 1025',
+    [table, schema], control, sqliteTableRebuildPlanLimits.columns + 1);
+  if (xinfo.truncated || xinfo.rows.length > sqliteTableRebuildPlanLimits.columns) return { rows: [], truncated: true };
+
+  const list = await read(driver, `SELECT i.name AS key_name,i.origin,k.cid,k.name AS column_name,k.coll
+    FROM pragma_index_list(?,?) i JOIN pragma_index_xinfo(i.name,?) k ON k."key" = 1
+    WHERE i."unique" = 1 AND i.partial = 0 ORDER BY i.seq,k.seqno LIMIT 257`, [table, schema, schema], control, 257);
+  const keys = list.rows.slice(0, sqliteCompletionLimits.entries), last = keys.at(-1)?.[0];
+  let incomplete = list.truncated || list.rows.length > keys.length;
+  // 原生目录截断时，末尾索引可能只收到部分列，不能把它当成较短的唯一键。
+  const partialTail = list.truncated || list.rows.length > keys.length && list.rows[keys.length][0] === last;
+  const complete = partialTail ? keys.filter(row => row[0] !== last) : keys;
+  const indexes = new Map<string, SqliteValue[][]>();
+  for (const row of complete) {
+    if (typeof row[0] !== 'string') throw Error('SQLite外键索引目录无效');
+    const index = indexes.get(row[0]);
+    if (index) index.push(row);
+    else indexes.set(row[0], [row]);
+  }
+
+  const eligible = new Set<string>();
+  const primary = xinfo.rows.filter(row => typeof row[3] === 'object' && row[3]?.type === 'integer' && row[3].value !== '0');
+  // 真正的 INTEGER PRIMARY KEY 是 rowid 别名且没有独立主键索引，包括行内 DESC 等特例的反面。
+  const [columnName, declaredType] = primary[0] ?? [];
+  if (arity === 1 && !incomplete && primary.length === 1 && typeof columnName === 'string' && typeof declaredType === 'string' &&
+    fold(declaredType) === 'integer' && !complete.some(row => row[1] === 'pk')) eligible.add(fold(columnName));
+
+  type KeyTerm = { name: string; collation: string };
+  const possible: { terms: KeyTerm[]; remaining: KeyTerm[] }[] = [];
+  for (const index of indexes.values()) {
+    if (index.length !== arity) continue;
+    const terms: KeyTerm[] = [];
+    for (const [, , cid, name, collation] of index) {
+      if (!cid || typeof cid !== 'object' || cid.type !== 'integer' || cid.value.startsWith('-') ||
+        typeof name !== 'string' || typeof collation !== 'string') break;
+      terms.push({ name: fold(name), collation: fold(collation) });
+    }
+    if (terms.length !== arity) continue;
+    const remaining = [...terms];
+    for (const name of used) {
+      const matched = remaining.findIndex(term => term.name === name);
+      if (matched < 0) break;
+      remaining.splice(matched, 1);
+    }
+    if (remaining.length === arity - used.length) possible.push({ terms, remaining });
+  }
+  if (possible.length) {
+    const ddl = await read(driver, `SELECT CASE WHEN length(CAST(sql AS BLOB)) <= 262144 THEN sql END FROM ${schema}.sqlite_schema
+      WHERE type = 'table' AND name = ? COLLATE BINARY LIMIT 1`, [table], control, 1);
+    const tableSql = ddl.rows[0]?.[0];
+    if (ddl.truncated || typeof tableSql !== 'string') incomplete = true;
+    else {
+      try {
+        const columns = xinfo.rows.map(([name, , hidden]) => {
+          if (typeof name !== 'string' || !hidden || typeof hidden !== 'object' || hidden.type !== 'integer') throw Error('SQLite外键列目录无效');
+          return { name, hidden: Number(hidden.value) };
+        });
+        const collations = inspectSqliteTableColumnCollations({ table, tableSql, columns });
+        // 显式父列允许与索引顺序不同，但每个键项的比较规则必须来自对应列的声明。
+        for (const { terms, remaining } of possible) if (terms.every(term => collations.get(term.name) === term.collation)) {
+          for (const { name } of remaining) eligible.add(name);
+        }
+      } catch { incomplete = true; }
+    }
+  }
+  const starts = fold(prefix);
+  const rows = xinfo.rows.filter(([name]) => typeof name === 'string' && eligible.has(fold(name)) &&
+    fold(name).startsWith(starts)).map(row => row.slice(0, 3));
+  return { rows, truncated: incomplete };
+}
+
 const flag = (value: SqliteValue): boolean | undefined => value && typeof value === 'object' && value.type === 'integer' &&
   (value.value === '0' || value.value === '1') ? value.value === '1' : undefined;
 const functionTypes = { s: 'scalar', a: 'aggregate', w: 'window' } as const;
@@ -77,7 +154,8 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
       if (schema !== 'main' && schema !== 'temp') throw Error('SQLite补全字段所属库无效');
       // 自带表值模块通常不在 table_list 内。无同名关系遮蔽时只读 xinfo，不准备或执行原调用。
       const drop = input.alterColumn === 'drop';
-      const result = await read(driver, 'SELECT name,type,hidden FROM pragma_table_xinfo(?,?)' + (input.alterColumn ? ' p' : '') + ' WHERE ' + prefixSql +
+      const result = typeof input.foreignKey === 'object' ? await foreignKeyColumns(driver, table, schema, input.prefix, input.foreignKey, control) :
+        await read(driver, 'SELECT name,type,hidden FROM pragma_table_xinfo(?,?)' + (input.alterColumn ? ' p' : '') + ' WHERE ' + prefixSql +
         (input.alterColumn ? ' AND p.hidden <> 1' : '') + (drop ? dropColumnSql : '') + ' ORDER BY cid LIMIT 257',
       [table, schema, input.prefix, input.prefix, ...(drop ? [table, schema, table, schema, schema] : [])], control, 257);
       incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;

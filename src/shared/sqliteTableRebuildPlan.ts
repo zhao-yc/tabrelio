@@ -20,7 +20,7 @@ export interface SqliteTableRebuildDefinition {
 interface Token { kind: 'word' | 'quoted' | 'string' | 'number' | 'symbol'; value: string; start: number; end: number; }
 interface Span { start: number; end: number; }
 interface DefinitionSegment extends Span { column?: string; parts: Token[]; }
-interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; notNull: boolean; notNulls: Span[]; references: (Span & { parts: Token[] })[]; primaryKeys: (Span & { parts: Token[] })[]; uniques: (Span & { parts: Token[] })[]; checks: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
+interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; collation?: string; notNull: boolean; notNulls: Span[]; references: (Span & { parts: Token[] })[]; primaryKeys: (Span & { parts: Token[] })[]; uniques: (Span & { parts: Token[] })[]; checks: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
 const limits = sqliteTableRebuildPlanLimits, encoder = new TextEncoder();
 const fold = (value: string) => value.replace(/[A-Z]/g, letter => letter.toLowerCase());
 const word = (token: Token | undefined, value: string) => token?.kind === 'word' && fold(token.value) === value.toLowerCase();
@@ -126,7 +126,9 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
     const token = parts[index++];
     if (word(token, 'DEFAULT')) { index = defaultEnd(parts, index); result.defaults.push({ start: parts[start].start, end: parts[index - 1].end }); }
     else if (word(token, 'CHECK')) { index = groupEnd(parts, index); result.checks.push({ start: parts[start].start, end: parts[index - 1].end, parts: parts.slice(start, index) }); }
-    else if (word(token, 'COLLATE')) { if (identifier(parts[index++]) === undefined) throw invalid(); }
+    else if (word(token, 'COLLATE')) {
+      const collation = identifier(parts[index++]); if (collation === undefined) throw invalid(); result.collation = collation;
+    }
     else if (word(token, 'REFERENCES')) { index = foreignEnd(parts, index); result.references.push({ start: parts[start].start, end: parts[index - 1].end, parts: parts.slice(start, index) }); }
     else if (word(token, 'PRIMARY')) {
       if (!word(parts[index++], 'KEY')) throw invalid();
@@ -194,6 +196,11 @@ export function normalizeSqliteTableRebuildDefinitionName(input: Pick<SqliteTabl
 }
 
 type ForeignKeyInput = Pick<SqliteTableRebuildDefinitionInput, 'table' | 'tableSql' | 'columns'>;
+/** 只解析原生目录返回的单个 CREATE，按实际默认排序规则判断外键索引；未声明时是 BINARY。 */
+export function inspectSqliteTableColumnCollations(input: ForeignKeyInput): ReadonlyMap<string, string> {
+  const source = definition({ ...input, candidateName: '', changes: [] });
+  return new Map(source.columns.map(column => [fold(column.name), fold(column.collation ?? 'BINARY')]));
+}
 /** 显式声明不同于STRICT/WR主键隐含属性，也不同于整数主键自动生成ROWID的NULL输入规则。 */
 export function inspectSqliteTableNotNull(raw: ForeignKeyInput): readonly { readonly column: string; readonly explicitNotNull: boolean; readonly sql: readonly string[] }[] {
   const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] });

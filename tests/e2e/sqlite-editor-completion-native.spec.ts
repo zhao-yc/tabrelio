@@ -61,7 +61,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     strictType || createType ? column : '"' + column + '"') + trail;
   const db = new DatabaseSync(filePath);
   try {
-    db.exec(`CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT,virtual_value TEXT GENERATED ALWAYS AS (value||'!'),old_extra TEXT DEFAULT '保留');
+    db.exec(`CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT,virtual_value TEXT GENERATED ALWAYS AS (value||'!'),old_extra TEXT DEFAULT '保留',id_related TEXT);
       CREATE UNIQUE INDEX subject_by_value ON subject(value);
       CREATE TABLE strict_subject(id INTEGER PRIMARY KEY) STRICT; INSERT INTO strict_subject VALUES(1);
       CREATE TABLE excluded(other TEXT); CREATE TABLE inbox(id INTEGER PRIMARY KEY,value TEXT); CREATE INDEX inbox_other ON inbox(value);
@@ -116,9 +116,15 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
             if (setup.foreignChild && input.kind !== 'stamp') {
               if (input.kind === 'table-options' && setup.foreignColumn) {
                 if (input.table !== setup.foreignChild || input.prefix !== '' || input.schema !== undefined) throw Error('外键子表越出本例');
-              } else if (input.kind !== setup.lookupKind || input.foreignKey !== true || input.schema !== 'main' ||
-                input.prefix !== setup.catalogName && input.prefix !== setup.typed ||
-                (setup.foreignColumn ? input.table !== 'subject' : 'table' in input)) throw Error('外键父表越出本例');
+              } else {
+                const key = input.foreignKey;
+                const validKey = setup.foreignColumn && input.prefix === setup.typed ?
+                  !!key && typeof key === 'object' && 'arity' in key && key.arity === 1 &&
+                    'used' in key && Array.isArray(key.used) && key.used.length === 0 : key === true;
+                if (input.kind !== setup.lookupKind || !validKey || input.schema !== 'main' ||
+                  input.prefix !== setup.catalogName && input.prefix !== setup.typed ||
+                  (setup.foreignColumn ? input.table !== 'subject' : 'table' in input)) throw Error('外键父表越出本例');
+              }
             }
             if (input.kind === 'functions' || input.kind === 'collations') {
               const indexFunction = setup.createIndex && input.kind === 'functions' && input.deterministicOnly === true && input.prefix === setup.typed;
@@ -171,6 +177,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     await page.keyboard.press('Control+Space');
     const widget = query.locator('.suggest-widget:visible');
     await expect(widget.locator('.monaco-list-row .label-name').filter({ hasText: new RegExp('^' + column + '$') })).toHaveCount(1);
+    if (foreignColumn) await expect(widget.locator('.monaco-list-row .label-name').filter({ hasText: /^id_related$/ })).toHaveCount(0);
     await expect(widget.locator('.monaco-list-row.focused .label-name')).toHaveText(column);
     await page.keyboard.press('Enter');
     const inserted = scenario.verb === '函数' ? prefix + column + '()' + trail : accepted;
@@ -183,7 +190,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         lookupKind === 'functions' || lookupKind === 'collations' ? expect.objectContaining({ kind: lookupKind, prefix: typed }) :
         expect.objectContaining({ kind: lookupKind, table: targetTable, schema: 'main', prefix: strictType ? '' : typed,
           ...(scenario.verb === 'CREATE INDEX' ? { indexTable: true } : {}), ...(alterColumn ? { alterColumn } : {}),
-          ...(foreignColumn ? { foreignKey: true } : {}) }),
+          ...(foreignColumn ? { foreignKey: { arity: 1, used: [] } } : {}) }),
       ...(scenario.verb === 'CREATE INDEX' ? [expect.objectContaining({ kind: 'functions', prefix: typed, deterministicOnly: true })] : []),
     ]);
     expect(completion.every(fact => fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true)).toBe(true);

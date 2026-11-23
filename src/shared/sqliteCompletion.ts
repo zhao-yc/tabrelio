@@ -12,6 +12,11 @@ const functionName = z.string().max(sqliteCompletionLimits.prefixUnits).regex(/^
 const functionSignatures = z.array(z.object({ arity: z.number().int().min(-32768).max(32767), type: z.enum(['scalar', 'aggregate', 'window']) }).strict()).min(1).max(sqliteCompletionLimits.entries)
   .refine(value => new Set(value.map(({ arity, type }) => type + ':' + arity)).size === value.length);
 export const sqliteAlterColumnMode = z.enum(['rename', 'drop', 'nullability']);
+export const sqliteForeignKeySelectionSchema = z.object({
+  arity: z.number().int().min(1).max(sqliteCompletionLimits.entries),
+  used: z.array(name).max(sqliteCompletionLimits.entries),
+}).strict();
+export type SqliteForeignKeySelection = z.infer<typeof sqliteForeignKeySelectionSchema>;
 const columnMode = { tableFunction: z.literal(true).optional(), indexTable: z.literal(true).optional(), alterColumn: sqliteAlterColumnMode.optional() };
 const oneColumnMode = (value: { tableFunction?: true; indexTable?: true; alterColumn?: z.infer<typeof sqliteAlterColumnMode> }) =>
   [value.tableFunction, value.indexTable, value.alterColumn].filter(Boolean).length <= 1;
@@ -20,7 +25,8 @@ export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('relations'), schema: schema.optional(), indexTable: z.literal(true).optional(),
     alterTable: z.literal(true).optional(), foreignKey: z.literal(true).optional() }).strict()
     .refine(value => [value.indexTable, value.alterTable, value.foreignKey].filter(Boolean).length <= 1 && (!value.foreignKey || value.schema !== undefined)),
-  z.object({ ...base, kind: z.literal('columns'), schema: schema.optional(), table: name, ...columnMode, foreignKey: z.literal(true).optional() })
+  z.object({ ...base, kind: z.literal('columns'), schema: schema.optional(), table: name, ...columnMode,
+    foreignKey: z.union([z.literal(true), sqliteForeignKeySelectionSchema]).optional() })
     .strict().refine(value => oneColumnMode(value) && (!value.foreignKey || value.schema !== undefined && !value.indexTable && !value.tableFunction && !value.alterColumn)),
   z.object({ ...base, kind: z.literal('indexes'), schema: schema.optional(), table: name }).strict(),
   z.object({ ...base, kind: z.literal('functions'), prefix: base.prefix.regex(/^[a-z][a-z0-9_]*$/i), deterministicOnly: z.literal(true).optional() }).strict(),

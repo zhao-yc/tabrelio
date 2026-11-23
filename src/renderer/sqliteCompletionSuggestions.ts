@@ -25,7 +25,7 @@ export function sqliteColumnTypeDetails(name: string, strict: boolean): string[]
 
 /** ALTER 先确定子表身份，随后只读取同库父表目录。建表声明已给出明确命名空间。 */
 export async function sqliteForeignKeyCatalog(
-  context: Exclude<SqliteForeignKeyContext, { kind: 'local-column' }>, prefix: string, directory: SqliteCompletionDirectory,
+  context: Exclude<SqliteForeignKeyContext, { kind: 'local-column' }>, prefix: string, directory: SqliteCompletionDirectory, hover = false,
 ): Promise<Pick<SqliteCompletionOutput, 'entries' | 'incomplete'>> {
   const { owner } = context;
   let schema;
@@ -37,7 +37,7 @@ export async function sqliteForeignKeyCatalog(
     schema = entry.schema;
   }
   return directory.load(context.kind === 'parent' ? { kind: 'relations', schema, prefix, foreignKey: true } :
-    { kind: 'columns', table: context.table, schema, prefix, foreignKey: true });
+    { kind: 'columns', table: context.table, schema, prefix, foreignKey: hover ? true : { arity: context.arity, used: context.used } });
 }
 
 const keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'ON', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'WITH', 'AS', 'DISTINCT', 'UNION ALL', 'IS NULL', 'IS NOT NULL', 'RETURNING', 'WINDOW', 'OVER', 'FILTER', 'PARTITION BY', 'ROWS', 'RANGE', 'BETWEEN', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'CURRENT ROW', 'EXPLAIN QUERY PLAN'];
@@ -106,7 +106,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     for (const entry of catalog.entries) {
       if (context.kind === 'parent' && entry.kind === 'table') {
         add({ label: entry.name, kind: 'table', insertText: quote(entry.name), detail: text.foreignParent + ' · ' + entry.schema });
-      } else if (context.kind === 'parent-column' && entry.kind === 'column' && !entry.hidden && !context.used.includes(fold(entry.name))) {
+      } else if (context.kind === 'parent-column' && entry.kind === 'column' && !entry.hidden) {
         const detail = [text.foreignParentColumn, entry.schema + '.' + entry.table, entry.declaredType].filter(Boolean).join(' · ');
         add({ label: entry.name, kind: 'column', insertText: quote(entry.name), detail });
       }

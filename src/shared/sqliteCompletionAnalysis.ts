@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits, sqliteCompletionSourceKey, sqliteCompletionSourceSchema, sqliteCompletionTableSchema, type SqliteCompletionSource, type SqliteCompletionTable } from './sqliteCompletion';
+import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits, sqliteCompletionSourceKey, sqliteCompletionSourceSchema, sqliteCompletionTableSchema, sqliteForeignKeySelectionSchema, type SqliteCompletionSource, type SqliteCompletionTable } from './sqliteCompletion';
 import type { LocalReferenceToken } from './localReferenceIndex';
 import type { PhysicalObjectAnalysis } from './physicalObjectAnalysis';
 
@@ -39,7 +39,7 @@ const foreignOwner = z.union([z.object({ schema: z.enum(['main', 'temp']) }).str
 type ForeignKeyOwner = z.infer<typeof foreignOwner>;
 const foreignKeyContext = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('parent'), owner: foreignOwner, self: foreignName.optional() }).strict(),
-  z.object({ kind: z.literal('parent-column'), owner: foreignOwner, table: foreignName, used: foreignNames }).strict(),
+  sqliteForeignKeySelectionSchema.extend({ kind: z.literal('parent-column'), owner: foreignOwner, table: foreignName }).strict(),
   z.object({ kind: z.literal('local-column'), columns: foreignNames, used: foreignNames, self: foreignName.optional(), partial: z.literal(true).optional() }).strict(),
 ]);
 export type SqliteForeignKeyContext = z.infer<typeof foreignKeyContext>;
@@ -731,21 +731,21 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       return { bindings: [], ctes: new Map(), syntax: ['foreign-key'], foreignKey };
     }
 
-    /** 清单只接受一个标识符，已写列从其它候选中排除。 */
+    /** 每项只接受一个标识符。保留其它槽位的列及出现次数，以支持索引中的重复列。 */
     function foreignKeyColumnList(openIndex: number, close: number): string[] | undefined {
       const open = tokens[openIndex];
       if (target.start < open.end || target.end > (tokens[close]?.start ?? source.length)) return;
-      const used = new Set<string>();
+      const used: string[] = [];
       let active = false, start = openIndex + 1;
       for (let i = start; i <= close; i++) {
         if (i < close && !(tokens[i].kind === 'symbol' && tokens[i].value === ',' && tokens[i].depth === open.depth + 1)) continue;
         const oneName = start + 1 === i && ddlName(tokens[start]);
         if (start + 1 === i && targetIndex === start || start === i && !intent && target.start === target.end &&
           target.start >= tokens[start - 1].end && target.end <= (tokens[i]?.start ?? source.length)) active = true;
-        else if (oneName) used.add(fold(tokens[start].value));
+        else if (oneName) used.push(fold(tokens[start].value));
         start = i + 1;
       }
-      return active && used.size <= limits.entries ? [...used] : undefined;
+      return active && used.length <= limits.entries ? used : undefined;
     }
 
     /** REFERENCES 固定在子表所在库。建表自引用从当前声明取列，避免借用已存在同名表。 */
@@ -759,12 +759,19 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         kind: 'local-column', columns: columns.slice(0, limits.entries), used, ...(self ? { self } : {}),
         ...(columns.length > limits.entries ? { partial: true } : {}),
       });
-      let reference = -1;
+      let reference = -1, arity = 1;
       if (draft && keyword(tokens[key], 'foreign') && keyword(tokens[key + 1], 'key')) {
         const childOpen = key + 2, open = tokens[childOpen];
         if (open?.kind !== 'symbol' || open.value !== '(') return;
         const close = open.pair ?? end, used = foreignKeyColumnList(childOpen, close);
         if (used) return localColumns(draft.columns, used);
+        const size = close - childOpen - 1;
+        if (size < 1 || size % 2 === 0 || size >= limits.entries * 2) return;
+        for (let index = childOpen + 1; index < close; index += 2) {
+          const comma = tokens[index + 1];
+          if (!ddlName(tokens[index]) || index + 1 < close && (comma.kind !== 'symbol' || comma.value !== ',')) return;
+        }
+        arity = (size + 1) / 2;
         reference = close + 1;
         if (!keyword(tokens[reference], 'references')) return;
       } else {
@@ -787,7 +794,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       const used = foreignKeyColumnList(parentIndex + 1, open.pair ?? end);
       if (!used) return;
       if (draft && fold(draft.name) === fold(parent.value)) return localColumns(draft.columns, used, draft.name);
-      return foreignKeyScope({ kind: 'parent-column', owner, table: parent.value, used });
+      return foreignKeyScope({ kind: 'parent-column', owner, table: parent.value, used, arity });
     }
 
     function createTableDefinitionAt(head: number, end: number): ScopeResult | undefined {

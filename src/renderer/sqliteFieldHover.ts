@@ -42,7 +42,7 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
     if (context.kind === 'parent' && context.self && sameName(context.self)) {
       return markdown([sqliteCompletionZh.foreignParent, display(name), sqliteCompletionZh.foreignSelf]);
     }
-    const result = await sqliteForeignKeyCatalog(context, prefix, directory);
+    const result = await sqliteForeignKeyCatalog(context, prefix, directory, true);
     if (result.incomplete) return;
     const entry = result.entries.find(entry => sameName(entry.name));
     if (context.kind === 'parent' && entry?.kind === 'table') {

@@ -59,6 +59,57 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('外键父键按列数、已填列和原生排序规则筛选，保留合法的主键及唯一索引', async () => {
+    const p = profile('外键父键', `
+      CREATE TABLE parent(id INTEGER PRIMARY KEY, plain TEXT, partial TEXT, expression TEXT,
+        invalid TEXT, title TEXT COLLATE nocase UNIQUE, code TEXT COLLATE nocase COLLATE rtrim,
+        area TEXT, region TEXT, other TEXT, alternate TEXT, computed TEXT AS (plain) STORED UNIQUE,
+        CHECK(plain COLLATE nocase IS NOT NULL OR plain IS NULL), UNIQUE(code,area), UNIQUE(region,other));
+      CREATE INDEX only_lookup ON parent(plain);
+      CREATE UNIQUE INDEX invalid_collation ON parent(invalid COLLATE NOCASE);
+      CREATE UNIQUE INDEX qualified_alternate ON parent(alternate);
+      CREATE UNIQUE INDEX expression_key ON parent(lower(expression));
+      CREATE UNIQUE INDEX partial_key ON parent(partial) WHERE partial IS NOT NULL;
+      CREATE TABLE without_rowid(first TEXT COLLATE NOCASE, second TEXT, PRIMARY KEY(first,second)) WITHOUT ROWID;
+      CREATE TABLE descending(id INTEGER PRIMARY KEY DESC);
+      CREATE TABLE invalid_pk(id TEXT, PRIMARY KEY(id COLLATE NOCASE));
+      CREATE TABLE repeated(key TEXT, other TEXT, UNIQUE(key,key));
+    `);
+    const { app, events } = runtime([p]), { sessionId } = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, sessionId, `BEGIN; CREATE TEMP TABLE parent(temp_id INTEGER PRIMARY KEY, title TEXT COLLATE 'NOCASE' UNIQUE)`);
+    const state = await app.request('query.completionState', { sessionId }), count = events.length;
+    const names = async (table: string, arity: number, used: string[] = [], schema: 'main' | 'temp' = 'main', prefix = '') => {
+      const result = await completion(app, p.id, { kind: 'columns', schema, table, foreignKey: { arity, used }, prefix }, sessionId);
+      expect(result.incomplete).toBe(false);
+      return result.entries.map(entry => entry.name);
+    };
+    expect(await names('parent', 1)).toEqual(['id', 'title', 'alternate', 'computed']);
+    expect(await names('parent', 1, [], 'main', 'TI')).toEqual(['title']);
+    expect(await names('parent', 1, [], 'temp')).toEqual(['temp_id', 'title']);
+    expect(await names('parent', 2)).toEqual(['code', 'area', 'region', 'other']);
+    expect(await names('parent', 2, ['aReA'])).toEqual(['code']);
+    expect(await names('parent', 2, ['plain'])).toEqual([]);
+    expect(await names('parent', 2, ['area', 'code'])).toEqual([]);
+    expect(await names('without_rowid', 2, ['second'])).toEqual(['first']);
+    expect(await names('descending', 1)).toEqual(['id']);
+    expect(await names('invalid_pk', 1)).toEqual([]);
+    expect(await names('repeated', 2, ['KEY'])).toEqual(['key']);
+    expect(await names('parent', 3, ['area', 'AREA'])).toEqual([]);
+    expect(await app.request('query.completionState', { sessionId })).toEqual(state);
+    expect(events).toHaveLength(count);
+    await execute(app, sessionId, 'ROLLBACK');
+  });
+
+  it('外键索引目录截断在复合键中间时，不把残缺前缀当作单列唯一键', async () => {
+    const duplicateKeys = Array.from({ length: 255 }, (_, index) => 'CREATE UNIQUE INDEX idx_' + index + ' ON parent(eligible);').join('');
+    const p = profile('外键父键目录上限', 'CREATE TABLE parent(first TEXT, second TEXT, eligible TEXT); ' +
+      'CREATE UNIQUE INDEX composite ON parent(first,second); ' + duplicateKeys);
+    const { app } = runtime([p]);
+    const result = await completion(app, p.id, { kind: 'columns', schema: 'main', table: 'parent', foreignKey: { arity: 1, used: [] } });
+    expect(result.incomplete).toBe(true);
+    expect(result.entries.map(entry => entry.name)).toEqual(['eligible']);
+  });
+
   it('外键目录按子表所在库读取普通父表和列，原事务内的同名视图不会替换另一库的表', async () => {
     const p = profile('外键目录', 'CREATE TABLE parent(main_id INTEGER PRIMARY KEY); CREATE TABLE shadowed(main_key INTEGER PRIMARY KEY); CREATE VIEW parent_view AS SELECT * FROM parent;');
     const { app, events } = runtime([p]), { sessionId } = await app.request('sessions.open', { connectionId: p.id });
