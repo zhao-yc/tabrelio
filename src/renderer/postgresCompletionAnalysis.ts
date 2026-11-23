@@ -310,16 +310,23 @@ function projectedMatches(projection: Projection, name: string): (LocalReference
   return projection.names.flatMap((column, index) => column === name ? [projection.origins?.[index] ?? null] : []);
 }
 
-function recordProjectedColumn(token: PostgresEditorToken, name: string, levels: ScopedRelation[][], trace: ReferenceTrace): void {
+/** 空列表证明可见输入中没有该名称，未知目录和不完整投影不能当作缺列。 */
+function projectedInputMatches(name: string, levels: ScopedRelation[][]): (LocalReferenceRange | null)[] | undefined {
   for (const level of levels) {
     const projections = level.map(relation => relation.projection);
     if (!projections.every(knownProjection)) return;
     const matches = projections.flatMap(projection => projectedMatches(projection, name));
-    if (!matches.length) continue;
-    const [origin] = matches;
-    if (matches.length === 1 && origin && token.start !== origin.start) trace.edges.set(token, origin);
-    return;
+    if (matches.length) return matches;
   }
+  return [];
+}
+
+function recordProjectedMatch(token: PostgresEditorToken, matches: (LocalReferenceRange | null)[] | undefined, trace: ReferenceTrace): void {
+  if (matches?.length === 1 && matches[0] && token.start !== matches[0].start) trace.edges.set(token, matches[0]);
+}
+
+function recordProjectedColumn(token: PostgresEditorToken, name: string, levels: ScopedRelation[][], trace: ReferenceTrace): void {
+  recordProjectedMatch(token, projectedInputMatches(name, levels), trace);
 }
 
 /** 只在已确认的表达式位置收集字段，限定名沿查询块遮蔽规则解析。 */
@@ -426,15 +433,80 @@ function traceProjectionOrder(parts: Part[], projection: Projection, trace: Refe
       let tail = start + 1;
       if (['ASC', 'DESC'].includes(keyword(parts[tail]))) tail++;
       if (keyword(parts[tail]) === 'NULLS' && ['FIRST', 'LAST'].includes(keyword(parts[tail + 1]))) tail += 2;
-      if (tail === end) {
-        const matches = projectedMatches(projection, name);
-        if (matches.length === 1 && matches[0]) trace.edges.set(token, matches[0]);
-        if (!matches.length && input) recordProjectedColumn(token, name, input, trace);
-      }
+      if (tail === end) traceOutputFirst(token, name, projection, trace, input);
     }
     if (done) break;
     start = end + 1;
   }
+}
+
+function traceOutputFirst(token: PostgresEditorToken, name: string, projection: Projection, trace: ReferenceTrace, input?: ScopedRelation[][]): void {
+  if (!knownProjection(projection)) return;
+  const matches = projectedMatches(projection, name);
+  if (matches.length) recordProjectedMatch(token, matches, trace);
+  else if (input) recordProjectedColumn(token, name, input, trace);
+}
+
+/** GROUP BY 的裸名称先查本层输入，再查输出；两处均无匹配时才看可关联的外层列。 */
+function traceGroupingName(token: PostgresEditorToken, name: string, projection: Projection, input: ScopedRelation[][],
+  merged: boolean, trace: ReferenceTrace): void {
+  const current = projectedInputMatches(name, input.slice(0, 1));
+  if (!current) return;
+  if (current.length) {
+    if (!merged) recordProjectedMatch(token, current, trace);
+    return;
+  }
+  traceOutputFirst(token, name, projection, trace, input.slice(1));
+}
+
+/** 分组集合中的隐式行括号可展开为单独分组项。显式 ROW 和普通函数仍按表达式处理。 */
+function traceGroupingItems(parts: Part[], visit: (token: PostgresEditorToken, name: string) => void): void {
+  let start = 0;
+  for (let end = 0; end <= parts.length; end++) {
+    if (end !== parts.length && !punct(parts[end], ',')) continue;
+    const leading = parts[start], word = keyword(leading);
+    if (end === start + 1) {
+      if (leading.kind === 'group' && leading.closing === ')') traceGroupingItems(leading.parts, visit);
+      else {
+        const name = identifier(leading);
+        if (leading.kind !== 'group' && name && !stop.has(word)) visit(leading, name);
+      }
+    } else if (end > start) {
+      const group = parts[end - 1];
+      if (group.kind === 'group' && group.closing === ')' &&
+          (end === start + 2 && ['ROLLUP', 'CUBE'].includes(word) ||
+           end === start + 3 && word === 'GROUPING' && keyword(parts[start + 1]) === 'SETS')) traceGroupingItems(group.parts, visit);
+    }
+    start = end + 1;
+  }
+}
+
+/** DISTINCT ON 采用输出优先，但多列表达式括号不是可展开的分组集合。 */
+function traceDistinctOn(parts: Part[], projection: Projection, input: ScopedRelation[][], trace: ReferenceTrace): void {
+  const group = parts[3];
+  if (keyword(parts[1]) !== 'DISTINCT' || keyword(parts[2]) !== 'ON' || group?.kind !== 'group' || group.closing !== ')') return;
+  let start = 0;
+  for (let end = 0; end <= group.parts.length; end++) {
+    if (end !== group.parts.length && !punct(group.parts[end], ',')) continue;
+    if (end === start + 1) {
+      let token = group.parts[start];
+      while (token.kind === 'group' && token.closing === ')' && token.parts.length === 1) token = token.parts[0];
+      const name = identifier(token);
+      if (token.kind !== 'group' && name && !stop.has(keyword(token))) traceOutputFirst(token, name, projection, trace, input);
+    }
+    start = end + 1;
+  }
+}
+
+function traceProjectionGrouping(parts: Part[], projection: Projection, input: ScopedRelation[][], trace: ReferenceTrace): void {
+  const group = parts.findIndex((part, index) => keyword(part) === 'GROUP' && keyword(parts[index + 1]) === 'BY');
+  if (group < 0) return;
+  let start = group + 2;
+  if (['ALL', 'DISTINCT'].includes(keyword(parts[start]))) start++;
+  const boundary = parts.findIndex((part, index) => index >= start && endsFrom.has(keyword(part)));
+  const merged = parts.slice(0, group).some(part => ['NATURAL', 'USING'].includes(keyword(part)));
+  traceGroupingItems(parts.slice(start, boundary >= 0 ? boundary : undefined), (token, name) =>
+    traceGroupingName(token, name, projection, input, merged, trace));
 }
 
 /** OLD/NEW 共享目标列，只能作为 RETURNING 的限定名。默认名称让位给已有关系。 */
@@ -1539,8 +1611,14 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     if (returning >= 0 && !trace.unsupported) traceReturning(main.slice(returning + 1), scope, refs, outer, trace, write ? refs[0] : undefined);
     if (!trace.projected) return { projection: unknown };
     const projection = tableSource ? refs[0]?.projection ?? unknown : project(main, refs, undefined, trace);
-    if (command === 'SELECT' || tableSource) traceProjectionOrder(main, projection, trace,
-      [refs, ...outer].map(level => level.filter(ref => !ref.qualifiedOnly)));
+    if (command === 'SELECT' || tableSource) {
+      const input = [refs, ...outer].map(level => level.filter(ref => !ref.qualifiedOnly));
+      traceProjectionOrder(main, projection, trace, input);
+      if (command === 'SELECT') {
+        traceProjectionGrouping(main, projection, input, trace);
+        traceDistinctOn(main, projection, input, trace);
+      }
+    }
     return { projection };
   }
   const projection = project(main, refs);

@@ -42,12 +42,31 @@ it('拒绝显式和隐式名称碰撞，以及无法完整改写的分组和连�
   expect(rename('SELECT 1 AS ¦old, 2 AS old', 'new_name')).toEqual({ status: 'blocked', reason: 'collision' });
   expect(rename('SELECT 1 AS ¦old ORDER BY old', 'x'.repeat(64))).toEqual({ status: 'blocked', reason: 'name' });
   for (const sql of [
-    'SELECT 1 AS ¦old GROUP BY old',
+    'SELECT 1 AS ¦old FROM ledger GROUP BY old',
     'WITH q AS (SELECT 1 AS ¦old) SELECT q.old FROM q NATURAL JOIN other',
     'WITH q AS (SELECT 1 AS ¦old) SELECT q.old FROM q JOIN other USING (old)',
     'WITH q AS (SELECT 1 AS ¦old) SELECT q.old, other.* FROM q CROSS JOIN other',
   ]) expect(rename(sql, 'next_name'), sql).toEqual({ status: 'blocked', reason: 'unresolved' });
   expect(rename('SELECT t.¦old FROM ledger t ORDER BY old', 'next_name')).toMatchObject({ status: 'blocked' });
+});
+
+it('同名输入和输出的 GROUP BY 与 ORDER BY 可独立改名', () => {
+  expect(edited('WITH q AS (SELECT 1 AS id) SELECT 2 AS id FROM q GROUP BY ¦id ORDER BY id', 'source_id'))
+    .toBe('WITH q AS (SELECT 1 AS "source_id") SELECT 2 AS id FROM q GROUP BY "source_id" ORDER BY id');
+  expect(edited('WITH q AS (SELECT 1 AS id) SELECT 2 AS id FROM q GROUP BY id ORDER BY ¦id', 'shown_id'))
+    .toBe('WITH q AS (SELECT 1 AS id) SELECT 2 AS "shown_id" FROM q GROUP BY id ORDER BY "shown_id"');
+  expect(rename('WITH q AS (SELECT 1 AS occupied) SELECT 2 AS ¦id FROM q GROUP BY id', 'occupied'))
+    .toEqual({ status: 'blocked', reason: 'collision' });
+});
+
+it('整组改写分组集合与 DISTINCT ON 中确认的列名', () => {
+  expect(edited('SELECT 1 AS ¦old GROUP BY old', 'next_name')).toBe('SELECT 1 AS "next_name" GROUP BY "next_name"');
+  expect(edited('WITH q AS (SELECT 1 AS base) SELECT base+1 AS tier, base+2 AS bucket FROM q ' +
+    'GROUP BY DISTINCT GROUPING SETS ((tier,bucket), ROLLUP(tier), CUBE(tier,bucket), ()) ORDER BY ¦tier', '分组'))
+    .toBe('WITH q AS (SELECT 1 AS base) SELECT base+1 AS "分组", base+2 AS bucket FROM q ' +
+      'GROUP BY DISTINCT GROUPING SETS (("分组",bucket), ROLLUP("分组"), CUBE("分组",bucket), ()) ORDER BY "分组"');
+  expect(edited('WITH q AS (SELECT 1 AS id) SELECT DISTINCT ON (¦id) 2 AS id, q.id AS original FROM q ORDER BY id', 'shown_id'))
+    .toBe('WITH q AS (SELECT 1 AS id) SELECT DISTINCT ON ("shown_id") 2 AS "shown_id", q.id AS original FROM q ORDER BY "shown_id"');
 });
 
 it('整稿改写命名参数，执行计划仍逐条编号并为同名参数提供一次输入', () => {

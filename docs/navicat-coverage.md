@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 查询编辑器支持在 `GROUP BY`、`GROUPING SETS`、`ROLLUP`、`CUBE` 及 `DISTINCT ON` 中定位已确认的投影列、查看引用和整组改名。同名时，`GROUP BY` 优先当前查询的输入列，`DISTINCT ON` 与 `ORDER BY` 优先输出别名。Q01 继续为部分覆盖。 [PostgreSQL SELECT 名称规则](https://www.postgresql.org/docs/18/sql-select.html)
+
 2026-11-24 源码增量。PostgreSQL 查询编辑器支持用 F2 给当前语句的显式投影别名及 CTE、派生表列清单整组改名，更新已确认的透传引用。交付修改前会重新核对名称及引用关系，保留其它作用域和物理字段。可离线操作，一次撤销恢复原稿。Q01 继续为部分覆盖。 [Navicat 编辑器重构](https://www3.navicat.com/en/navicat-18-highlights)
 
 2026-11-24 源码增量。PostgreSQL 查询编辑器支持对作用域已确认的 CTE、派生表和 SELECT 输出列使用 F12、Shift+F12 和引用高亮。识别显式列清单、原名透传、递归首分支及集合查询的 ORDER BY，保留内外层同名列各自的声明。可离线操作。Q01 继续为部分覆盖。 [Navicat 编辑器 Code Insight](https://www3.navicat.com/en/navicat-18-highlights)

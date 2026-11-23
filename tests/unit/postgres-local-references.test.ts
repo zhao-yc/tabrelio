@@ -56,6 +56,29 @@ it('保留限定名消歧，并跳过重复或未知投影、类型和排序表�
   expect(at('WITH q AS (SELECT 1 AS id) SELECT b.¦id FROM q a CROSS JOIN q b')).toMatchObject({ status: 'ready' });
 });
 
+it('GROUP BY 同名时优先绑定本层输入，ORDER BY 和 DISTINCT ON 优先绑定输出', () => {
+  const grouped = 'WITH q AS (SELECT 1 AS id) SELECT 2 AS id FROM q GROUP BY id ORDER BY id';
+  const [source, output, group, order] = [...grouped.matchAll(/\bid\b/g)].map(match => ({ start: match.index, end: match.index + 2 }));
+  expect(analyzePostgresLocalReferences(grouped, group.start)).toEqual({ status: 'ready', target: group,
+    declaration: source, references: [group] });
+  expect(analyzePostgresLocalReferences(grouped, order.start)).toEqual({ status: 'ready', target: order,
+    declaration: output, references: [order] });
+  const distinct = 'WITH q AS (SELECT 1 AS id) SELECT DISTINCT ON ((¦id)) 2 AS id FROM q ORDER BY id';
+  expect(at(distinct)).toMatchObject({ status: 'ready', declaration: { start: distinct.lastIndexOf('AS id') + 2 },
+    references: [{ start: distinct.indexOf('¦') }, { start: distinct.lastIndexOf('id') - 1 }] });
+});
+
+it('GROUP BY 输出优先于外层同名列，歧义和匿名来源不借用输出声明', () => {
+  const nested = 'WITH q AS (SELECT 1 AS id) SELECT (SELECT 2 AS id GROUP BY ¦id) FROM q';
+  expect(at(nested)).toMatchObject({ status: 'ready', declaration: { start: nested.lastIndexOf('AS id') + 3 } });
+  for (const sql of [
+    'WITH q AS (SELECT 1 AS id) SELECT 2 AS id FROM q a CROSS JOIN q b GROUP BY ¦id',
+    'SELECT 1 AS column1 FROM (VALUES (2)) t GROUP BY ¦column1',
+    'SELECT 1 AS id GROUP BY ROW(¦id)',
+    'SELECT DISTINCT ON ((¦id, 1)) 2 AS id',
+  ]) expect(at(sql), sql).toMatchObject({ status: 'blocked' });
+});
+
 it('命名参数在整份草稿内按大小写匹配，位置参数和字面量不参与', () => {
   const sql = `SELECT [$needle], [$Needle], '[$needle]', "[$needle]", $body$[$needle];$body$;\n` +
     '/* 外层 /* [$needle] */ */ SELECT $1, [$needle]; -- [$needle]';

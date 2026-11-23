@@ -978,6 +978,8 @@ PostgreSQL 查询编辑器可离线追踪 CTE 和派生表的已确认输出列�
 
 在 PostgreSQL 的显式投影别名、列清单或已确认引用上按 F2，可整组更新当前语句，按 Ctrl／Cmd+Z 一次撤销。名称冲突、未确认的同名依赖及 `NATURAL JOIN` 会阻止整组修改，保留草稿。[PostgreSQL SELECT 名称规则](https://www.postgresql.org/docs/18/sql-select.html)
 
+`GROUP BY` 中的裸列名优先指向当前查询的输入列，确定没有同名输入列时才使用输出别名。`ORDER BY` 和 `DISTINCT ON` 的裸列名优先指向输出。以上绑定可用于 F12、Shift+F12 和 F2，分组展开也适用于 `GROUPING SETS`、`ROLLUP` 与 `CUBE`。目录信息未知或输入列有歧义时，编辑器会停在可确认的范围。[PostgreSQL SELECT 名称规则](https://www.postgresql.org/docs/18/sql-select.html)
+
 当前源码版支持整理已返回结果，详见[多列排序与条件筛选速查](query-results-guide.md)：先筛选，再设置列优先级、NULL位置和大小写选项；条件可单条或全部启停，显式应用后生效。源码、真实窗口与安装范围分别记录，暂不发布新安装包。
 
 查询页可用“保存结果快照”保存当前已返回结果或固定结果，再用“打开结果快照”离线重开为一份固定结果，继续查看、整理、比较及查看源SQL。文件包含原始数据和源SQL，保存全部已返回列／行，不继承本地筛选排序；截断结果仍会明确提示。文件最多16MiB，固定结果仍受5份／累计16MiB限制。打开不改变编辑器正文或连接，也不执行SQL。该功能已验Windows源码窗口，安装包与macOS另验，详见[结果快照](development/query-result-snapshot-20261028.md)，暂不发布。

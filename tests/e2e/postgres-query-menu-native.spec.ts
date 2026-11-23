@@ -1899,6 +1899,43 @@ test('PostgreSQL 离线整组重命名投影列并保留物理字段和内层同
   expect(pageErrors).toEqual([]);
 });
 
+test('PostgreSQL 离线区分 GROUP BY 输入列和 ORDER BY 输出列', async ({}, info) => {
+  const lines = ['WITH q AS (SELECT 1 AS bucket)', 'SELECT 2 AS bucket FROM q', 'GROUP BY bucket', 'ORDER BY bucket;'];
+  const sql = lines.join('\n');
+  await prepare({id: '', name: '离线 PostgreSQL 分组列改名', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, sql);
+  await resizeQueryWindow(1280, 920, 0.75);
+  const initial = await inspectModel();
+  const input = editor().locator('.rename-box input.rename-input');
+  for (const entry of [
+    { referenceLine: 3, declarationLine: 1, name: 'source_bucket' },
+    { referenceLine: 4, declarationLine: 2, name: 'shown_bucket' },
+  ]) {
+    const { referenceLine, declarationLine, name } = entry;
+    const column = lines[referenceLine - 1].indexOf('bucket') + 3;
+    await modelSelection(referenceLine, column);
+    await page.keyboard.press('F12');
+    await expect.poll(async () => (await inspectModel()).position).toMatchObject({
+      lineNumber: declarationLine, column: lines[declarationLine - 1].indexOf('bucket') + 1,
+    });
+    await modelSelection(referenceLine, column);
+    await page.keyboard.press('F2');
+    await expect(input).toHaveValue('bucket');
+    await input.fill(name);
+    await input.press('Enter');
+    const expected = lines.map((line, index) => [referenceLine, declarationLine].includes(index + 1)
+      ? line.replace('bucket', `"${name}"`) : line).join('\n');
+    await expect.poll(async () => (await inspectModel()).sql).toBe(expected);
+    await page.screenshot({path: info.outputPath(`${name}.png`), animations: 'disabled'});
+    await page.keyboard.press('ControlOrMeta+Z');
+    await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+  }
+  expect((await inspectModel()).identity).toEqual(initial.identity);
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('PostgreSQL 离线定位 CTE 列声明并高亮同一投影的引用', async ({}, info) => {
   const lines = ['WITH q AS (SELECT 1 AS amount),',
     '  copied AS (SELECT q.amount FROM q)',
