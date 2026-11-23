@@ -76,6 +76,52 @@ it('PostgreSQL窗口函数和聚合筛选关键字可从编辑器补全', async 
   }
 });
 
+it('命名窗口补全区分裸 OVER、括号复制、定义继承和继承后的排序', () => {
+  const windows = ' FROM t WINDOW base AS (PARTITION BY t.grp), sorted AS (base ORDER BY t.id), ' +
+    'framed AS (sorted ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)';
+  expect(at('SELECT count(*) OVER |' + windows)?.windows).toEqual({ inline: false, names: ['base', 'sorted', 'framed'] });
+  expect(at('SELECT count(*) OVER (|)' + windows)?.windows).toEqual({ inline: true, names: ['base', 'sorted'] });
+  expect(at('SELECT count(*) OVER (| ORDER BY t.id)' + windows)?.windows).toEqual({ inline: true, names: ['base'] });
+  expect(at('SELECT count(*) FILTER (WHERE active) OVER (ba| PARTITION BY t.id)' + windows)?.windows)
+    .toEqual({ inline: true, names: [] });
+  expect(at('SELECT count(*) OVER derived WINDOW base AS (), derived AS (ba|), later AS ()')?.windows)
+    .toEqual({ inline: true, names: ['base'] });
+  expect(at('SELECT count(*) OVER derived WINDOW base AS (ORDER BY 1), derived AS (base), final AS (| ORDER BY 2)')?.windows)
+    .toEqual({ inline: true, names: [] });
+  expect(at('SELECT count(*) OVER (|) WINDOW w AS (ORDER BY rows, following)')?.windows)
+    .toEqual({ inline: true, names: ['w'] });
+});
+
+it('命名窗口名称仅在本查询块可见，避开普通函数、子查询和同名字段', () => {
+  expect(at('SELECT (SELECT sum(v) OVER in| FROM t WINDOW inner_win AS ()) WINDOW outer_win AS ()')?.windows)
+    .toEqual({ inline: false, names: ['inner_win'] });
+  expect(at('SELECT count(*) OVER fir| WINDOW first_win AS () UNION ALL SELECT count(*) OVER second_win WINDOW second_win AS ()')?.windows)
+    .toEqual({ inline: false, names: ['first_win'] });
+  expect(at('SELECT 1 FROM t WINDOW w AS () ORDER BY max(id) OVER w|')?.windows).toEqual({ inline: false, names: ['w'] });
+  expect(at('SELECT (SELECT count(*) OVER |) WINDOW outer_win AS ()')?.windows).toEqual({ inline: false, names: [] });
+  for (const sql of ['SELECT (x) OVER t| FROM t WINDOW w AS ()', 'SELECT over(t.|) FROM t WINDOW w AS ()',
+    'SELECT count(*) OVER FROM table_| WINDOW w AS ()', 'SELECT sum(x) OVER (ORDER BY win|) FROM t WINDOW win AS ()']) {
+    expect(at(sql)?.windows, sql).toBeUndefined();
+  }
+});
+
+it('窗口补全只替换名称，引用转义和大小写遵循 PostgreSQL，且全程离线', async () => {
+  const request = vi.fn(async () => ({ items: [], incomplete: false }));
+  const marked = 'SELECT count(*) OVER "计""|旧" FROM app.t WINDOW "计""数" AS (), " Other" AS ()';
+  const { provider, suggest } = editor(marked, request);
+  try {
+    const items = (await suggest())?.suggestions;
+    expect(items).toHaveLength(1);
+    const item = items![0];
+    expect(item).toMatchObject({ label: {label: '计"数', description: '命名窗口'}, insertText: '"计""数"' });
+    if (!('startColumn' in item.range)) throw Error('窗口名称必须使用完整替换范围');
+    const sql = marked.replace('|', '');
+    expect(sql.slice(0, item.range.startColumn - 1) + item.insertText + sql.slice(item.range.endColumn - 1))
+      .toBe('SELECT count(*) OVER "计""数" FROM app.t WINDOW "计""数" AS (), " Other" AS ()');
+    expect(request).not.toHaveBeenCalled();
+  } finally { provider.dispose(); }
+});
+
 it.each([
   ['SELECT 1 ORDER BY 1 NU|', 'NULLS LAST', 'SELECT 1 ORDER BY 1 NULLS LAST'],
   ['SELECT 1 ORDER BY 1 NULLS F|suffix', 'FIRST', 'SELECT 1 ORDER BY 1 NULLS FIRST'],

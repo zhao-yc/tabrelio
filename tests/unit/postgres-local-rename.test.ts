@@ -14,6 +14,24 @@ function edited(marked: string, name: string) {
   return result.edits.reduceRight((sql, edit) => sql.slice(0, edit.start) + edit.text + sql.slice(edit.end), marked.replace('¦', ''));
 }
 
+it('命名窗口改名保留物理字段、另一查询块同名窗口和独立语句', () => {
+  const before = 'SELECT base, sum(x) OVER ¦base, (SELECT sum(1) OVER base WINDOW base AS ()) AS separate ' +
+    'FROM ledger WINDOW base AS (PARTITION BY base), next AS (base ORDER BY x); SELECT sum(1) OVER base WINDOW base AS ();';
+  expect(rename(before)).toMatchObject({status: 'ready', kind: 'window', name: 'base'});
+  expect(edited(before, '计"数')).toBe('SELECT base, sum(x) OVER "计""数", (SELECT sum(1) OVER base WINDOW base AS ()) AS separate ' +
+    'FROM ledger WINDOW "计""数" AS (PARTITION BY base), next AS ("计""数" ORDER BY x); SELECT sum(1) OVER base WINDOW base AS ();');
+  expect(edited('SELECT 1 WINDOW ¦unused AS ()', 'win')).toBe('SELECT 1 WINDOW "win" AS ()');
+});
+
+it('窗口改名拒绝本块冲突或无法完整绑定的同名继承项', () => {
+  expect(rename('SELECT sum(1) OVER ¦base WINDOW base AS (), next AS ()', 'next'))
+    .toEqual({status: 'blocked', reason: 'collision'});
+  expect(rename('SELECT sum(1) OVER ¦base WINDOW next AS (base), base AS ()', 'renamed'))
+    .toEqual({status: 'blocked', reason: 'unresolved'});
+  expect(edited('SELECT next, count(*) OVER ¦base FROM t WINDOW base AS ()', 'next'))
+    .toBe('SELECT next, count(*) OVER "next" FROM t WINDOW "next" AS ()');
+});
+
 it('整组改写 CTE 列清单与透传引用，保留物理同名字段、内层同名列和相邻语句', () => {
   const source = 'WITH q(amount) AS (SELECT s.amount FROM ledger s), ' +
     'chain AS (SELECT q.* FROM q) SELECT c.am¦ount, (SELECT d.amount FROM (SELECT 2 AS amount) d) AS other_value ' +

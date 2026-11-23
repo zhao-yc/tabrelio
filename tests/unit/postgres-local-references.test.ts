@@ -6,6 +6,24 @@ function at(marked: string, standardStrings?: boolean) {
   return analyzePostgresLocalReferences(sql, offset, standardStrings);
 }
 
+it('窗口声明、裸 OVER、括号复制和后续定义继承共享已确认绑定', () => {
+  const sql = 'SELECT sum(x) OVER base, count(*) FILTER (WHERE x>0) OVER (base ORDER BY x) FROM t ' +
+    'WINDOW base AS (PARTITION BY grp), next AS (base ORDER BY x) ORDER BY sum(x) OVER base';
+  const spans = [...sql.matchAll(/\bbase\b/g)].map(match => ({start: match.index, end: match.index + match[0].length}));
+  expect(analyzePostgresLocalReferences(sql, spans[0].start)).toEqual({status: 'ready', target: spans[0],
+    declaration: spans[2], references: [spans[0], spans[1], spans[3], spans[4]]});
+});
+
+it('窗口继承不跳到后置声明、不可复制的帧、同名列或外层窗口', () => {
+  for (const sql of [
+    'SELECT sum(x) OVER next FROM t WINDOW next AS (¦base), base AS ()',
+    'SELECT sum(x) OVER (¦base) FROM t WINDOW base AS (ORDER BY x ROWS CURRENT ROW)',
+    'SELECT (SELECT sum(1) OVER ¦base) WINDOW base AS ()',
+    'SELECT sum(1) OVER ¦base WINDOW base AS (), base AS ()',
+    'SELECT sum(1) OVER (ORDER BY ¦base) WINDOW base AS ()',
+  ]) expect(at(sql), sql).toMatchObject({status: 'blocked'});
+});
+
 it('CTE 位置列、通配透传及 ORDER BY 共同指向最初的确定列声明', () => {
   const sql = 'WITH base("Total") AS (VALUES (1)), q AS (SELECT base.* FROM base) ' +
     'SELECT z."Total" FROM q z WHERE "Total"=1 ORDER BY "Total" DESC NULLS FIRST';

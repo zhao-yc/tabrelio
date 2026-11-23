@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 查询编辑器支持离线补全命名窗口、定位声明、查看引用和整组改名。按查询块处理裸 `OVER`、括号复制及 `WINDOW` 列表继承，区分内外层、集合查询分支与同名字段。Q01、O05 继续为部分覆盖。 [PostgreSQL WINDOW 子句](https://www.postgresql.org/docs/18/sql-select.html#SQL-WINDOW)
+
 2026-11-24 源码增量。PostgreSQL 查询编辑器内置 PostgreSQL 18 语法解析器，无需连接即可检查整份草稿，点击首处诊断可定位原文。支持命名参数模板、嵌套注释和 SQL 例程体，编辑后清除过期诊断。Q01、O05 继续为部分覆盖。 [PostgreSQL 解析阶段](https://www.postgresql.org/docs/18/parser-stage.html)
 
 2026-11-24 源码增量。PostgreSQL 查询编辑器支持在 `GROUP BY`、`GROUPING SETS`、`ROLLUP`、`CUBE` 及 `DISTINCT ON` 中定位已确认的投影列、查看引用和整组改名。同名时，`GROUP BY` 优先当前查询的输入列，`DISTINCT ON` 与 `ORDER BY` 优先输出别名。Q01 继续为部分覆盖。 [PostgreSQL SELECT 名称规则](https://www.postgresql.org/docs/18/sql-select.html)

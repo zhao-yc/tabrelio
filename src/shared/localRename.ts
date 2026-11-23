@@ -41,10 +41,10 @@ export function planLocalRename(context: LocalRenameContext, references: LocalRe
   const { target, tokens } = context, group = [references.declaration, ...references.references].sort((a, b) => a.start - b.start);
   const same = tokens.filter(token => folded(token.value, dialect) === folded(target.value, dialect));
   if (same.length !== group.length || same.some((token, index) => token.start !== group[index].start || token.end !== group[index].end)) return { status: 'blocked', reason: 'unresolved' };
-  let direct: LocalDeclarationKind | undefined;
+  let direct: LocalDeclarationKind | undefined = dialect === 'postgresql' && classify(references.declaration) === 'window' ? 'window' : undefined;
   for (const reference of references.references) {
     const kind = classify(reference);
-    if (kind === 'alias' || kind === 'cte' || kind === 'window' && dialect === 'sqlite') { direct = kind; break; }
+    if (kind === 'alias' || kind === 'cte' || kind === 'window' && dialect !== 'mysql') { direct = kind; break; }
   }
   if (!direct) return { status: 'blocked', reason: 'physical' };
   const result = { status: 'ready' as const, target: { start: target.start, end: target.end }, name: target.value, kind: direct, edits: [] as { start: number; end: number; text: string }[] };

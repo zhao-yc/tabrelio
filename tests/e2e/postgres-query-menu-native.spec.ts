@@ -1900,6 +1900,51 @@ test('PostgreSQL 离线整组重命名投影列并保留物理字段和内层同
   expect(pageErrors).toEqual([]);
 });
 
+test('PostgreSQL 离线命名窗口补全、定位声明和整组改名', async ({}, info) => {
+  const lines = ['SELECT count(*) OVER buSuffix, count(*) OVER derived',
+    'FROM (VALUES (1),(1),(2)) q(grp)', 'WINDOW bucket AS (PARTITION BY grp),', '  derived AS (bucket ORDER BY grp);'];
+  const source = lines.join('\n');
+  await prepare({id: '', name: '离线 PostgreSQL 命名窗口', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'postgres'}, source);
+  await resizeQueryWindow(1280, 920, 0.75);
+  const initial = await inspectModel(), column = lines[0].indexOf('buSuffix') + 3;
+  await modelSelection(1, column);
+  await triggerSuggestions();
+  const suggestion = tab().locator('.suggest-widget.visible .monaco-list-row.focused');
+  await expect(suggestion.locator('.label-name')).toHaveText('bucket');
+  await page.keyboard.press('Enter');
+  const completed = source.replace('buSuffix', '"bucket"');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+
+  await modelSelection(1, column);
+  await page.keyboard.press('F12');
+  await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 3, column: 8});
+  await page.keyboard.press('Shift+F12');
+  const peek = editor().locator('.peekview-widget.reference-zone-widget');
+  await expect(peek.locator('.ref-tree .monaco-list-row[role="treeitem"][aria-level="1"]')).toHaveCount(3);
+  await page.keyboard.press('Escape');
+  await expect(peek).not.toBeVisible();
+
+  await modelSelection(1, column);
+  await page.keyboard.press('F2');
+  const input = editor().locator('.rename-box input.rename-input');
+  await expect(input).toHaveValue('bucket');
+  await input.fill('group_window');
+  await input.press('Enter');
+  const renamed = completed.replace('"bucket"', '"group_window"').replace('WINDOW bucket', 'WINDOW "group_window"')
+    .replace('(bucket ORDER', '("group_window" ORDER');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(renamed);
+  await page.screenshot({path: info.outputPath('PostgreSQL命名窗口改名.png'), animations: 'disabled'});
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(source);
+  expect((await inspectModel()).identity).toEqual(initial.identity);
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('PostgreSQL 离线语法检查定位原文并随草稿编辑清除标记', async ({}, info) => {
   const source = "SELECT '中文😀';\nSELECT [$needle], FROM t;";
   await prepare({id: '', name: '离线 PostgreSQL 语法检查', dialect: 'postgresql', group: '', color: '#123456',

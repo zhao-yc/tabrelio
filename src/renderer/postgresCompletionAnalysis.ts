@@ -25,8 +25,9 @@ export interface PostgresFieldTarget extends LocalReferenceRange {
 }
 interface ReferenceTrace {
   edges: Map<PostgresEditorToken, LocalReferenceRange>;
-  declarations: Map<number, 'alias' | 'cte'>;
+  declarations: Map<number, 'alias' | 'cte' | 'window'>;
   implicitNames: Map<number, Set<string>>;
+  windowSlots: Map<number, PostgresEditorToken[]>;
   physicalRelations?: PhysicalRelation[];
   field?: { offset: number; target?: PostgresFieldTarget };
   projected?: true;
@@ -46,6 +47,7 @@ export interface PostgresCompletionAnalysis {
   routine?: PostgresRoutineCompletionTarget;
   existingCall?: boolean;
   keywords?: readonly string[];
+  windows?: { names: string[]; inline: boolean };
 }
 const entries = new Set(['FROM', 'JOIN', 'UPDATE', 'INTO']);
 const endsFrom = new Set(['WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'FETCH', 'RETURNING',
@@ -151,7 +153,7 @@ interface QueryContext {
   start: number;
   left: PostgresEditorToken[];
 }
-interface Parsed { projection: Projection; query?: Query; routine?: PostgresRoutineCompletionTarget; }
+interface Parsed { projection: Projection; query?: Query; routine?: PostgresRoutineCompletionTarget; windows?: PostgresCompletionAnalysis['windows']; }
 
 /** 只接受一个 schema 限定符，关系别名和赋值左侧继续由字段补全处理。 */
 function expressionRoutine(main: Part[], left: PostgresEditorToken[], cursorGroup: Part | undefined,
@@ -507,6 +509,156 @@ function traceProjectionGrouping(parts: Part[], projection: Projection, input: S
   const merged = parts.slice(0, group).some(part => ['NATURAL', 'USING'].includes(keyword(part)));
   traceGroupingItems(parts.slice(start, boundary >= 0 ? boundary : undefined), (token, name) =>
     traceGroupingName(token, name, projection, input, merged, trace));
+}
+
+interface WindowShape { parent?: PostgresEditorToken; partition: boolean; order: boolean; frame: boolean; }
+interface NamedWindow extends WindowShape {
+  name: string;
+  token: PostgresEditorToken;
+  definition: Group;
+  valid: boolean;
+}
+const windowFrameWords = new Set(['ROWS', 'RANGE', 'GROUPS']);
+const windowSpecWords = new Set(['PARTITION', 'ORDER', ...windowFrameWords]);
+const windowTail = new Set(['ORDER', 'LIMIT', 'OFFSET', 'FETCH', 'FOR']);
+
+function windowToken(part?: Part): PostgresEditorToken | undefined {
+  const name = identifier(part);
+  return part && part.kind !== 'group' && name && !stop.has(keyword(part)) &&
+    new TextEncoder().encode(name).length <= 63 ? part : undefined;
+}
+
+/** 窗口规范只看当前括号层。把 ORDER BY rows 或 x.rows 这样的字段和真实窗口帧分开。 */
+function windowShape(parts: Part[]): WindowShape {
+  const by = (word: string) => parts.some((part, index) =>
+    keyword(part) === word && keyword(parts[index + 1]) === 'BY' && !punct(parts[index - 1], '.'));
+  let lastBoundary = -1;
+  parts.forEach((part, index) => {
+    const word = keyword(part);
+    if (word === 'PRECEDING' || word === 'FOLLOWING' || word === 'CURRENT' && keyword(parts[index + 1]) === 'ROW') lastBoundary = index;
+  });
+  const frame = parts.some((part, index) => {
+    if (index >= lastBoundary || !windowFrameWords.has(keyword(part))) return false;
+    const previous = parts[index - 1], next = parts[index + 1];
+    return !(previous?.kind === 'punct' && !/^\d$/.test(previous.text)) &&
+      !['BY', 'COLLATE', 'WHEN', 'THEN', 'ELSE', 'AND', 'OR'].includes(keyword(previous)) &&
+      !punct(next, ',') && !punct(next, '.');
+  });
+  return { parent: windowSpecWords.has(keyword(parts[0])) ? undefined : windowToken(parts[0]),
+    partition: by('PARTITION'), order: by('ORDER'), frame };
+}
+
+const acceptsWindowBase = (window: NamedWindow, shape: WindowShape) =>
+  window.valid && !window.frame && !shape.partition && !(window.order && shape.order);
+
+/** WINDOW 列表按声明顺序构造。继承的排序也计入后续窗口的排序重定义约束。 */
+function namedWindows(parts: Part[]): NamedWindow[] | undefined {
+  const at = parts.findIndex((part, index) => keyword(part) === 'WINDOW' && !punct(parts[index - 1], '.'));
+  if (at < 0) return [];
+  const windows = new Map<string, NamedWindow>();
+  let index = at + 1;
+  for (;;) {
+    const token = windowToken(parts[index]), name = identifier(token);
+    const definition = parts[index + 2];
+    if (!token || !name || windows.has(name) || windows.size >= limits.items ||
+      keyword(parts[index + 1]) !== 'AS' || definition?.kind !== 'group' || definition.closing !== ')') return;
+    const shape = windowShape(definition.parts), parent = identifier(shape.parent);
+    const base = parent === undefined ? undefined : windows.get(parent);
+    windows.set(name, { ...shape, name, token, definition, order: shape.order || base?.order === true,
+      valid: definition.closed && (parent === undefined || !!base && acceptsWindowBase(base, shape)) });
+    index += 3;
+    if (!punct(parts[index], ',')) break;
+    index++;
+  }
+  if (parts[index] && !windowTail.has(keyword(parts[index]))) return;
+  return [...windows.values()];
+}
+
+/** OVER 只能跟在函数调用或它的 FILTER、WITHIN GROUP 之后。子查询另有 WINDOW 名称空间。 */
+function visitWindowCalls(parts: Part[], visit: (over: PostgresEditorToken, target?: Part) => void): void {
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (part.kind === 'group') {
+      if (!referenceCommands.has(keyword(part.parts[0]))) visitWindowCalls(part.parts, visit);
+      continue;
+    }
+    if (keyword(part) !== 'OVER') continue;
+    let call = i - 1;
+    if (keyword(parts[call - 1]) === 'FILTER') call -= 2;
+    if (keyword(parts[call - 1]) === 'GROUP' && keyword(parts[call - 2]) === 'WITHIN') call -= 3;
+    const args = parts[call], name = parts[call - 1];
+    if (args?.kind !== 'group' || args.closing !== ')' || !args.closed || !windowToken(name) ||
+      punct(parts[call - 2], '::') || punct(parts[call - 2], ':')) continue;
+    visit(part, parts[i + 1]);
+    if (parts[i + 1]?.kind === 'group') i++;
+  }
+}
+
+function selectWindowCalls(parts: Part[], visit: (over: PostgresEditorToken, target?: Part) => void): void {
+  const boundary = parts.findIndex(part => endsFrom.has(keyword(part)) || keyword(part) === 'FROM');
+  visitWindowCalls(parts.slice(1, boundary < 0 ? undefined : boundary), visit);
+  const order = parts.findIndex((part, index) => keyword(part) === 'ORDER' && keyword(parts[index + 1]) === 'BY');
+  if (order < 0) return;
+  const end = parts.findIndex((part, index) => index > order + 1 && windowTail.has(keyword(part)));
+  visitWindowCalls(parts.slice(order + 2, end < 0 ? undefined : end), visit);
+}
+
+/** 补全只在裸 OVER 后或规范首词的名称位置触发，不查询目录。 */
+function completeWindowNames(parts: Part[], context: QueryContext): PostgresCompletionAnalysis['windows'] {
+  let names: PostgresCompletionAnalysis['windows'];
+  const windows = namedWindows(parts);
+  const inline = (group: Group, allowed: NamedWindow[]) => {
+    if (!contains(group, context.offset)) return;
+    const first = group.parts[0];
+    if (first) {
+      const clause = windowSpecWords.has(keyword(first));
+      const beforeClause = clause && context.offset < first.start;
+      const replacingName = !clause && ['word', 'identifier'].includes(first.kind) && first.start === context.start;
+      if (!beforeClause && !replacingName) return;
+    }
+    const shape = windowShape(group.parts);
+    names = { inline: true, names: allowed.filter(window => acceptsWindowBase(window, shape)).map(window => window.name) };
+  };
+  selectWindowCalls(parts, (over, target) => {
+    if (target?.kind === 'group') {
+      if (target.closing === ')') inline(target, windows ?? []);
+    } else if (context.left.at(-1) === over && (!target || context.start < target.start ||
+      context.start === target.start && ['identifier', 'word'].includes(target.kind) && !stop.has(keyword(target)))) {
+      names = { inline: false, names: (windows ?? []).filter(window => window.valid).map(window => window.name) };
+    }
+  });
+  if (names) return names;
+  if (!windows) return;
+  for (const [index, window] of windows.entries()) {
+    inline(window.definition, windows.slice(0, index));
+    if (names) return names;
+  }
+}
+
+/** 记录本块专用的名称位置，改名时不把同名字段或内层窗口算进这个名称空间。 */
+function traceNamedWindows(parts: Part[], trace: ReferenceTrace): void {
+  const windows = namedWindows(parts);
+  if (!windows?.length) return;
+  const slots = windows.map(window => window.token);
+  const visible = new Map<string, NamedWindow>();
+  const record = (target?: PostgresEditorToken, shape?: WindowShape) => {
+    if (!target) return;
+    slots.push(target);
+    const window = visible.get(identifier(target)!);
+    if (window && (!shape || acceptsWindowBase(window, shape))) trace.edges.set(target, window.token);
+  };
+  for (const window of windows) {
+    trace.declarations.set(window.token.start, 'window');
+    trace.windowSlots.set(window.token.start, slots);
+    record(window.parent, windowShape(window.definition.parts));
+    visible.set(window.name, window);
+  }
+  selectWindowCalls(parts, (_over, target) => {
+    if (target?.kind === 'group' && target.closing === ')') {
+      const shape = windowShape(target.parts);
+      record(shape.parent, shape);
+    } else record(windowToken(target));
+  });
 }
 
 /** OLD/NEW 共享目标列，只能作为 RETURNING 的限定名。默认名称让位给已有关系。 */
@@ -1472,6 +1624,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   const firstSet = main.findIndex(part => setOperators.has(keyword(part)));
   if (firstSet >= 0) {
     let output = unknown, branchStart = 0, query: Query | undefined, routine: PostgresRoutineCompletionTarget | undefined;
+    let windows: Parsed['windows'];
     for (let i = 0; i <= main.length; i++) {
       if (i < main.length && !setOperators.has(keyword(main[i]))) continue;
       const branch = main.slice(branchStart, i);
@@ -1485,11 +1638,11 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       if (branchStart === 0) { output = parsed.projection; firstBranch?.(output); }
       if (trace?.projected && order >= 0) traceProjectionOrder(branch.slice(order), output, trace);
       if (inOrder) query = columns([{ name: '', projection: output }], [], active.left);
-      else if (active) { query = parsed.query; routine = parsed.routine; }
+      else if (active) { query = parsed.query; routine = parsed.routine; windows = parsed.windows; }
       if (['ALL', 'DISTINCT'].includes(keyword(main[i + 1]))) i++;
       branchStart = i + 1;
     }
-    return { projection: output, query, routine };
+    return { projection: output, query, routine, windows };
   }
 
   const write = command === 'UPDATE' || command === 'DELETE';
@@ -1608,6 +1761,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   }
   if (trace) {
     traceExpressions(returning < 0 ? main : main.slice(0, returning), scope, refs, outer, spans!, trace);
+    if (command === 'SELECT' && !trace.field && !trace.physicalRelations) traceNamedWindows(main, trace);
     if (returning >= 0 && !trace.unsupported) traceReturning(main.slice(returning + 1), scope, refs, outer, trace, write ? refs[0] : undefined);
     if (!trace.projected) return { projection: unknown };
     const projection = tableSource ? refs[0]?.projection ?? unknown : project(main, refs, undefined, trace);
@@ -1653,6 +1807,8 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
         { kind: 'relations', ...(qualifier ? { schema: qualifier } : {}), ...(ctes.length ? { ctes } : {}) }, routine };
     }
   }
+  const windows = command === 'SELECT' ? completeWindowNames(main, context) : undefined;
+  if (windows) return { projection, windows };
   return { projection, query: keyword(left.at(-1)) === 'AS' ? undefined : columns(visible, outer, left),
     routine: expressionRoutine(main, left, cursorGroup, [visible, ...outer], argumentStart) };
 }
@@ -1678,7 +1834,7 @@ function tracePostgresStatement(source: string, offset: number, mode: boolean,
   if (intent !== 'relation' && !tokens.some(token => identifier(token) && offset >= token.start && offset <= token.end)) return noLocalReference;
   const parts = groupStatement(tokens, offset, statement.end, true);
   if (!parts) return noLocalReference;
-  const trace: ReferenceTrace = { edges: new Map(), declarations: new Map(), implicitNames: new Map(), unsupported: false,
+  const trace: ReferenceTrace = { edges: new Map(), declarations: new Map(), implicitNames: new Map(), windowSlots: new Map(), unsupported: false,
     ...(intent === 'relation' ? { physicalRelations: [] } : intent === 'field' ? { field: { offset } } :
       intent === 'references' || intent === 'projectionRename' ? { projected: true } : {}),
     ...(intent === 'projectionRename' ? { projectionRename: { explicit: new Set(), separate: new Set(), uncertain: new Set(), outputs: [] } } : {}) };
@@ -1703,7 +1859,8 @@ function analyzePostgresBinding<T extends LocalBindingReferences | LocalRename>(
     const declaration = trace.edges.get(target) ?? target;
     const references = [...trace.edges].filter(([, binding]) => binding.start === declaration.start)
       .map(([token]) => rangeOf(token)).sort((a, b) => a.start - b.start);
-    if (!references.length && !trace.projectionRename?.explicit.has(declaration.start)) return noLocalReference;
+    if (!references.length && !trace.projectionRename?.explicit.has(declaration.start) &&
+      !trace.windowSlots.has(declaration.start)) return noLocalReference;
     if (references.length > limits.items) return { status: 'blocked', reason: 'budget' };
     return plan({ status: 'ready', target: rangeOf(target), declaration: rangeOf(declaration), references }, target, tokens, trace, mode);
   }
@@ -1813,6 +1970,12 @@ export function analyzePostgresLocalRename(source: string, offset: number, stand
     const declaration = references.declaration.start;
     if (newName !== undefined && newName !== name && trace.implicitNames.get(declaration)?.has(newName)) return { status: 'blocked', reason: 'collision' };
     const kind = trace.declarations.get(declaration);
+    const window = trace.windowSlots.get(declaration);
+    if (kind === 'window' && window) {
+      const sorted = [...window].sort((left, right) => left.start - right.start);
+      return planLocalRename({ status: 'ready', target: { ...rangeOf(target), value: name },
+        tokens: sorted.map(token => ({ ...rangeOf(token), value: identifier(token)! })) }, references, 'postgresql', () => kind, newName);
+    }
     const localTokens = [];
     for (const token of tokens) {
       const value = identifier(token);
@@ -1925,9 +2088,9 @@ function selectClauseKeywords(source: string, parts: Part[], position: { start: 
 }
 
 /** 定位当前标识符，屏蔽注释、字符串和参数，再解析当前语句的查询作用域。 */
-export function analyzePostgresCompletion(source: string, offset: number): PostgresCompletionAnalysis | undefined {
+export function analyzePostgresCompletion(source: string, offset: number, standardStrings?: boolean): PostgresCompletionAnalysis | undefined {
   if (source.length > limits.source || offset < 0 || offset > source.length || source.includes('\0')) return;
-  const all = scanPostgresEditorTokens(source, limits.tokens);
+  const all = scanPostgresEditorTokens(source, limits.tokens, standardStrings ?? true);
   if (!all || all.some(token => token.kind === 'blocked' && offset > token.start &&
       (offset < token.end || token.open && offset === token.end))) return;
   const target = all.find(token => (token.kind === 'word' || token.kind === 'identifier') && offset >= token.start && offset <= token.end);
@@ -1945,6 +2108,12 @@ export function analyzePostgresCompletion(source: string, offset: number): Postg
     ? selectClauseKeywords(source, parts, { start, end, offset, prefix: prefixUpper }) : undefined;
   if (clause?.continuation) return { start, end, prefix, quoted, keywords: clause.items };
   const parsed = parts && parseQuery(parts, new Map(), [], { offset, start, left });
+  if (parsed?.windows) {
+    const result = { start, end, prefix, quoted, windows: parsed.windows };
+    // 尚未连接时，两种字符串规则必须确认相同位置和同一组窗口。
+    return standardStrings === undefined && source.includes('\\') &&
+      JSON.stringify(result) !== JSON.stringify(analyzePostgresCompletion(source, offset, false)) ? undefined : result;
+  }
   const next = parsed?.routine && all.find(token => token !== target && token.start >= end && !(token.kind === 'blocked' && token.text === 'comment'));
   const existingCall = punct(next, '(');
   const declaredTable = existingCall && declaredTableSyntax.has(keyword(target)) && !punct(left.at(-1), '.');

@@ -168,12 +168,26 @@ export function createPostgresCompletionProvider(options: {
           }) };
         }
         if (parameter === null || context?.triggerCharacter === '$') return empty;
-        const analysis = analyzePostgresCompletion(source, offset);
+        const analysis = analyzePostgresCompletion(source, offset, options.standardStrings);
         if (!analysis) return empty;
         const { query, prefix, quoted, routine } = analysis;
         const start = model.getPositionAt(analysis.start), end = model.getPositionAt(analysis.end);
         if (start.lineNumber !== end.lineNumber) return empty;
         const range = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+        const windows = analysis.windows;
+        if (windows) {
+          const normalized = (name: string) => quoted ? name : name.replace(/[A-Z]/g, character => character.toLowerCase());
+          const suggestions: monaco.languages.CompletionItem[] = windows.names.filter(name => normalized(name).startsWith(normalized(prefix)))
+            .map((name, index) => ({ range, kind: options.kinds.variable, label: { label: name, description: postgresZh.namedWindow },
+              insertText: postgresIdentifier(name), filterText: quoted ? postgresIdentifier(name) : name,
+              sortText: '0' + String(index).padStart(3, '0') }));
+          if (windows.inline && !quoted) {
+            for (const label of ['PARTITION BY', 'ORDER BY', 'ROWS', 'RANGE', 'GROUPS'].filter(word => word.startsWith(prefix.toUpperCase()))) {
+              suggestions.push({ label, kind: options.kinds.keyword, insertText: label, range, sortText: '9' + label });
+            }
+          }
+          return { suggestions: suggestions.slice(0, postgresCompletionLimits.items), incomplete: true };
+        }
         const references: PostgresCompletionReference[] = [];
         const origins: number[] = [];
         const localColumns: { reference: number; name: string; type?: string }[] = [];
