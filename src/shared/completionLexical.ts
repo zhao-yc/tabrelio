@@ -22,7 +22,7 @@ export function quoteCompletionIdentifier(value:string):string{if(!completionIde
 const blocked=(reason:Extract<CompletionLexicalResult,{status:'blocked'}>['reason']):CompletionLexicalResult=>({status:'blocked',reason});
 
 /** 单个确定模式的纯词法扫描，不执行SQL、不读取连接，也不记录用户文本。 */
-function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:boolean,prefixUnits:number,signature?:'mysql'|'sqlite',complete=false,whole=false):CompletionLexicalResult{
+function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:boolean,prefixUnits:number,signature?:'mysql'|'sqlite',complete=false,whole: false | 'definition' | 'folding' = false):CompletionLexicalResult{
   const statements:Statement[]=[],regions:Region[]=[];let current:Statement={start:0,end:source.length,tokens:[],executable:false};
   let index=0,depth=0,total=0,delimiter=';',lineStart=true,hasCode=false;
   /** 限制全文件token数与括号深度，避免大脚本在每次键盘输入时无限分配。 */
@@ -32,7 +32,7 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
   }
   while(index<source.length){
     // 客户端DELIMITER仅在独立行且当前语句无代码时生效，注释/字符串不能伪造指令。
-    if(signature!=='sqlite'&&lineStart&&!hasCode){
+    if(whole!=='folding'&&signature!=='sqlite'&&lineStart&&!hasCode){
       const end=source.indexOf('\n',index),lineEnd=end<0?source.length:end+1,line=source.slice(index,lineEnd);
       const directive=/^[\t\r ]*DELIMITER[\t ]+(\S+)[\t\r ]*(?:\n)?$/i.exec(line);
       if(directive){
@@ -41,7 +41,7 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
       }
     }
     const char=source[index],next=source[index+1];
-    if(source.startsWith(delimiter,index)){
+    if(whole!=='folding'&&source.startsWith(delimiter,index)){
       current.end=index;statements.push(current);index+=delimiter.length;current={start:index,end:source.length,tokens:[],executable:false};depth=0;hasCode=false;lineStart=false;continue;
     }
     if(space(char)){lineStart=char==='\n'||lineStart;index++;continue;}
@@ -123,8 +123,16 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
 /** 结构草稿检查单条原文，不以光标、客户端分隔符或可执行注释推断正文。 */
 export function mysqlDefinitionTokens(source:string,ansiQuotes:boolean,noBackslashEscapes:boolean):CompletionLexicalContext|undefined{
   if(source.length>completionLimits.sourceUnits||/[\u0000\uD800-\uDFFF]/u.test(source))return;
-  const result=scan(source,0,ansiQuotes,noBackslashEscapes,completionLimits.aliasUnits,undefined,true,true);
+  const result=scan(source,0,ansiQuotes,noBackslashEscapes,completionLimits.aliasUnits,undefined,true,'definition');
   return result.status==='ready'?result:undefined;
+}
+
+/** 分段已由原执行扫描器完成，内部的分号保留在例程和触发器体内。 */
+export function foldingStatementTokens(source: string, dialect: 'mysql' | 'mariadb' | 'sqlite', ansiQuotes: boolean, noBackslashEscapes: boolean): CompletionToken[] | undefined {
+  const sqlite = dialect === 'sqlite';
+  const result = scan(source, 0, sqlite || ansiQuotes, sqlite || noBackslashEscapes, completionLimits.aliasUnits,
+    sqlite ? 'sqlite' : undefined, true, 'folding');
+  return result.status === 'ready' ? result.tokens : undefined;
 }
 
 /** 未知会话模式分别扫描四种组合；仅当前语句及编辑范围完全一致时提供候选。 */

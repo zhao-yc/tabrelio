@@ -1880,6 +1880,30 @@ test('PostgreSQL 语句折叠离线保留标题和同行的下一条 SQL', async
   await expect(lines).toContainText('PERFORM 42');
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
   await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).editorSqlFolding).toBe(true);
+  const nested = ['WITH', 'subject AS (', "SELECT $value$保留 ) 字面$value$ AS nested_value", '),',
+    'adjacent AS (SELECT 22)', 'SELECT * FROM subject;'].join('\n');
+  await replaceDraft(nested);
+  await modelSelection(2, 1);
+  await expect(expanded).toHaveCount(2);
+  const point = await page.evaluate(() => {
+    const monaco = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+    const instance = monaco?.editor.getEditors().find(item => item.getContainerDomNode().closest('.postgres-query'));
+    const position = instance?.getScrolledVisiblePosition({ lineNumber: 2, column: 1 }), host = instance?.getDomNode();
+    if (!position || !host) throw Error('缺少原 PostgreSQL 第二行');
+    const y = host.getBoundingClientRect().top + position.top + position.height / 2;
+    const button = Array.from(host.querySelectorAll('.codicon-folding-expanded'), icon => icon.getBoundingClientRect())
+      .find(rect => rect.top <= y && y < rect.bottom);
+    if (!button) throw Error('缺少原 CTE 折叠按钮');
+    return { x: button.left + button.width / 2, y };
+  });
+  await page.mouse.click(point.x, point.y);
+  await expect(lines).not.toContainText('nested_value');
+  await expect(lines).toContainText('),');
+  await expect(lines).toContainText('adjacent AS (SELECT 22)');
+  await page.screenshot({path: info.outputPath('PostgreSQL子查询折叠.png')});
+  await collapsed.click();
+  await expect(lines).toContainText('nested_value');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(nested);
   await replaceDraft(ambiguousFoldingScript);
   await expect(expanded).toHaveCount(0);
   await command('editor-sql-folding');

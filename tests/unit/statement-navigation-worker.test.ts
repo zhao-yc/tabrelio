@@ -13,6 +13,11 @@ it('真实轻量Worker按三方言处理原文，只返回固定数字范围', (
   runInContext(bundle.outputFiles[0].text, context, { timeout: 8000 }); expect(messages).toEqual([{ type: 'dbark-statement-navigation-ready', version: 1 }]);
   const send = (value: unknown) => { context.requestJson = JSON.stringify(value); runInContext('self.onmessage({ data: JSON.parse(requestJson) })', context, { timeout: 2000 }); };
   for (const dialect of ['mysql', 'mariadb', 'sqlite'] as const) { send({ id: 1, source, dialect, mode }); expect(messages.at(-1)).toEqual({ id: 1, result: analyzeStatementNavigation(source, dialect, mode) }); }
+  const folded = 'SELECT\n (\n   42\n );';
+  send({ id: 1, source: folded, dialect: 'postgresql', mode, fold: true });
+  expect(messages.at(-1)).toEqual({ id: 1, result: analyzeStatementNavigation(folded, 'postgresql', mode, true) });
+  send({ id: 1, source: folded, dialect: 'postgresql', mode, fold: false });
+  expect(messages.at(-1)).toMatchObject({ id: 1, result: { status: 'blocked' } });
   for (const extra of [{ sql: 'DROP TABLE t' }, { uri: 'command:run' }, { dialect: 'other' }, { mode: 1 }]) { send({ id: 1, source, dialect: 'mysql', mode, ...extra }); expect(messages.at(-1)).toMatchObject({ id: 1, result: { status: 'blocked' } }); }
 });
 /** 可控传输和计时器只验证本轮握手、取消、替换及释放，分段结果由生产模块生成。 */

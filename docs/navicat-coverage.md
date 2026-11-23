@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 编辑器可独立折叠长 CTE、子查询与其它多行括号块，保留闭括号所在行及同行后续代码。折叠沿用原 SQL 分段、方言词法与会话模式。Q01 继续为部分覆盖。 [Navicat SQL 编辑器手册](https://www.navicat.com/manual/pdf_manual/en/navicat/win_manual/navicat_en.pdf)
+
 2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 共用的计划对比窗口支持按节点、路径、变化字段及两侧显示值查找，可用键盘循环定位并高亮匹配字段。查找适用于当前计划对照基准和离线双快照。Q07 继续为部分覆盖。
 
 2026-11-24 源码增量。MySQL 和 MariaDB 的 JSON 估算计划、MySQL TREE 实测计划及 MariaDB JSON 实测计划支持同引擎的快照离线对比，以及当前查询结果直接对照已保存的基准。JSON 按字段路径对齐，TREE 按同级位置对齐。Q07 继续为部分覆盖。 [MySQL EXPLAIN](https://dev.mysql.com/doc/refman/8.4/en/explain.html) · [MariaDB ANALYZE FORMAT=JSON](https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/analyze-and-explain-statements/analyze-format-json)

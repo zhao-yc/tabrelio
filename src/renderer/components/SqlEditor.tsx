@@ -106,8 +106,10 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const contentRef = useRef<ReturnType<typeof editorContentBridge> | null>(null);
   const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable; formatAction?: monaco.IDisposable; formatToken?: object; indentation?: ReturnType<typeof bindEditorIndentation> } | null>(null);
   const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat, queryTabId, clipboardDisabled });
-  const foldingScope = useRef({ dialect: requestedDialect, standardStrings: postgresStandardStrings });
-  useLayoutEffect(() => { foldingScope.current = { dialect: requestedDialect, standardStrings: postgresStandardStrings }; });
+  const foldingAnsiQuotes = requestedDialect === 'mysql' || requestedDialect === 'mariadb' ? mysqlMode?.ansiQuotes : undefined;
+  const foldingEscapes = requestedDialect === 'postgresql' ? postgresStandardStrings : requestedDialect === 'mysql' || requestedDialect === 'mariadb' ? mysqlMode?.noBackslashEscapes : undefined;
+  const foldingScope = useRef({ dialect: requestedDialect, standardStrings: postgresStandardStrings, quotes: foldingAnsiQuotes, escapes: foldingEscapes });
+  useLayoutEffect(() => { foldingScope.current = { dialect: requestedDialect, standardStrings: postgresStandardStrings, quotes: foldingAnsiQuotes, escapes: foldingEscapes }; });
   const snippetScope = useRef({ dialect: requestedDialect, postgres: postgresCompletion, standardStrings: postgresStandardStrings });
   useLayoutEffect(() => { snippetScope.current = { dialect: requestedDialect, postgres: postgresCompletion, standardStrings: postgresStandardStrings }; });
   const completionRef = useRef(completion);
@@ -200,10 +202,10 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const client = new StatementNavigationWorkerClient(() => new StatementNavigationWorker({ name: 'dbark-sql-folding' }));
     const registration = monaco.languages.registerFoldingRangeProvider(languageSelector, sqlStatementFoldingProvider(instance, requestedDialect, client,
       () => active && aliveRef.current && editorRef.current === instance && foldingScope.current.dialect === requestedDialect &&
-        foldingScope.current.standardStrings === postgresStandardStrings && useWorkspace.getState().settings.editorSqlFolding === true,
-      postgresStandardStrings === undefined ? {} : { noBackslashEscapes: postgresStandardStrings }));
+        foldingScope.current.quotes === foldingAnsiQuotes && foldingScope.current.escapes === foldingEscapes && useWorkspace.getState().settings.editorSqlFolding === true,
+      { ...(foldingAnsiQuotes === undefined ? {} : { ansiQuotes: foldingAnsiQuotes }), ...(foldingEscapes === undefined ? {} : { noBackslashEscapes: foldingEscapes }) }));
     return () => { active = false; registration.dispose(); client.dispose(); };
-  }, [contentReady, queryEditor, sqlFolding, requestedDialect, postgresStandardStrings, languageSelector]);
+  }, [contentReady, queryEditor, sqlFolding, requestedDialect, foldingAnsiQuotes, foldingEscapes, languageSelector]);
   /** 原生菜单只收到可用状态，选区内容留在当前模型内。 */
   useEffect(() => {
     if (!onSelectionState) return;

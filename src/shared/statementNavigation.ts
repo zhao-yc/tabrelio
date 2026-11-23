@@ -2,12 +2,13 @@ import { SqlScriptScanner } from './sqlScriptScanner';
 import { scanSqliteStatementPositions } from './sqliteStatementScanner';
 import type { CompletionLexicalMode } from './completionLexical';
 import { postgresSqlContentStart, PostgresStatementLimit, splitPostgresSql } from './postgresSql';
+import { sqlFoldingBlocks, type SqlFoldingBlock } from './sqlFoldingBlocks';
 
-export const statementNavigationLimits = { sourceUnits: 262144, statements: 1000, previewPoints: 160 } as const;
+export const statementNavigationLimits = { sourceUnits: 262144, statements: 1000, blocks: 1000, previewPoints: 160 } as const;
 export interface NavigableStatement { start: number; end: number; delimiterStart: number; delimiterEnd: number; }
 export const statementNavigationDialects = ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const;
 export type StatementNavigationDialect = typeof statementNavigationDialects[number];
-export type StatementNavigationResult = { status: 'ready'; statements: NavigableStatement[] } | { status: 'blocked'; reason: string };
+export type StatementNavigationResult = { status: 'ready'; statements: NavigableStatement[]; blocks?: SqlFoldingBlock[] } | { status: 'blocked'; reason: string };
 const reasons = ['input', 'budget', 'mode', 'script', 'context', 'stale', 'worker', 'cancelled', 'disposed', 'replaced', 'timeout', 'startup-timeout'];
 
 /** 只读取固定、自有数据属性；线程不能夹带SQL、路径、命令或访问器。 */
@@ -23,7 +24,7 @@ function boundary(source: string, offset: unknown): offset is number { return Nu
 /** 所有范围绑定同一原文，顺序完整、不重叠且含准确原分隔符边界；不传原SQL副本。 */
 export function validStatementNavigationResult(raw: unknown, source: string): raw is StatementNavigationResult {
   if (record(raw, ['status', 'reason']) && raw.status === 'blocked') return typeof raw.reason === 'string' && reasons.includes(raw.reason);
-  if (!sourceValid(source) || !record(raw, ['status', 'statements']) || raw.status !== 'ready') return false;
+  if (!sourceValid(source) || (!record(raw, ['status', 'statements']) && !record(raw, ['status', 'statements', 'blocks'])) || raw.status !== 'ready') return false;
   const ranges = raw.statements;
   if (!Array.isArray(ranges) || Object.getPrototypeOf(ranges) !== Array.prototype || ranges.length > statementNavigationLimits.statements || Reflect.ownKeys(ranges).length !== ranges.length + 1) return false;
   let previous = 0;
@@ -34,11 +35,29 @@ export function validStatementNavigationResult(raw: unknown, source: string): ra
     if (range.delimiterStart === range.delimiterEnd && range.delimiterEnd !== source.length || range.delimiterEnd - range.delimiterStart > 16) return false;
     previous = range.delimiterEnd;
   }
+  if (!Object.hasOwn(raw, 'blocks')) return true;
+  const blocks = raw.blocks;
+  if (!Array.isArray(blocks) || Object.getPrototypeOf(blocks) !== Array.prototype || blocks.length > statementNavigationLimits.blocks || Reflect.ownKeys(blocks).length !== blocks.length + 1) return false;
+  let statement = 0, previousStart = -1;
+  const ends: number[] = [];
+  for (let index = 0; index < blocks.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(blocks, String(index));
+    if (!descriptor?.enumerable || !('value' in descriptor)) return false;
+    const block = descriptor.value;
+    if (!record(block, ['start', 'end']) || !boundary(source, block.start) || !boundary(source, block.end) ||
+        block.start <= previousStart || block.start >= block.end || source[block.start] !== '(' || source[block.end - 1] !== ')') return false;
+    while (statement < ranges.length && block.start >= ranges[statement].end) statement++;
+    if (!ranges[statement] || block.start < ranges[statement].start || block.end > ranges[statement].end) return false;
+    while (ends.length && block.start >= ends[ends.length - 1]) ends.pop();
+    if (ends.length && block.end >= ends[ends.length - 1]) return false;
+    previousStart = block.start;
+    ends.push(block.end);
+  }
   return true;
 }
 
 /** 使用真正执行路径的原扫描器；导航不会prepare、执行或预测前面SET/CALL的效果。 */
-export function analyzeStatementNavigation(source: string, dialect: StatementNavigationDialect, mode: CompletionLexicalMode = {}): StatementNavigationResult {
+export function analyzeStatementNavigation(source: string, dialect: StatementNavigationDialect, mode: CompletionLexicalMode = {}, fold = false): StatementNavigationResult {
   if (typeof source === 'string' && source.length > statementNavigationLimits.sourceUnits) return { status: 'blocked', reason: 'budget' };
   if (!sourceValid(source) || !statementNavigationDialects.includes(dialect)) return { status: 'blocked', reason: 'input' };
   const modeKeys = mode && typeof mode === 'object' && !Array.isArray(mode) ? Reflect.ownKeys(mode).filter((key): key is string => typeof key === 'string') : [];
@@ -66,6 +85,15 @@ export function analyzeStatementNavigation(source: string, dialect: StatementNav
       for (const range of ranges) accept(range.start, range.end, range.delimiterStart, range.delimiterEnd);
     }
     const result: StatementNavigationResult = { status: 'ready', statements };
+    if (fold) {
+      const blocks: SqlFoldingBlock[] = [];
+      for (const { start, end } of statements) {
+        const local = sqlFoldingBlocks(source.slice(start, end), dialect, mode);
+        if (blocks.length + local.length > statementNavigationLimits.blocks) { blocks.length = 0; break; }
+        for (const block of local) blocks.push({ start: start + block.start, end: start + block.end });
+      }
+      result.blocks = blocks;
+    }
     return validStatementNavigationResult(result, source) ? result : { status: 'blocked', reason: 'script' };
   } catch (reason) { return { status: 'blocked', reason: reason instanceof PostgresStatementLimit || reason instanceof Error && reason.message === 'budget' ? 'budget' : 'script' }; }
 }

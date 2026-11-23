@@ -7,7 +7,7 @@ export class StatementNavigationWorkerClient {
   private active?: { stop(reason: string): void }; private disposed = false;
   constructor(private readonly create: () => WorkerPort) {}
   /** 8秒启动／2秒扫描分别限时，超时整份拒绝，不保留部分语句目录。 */
-  analyze(source: string, dialect: StatementNavigationDialect, mode: CompletionLexicalMode, signal: AbortSignal): Promise<StatementNavigationResult> {
+  analyze(source: string, dialect: StatementNavigationDialect, mode: CompletionLexicalMode, signal: AbortSignal, fold = false): Promise<StatementNavigationResult> {
     if (this.disposed || signal.aborted) return Promise.resolve({ status: 'blocked', reason: 'cancelled' });
     if (source.length > statementNavigationLimits.sourceUnits) return Promise.resolve({ status: 'blocked', reason: 'budget' });
     this.active?.stop('replaced');
@@ -31,10 +31,11 @@ export class StatementNavigationWorkerClient {
           if (value?.type === 'dbark-statement-navigation-ready') {
             if (Object.keys(value).sort().join(',') !== 'type,version' || value.version !== 1) return owner.stop('worker');
             if (sent) return; sent = true; clearTimeout(timer); timer = setTimeout(() => owner.stop('timeout'), 2000);
-            try { worker!.postMessage({ id: 1, source, dialect, mode: snapshot }); } catch { owner.stop('worker'); }
+            try { worker!.postMessage({ id: 1, source, dialect, mode: snapshot, ...(fold ? { fold: true } : {}) }); } catch { owner.stop('worker'); }
             return;
           }
-          if (!sent || !value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'id,result' || value.id !== 1 || !validStatementNavigationResult(value.result, source)) return owner.stop('worker');
+          if (!sent || !value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'id,result' || value.id !== 1 ||
+              !validStatementNavigationResult(value.result, source) || value.result.status === 'ready' && Object.hasOwn(value.result, 'blocks') !== fold) return owner.stop('worker');
           finish(value.result);
         };
         worker.onerror = event => { event.preventDefault(); owner.stop('worker'); }; worker.onmessageerror = () => owner.stop('worker');

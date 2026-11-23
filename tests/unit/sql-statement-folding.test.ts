@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import type { editor } from 'monaco-editor';
-import { analyzeStatementNavigation, type StatementNavigationResult } from '../../src/shared/statementNavigation';
+import { analyzeStatementNavigation, validStatementNavigationResult, type StatementNavigationResult } from '../../src/shared/statementNavigation';
 import { sqlStatementFoldingProvider, statementFoldingRanges } from '../../src/renderer/sqlStatementFolding';
 
 /** 用原 UTF-16 偏移模拟 Monaco 模型，仅替换界面与线程端口。 */
@@ -33,6 +33,43 @@ it('PostgreSQL 从语句正文开始折叠，保留前导注释和末行的相�
   const result = analyzeStatementNavigation(source, 'postgresql');
   if (result.status !== 'ready') throw Error('测试脚本不能分段');
   expect(statementFoldingRanges(model(source).port, result.statements, source, 'postgresql')).toEqual([{ start: 3, end: 6 }]);
+});
+
+it.each(['mysql', 'mariadb', 'sqlite', 'postgresql'] as const)('%s 保留 CTE 和嵌套调用的闭括号行', dialect => {
+  const source = ['WITH', '  subject AS (', '    SELECT COALESCE(', "      '文字 ) 🚢',", '      1',
+    '    ) AS id', '  ), next_cte AS (SELECT 2)', 'SELECT id FROM subject;'].join('\r\n');
+  const result = analyzeStatementNavigation(source, dialect, {}, true);
+  if (result.status !== 'ready') throw Error('测试脚本不能分段');
+  expect(validStatementNavigationResult(result, source)).toBe(true);
+  expect(result.blocks?.map(block => source.slice(block.start, block.end))).toEqual([
+    '(\r\n    SELECT COALESCE(\r\n      \'文字 ) 🚢\',\r\n      1\r\n    ) AS id\r\n  )',
+    '(\r\n      \'文字 ) 🚢\',\r\n      1\r\n    )',
+  ]);
+  expect(statementFoldingRanges(model(source).port, result.statements, source, dialect, result.blocks)).toEqual([
+    { start: 1, end: 8 }, { start: 2, end: 6 }, { start: 3, end: 5 },
+  ]);
+});
+
+it('括号配对忽略 PostgreSQL dollar quote、嵌套注释和 SQLite 方括号引用', () => {
+  const postgres = "SELECT\r\n  $body$(\r\n)字面\r\n$body$,\r\n  /* ( /* 嵌套 */ ) */ (\r\n    1\r\n  );";
+  const pg = analyzeStatementNavigation(postgres, 'postgresql', {}, true);
+  expect(pg).toMatchObject({ status: 'ready', blocks: [{ start: postgres.indexOf('(\r\n    1'), end: postgres.lastIndexOf(')') + 1 }] });
+  const sqlite = 'SELECT\r\n  [a(\r\n) b], (\r\n     1 --)\r\n  );';
+  const sq = analyzeStatementNavigation(sqlite, 'sqlite', {}, true);
+  expect(sq).toMatchObject({ status: 'ready', blocks: [{ start: sqlite.indexOf('(\r\n     1'), end: sqlite.lastIndexOf(')') + 1 }] });
+});
+
+it('块边界有歧义时保留原语句范围，且伪造范围不能越过括号或语句', () => {
+  const source = "SELECT 'x\\'(\r\n  1\r\n) -- 合上'";
+  const offline = analyzeStatementNavigation(source, 'mysql', {}, true);
+  const known = analyzeStatementNavigation(source, 'mysql', { noBackslashEscapes: true }, true);
+  expect(offline).toMatchObject({ status: 'ready', blocks: [] });
+  expect(known).toMatchObject({ status: 'ready', blocks: [{ start: source.indexOf('('), end: source.indexOf(')') + 1 }] });
+  if (known.status !== 'ready') throw Error('测试脚本不能分段');
+  expect(validStatementNavigationResult({ ...known, blocks: [{ start: 0, end: source.indexOf(')') + 1 }] }, source)).toBe(false);
+  const joined = 'SELECT (\r\n  1\r\n); SELECT (\r\n  2\r\n);';
+  const valid = analyzeStatementNavigation(joined, 'sqlite', {}, true);
+  expect(validStatementNavigationResult({ ...valid, blocks: [{ start: joined.indexOf('('), end: joined.lastIndexOf(')') + 1 }] }, joined)).toBe(false);
 });
 
 it('PostgreSQL 折叠根据会话模式快照取范围，旧提供器失效后不提交迟到范围', async () => {

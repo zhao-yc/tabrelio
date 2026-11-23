@@ -336,7 +336,7 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     await expect.poll(foldingMenuState).toBe(true);
     // 首条 SELECT 的前导注释也跨行。用模型行位置定位对应按钮，Monaco 的虚拟 DOM 顺序可能不同。
     await expect(expanded).toHaveCount(2);
-    const foldingPoint = await step(() => page.evaluate(line => {
+    const foldingPoint = (line: number) => step(() => page.evaluate(line => {
       const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
       const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().closest('.query-tab'));
       const position = instance?.getScrolledVisiblePosition({ lineNumber: line, column: 1 }), node = instance?.getDomNode();
@@ -346,8 +346,9 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
         .filter(rect => rect.top <= y && y < rect.bottom);
       if (icons.length !== 1) throw Error('复合语句折叠按钮与可见行未对齐');
       return { x: icons[0].left + icons[0].width / 2, y };
-    }, compoundLine));
-    await step(() => page.mouse.click(foldingPoint.x, foldingPoint.y));
+    }, line));
+    const compoundPoint = await foldingPoint(compoundLine);
+    await step(() => page.mouse.click(compoundPoint.x, compoundPoint.y));
     await expect(editorLines).not.toContainText(bodyText);
     await expect(editorLines).toContainText(dialect === 'sqlite' ? 'CREATE TEMP TRIGGER' : 'CREATE PROCEDURE');
     await step(() => editor.locator('.codicon-folding-collapsed').click());
@@ -356,9 +357,37 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     expect(foldingWorkers).toHaveLength(1);
     expect(foldingWorkers[0]).toMatchObject({ ready: 1, sent: 1, replied: 1, terminated: 1, dialect, source: finalModel.source });
     unchanged(finalModel, await model());
+    stage = '单独折叠 CTE 正文并保留闭括号和下一段 SQL';
+    const blockSource = ['WITH', 'subject AS (', 'SELECT 11 AS nested_value', '),',
+      'adjacent AS (SELECT 22)', 'SELECT * FROM subject;'].join('\n');
+    await step(() => editor.getByRole('textbox').focus());
+    await step(() => page.keyboard.press(modifier + '+A'));
+    await step(() => page.keyboard.insertText(blockSource));
+    await expect.poll(async () => (await model()).source.replaceAll('\r\n', '\n')).toBe(blockSource);
+    await goTo(2, 1);
+    const beforeBlock = await model();
+    await expect.poll(async () => (await workers()).filter(value => value.folding && value.source === beforeBlock.source).at(-1))
+      .toMatchObject({ ready: 1, sent: 1, replied: 1, terminated: 1, dialect,
+        result: { status: 'ready', blocks: [{ start: beforeBlock.source.indexOf('('), end: beforeBlock.source.indexOf(')') + 1 }] } });
+    await expect(expanded).toHaveCount(2);
+    const nestedPoint = await foldingPoint(2);
+    await step(() => page.mouse.click(nestedPoint.x, nestedPoint.y));
+    await expect(editorLines).not.toContainText('nested_value');
+    await expect(editorLines).toContainText('subject AS (');
+    await expect(editorLines).toContainText('),');
+    await expect(editorLines).toContainText('adjacent AS (SELECT 22)');
+    await expect(editorLines).toContainText('SELECT * FROM subject');
+    await step(() => page.screenshot({ path: info.outputPath(`${dialect}-CTE独立折叠.png`) }));
+    await step(() => editor.locator('.codicon-folding-collapsed').click());
+    await expect(editorLines).toContainText('nested_value');
+    unchanged(beforeBlock, await model());
     await toggleFolding();
     await expect.poll(foldingMenuState).toBe(false);
     await expect(expanded).toHaveCount(0);
+    await step(() => editor.getByRole('textbox').focus());
+    await step(() => page.keyboard.press(modifier + '+A'));
+    await step(() => page.keyboard.insertText(finalModel.source));
+    await expect.poll(async () => (await model()).source).toBe(finalModel.source);
     const foldingAudit = await audit();
     expect(foldingAudit.denied).toEqual([]);
     expect(foldingAudit.commands.filter(command => /^(?:metadata|sessions|query|table|schema|sqlite|serverMonitor)\./.test(command))).toEqual([]);
