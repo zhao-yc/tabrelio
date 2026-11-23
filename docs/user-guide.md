@@ -984,6 +984,8 @@ PostgreSQL 查询编辑器可离线追踪 CTE 和派生表的已确认输出列�
 
 PostgreSQL 的 `JOIN USING` 和 `NATURAL JOIN` 合并键在结果里只建议一次。连接输出经 `SELECT *`、派生表或 CTE 后仍保留列顺序，位置列别名按该顺序替换。整个连接的别名遮蔽内部来源。用 `USING (...) AS alias` 时，`alias.` 只补全连接键。 [PostgreSQL SELECT](https://www.postgresql.org/docs/18/sql-select.html)
 
+在 PostgreSQL 的 `JOIN … ON` 条件中，字段候选来自当前连接两侧及可关联的外层查询。逗号分隔的表、尚未接入的来源和 `UPDATE`／`DELETE` 写入目标不参与当前条件的补全。接续前一个 `JOIN USING` 时，仍可直接补全唯一的合并键。 [PostgreSQL 连接作用域](https://www.postgresql.org/docs/18/queries-table-expressions.html#QUERIES-JOIN)
+
 把光标放在 PostgreSQL 的整体 JOIN 别名或 `USING (...) AS alias` 的别名限定符上，可用 F12 跳到声明、Shift+F12 查找引用、F2 整组改名。改名保留内部同名别名和同名连接键。能确认来源的整体 JOIN 列清单也可按 F2 改名。遇到无法确认的裸名称时，编辑器会保留原草稿。 [PostgreSQL SELECT](https://www.postgresql.org/docs/18/sql-select.html)
 
 在 PostgreSQL 的显式投影别名、列清单或已确认引用上按 F2，可整组更新当前语句，按 Ctrl／Cmd+Z 一次撤销。名称冲突、未确认的同名依赖及 `NATURAL JOIN` 会阻止整组修改，保留草稿。[PostgreSQL SELECT 名称规则](https://www.postgresql.org/docs/18/sql-select.html)

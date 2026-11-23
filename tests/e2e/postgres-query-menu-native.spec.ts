@@ -2331,25 +2331,30 @@ test('PostgreSQL JOIN USING 补全按原目录建议共有列并保留连接输�
     await observer.query('CREATE SCHEMA using_scope; ' +
       'CREATE TABLE public.using_left (raw_id int, region text, left_only text); ' +
       'CREATE TABLE public.using_right (id int, region text, right_only text); ' +
+      'CREATE TABLE public.using_earlier (id int, right_decoy text); ' +
+      'CREATE TABLE public.using_later (match_key int, right_later text); ' +
       'CREATE TABLE using_scope.using_left (scoped_key int, region text); ' +
       'CREATE TABLE using_scope.using_right (scoped_key int, region text); ' +
-      "INSERT INTO public.using_left VALUES (4,'东','左'); INSERT INTO public.using_right VALUES (4,'东','右');");
+      "INSERT INTO public.using_left VALUES (4,'东','左'); INSERT INTO public.using_right VALUES (4,'东','右'); " +
+      "INSERT INTO public.using_earlier VALUES (4,'早'); INSERT INTO public.using_later VALUES (4,'晚');");
     const sql = 'SELECT * FROM public.using_left l(id) JOIN public.using_right r USING (region, i_tail);';
     await prepare({id: '', name: '隔离 PostgreSQL 共有列', dialect: 'postgresql', group: '', color: '#123456',
       host, port, user, database: user, password, rememberPassword: false}, sql);
     await resizeQueryWindow(1280, 920, 0.75);
     const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
     const identity = (await inspectModel()).identity;
-    const accept = async (source: string, placeholder: string, name: string, onlyColumn = true) => {
+    const accept = async (source: string, placeholder: string, name: string,
+      {onlyColumn = true, prefixLength = 1, qualifier = ''} = {}) => {
       await replaceDraft(source);
       const baseline = await history();
-      await modelSelection(1, source.indexOf(placeholder) + 2);
+      await modelSelection(1, source.indexOf(placeholder) + prefixLength + 1);
       await triggerSuggestions();
       const names = tab().locator('.suggest-widget.visible .monaco-list-row .label-name');
       if (onlyColumn) await expect(names).toHaveText([name]);
       else await expect(tab().locator('.suggest-widget.visible .monaco-list-row.focused .label-name')).toHaveText(name);
       await page.keyboard.press('Enter');
-      const expected = source.replace(placeholder, postgresIdentifier(name));
+      const insertion = qualifier ? postgresIdentifier(qualifier) + '.' + postgresIdentifier(name) : postgresIdentifier(name);
+      const expected = source.replace(placeholder, insertion);
       await expect.poll(async () => (await inspectModel()).sql).toBe(expected);
       expect((await inspectModel()).identity).toEqual(identity);
       expect(await history()).toEqual(baseline);
@@ -2359,7 +2364,7 @@ test('PostgreSQL JOIN USING 补全按原目录建议共有列并保留连接输�
     };
     const filled = await accept(sql, 'i_tail', 'id');
     expect((await observer.query({text: filled, rowMode: 'array'})).rows).toEqual([['东', 4, '左', '右']]);
-    const joined = await accept('SELECT i_tail FROM public.using_left l(id) JOIN public.using_right r USING (id)', 'i_tail', 'id', false);
+    const joined = await accept('SELECT i_tail FROM public.using_left l(id) JOIN public.using_right r USING (id)', 'i_tail', 'id', {onlyColumn: false});
     expect(joined.startsWith('SELECT "id"')).toBe(true);
     expect((await observer.query({text: joined, rowMode: 'array'})).rows).toEqual([[4]]);
     const cte = await accept('WITH merged AS (SELECT * FROM public.using_left l(id) FULL JOIN public.using_right r USING (id)) ' +
@@ -2369,6 +2374,22 @@ test('PostgreSQL JOIN USING 补全按原目录建议共有列并保留连接输�
     expect((await observer.query({text: alias, rowMode: 'array'})).rows).toEqual([['东']]);
     const keys = await accept('SELECT shared.i_tail FROM public.using_left l(id) JOIN public.using_right r USING (id) AS shared', 'i_tail', 'id');
     expect((await observer.query({text: keys, rowMode: 'array'})).rows).toEqual([[4]]);
+    const conditionOptions = {prefixLength: 6, qualifier: 'r'};
+    const condition = await accept('SELECT r.right_only FROM public.using_earlier e, public.using_left l(id) ' +
+      "JOIN public.using_right r ON right_tail = '右' JOIN public.using_later c ON r.id=c.match_key", 'right_tail', 'right_only', conditionOptions);
+    expect((await observer.query({text: condition, rowMode: 'array'})).rows).toEqual([['右']]);
+    const mergedCondition = await accept('SELECT pair.right_only FROM public.using_earlier e, ' +
+      '(public.using_left l(id) JOIN public.using_right r USING (id)) pair ' +
+      'JOIN public.using_later c ON id_tail=c.match_key', 'id_tail', 'id', {onlyColumn: false, prefixLength: 2});
+    expect((await observer.query({text: mergedCondition, rowMode: 'array'})).rows).toEqual([['右']]);
+    await expect(observer.query(condition.replace('"r"."right_only"', 'e.right_decoy'))).rejects.toMatchObject({code: '42P01'});
+    await expect(observer.query(condition.replace('"r"."right_only"', 'c.right_later'))).rejects.toMatchObject({code: '42P01'});
+    const sources = 'public.using_left l(id) JOIN public.using_right r ON right_tail = \'右\' WHERE e.id=r.id';
+    for (const statement of ['UPDATE public.using_earlier e SET right_decoy=r.right_only FROM ', 'DELETE FROM public.using_earlier e USING ']) {
+      const completed = await accept(statement + sources, 'right_tail', 'right_only', conditionOptions);
+      expect((await observer.query('EXPLAIN ' + completed)).rows.length).toBeGreaterThan(0);
+      await expect(observer.query('EXPLAIN ' + completed.replace('"r"."right_only"', 'e.right_decoy'))).rejects.toMatchObject({code: '42P01'});
+    }
     await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
     const changeSession = async (statement: string) => {
       await replaceDraft(statement);

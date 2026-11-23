@@ -198,6 +198,54 @@ it('USING 列不接受表限定符、重复的其它键或无法确认输出的�
   }
 });
 
+it('JOIN ON 补全由当前两个操作数决定，保留相关外层并隔离逗号项、后续 JOIN 和写入目标', () => {
+  const condition = ' FROM earlier e, a x JOIN b y ON ';
+  const tail = ' JOIN later z ON true';
+  expect(at('SELECT *' + condition + '|' + tail)?.query).toMatchObject({kind: 'columns', qualified: false,
+    relations: [{name: 'a', alias: 'x'}, {name: 'b', alias: 'y'}]});
+  expect(at('SELECT *' + condition + 'true AND |')?.query).toMatchObject({relations: [{name: 'a'}, {name: 'b'}]});
+  for (const sample of [
+    'SELECT *' + condition + 'e.|' + tail,
+    'SELECT *' + condition + 'z.|' + tail,
+    'SELECT * FROM earlier e TABLESAMPLE SYSTEM (100) REPEATABLE (1), a x JOIN b y ON e.|',
+    'SELECT * FROM a x JOIN (b y JOIN c z ON x.|) wrapped ON true',
+    'SELECT * FROM (a x JOIN b y ON true) wrapped JOIN c z ON x.|',
+    'UPDATE dst d SET id=1 FROM a x JOIN b y ON d.|',
+    'DELETE FROM dst d USING a x JOIN b y ON d.|',
+  ]) expect(at(sample)?.query, sample).toBeUndefined();
+  expect(at('SELECT * FROM a x JOIN (b y JOIN c z ON y.|) wrapped ON true')?.query)
+    .toMatchObject({relations: [{name: 'b', alias: 'y'}]});
+  expect(at('SELECT * FROM (a x JOIN b y ON true) wrapped JOIN c z ON wrapped.|')?.query)
+    .toMatchObject({relations: [{name: 'wrapped'}], joinOutput: {source: {kind: 'join'}}});
+  expect(at('SELECT * FROM a x JOIN b y ON EXISTS (SELECT 1 FROM inner_table v WHERE x.|) JOIN later z ON true')?.query)
+    .toMatchObject({relations: [{name: 'a', alias: 'x'}]});
+  expect(at('SELECT (SELECT 1 FROM a x JOIN b y ON parent.|) FROM app.parent')?.query)
+    .toMatchObject({relations: [{name: 'parent', schema: 'app'}]});
+  expect(at('UPDATE dst d SET id=1 FROM a x JOIN b y ON true WHERE d.|')?.query)
+    .toMatchObject({relations: [{name: 'dst', alias: 'd'}]});
+  expect(at('SELECT * FROM a x JOIN LATERAL (SELECT x.|) y ON true')?.query)
+    .toMatchObject({relations: [{name: 'a', alias: 'x'}]});
+  expect(at('SELECT * FROM a x TABLESAMPLE BERNOULLI (50) JOIN b y ON x.|')?.query)
+    .toMatchObject({relations: [{name: 'a', alias: 'x'}]});
+});
+
+it('后续 ON 的裸列候选使用前序 JOIN 的合并输出，不读取其它 FROM 项的目录', async () => {
+  const marked = 'SELECT * FROM outside, (app.a x JOIN app.b y USING (id)) pair JOIN app.c z ON i|_tail = 1';
+  const request = vi.fn(async (input: PostgresCompletionInput): Promise<PostgresCompletionResult> => ({incomplete: false, items: input.kind === 'joinColumns' ? [
+    {kind: 'joinColumns', reference: 0, names: ['id', 'from_a']},
+    {kind: 'joinColumns', reference: 1, names: ['id', 'from_b']},
+    {kind: 'joinColumns', reference: 2, names: ['other']},
+  ] : []}));
+  const {provider, suggest} = editor(marked, request, '原会话');
+  try {
+    expect((await suggest())?.suggestions.filter(item => typeof item.label === 'object').map(item => item.insertText)).toEqual(['"id"']);
+    const catalogs = request.mock.calls.map(([input]) => input).filter(input => input.kind !== 'routines');
+    expect(catalogs).toEqual([{kind: 'joinColumns', prefix: '',
+      connectionId: '原连接', database: '原库', sessionId: '原会话',
+      relations: [{schema: 'app', name: 'a'}, {schema: 'app', name: 'b'}, {schema: 'app', name: 'c'}]}]);
+  } finally { provider.dispose(); }
+});
+
 it('连接输出补全合并裸键，对仍重名的列给出可见限定名', async () => {
   const sql = 'WITH a(id, tag, only_a) AS (VALUES (1,2,3)), b(id, tag, only_b) AS (VALUES (1,4,5)) ' +
     'SELECT | FROM a FULL JOIN b USING (id) AS shared';
