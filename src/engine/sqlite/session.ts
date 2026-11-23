@@ -9,7 +9,7 @@ import type { QueryFailureSourceRange } from '../../shared/queryFailure';
 export class SqliteDriverError extends Error {
   readonly completedResults: readonly Readonly<SqliteStatementResult>[];
   constructor(message: string, readonly code: string, readonly transaction: boolean | null, readonly completedStatements: number, readonly sessionClosed: boolean,
-    results: readonly SqliteStatementResult[] = [], readonly sourceRange?: QueryFailureSourceRange) {
+    results: readonly SqliteStatementResult[] = [], readonly sourceRange?: QueryFailureSourceRange, readonly errorRange?: QueryFailureSourceRange) {
     super(message); this.name = 'SqliteDriverError';
     // 前序完整结果属于原执行事实；失败后仍须提供截断/变更量，不能只凭语句数猜测成功。
     this.completedResults = Object.freeze(results.map(result => Object.freeze({ ...result,
@@ -137,8 +137,8 @@ export class SqliteDriverSession {
   get identity(): SqliteFileIdentity | undefined { return this.identityValue ? { ...this.identityValue } : undefined; }
   get copySourceIdentity(): SqliteFileIdentity | undefined { return this.copySourceIdentityValue ? { ...this.copySourceIdentityValue } : undefined; }
   private error(message: string, code: string, completed = this.active?.results.length ?? 0, results: readonly SqliteStatementResult[] = this.active?.results ?? [],
-    sourceRange?: QueryFailureSourceRange): SqliteDriverError {
-    return new SqliteDriverError(message, code, this.exited ? null : this.transactionValue, completed, this.exited, results, sourceRange);
+    sourceRange?: QueryFailureSourceRange, errorRange?: QueryFailureSourceRange): SqliteDriverError {
+    return new SqliteDriverError(message, code, this.exited ? null : this.transactionValue, completed, this.exited, results, sourceRange, errorRange);
   }
 
   /** 同一物理连接不并行执行；每个批次等消费者完成后才确认，不无限积压结果。 */
@@ -333,6 +333,15 @@ export class SqliteDriverSession {
           validateSourceRange(operation.originalSql, message.sourceRange);
           message.sourceRange = {start: message.sourceRange.start, end: message.sourceRange.end};
         }
+        if (message.kind === 'failed' && message.errorRange !== undefined) {
+          if (!operation.captureQueryReceipt || operation.originalSql === undefined || !/^SQLITE_NATIVE_\d+$/.test(message.code))
+            throw Error('SQLite精确错误位置不属于本次查询');
+          const {start, end} = message.errorRange;
+          validateSourceRange(operation.originalSql, message.errorRange);
+          if (start < (operation.results.at(-1)?.queryReceipt?.sourceRange.end ?? 0) ||
+              message.sourceRange && (start < message.sourceRange.start || end > message.sourceRange.end)) throw Error('SQLite精确错误位置不在失败语句内');
+          message.errorRange = {start, end};
+        }
         if (message.kind === 'completed') {
           if (operation.syntaxSource !== undefined) {
             if (!validSqlSyntaxCheckResult(message.result.syntax, operation.syntaxSource) || message.result.transaction !== this.transactionValue)
@@ -358,7 +367,8 @@ export class SqliteDriverSession {
       if (operation.consumerError) operation.result.reject(this.error(operation.consumerError.message, 'SQLITE_CONSUMER_FAILED', operation.results.length, operation.results));
       else if (terminal.kind === 'completed') operation.result.resolve(terminal.result);
       else operation.result.reject(this.error(terminal.kind === 'cancelled' ? 'SQLite查询已取消' : terminal.message, terminal.kind === 'cancelled' ? 'SQLITE_CANCELLED' : terminal.code,
-        terminal.completedStatements, operation.results, terminal.kind === 'failed' ? terminal.sourceRange : undefined));
+        terminal.completedStatements, operation.results, terminal.kind === 'failed' ? terminal.sourceRange : undefined,
+        terminal.kind === 'failed' ? terminal.errorRange : undefined));
     });
   }
   private failUnconfirmed(operation: Operation, reason: unknown): void {

@@ -27,6 +27,7 @@ typedef struct RawProbe {
   int read_mode; int frame_phase; int frame_column; sqlite3_uint64 frame_sequence;
   sqlite3_value *frame_value; const unsigned char *frame_data; unsigned char frame_numeric[8];
   int frame_size; int frame_offset;
+  int prepare_error_offset_plus_one;
   sqlite3_int64 deadline_ms; int deadline_hit;
 } RawProbe;
 
@@ -123,6 +124,7 @@ static void clear_source(RawProbe *p) {
   sqlite3_free(p->sql); p->sql=0; p->sql_length=0; p->sql_capacity=0; p->sql_stage=0; p->consumed=0;
   p->done=0; p->row=0; p->result=SQLITE_OK; p->started=0; p->bind_index=0; p->deadline_ms=0; p->deadline_hit=0;
   p->read_mode=0; p->frame_phase=0; p->frame_column=0; p->frame_sequence=0;
+  p->prepare_error_offset_plus_one=0;
 }
 
 /* 缓冲上限固定20MiB，扩容失败保留原材料，调用方须明确放弃；不触发prepare或step。 */
@@ -148,7 +150,14 @@ static void prepare_source(sqlite3_context *ctx, RawProbe *p) {
   deadline_handler(p,1);
   rc=sqlite3_prepare_v3(p->db,(const char *)p->sql,p->sql_length,0,&p->statement,&tail);
   deadline_handler(p,0);
-  if (rc!=SQLITE_OK) { rc=statement_failure(p,rc); sqlite3_finalize(p->statement); p->statement=0; clear_source(p); sqlite3_result_error_code(ctx,rc); return; }
+  if (rc!=SQLITE_OK) {
+    /* 在收尾或下一条控制 SQL 重置连接诊断之前，仅保留本次 prepare 的字节偏移。 */
+    int offset=sqlite3_error_offset(p->db), length=p->sql_length;
+    rc=statement_failure(p,rc); sqlite3_finalize(p->statement); p->statement=0; clear_source(p);
+    if (offset>=0 && offset<length && ((rc&255)==SQLITE_ERROR || (rc&255)==SQLITE_MISMATCH))
+      p->prepare_error_offset_plus_one=offset+1;
+    sqlite3_result_error_code(ctx,rc); return;
+  }
   p->sql_stage=2; p->consumed=(int)(tail-(const char *)p->sql);
   sqlite3_result_int(ctx,p->consumed);
 }
@@ -271,17 +280,18 @@ static void read_value(sqlite3_context *ctx, RawProbe *p, int op, int column) {
   sqlite3_value_free(copy);
 }
 
-/* 0直接准备、1推进、2收尾、3/4读值；5～11参数/元数据/原前缀，12～14分段SQL，15真实statement位，16有界帧。 */
+/* 0直接准备、1推进、2收尾、3/4读值；5～11参数/元数据/原前缀，12～14分段SQL，15真实statement位，16有界帧，17读取一次prepare错误位置。 */
 static void run(sqlite3_context *ctx, int argc, sqlite3_value **args) {
   RawProbe *p = sqlite3_user_data(ctx); int op, rc; sqlite3_int64 operation;
   if (argc != 2 || sqlite3_value_type(args[0]) != SQLITE_INTEGER) { invalid(ctx); return; }
   operation=sqlite3_value_int64(args[0]);
-  if (operation < 0 || operation > 16) { invalid(ctx); return; }
+  if (operation < 0 || operation > 17) { invalid(ctx); return; }
   op=(int)operation;
   if (op == 0) {
     const char *sql; int length;
     if (p->sql_stage || sqlite3_value_type(args[1])!=SQLITE_TEXT) { invalid(ctx); return; }
     sql=(const char *)sqlite3_value_text(args[1]); length=sqlite3_value_bytes(args[1]);
+    p->prepare_error_offset_plus_one=0;
     p->sql_stage=1;
     if (!append_sql(ctx,p,sql,length)) { clear_source(p); return; }
     prepare_source(ctx,p); return;
@@ -302,7 +312,7 @@ static void run(sqlite3_context *ctx, int argc, sqlite3_value **args) {
       if (budget<1 || budget>RAW_TIMEOUT_MAX_MS || now<0) { invalid(ctx); return; }
       p->deadline_ms=now+budget;
     }
-    p->sql_stage=1; sqlite3_result_int(ctx,0); return;
+    p->prepare_error_offset_plus_one=0; p->sql_stage=1; sqlite3_result_int(ctx,0); return;
   }
   if (op==13) {
     const void *bytes; int count;
@@ -313,6 +323,10 @@ static void run(sqlite3_context *ctx, int argc, sqlite3_value **args) {
     return;
   }
   if (op==14) { if (sqlite3_value_type(args[1])!=SQLITE_NULL) invalid(ctx); else prepare_source(ctx,p); return; }
+  if (op==17) {
+    if (p->sql_stage || sqlite3_value_type(args[1])!=SQLITE_NULL) { invalid(ctx); return; }
+    sqlite3_result_int(ctx,p->prepare_error_offset_plus_one-1); p->prepare_error_offset_plus_one=0; return;
+  }
   if (p->sql_stage!=2) { invalid(ctx); return; }
   if (op==11) {
     sqlite3_int64 offset; int count;

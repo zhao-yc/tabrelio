@@ -6,7 +6,7 @@ import { sqliteDriverLimits, type SqliteCancellation, type SqliteStatementResult
 import { currentSqliteStatement, sqliteStatementRanges } from '../engine/sqlite/currentStatement';
 import { sqliteExplainSource } from '../engine/sqlite/explainSource';
 import { buildSqliteExplainPlan } from '../shared/sqliteExplain';
-import { sqliteParameterInfo, sqliteParameterPlan } from '../engine/sqlite/parameters';
+import { sqliteParameterInfo, sqliteParameterPlan, sqliteQueryErrorRange } from '../engine/sqlite/parameters';
 import { validateSqliteQueryParameters } from '../shared/sqliteQueryParameters';
 import { validSqliteStatementTimeout } from '../shared/sqliteStatementTimeout';
 import { validQueryResultTitle } from '../shared/queryResultTitle';
@@ -259,11 +259,11 @@ export class SqliteQuerySession {
             retainedBytes = checkpoint.bytes;
             originBytes = checkpoint.origins;
           },
-        });
+        }, originalSql);
         const completed = complete(facts, ordinals);
         const message = queryScriptReportSummary(report), first = report.errors[0];
         const failure = first && {statementOrdinal: first.statementOrdinal, statementsCompleted: first.statementsCompleted,
-          sourceRange: first.sourceRange, message};
+          sourceRange: first.sourceRange, ...(first.errorRange ? {errorRange: first.errorRange} : {}), message};
         terminalEvent({status: cancelled ? 'cancelled' : failure ? 'failed' : 'completed', progress: 100, rows: operation.rows, message});
         return {...completed, ...displayTitles(facts.length), elapsedMs: performance.now() - operation.started,
           transactionOpen: transaction, scriptReport: report, ...(failure ? {failure} : {})};
@@ -333,7 +333,8 @@ export class SqliteQuerySession {
       if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || reason.code === 'SQLITE_STATEMENT_TIMEOUT' || options.namedParameters && reason.code === 'SQLITE_NAMED_PARAMETERS_INVALID' || options.single && ['SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT', 'SQLITE_SINGLE_STATEMENT_REQUIRED'].includes(reason.code) || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
         if (reason.completedResults.length !== reason.completedStatements) throw Error('SQLite失败回执缺少前序完整结果，不能发布成功摘要');
         const sourceRange = options.sourceRange ?? options.parameterRanges?.[reason.completedStatements] ?? reason.sourceRange;
-        return { ...complete(reason.completedResults), ...displayTitles(reason.completedStatements), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message, ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}) } };
+        const errorRange = sqliteQueryErrorRange(reason.errorRange, sourceRange, options.sourceRange?.start ?? 0, sql, originalSql);
+        return { ...complete(reason.completedResults), ...displayTitles(reason.completedStatements), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message, ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}), ...(errorRange ? {errorRange} : {}) } };
       }
       throw reason;
     } finally { if (this.active === operation) this.active = undefined; }

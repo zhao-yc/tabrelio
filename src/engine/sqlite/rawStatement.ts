@@ -2,12 +2,15 @@ import type { SQLInputValue } from 'node:sqlite';
 import { sqliteDriverLimits as limits, type SqliteColumn, type SqliteValue } from './protocol';
 import { validSqliteStatementTimeout } from '../../shared/sqliteStatementTimeout';
 import { decodeSqliteRawValue } from './rawValue';
+import type { QueryFailureSourceRange } from '../../shared/queryFailure';
 
 /** 只由持有原连接的worker提供，不接受扩展路径或跨进程可执行内容。 */
 export type SqliteRawInvoke = (operation: number, argument: SQLInputValue) => unknown;
 export class SqliteRawStatementError extends Error {
   /** 位置值过量沿用原生RANGE码；其它协议异常不伪造SQLite执行错误。 */
-  constructor(readonly errcode?: number) { super(errcode === 25 ? 'SQLite位置参数数量超过原生匿名参数槽' : 'SQLite原字节语句协议、材料或生命周期无效'); }
+  constructor(readonly errcode?: number, readonly errorRange?: QueryFailureSourceRange) {
+    super(errcode === 25 ? 'SQLite位置参数数量超过原生匿名参数槽' : 'SQLite原字节语句协议、材料或生命周期无效');
+  }
 }
 const invalid = () => new SqliteRawStatementError();
 const chunkBytes = 65536;
@@ -40,7 +43,7 @@ export class SqliteRawStatement {
   private constructor(private readonly invoke: SqliteRawInvoke, readonly sourceSQL: string, readonly hasStatement: boolean) {}
 
   /** 先取得独占材料阶段再传入分段；未取得能力时绝不收尾别人的statement。 */
-  static prepare(invoke: SqliteRawInvoke, sql: string, statementTimeoutMs?: number): SqliteRawStatement {
+  static prepare(invoke: SqliteRawInvoke, sql: string, statementTimeoutMs?: number, captureError = false): SqliteRawStatement {
     if (typeof sql !== 'string' || !sql.length || sql.includes('\0') || !validUnicode(sql) || Buffer.byteLength(sql) > limits.sqlBytes) throw invalid();
     if (statementTimeoutMs !== undefined && !validSqliteStatementTimeout(statementTimeoutMs)) throw invalid();
     const source = Buffer.from(sql), acquired = invoke(12, statementTimeoutMs === undefined ? null : BigInt(statementTimeoutMs));
@@ -50,7 +53,23 @@ export class SqliteRawStatement {
         const bytes = source.subarray(offset, Math.min(offset + chunkBytes, source.length));
         if (invoke(13, bytes) !== offset + bytes.length) throw invalid();
       }
-      const consumed = count(invoke(14, null), source.length); if (!consumed) throw invalid();
+      let response: unknown;
+      try { response = invoke(14, null); }
+      catch (error) {
+        if (captureError && error instanceof Error && 'errcode' in error && typeof error.errcode === 'number') {
+          let range: QueryFailureSourceRange | undefined;
+          try {
+            const offset = count(invoke(17, null), source.length - 1);
+            const start = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(source.subarray(0, offset)).length;
+            const first = sql[start] === '\n' && sql[start - 1] === '\r' ? start - 1 : start;
+            const end = first + (sql.startsWith('\r\n', first) || sql.codePointAt(first)! > 0xffff ? 2 : 1);
+            range = {start: first, end};
+          } catch { /* 找不到可信 UTF-8 边界时保留原错误码和整句回执。 */ }
+          if (range) throw new SqliteRawStatementError(error.errcode, range);
+        }
+        throw error;
+      }
+      const consumed = count(response, source.length); if (!consumed) throw invalid();
       const parts: Uint8Array[] = [];
       for (let offset = 0; offset < consumed; offset += chunkBytes) {
         const part = invoke(11, BigInt(offset));

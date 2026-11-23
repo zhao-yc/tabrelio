@@ -2,6 +2,7 @@ import { queryParameterLimits, type QueryParameterNames } from '../../shared/que
 import { navicatParameterNameAt } from '../../shared/navicatParameter';
 import { sqliteNamedBindAt } from '../../shared/sqliteNamedBind';
 import { sqliteStatementRanges } from './currentStatement';
+import type { QueryFailureSourceRange } from '../../shared/queryFailure';
 
 const identifierStart = (value: string) => /[A-Za-z_\u0080-\uFFFF]/.test(value);
 const identifierPart = (value: string) => /[A-Za-z0-9_$\u0080-\uFFFF]/.test(value);
@@ -60,4 +61,16 @@ export function sqliteParameterInfo(sql: string, navicat = false): QueryParamete
   return {dialect: 'sqlite', names: sqliteParameterPlan(sql, navicat).names, warnings: [], noBackslashEscapes: true,
     ansiQuotes: true, noBackslashEscapesKnown: true, ansiQuotesKnown: true, maxDecimalScale: 38, allowTimeEndpointFraction: true,
     ...(navicat ? {sqliteNavicatParameters: true} : {})};
+}
+
+/** 命名模板改写等长；命中原生冒号时，选择已确认对应的完整原模板。 */
+export function sqliteQueryErrorRange(error: QueryFailureSourceRange | undefined, statement: QueryFailureSourceRange | undefined,
+  base: number, sql: string, originalSql?: string): QueryFailureSourceRange | undefined {
+  if (!error || !statement) return;
+  const templateStart = error.start - 1;
+  const name = originalSql && templateStart >= 0 ? navicatParameterNameAt(originalSql, templateStart) : undefined;
+  const token = name && sql.startsWith(` :${name} `, templateStart);
+  const range = token ? {start: base + templateStart, end: base + templateStart + name.length + 3}
+    : {start: base + error.start, end: base + error.end};
+  if (range.start >= statement.start && range.end <= statement.end) return range;
 }

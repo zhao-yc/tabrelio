@@ -122,7 +122,7 @@ export type SqliteWorkerResponse =
   | { kind: 'rebuildProgress'; id: string; frame: number; comparedRows: string; columnGroups: number }
   | { kind: 'statementEnd'; id: string; result: SqliteStatementResult }
   | { kind: 'completed'; id: string; result: SqliteExecutionResult }
-  | { kind: 'failed'; id: string; code: string; message: string; transaction: boolean; completedStatements: number; sourceRange?: QueryFailureSourceRange }
+  | { kind: 'failed'; id: string; code: string; message: string; transaction: boolean; completedStatements: number; sourceRange?: QueryFailureSourceRange; errorRange?: QueryFailureSourceRange }
   | { kind: 'cancelled'; id: string; transaction: boolean; completedStatements: number }
   | { kind: 'closed'; id: string; rebuildRestored?: true };
 

@@ -9,7 +9,7 @@ import { copySqliteRebuildComparisonInput, copySqliteRebuildComparisonResult, co
 import { queryParameterLimits } from '../../shared/queryParameters';
 import { sqliteNamedParameterNames } from './parameters';
 import { createSqliteNativeInvoke, resolveSqliteNativeResource, sqliteNativeFunction } from './nativeRuntime';
-import { SqliteRawStatement, type SqliteRawInvoke } from './rawStatement';
+import { SqliteRawStatement, SqliteRawStatementError, type SqliteRawInvoke } from './rawStatement';
 import { readableSqlitePragma } from '../../shared/sqlitePragmaAccess';
 import { validSqliteStatementTimeout } from '../../shared/sqliteStatementTimeout';
 import { checkSqliteSyntax } from './syntaxCheck';
@@ -163,9 +163,9 @@ export class SqliteWorkerCore {
   private transaction(): boolean { if (!this.db) return false; const value = this.db.isTransaction; if (typeof value !== 'boolean') throw invalid(); return value; }
 
   /** 原生错误正文可能包含SQL、路径或参数；对外仅发送固定的安全中文提示。 */
-  private failure(id: string, failure: DriverFailure, completedStatements = 0, sourceRange?: QueryFailureSourceRange): void {
+  private failure(id: string, failure: DriverFailure, completedStatements = 0, sourceRange?: QueryFailureSourceRange, errorRange?: QueryFailureSourceRange): void {
     try { this.port.send({ kind: 'failed', id, code: failure.code, message: failure.message, transaction: this.transaction(), completedStatements,
-      ...(sourceRange ? {sourceRange} : {}) }); }
+      ...(sourceRange ? {sourceRange} : {}), ...(errorRange ? {errorRange} : {}) }); }
     catch { this.port.exit(1); }
   }
 
@@ -352,7 +352,7 @@ export class SqliteWorkerCore {
       if (this.rebuildWriter) throw invalid();
       const before = this.transaction();
       this.preparingSyntax = true;
-      const syntax = await checkSqliteSyntax(sql, source => SqliteRawStatement.prepare(this.nativeInvoke!, source), () => this.yield(active));
+      const syntax = await checkSqliteSyntax(sql, source => SqliteRawStatement.prepare(this.nativeInvoke!, source, undefined, true), () => this.yield(active));
       this.check(active);
       const transaction = this.transaction();
       if (transaction !== before) throw new DriverFailure('SQLITE_SYNTAX_TRANSACTION_CHANGED', 'SQLite 检查期间原生事务状态变化');
@@ -366,7 +366,7 @@ export class SqliteWorkerCore {
   }
 
   private async execute(active: Execution, request: Extract<SqliteWorkerRequest, { kind: 'execute' | 'streamRead' }>): Promise<void> {
-    let attemptedStart: number | undefined, nativeRange: QueryFailureSourceRange | undefined;
+    let attemptedStart: number | undefined, prepareStart: number | undefined, nativeRange: QueryFailureSourceRange | undefined;
     try {
       const { sql, options } = request;
       const stream = request.kind === 'streamRead';
@@ -409,7 +409,9 @@ export class SqliteWorkerCore {
         const statementStart = offset;
         if (request.captureFailureRange) attemptedStart = offset;
         const started = request.captureQueryReceipt ? performance.now() : undefined;
-        const remaining = sql.slice(offset), statement = SqliteRawStatement.prepare(this.nativeInvoke!, remaining, timeout), prefix = statement.sourceSQL;
+        if (request.captureQueryReceipt) prepareStart = offset;
+        const remaining = sql.slice(offset), statement = SqliteRawStatement.prepare(this.nativeInvoke!, remaining, timeout, prepareStart !== undefined), prefix = statement.sourceSQL;
+        prepareStart = undefined;
         try {
           if (typeof prefix !== 'string' || !prefix.length || !remaining.startsWith(prefix)) throw invalid();
           if (attemptedStart !== undefined && statement.hasStatement) nativeRange = {start: attemptedStart, end: attemptedStart + prefix.length};
@@ -444,9 +446,13 @@ export class SqliteWorkerCore {
         const code = object(error) && integer(error.errcode, 0, 2147483647) ? error.errcode : undefined;
         const timedOut = code === 0x7fff0109;
         const nativeCode = timedOut ? 'SQLITE_STATEMENT_TIMEOUT' : code === undefined ? 'SQLITE_EXECUTION_FAILED' : 'SQLITE_NATIVE_' + code;
-        const range = attemptedStart !== undefined && code !== undefined
-          ? nativeRange ?? failedPrepareRange(request.sql, attemptedStart) : undefined;
-        this.failure(active.id, error instanceof DriverFailure ? error : error instanceof SqliteRawValueError ? new DriverFailure(error.code === 'SQLITE_RAW_VALUE_INVALID' ? 'SQLITE_VALUE_INVALID' : error.code, error.message) : new DriverFailure(nativeCode, timedOut ? 'SQLite 语句执行超时，已停止后续语句' : 'SQLite语句执行失败，已停止后续语句；未自动回滚或重放'), active.results.length, range);
+        const prepareRange = prepareStart !== undefined && error instanceof SqliteRawStatementError ? error.errorRange : undefined;
+        const attempted = attemptedStart ?? (prepareRange ? prepareStart : undefined);
+        const range = attempted !== undefined && code !== undefined ? nativeRange ?? failedPrepareRange(request.sql, attempted) : undefined;
+        // 编译偏移必须位于由同一尝试起点确认的首条语句，不能跨到脚本尾部。
+        const errorRange = prepareRange && range && prepareStart !== undefined && prepareStart + prepareRange.end <= range.end
+          ? {start: prepareStart + prepareRange.start, end: prepareStart + prepareRange.end} : undefined;
+        this.failure(active.id, error instanceof DriverFailure ? error : error instanceof SqliteRawValueError ? new DriverFailure(error.code === 'SQLITE_RAW_VALUE_INVALID' ? 'SQLITE_VALUE_INVALID' : error.code, error.message) : new DriverFailure(nativeCode, timedOut ? 'SQLite 语句执行超时，已停止后续语句' : 'SQLite语句执行失败，已停止后续语句；未自动回滚或重放'), active.results.length, attemptedStart !== undefined ? range : undefined, errorRange);
       }
     } finally { if (this.guardedCreate?.owner === active) this.guardedCreate = undefined; active.waiting = undefined; if (this.active === active) this.active = undefined; }
   }

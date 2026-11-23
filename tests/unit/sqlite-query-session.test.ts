@@ -255,14 +255,33 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
 
   it('准备失败只定位已尝试且边界明确的首条语句，不把未闭合尾部或上一条误选为失败', async () => {
     const harness = await open(fixture());
-    const failing = 'SELECT missing_column FROM subject;';
+    const failing = "SELECT '前置🧭', missing_column FROM subject;";
     const script = "SELECT '前🧭';\r\n/* 不在选区 */ " + failing + "\r\nSELECT '未闭合";
     const result = await execute(harness, script), start = script.indexOf(failing);
-    expect(result.failure).toMatchObject({statementOrdinal: 2, statementsCompleted: 1, sourceRange: {start, end: start + failing.length}});
+    const errorStart = script.indexOf('missing_column');
+    expect(result.failure).toMatchObject({statementOrdinal: 2, statementsCompleted: 1, sourceRange: {start, end: start + failing.length},
+      errorRange: {start: errorStart, end: errorStart + 1}});
     expect(result.results).toHaveLength(1);
     const ambiguous = await execute(harness, "SELECT 1;\r\nSELECT '未闭合");
     expect(ambiguous.failure).toMatchObject({statementOrdinal: 2, statementsCompleted: 1});
     expect(ambiguous.failure).not.toHaveProperty('sourceRange');
+    expect(ambiguous.failure).not.toHaveProperty('errorRange');
+  });
+
+  it('SQLite 原生错误命中改写参数时保留整个原模板和当前语句基址', async () => {
+    const h = await open(fixture());
+    const sql = "SELECT 1;\r\n/* 🧭 */ SELECT '中文🚢' AS [$bad_alias] FROM subject;\r\nSELECT 2;";
+    const start = sql.indexOf('[$bad_alias]'), errorRange = {start, end: start + '[$bad_alias]'.length};
+    const input = {sessionId: h.session.sessionId, sql, maxRows: 20, sqliteNavicatParameters: true as const,
+      parameters: [{name: 'bad_alias', type: 'text' as const, value: '不在回执中的值'}]};
+    const whole = await h.session.executeParameterized({...input, taskId: '整组'});
+    expect(whole.failure).toMatchObject({statementOrdinal: 2, errorRange});
+    const current = await h.session.executeParameterized({...input, taskId: '当前', currentStatement: {offset: start}});
+    expect(current.failure).toMatchObject({statementOrdinal: 1, errorRange});
+    const continuing = await h.session.executeParameterized({...input, taskId: '续执行', continueOnError: true});
+    expect(continuing.scriptReport).toMatchObject({reachedEnd: true, statementsCompleted: 2,
+      errors: [{statementOrdinal: 2, errorRange}]});
+    expect(JSON.stringify([whole, current, continuing])).not.toContain('不在回执中的值');
   });
 
   it('maxRows约束整个脚本而非每个结果集，RETURNING截断后仍完整写入', async () => {
@@ -531,6 +550,9 @@ describe('SQLite 脚本遇错继续', () => {
     expect(result.scriptReport).toMatchObject({statementsAttempted: 8, statementsCompleted: 6, reachedEnd: true,
       errors: [{kind: 'server', statementOrdinal: 4, statementsCompleted: 3}, {kind: 'server', statementOrdinal: 5, statementsCompleted: 3}]});
     expect(result.scriptReport?.errors.map(error => sql.slice(error.sourceRange!.start, error.sourceRange!.end))).toEqual(statements.slice(3, 5));
+    expect(result.scriptReport?.errors[0]).not.toHaveProperty('errorRange');
+    const start = sql.indexOf('BAD SELECT');
+    expect(result.scriptReport?.errors[1].errorRange).toEqual({start, end: start + 1});
     expect(result.results.at(-2)?.rows).toEqual([{c0: '1', c1: '原事务🚢'}]);
     expect(result.results.at(-1)).toMatchObject({rows: [], truncated: true});
     expect(result.sqliteResultReceipts?.map(receipt => receipt.statementOrdinal)).toEqual([1, 2, 3, 6, 7, 8]);
@@ -625,7 +647,7 @@ describe('SQLite 原生语法检查', () => {
     expect(result).toMatchObject({status: 'ready', statementCount: 7});
     if (result.status !== 'ready') throw Error('原生检查没有返回诊断');
     expect(result.issues.map(issue => [issue.code, sql.slice(issue.start, issue.end)])).toEqual([
-      ['sqlite-prepare', statements[3]], ['sqlite-unchecked', statements[4]], ['sqlite-unchecked', statements[5]], ['sqlite-incomplete', statements[6]],
+      ['sqlite-prepare', 'm'], ['sqlite-unchecked', statements[4]], ['sqlite-unchecked', statements[5]], ['sqlite-incomplete', statements[6]],
     ]);
     expect(h.process.sent.slice(requestCount)).toEqual([expect.objectContaining({kind: 'syntaxCheck', sql})]);
     expect(h.events).toHaveLength(eventCount);

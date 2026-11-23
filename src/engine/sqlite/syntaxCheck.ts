@@ -1,6 +1,6 @@
 import { sqlSyntaxCheckLimits as limits, type SqlSyntaxCheckResult, type SqlSyntaxIssue } from '../../shared/sqlSyntaxCheck';
 import { scanSqliteStatementPositions } from '../../shared/sqliteStatementScanner';
-import type { SqliteRawStatement } from './rawStatement';
+import { SqliteRawStatementError, type SqliteRawStatement } from './rawStatement';
 
 function skipTrivia(sql: string, offset = 0): number {
   while (offset < sql.length) {
@@ -61,7 +61,11 @@ export async function checkSqliteSyntax(sql: string, prepare: (source: string) =
       } catch (reason) {
         const code = reason && typeof reason === 'object' && 'errcode' in reason ? reason.errcode : undefined;
         const native = typeof code === 'number' && Number.isSafeInteger(code) && code > 0 ? code & 255 : undefined;
-        if (native === 1 || native === 20) issues.push({...range, code: 'sqlite-prepare'});
+        if (native === 1 || native === 20) {
+          const location = reason instanceof SqliteRawStatementError && reason.errorRange;
+          const precise = location ? {start: range.start + location.start, end: range.start + location.end} : undefined;
+          issues.push({...(precise ?? range), code: 'sqlite-prepare'});
+        }
         else if (native === 23 || native === 8) issues.push({...range, code: 'sqlite-unchecked'});
         else return {status: 'blocked', reason: 'context'};
       } finally { statement?.finish(); }

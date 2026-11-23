@@ -70,7 +70,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
   const syntax = marked('准确语法错', "SELEC '错误🚢┃;?''中文' AS bad", 111);
   const readonlyWrite = marked('只读写拒绝', "INSERT INTO subject(id,note) ┃VALUES(40,'只读必须拒绝')", 113);
   const readonlyRead = marked('只读SELECT', 'SELECT COUNT(*) AS tota┃l FROM subject', 115);
-  const failedSql = 'SELECT missing_column FROM subject;';
+  const failedSql = "SELECT '前文🧭', missing_column FROM subject;";
   const priorSql = "WITH RECURSIVE nums(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM nums WHERE n < 1005) SELECT CASE n WHEN 1 THEN '普通前序🧭' ELSE CAST(n AS TEXT) END AS prior FROM nums;";
   const full = priorSql + '\r\n/* 原文注释😀 */ ' + failedSql +
     "\r\nINSERT INTO subject VALUES(92,'普通失败后不得执行');";
@@ -216,13 +216,14 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     const checked = operations(checkedFacts, 'sqlite.syntaxCheck');
     expect(checked).toHaveLength(1);
     expect(checkedFacts.sessions[String(checked[0].request.sessionId)]).toBe(rw.id);
-    expect(result(checked[0].reply)).toEqual({status: 'ready', statementCount: 3, issues: checkedStatements.slice(1).map((sql, index) => ({
-      start: checkedSql.indexOf(sql), end: checkedSql.indexOf(sql) + sql.length, code: index === 0 ? 'sqlite-prepare' : 'sqlite-unchecked',
-    }))});
+    const badStart = checkedSql.indexOf('missing_column'), uncheckedStart = checkedSql.indexOf(checkedStatements[2]);
+    expect(result(checked[0].reply)).toEqual({status: 'ready', statementCount: 3, issues: [
+      {start: badStart, end: badStart + 1, code: 'sqlite-prepare'},
+      {start: uncheckedStart, end: uncheckedStart + checkedStatements[2].length, code: 'sqlite-unchecked'},
+    ]});
     const diagnostic = syntaxPanel.getByRole('button', {name: /第 2 行/});
     await step(() => diagnostic.click());
-    const badStart = checkedSql.indexOf(checkedStatements[1]);
-    expect((await model()).selections).toEqual([{start: badStart, end: badStart + checkedStatements[1].length}]);
+    expect((await model()).selections).toEqual([{start: badStart, end: badStart + 1}]);
     await step(() => page.screenshot({path: info.outputPath('SQLite原生语法检查.png')}));
     expect((await step(audit)).operations).toEqual(checkedFacts.operations);
     expect(await history()).toEqual([]);
@@ -305,13 +306,18 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     const successfulSql = [actualInsertSql, select.selected, selectionOnly.selected, trigger.selected, ordinary.source, transactionInsert.selected, transactionRead.selected]; await assertHistory(successfulSql);
     stage = '语法错误保原CRLF非BMP范围且无伪造历史'; const historyBeforeSyntax = await history(), syntaxFailure = await run(syntax, true, true); expect(syntaxFailure.outcome).toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, sourceRange: { start: syntax.start, end: syntax.end } } }); expect(emittedSql(await step(audit), syntaxFailure.fact?.request.taskId)).toEqual([]); expect(await history()).toEqual(historyBeforeSyntax); expect(disk()).toEqual(afterNormal);
     const locate = query().getByRole('button', { name: queryFailureSourceZh.locate, exact: true }); await step(() => expect(locate).toBeEnabled()); await step(() => locate.click()); const located = await model(); expect(located.source).toBe(syntax.source); expect(located.eol).toBe('\r\n'); expect(located.selections).toEqual([{ start: syntax.start, end: syntax.end }]); expect(syntax.source.slice(syntax.start, syntax.end)).toBe(syntax.selected); expect(operations(await step(audit), 'query.execute')).toHaveLength(8);
+    const precise = query().getByRole('button', {name: queryFailureSourceZh.locatePosition, exact: true});
+    await step(() => expect(precise).toBeEnabled()); await step(() => precise.click());
+    expect((await model()).selections).toEqual([{start: syntax.start, end: syntax.start + 1}]);
     stage = '普通脚本保留完整前序并定位首条准备失败';
     expect((await settings()).resultLimit).toBe(1000);
     const scriptFailure = await run(ordinaryFailure, false, true);
+    const exactStart = full.indexOf('missing_column');
     expect(scriptFailure.outcome).toMatchObject({
       results: [{truncated: true, rows: expect.arrayContaining([{c0: '普通前序🧭'}])}],
       sqliteResultReceipts: [{producedRows: 1005, changedRows: 0, sourceRange: {start: 0, end: priorSql.length}}],
-      failure: {statementOrdinal: 2, statementsCompleted: 1, sourceRange: {start: failedStart, end: failedEnd}}});
+      failure: {statementOrdinal: 2, statementsCompleted: 1, sourceRange: {start: failedStart, end: failedEnd},
+        errorRange: {start: exactStart, end: exactStart + 1}}});
     expect(emittedSql(await step(audit), scriptFailure.fact?.request.taskId)).toEqual([priorSql]);
     await step(() => expect(receipt).toContainText(/第 1 条语句 · 本条耗时 \d+ ms · 产生 1005 行 · 保留 1000 行/));
     await step(() => expect(query().locator('.tab-status')).toContainText(/本次总耗时 \d+ ms/));
@@ -327,11 +333,14 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     await step(() => page.screenshot({path: info.outputPath('SQLite结果定位.png')}));
     await step(() => locate.click());
     expect((await model()).selections).toEqual([{start: failedStart, end: failedEnd}]);
+    await step(() => precise.click());
+    expect((await model()).selections).toEqual([{start: exactStart, end: exactStart + 1}]);
     expect((await step(audit)).operations).toEqual(beforeLocate.operations);
     expect(await history()).toEqual(beforeLocationHistory);
     expect(beforeLocationHistory.find(entry => entry.sql === full)?.success).toBe(false);
     await write("SELECT '编辑后范围失效';");
     await step(() => expect(locate).toBeDisabled());
+    await step(() => expect(precise).toBeDisabled());
     await step(() => expect(locateResult()).toBeDisabled());
     expect(disk()).toEqual(afterNormal);
     stage = '显式开启遇错继续，定位多条失败并保留后续完整结果';
@@ -353,6 +362,9 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     await step(() => expect(query().locator('.sql-editor-wrap')).toBeHidden());
     for (const ordinal of [2, 3]) {
       const source = continuedStatements[ordinal - 1], start = continuedSource.indexOf(source);
+      const position = ordinal === 2 ? continuedSource.indexOf('missing_column') : start;
+      await step(() => query().getByRole('button', {name: queryFailureSourceZh.locatePositionFor(ordinal), exact: true}).click());
+      expect((await model()).selections).toEqual([{start: position, end: position + 1}]);
       await step(() => query().getByRole('button', {name: continueText.locate(ordinal), exact: true}).click());
       await step(() => expect(query().locator('.sql-editor-wrap')).toBeVisible());
       expect((await model()).selections).toEqual([{start, end: start + source.length}]);

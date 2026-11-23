@@ -1,7 +1,7 @@
 import type { SqliteDriverSession, SqliteExecuteOptions } from '../engine/sqlite/session';
 import { SqliteDriverError } from '../engine/sqlite/session';
 import type { SqliteStatementResult, SqliteValue } from '../engine/sqlite/protocol';
-import { sqliteNamedParameterNames } from '../engine/sqlite/parameters';
+import { sqliteNamedParameterNames, sqliteQueryErrorRange } from '../engine/sqlite/parameters';
 import type { QueryScriptReport } from '../shared/queryContinueOnError';
 import { queryContinueOnErrorLimits } from '../shared/queryContinueOnError';
 import type { SqlStatementRange } from '../shared/sqlScriptScanner';
@@ -23,7 +23,8 @@ function sqliteCanContinue(code: number): boolean {
 
 /** 始终在原物理连接上逐条执行，上一条的原生终态确认后才发送下一条。 */
 export async function continueSqliteScript(driver: SqliteDriverSession, source: string, ranges: SqlStatementRange[],
-  namedParameters: Record<string, SqliteValue> | undefined, resultLimit: number, statementTimeoutMs: number | undefined, control: ScriptControl) {
+  namedParameters: Record<string, SqliteValue> | undefined, resultLimit: number, statementTimeoutMs: number | undefined, control: ScriptControl,
+  originalSql?: string) {
   const facts: SqliteStatementResult[] = [], ordinals: number[] = [];
   const report: QueryScriptReport = {mode: 'continue-on-error', statementsAttempted: 0, statementsCompleted: 0, reachedEnd: false, errors: []};
   let cancelled = false;
@@ -64,8 +65,10 @@ export async function continueSqliteScript(driver: SqliteDriverSession, source: 
       const native = /^SQLITE_NATIVE_(\d+)$/.exec(code);
       cancelled = control.cancelled() || code === 'SQLITE_CANCELLED' || code === 'SQLITE_CANCELLED_SESSION_CLOSED';
       if (!cancelled && native && reason instanceof SqliteDriverError && driver.isUsable && reason.transaction !== null && sqliteCanContinue(Number(native[1]))) {
+        const sourceRange = {start: range.start, end: range.delimiterEnd};
+        const errorRange = sqliteQueryErrorRange(reason.errorRange, sourceRange, range.start, sql, originalSql?.slice(range.start, range.delimiterEnd));
         report.errors.push({kind: 'server', statementOrdinal: ordinal, statementsCompleted: facts.length,
-          message: 'SQLite 语句失败（' + code + '）', sourceRange: {start: range.start, end: range.delimiterEnd}});
+          message: 'SQLite 语句失败（' + code + '）', sourceRange, ...(errorRange ? {errorRange} : {})});
       } else {
         const message = cancelled ? 'SQLite 脚本已取消' : code === 'SQLITE_STATEMENT_TIMEOUT' ? 'SQLite 语句执行超时，已停止脚本'
           : native ? 'SQLite 原生错误要求停止（' + code + '）'
