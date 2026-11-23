@@ -63,3 +63,20 @@ it('真实嵌套连接组的字段悬停只显示投影列，首来源展开仍�
     expect(flattened.content).toContain(text.hidden + '：是');
   } finally { f.db.close(); }
 });
+it('组名和成员同名时按 SQLite 优先悬停成员，合并字段不猜测声明类型', async () => {
+  const f = fixture();
+  try {
+    f.db.exec("CREATE TABLE lhs(id INTEGER, data TEXT); INSERT INTO lhs VALUES(1,'左'); CREATE TABLE rhs(id INTEGER, data INTEGER); INSERT INTO rhs VALUES(1,42);");
+    const same = await f.hover('SELECT y.da|ta FROM (lhs x JOIN rhs y USING(id)) y');
+    expect(f.db.prepare(same.source).get()?.['data:1']).toBe(42);
+    expect(same.content).toContain('"rhs"');
+    expect(same.content).toContain(text.declaredType + '："INTEGER"');
+    const renamed = await f.hover('SELECT g."data:|1" FROM (lhs x JOIN rhs y USING(id)) g');
+    expect(f.db.prepare(renamed.source).get()?.['data:1']).toBe(42);
+    expect(renamed.content).toContain('"rhs"');
+    const merged = await f.hover('SELECT g.i|d FROM (lhs x FULL JOIN rhs y USING(id)) g');
+    expect(f.db.prepare(merged.source).get()?.id).toBe(1);
+    expect(merged.content).toContain('连接组输出列');
+    expect(merged.content).toContain(text.unknown);
+  } finally { f.db.close(); }
+});

@@ -25,7 +25,7 @@ const modifier = process.platform === 'darwin' ? 'Meta' : 'Control', connectionN
 const bootstrapSql = "CREATE TEMP TABLE subject(temp_marker TEXT,id INTEGER); INSERT INTO temp.subject VALUES('SQLITE_COMPLETION_TEMP_A',1);";
 const transactionalSql = 'CREATE TABLE main.uncommitted_completion_only(uncommitted_marker TEXT);';
 const secondSessionSql = 'SELECT main_marker,id FROM main.subject ORDER BY id;';
-const functionSql = `SELECT j."value" FROM (SELECT id AS "id:1" FROM json_each('["TVF_FIRST","TVF_SECOND"]')) a JOIN (main.subject s JOIN json_each('["TVF_FIRST","TVF_SECOND"]') j ON s.id=1) USING ("id:1") ORDER BY j.key`;
+const functionSql = `SELECT j."value", g."value" AS grouped_value FROM (SELECT id AS "id:1" FROM json_each('["TVF_FIRST","TVF_SECOND"]')) a JOIN (main.subject s JOIN json_each('["TVF_FIRST","TVF_SECOND"]') j ON s.id=1) AS g USING ("id:1") ORDER BY j.key`;
 const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql, functionSql];
 let completed: { directory: string; database: string; firstPid?: number; secondPid?: number; platform: string } | undefined;
 let observeFailure: (() => Record<string, unknown>) | undefined;
@@ -272,7 +272,7 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     await choose('SELECT s.te| FROM subject AS s', 'temp_marker', 'SELECT s."temp_marker" FROM subject AS s', 'main_marker'); const missing = await at('SELECT * FROM uncomm|'); await trigger(missing); await step(() => expect(widget().locator('.monaco-list-row .label-name').filter({ hasText: /^uncommitted_completion_only$/ })).toHaveCount(0)); await settleMetadata(); const rollbackLookup = completionFacts(await step(audit)).filter(fact => fact.request.kind === 'relations' && fact.request.sessionId === sessionA && fact.request.prefix === 'uncomm').at(-1)!; expect(sqliteCompletionOutputSchema.parse(result(rollbackLookup.reply)).entries).toEqual([]); await step(() => page.keyboard.press('Escape'));
     stage = '原查询接受括号连接内表值函数的真实字段候选后按用户意图执行一次';
     const beforeFunction = { tasks: await tasks(), history: await history(), executions: 3, sessions: 2 };
-    await choose(functionSql.replace('"value"', 'va|suffix'), 'value', functionSql);
+    await choose(functionSql.replace('j."value"', 'j.va|suffix'), 'value', functionSql);
     await settleMetadata(); await metadataReadOnly(baseline, beforeFunction);
     const functionRead = completionFacts(await step(audit)).filter(fact => succeeded(fact) && fact.request.tableFunction === true).at(-1)!;
     expect(functionRead.request).toMatchObject({ kind: 'columns', table: 'json_each', prefix: 'va', sessionId: sessionA });
@@ -290,8 +290,17 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     for (const fact of usingReads.filter(fact => fact.request.prefix !== '')) {
       expect(fact.request).toMatchObject({ table: 'json_each', tableFunction: true, prefix: 'key', sessionId: sessionA });
     }
+    stage = '连接组别名接受表值函数的输出列，组名不会作为物理表查询';
+    const beforeGroupReads = completionFacts(await step(audit)).length;
+    await choose(functionSql.replace('g."value"', 'g.va|suffix'), 'value', functionSql);
+    await settleMetadata(); await metadataReadOnly(baseline, beforeFunction);
+    const groupReads = completionFacts(await step(audit)).slice(beforeGroupReads).filter(fact => succeeded(fact) && fact.request.kind === 'columns' && fact.request.prefix === '');
+    expect(groupReads.map(fact => fact.request)).toEqual([
+      expect.objectContaining({ table: 'subject', schema: 'main', prefix: '', sessionId: sessionA }),
+      expect.objectContaining({ table: 'json_each', tableFunction: true, prefix: '', sessionId: sessionA }),
+    ]);
     await execute(functionSql, 4, true);
-    expect(result(operations(await step(audit), 'query.execute').at(-1)!.reply)).toMatchObject({ results: [{ rows: [{ c0: 'TVF_FIRST' }, { c0: 'TVF_SECOND' }] }] });
+    expect(result(operations(await step(audit), 'query.execute').at(-1)!.reply)).toMatchObject({ results: [{ rows: [{ c0: 'TVF_FIRST', c1: 'TVF_FIRST' }, { c0: 'TVF_SECOND', c1: 'TVF_SECOND' }] }] });
     const transactions = operations(await step(audit), 'query.transaction'); expect(transactions.map(fact => fact.request.action)).toEqual(['begin', 'rollback']); const firstTasks = await tasks(), firstHistory = await history(); expect(firstTasks.filter(task => task.kind === 'query.execute')).toHaveLength(explicitSql.length); expect(firstHistory.map(record => record.sql).sort()).toEqual([...explicitSql].sort()); expect(disk()).toEqual(baseline);
     stage = '保留一个无session新草稿，明确关闭原A/B释放真实会话及所有SQLite worker';
     const tabC = await createQuery(), retainedDraft = '-- SQLITE_COMPLETION_RETAINED_DRAFT\nSELECT main_marker FROM main.subject;'; await write(retainedDraft); await closeQuery(tabA); await closeQuery(tabB); await switchTab(tabC); await expectSql(retainedDraft); await settleMetadata(); await step(() => expect.poll(async () => { const facts = await audit(); return facts.pending === 0 && facts.workers.every(worker => worker.exit === 0); }).toBe(true));

@@ -251,6 +251,43 @@ it('嵌套连接组在外侧只补投影列，接受表值函数字段后 SQLite
     expect(() => db.prepare(marked.replace('|', 'json'))).toThrow(/no such column/i);
   } finally { db.close(); }
 });
+it('组别名从真实成员推导输出，稳定重名按引用范围插入且不会读组名目录', async () => {
+  const marked = 'SELECT "组🚢"."va|suffix" FROM (main.a x JOIN temp.b y USING(id)) AS "组🚢" JOIN (other c JOIN unused d) n ON 1';
+  const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE a(id, value TEXT,"value:1" TEXT); INSERT INTO a VALUES(1,'A','A1');
+      CREATE TEMP TABLE b(id,value INTEGER); INSERT INTO b VALUES(1,42);
+      CREATE TABLE other(id); INSERT INTO other VALUES(1); CREATE TABLE unused(id); INSERT INTO unused VALUES(1);`);
+    const directory = { load: vi.fn(async (lookup: SqliteCompletionLookup) => {
+      if (lookup.kind !== 'columns' || !lookup.schema) throw Error('预期准确成员来源');
+      const entries = db.prepare('SELECT name,type FROM pragma_table_xinfo(?,?) ORDER BY cid').all(lookup.table, lookup.schema)
+        .map(row => ({ ...column(String(row.name), lookup.table, lookup.schema), declaredType: String(row.type) }));
+      return { entries, incomplete: false, stamp: '1:1' };
+    }) };
+    const result = await sqliteCompletionSuggestions(analysis, directory);
+    expect(result.incomplete).toBe(false);
+    expect(result.items.map(item => item.label)).toEqual(['value', 'value:1', 'value:2']);
+    expect(directory.load.mock.calls).toEqual([[{ kind: 'columns', table: 'a', schema: 'main', prefix: '' }], [{ kind: 'columns', table: 'b', schema: 'temp', prefix: '' }]]);
+    const selected = result.items[2];
+    expect(selected.detail).toContain('INTEGER');
+    const sql = source.slice(0, analysis.target.start) + selected.insertText + source.slice(analysis.target.end);
+    expect(db.prepare(sql).all()).toEqual([{ 'value:2': 42 }]);
+  } finally { db.close(); }
+});
+it('组别名作为触发候选；明确的匿名派生列无需为派生表发出目录查询', async () => {
+  const marked = 'SELECT grp| FROM ((SELECT 1 AS local) JOIN other o) grp';
+  const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const d = directory([column('id', 'other')]);
+  expect((await sqliteCompletionSuggestions(analysis, d)).items).toEqual([{ label: 'grp', kind: 'alias', insertText: '"grp".', detail: '连接组输出列', trigger: true }]);
+  const qualified = analyzeSqliteCompletion(source.replace('grp FROM', 'grp. FROM'), marked.indexOf('|') + 1);
+  if (qualified.status !== 'ready') throw Error(qualified.reason);
+  d.load.mockClear();
+  expect((await sqliteCompletionSuggestions(qualified, d)).items.map(item => item.label)).toEqual(['local', 'id']);
+  expect(d.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'other', prefix: '' });
+});
 it('准确别名字段只替最后标识符，Unicode引号和片段语法保持普通文本', async () => {
   const d = directory([column('字段"🚢.${x}')]), result = await sqliteCompletionSuggestions(ready(), d);
   expect(d.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'subject', prefix: '' }); expect(result.items[0]).toMatchObject({ label: '字段"🚢.${x}', insertText: '"字段""🚢.${x}"', kind: 'column' });

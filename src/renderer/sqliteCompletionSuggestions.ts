@@ -1,58 +1,11 @@
 import type { SqliteCompletionAnalysis, SqliteCompletionRelation } from '../shared/sqliteCompletionAnalysis';
-import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionColumns, sqliteCompletionLimits, sqliteCompletionSourceKey, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
+import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, sqliteCompletionColumns, sqliteCompletionLimits, type SqliteCompletionLookup, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
+import { sqliteJoinColumnReader, sqliteJoinRowidName, sqliteQualifiedJoinColumns } from './sqliteJoinColumns';
 
 export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
-interface JoinColumn { name: string; hidden: boolean; originName?: string; }
-interface JoinColumns { columns: JoinColumn[]; incomplete: boolean; ambiguousOrigins?: Set<string>; }
-type MergedJoinColumns = true | string[] | undefined;
 const keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'ON', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'WITH', 'AS', 'DISTINCT', 'UNION ALL', 'IS NULL', 'IS NOT NULL', 'RETURNING', 'WINDOW', 'OVER', 'FILTER', 'PARTITION BY', 'ROWS', 'RANGE', 'BETWEEN', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'CURRENT ROW'];
-const rowidName = /^(?:rowid|_rowid_|oid)(?::\d+)*:?$/i;
-
-/** 用实际目录推导嵌套 JOIN 的列名。显式 USING 可引用被普通星号省略的副本。 */
-function projectJoinGroup(inputs: { columns: JoinColumn[]; merged: MergedJoinColumns }[], uniqueLeft: boolean): JoinColumns {
-  const names = new Map<string, { count: number; visible: boolean }>();
-  const mergedNames: string[][] = [];
-  for (const input of inputs) {
-    const merged = input.merged === true ? input.columns.filter(({ name, hidden }) => !hidden && names.get(fold(name))?.visible).map(({ name }) => name) : input.merged ?? [];
-    const matching = new Set(merged.map(fold));
-    const right = new Set(input.columns.map(({ name }) => fold(name)));
-    if ([...matching].some(key => !names.has(key) || !right.has(key) || uniqueLeft && names.get(key)?.count !== 1)) return { columns: [], incomplete: true };
-    mergedNames.push(merged);
-    for (const { name, hidden } of input.columns) {
-      const key = fold(name), known = names.get(key) ?? { count: 0, visible: false };
-      names.set(key, { count: known.count + Number(!matching.has(key)), visible: known.visible || !hidden });
-    }
-  }
-  // SQLite 将 USING 的合并值排在所在连接的左侧来源之前，再为重复列分配 :1、:2 等后缀。
-  const projected = inputs.flatMap(({ columns }, index) => [
-    ...(mergedNames[index + 1] ?? []).map(name => ({ name, originName: name, merged: true })),
-    ...columns.filter(column => !column.hidden).map(({ name, originName }) => ({ name, originName: originName ?? name, merged: false })),
-  ]);
-  const occupied = new Map<string, JoinColumn>(), uncertain = new Set<string>();
-  const origins = new Set<string>(), mergedOrigins = new Set<string>(), ambiguousOrigins = new Set<string>();
-  const hasBooleanName = projected.some(({ name }) => /^(?:true|false)$/i.test(name));
-  let incomplete = hasBooleanName;
-  for (const { name: original, originName, merged } of projected) {
-    const origin = fold(originName);
-    if (!mergedOrigins.has(origin) && origins.has(origin)) ambiguousOrigins.add(origin);
-    origins.add(origin);
-    if (merged) mergedOrigins.add(origin);
-    const base = original.replace(/:\d*$/, '');
-    if (rowidName.test(original) || hasBooleanName && /^(?:true|false|column\d+(?::\d+)*)$/i.test(original)) { incomplete = true; continue; }
-    // 随机后缀只会影响同一名称族后续列，已经分配的名称仍可使用。
-    if (uncertain.has(fold(base))) continue;
-    let name = original, suffix = 0;
-    while (occupied.has(fold(name)) && suffix < 4) name = base + ':' + ++suffix;
-    if (occupied.has(fold(name)) || name.length > sqliteCompletionLimits.nameUnits) {
-      // 前四个后缀均被占用后 SQLite 转为随机数，不能把猜测的名称作为候选。
-      uncertain.add(fold(base));
-      incomplete = true;
-    } else occupied.set(fold(name), { name, hidden: false, originName });
-  }
-  return { columns: [...occupied.values()], incomplete, ambiguousOrigins };
-}
 
 /** 建议只引用准确目录名；同名字段保留不同别名的限定插入，CTE声明不伪装成FROM绑定。 */
 export async function sqliteCompletionSuggestions(analysis: Extract<SqliteCompletionAnalysis, { status: 'ready' }>, directory: SqliteCompletionDirectory): Promise<{ items: SqliteCompletionItem[]; incomplete: boolean }> {
@@ -67,31 +20,8 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   };
   if (analysis.using) {
     const { left, right, used, uniqueLeft, groups = [], starGroupSides } = analysis.using;
-    const cache = new Map<string, SqliteCompletionOutput>();
-    const projectedGroups: JoinColumns[] = [];
-    const readColumns = async (operand: typeof right, lookupPrefix: string): Promise<JoinColumns> => {
-      if ('group' in operand) return projectedGroups[operand.group];
-      if ('columns' in operand) {
-        return { columns: operand.columns.map(name => ({ name, hidden: false })), incomplete: !operand.columns.length };
-      }
-      const key = sqliteCompletionSourceKey(operand.source);
-      const full = cache.get(key + '\0');
-      let metadata = full && !full.incomplete ? full : cache.get(key + '\0' + lookupPrefix);
-      if (!metadata) {
-        metadata = await directory.load(sqliteCompletionColumns(operand.source, lookupPrefix));
-        cache.set(key + '\0' + lookupPrefix, metadata);
-      }
-      return { columns: metadata.entries.filter(entry => entry.kind === 'column'), incomplete: metadata.incomplete };
-    };
-    for (const group of groups) {
-      const inputs: Parameters<typeof projectJoinGroup>[0] = [];
-      for (const { operand, merged } of group.inputs) {
-        const result = await readColumns(operand, '');
-        if (result.incomplete) break;
-        inputs.push({ columns: result.columns, merged });
-      }
-      projectedGroups.push(inputs.length === group.inputs.length ? projectJoinGroup(inputs, group.uniqueLeft === true) : { columns: [], incomplete: true });
-    }
+    const { readColumns, projectGroups } = sqliteJoinColumnReader(directory);
+    await projectGroups(groups);
     const names = new Map<string, { count: number; visible: boolean }>();
     const ambiguous = new Set<string>();
     // 含 RIGHT/FULL JOIN 的查询块按合并后的左侧列消歧。
@@ -113,13 +43,23 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     if (starGroupSides && starGroupSides !== 'left') for (const name of result.ambiguousOrigins ?? []) ambiguous.add(name);
     // 隐式 rowid 并非列目录的一部分。若另一侧有同族的显式列，指出候选可能不全。
     const groupedLeft = left.some(({ operand }) => 'group' in operand);
-    if ('group' in right && [...names.keys()].some(name => name.startsWith(prefix) && rowidName.test(name))) incomplete = true;
+    if ('group' in right && [...names.keys()].some(name => name.startsWith(prefix) && sqliteJoinRowidName.test(name))) incomplete = true;
     for (const { name } of result.columns) {
       const key = fold(name), known = names.get(key);
-      if (groupedLeft && key.startsWith(prefix) && rowidName.test(key)) { incomplete = true; continue; }
+      if (groupedLeft && key.startsWith(prefix) && sqliteJoinRowidName.test(key)) { incomplete = true; continue; }
       if (known && (!uniqueLeft || known.count === 1) && !excluded.has(key) && !ambiguous.has(key)) {
         add({ label: name, kind: 'column', insertText: quote(name), detail: text.joinColumn });
       }
+    }
+    return { items, incomplete };
+  }
+  if (analysis.joinGroup) {
+    const { alias, groups } = analysis.joinGroup;
+    const projected = await sqliteQualifiedJoinColumns(alias, groups, directory);
+    incomplete = projected.incomplete;
+    for (const { name, entry } of projected.columns) {
+      const info = [alias, text.joinGroup, entry?.declaredType].filter(Boolean).join(' · ');
+      add({ label: name, kind: 'column', insertText: quote(name), detail: info });
     }
     return { items, incomplete };
   }
@@ -168,7 +108,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
         const source = relation.tableFunction ? text.tableFunction : undefined;
         for (const entry of metadata.entries) if (entry.kind === 'column' && !(relation.visibleColumnsOnly && entry.hidden)) add({ label: entry.name, kind: 'column', insertText: insert(entry.name), detail: binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : '') });
       }
-      if (!qualifiers.length) add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail: text.alias, trigger: true });
+      if (!qualifiers.length) add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail: relation.kind === 'local' && relation.source === 'group' ? text.joinGroup : text.alias, trigger: true });
     }
   }
   if (analysis.syntax.includes('keyword') && !analysis.target.quoted && !qualifiers.length) for (const keyword of keywords) add({ label: keyword, kind: 'keyword', insertText: keyword, detail: text.keyword });

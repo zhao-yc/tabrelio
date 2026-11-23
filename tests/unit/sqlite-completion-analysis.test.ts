@@ -89,7 +89,45 @@ it('递归CTE的递归成员可补显式列，锚点不借递归成员中的绑�
 it('派生表投影保持本地输出，不为同名别名查询永久元数据',()=>{expect(ready('SELECT d.| FROM (SELECT source.id AS item,1 AS flag FROM source) AS d').relations).toEqual([{kind:'local',source:'derived',name:'d',alias:'d',columns:['item','flag']}]);expect(analyze('SELECT d.| FROM (SELECT * FROM source) AS d')).toMatchObject({status:'blocked',reason:'local-output'});});
 it('普通相关子查询可见外层alias，FROM派生体不借外层行，内层同alias优先',()=>{const correlated=ready('SELECT * FROM outer_table o WHERE EXISTS (SELECT o.| FROM inner_table i)');expect(correlated.relations.map(item=>item.alias)).toEqual(['i','o']);const derived=ready('SELECT * FROM outer_table o JOIN (SELECT i.| FROM inner_table i) d ON 1=1');expect(derived.relations).toEqual([{kind:'physical',name:'inner_table',alias:'i'}]);const shadow=ready('SELECT * FROM outer_table t WHERE EXISTS (SELECT t.| FROM inner_table t)');expect(shadow.relations).toEqual([{kind:'physical',name:'inner_table',alias:'t'}]);});
 it('trigger体内分号不伪造独立SELECT；后继statement仍准确隔离',()=>{expect(analyze('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT x.| FROM secret x; END;')).toMatchObject({status:'blocked',reason:'trigger'});expect(ready('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT CASE WHEN 1 THEN 2 END; END; SELECT t.| FROM actual t').relations).toEqual([{kind:'physical',name:'actual',alias:'t'}]);});
-it.each(['SELECT x.| FROM (a JOIN b) x','SELECT * FROM a INDEXED BY |','WITH c(x) AS(SELECT 1) UPDATE c SET |'])('未知SQLite复杂上下文明确blocked，不伪造物理关系 %#',source=>{expect(analyze(source).status).toBe('blocked');});
+it.each(['SELECT * FROM a INDEXED BY |','WITH c(x) AS(SELECT 1) UPDATE c SET |'])('未知SQLite复杂上下文明确blocked，不伪造物理关系 %#',source=>{expect(analyze(source).status).toBe('blocked');});
+
+it('只交付命中组别名的投影树，成员别名和其他组仍各自绑定', () => {
+  const marked = 'SELECT g.va|lue FROM (main.a x JOIN temp.b y USING(id)) AS g JOIN (c JOIN d) n ON 1';
+  const value = ready(marked);
+  expect(value.joinGroup).toEqual({ alias: 'g', groups: [{ inputs: [
+    { operand: { source: { name: 'a', schema: 'main' } }, binding: 'x' },
+    { operand: { source: { name: 'b', schema: 'temp' } }, binding: 'y', merged: ['id'] },
+  ] }] });
+  expect(value.relations.filter(relation => relation.kind === 'local').map(relation => relation.name)).toEqual(['g', 'n']);
+  expect(ready(marked.replace('g.va|lue', 'x.va|lue')).joinGroup).toBeUndefined();
+  expect(ready('SELECT (SELECT grp.va|lue) FROM (a JOIN b) grp').joinGroup?.alias).toBe('grp');
+  expect(ready('SELECT grp.lo|cal FROM ((SELECT 1 AS local) JOIN b) grp').joinGroup?.groups[0].inputs[0])
+    .toEqual({ operand: { columns: ['local'] } });
+});
+
+it('最外层组名覆盖内组名而保留成员，定位只指向实际声明', () => {
+  const relation = 'FROM ((a x JOIN b y USING(id)) inner_group) AS outer_group';
+  const readyOuter = ready('SELECT outer_group.va|lue ' + relation);
+  expect(readyOuter.joinGroup?.groups).toHaveLength(1);
+  expect(readyOuter.relations.map(value => value.alias ?? value.name)).toEqual(['x', 'y', 'outer_group']);
+  expect(ready('SELECT inner_group.va|lue ' + relation).joinGroup).toBeUndefined();
+  const { source, offset } = query('SELECT outer_|group.value ' + relation);
+  const alias = source.lastIndexOf('outer_group');
+  expect(analyzeSqliteCompletion(source, offset, 'definition')).toMatchObject({ status: 'ready', definition: { start: alias, end: alias + 'outer_group'.length } });
+  expect(analyzeSqliteCompletion(source, offset, 'object')).toMatchObject({ status: 'blocked', reason: 'local' });
+  expect(ready('SELECT y.va|lue FROM (a x JOIN b y) y').joinGroup?.alias).toBe('y');
+});
+
+it('组别名回包校验要求同名查询绑定和可达投影树', () => {
+  const marked = 'SELECT g.va|lue FROM (a JOIN b) g', { source, offset } = query(marked), value = ready(marked);
+  const group = value.joinGroup!;
+  for (const response of [
+    { ...value, joinGroup: { ...group, alias: 'other' } },
+    { ...value, joinGroup: undefined },
+    { ...value, relations: value.relations.filter(relation => relation.name !== 'g') },
+    { ...value, joinGroup: { ...group, groups: [group.groups[0], group.groups[0]] } },
+  ]) expect(() => validateSqliteCompletionAnalysis(response, source, offset)).toThrow();
+});
 
 it('表值调用保留实际目标、命名空间和绑定，未调用的同名关系沿用普通列目录', () => {
   expect(ready("SELECT j.va|lue FROM main.json_each('[1,2]') j").relations)
