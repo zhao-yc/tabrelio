@@ -74,6 +74,7 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   }
   if (candidates.length !== 1) return;
   const { relation, column, entry, tableFunction } = candidates[0];
+  if (relation.afterOuterJoin) return;
   const localSource = relation.kind === 'local' ? relation.source === 'cte' ? text.cte : text.derived : undefined;
   return fieldHover(relation.alias ?? relation.name, column, entry, tableFunction === true || relation.kind === 'physical' && relation.tableFunction === true, localSource);
 }

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite `JOIN … ON` 支持补全和悬停当前查询块的标量输出别名。外连接字段候选、定义跳转和相关子查询遵循连接输入边界，未限定名称按原目录消歧。Q01 与 O05 继续为部分覆盖。[SQLite JOIN 语义](https://www.sqlite.org/lang_select.html#fromclause)
+
 2026-11-23 源码增量。SQLite 支持命名窗口的补全、定义跳转、引用查询和局部重命名。补全保留声明引号，并按裸引用与括号继承的语义筛选窗口。Q01 与 O05 继续为部分覆盖。[SQLite 窗口继承](https://www.sqlite.org/windowfunctions.html#window_chaining)
 
 2026-11-23 源码增量。SQLite 普通查询支持在排序、分组和过滤中补全及悬停输出别名。独立排序名称优先使用别名，排序表达式、分组和过滤按查询层级处理与来源列的同名冲突。Q01 继续为部分覆盖。[SQLite SELECT](https://www.sqlite.org/lang_select.html#orderby) · [SQLite 名称解析源码](https://github.com/sqlite/sqlite/blob/version-3.53.0/src/resolve.c#L628)

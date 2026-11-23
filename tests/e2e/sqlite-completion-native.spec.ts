@@ -30,7 +30,10 @@ const compoundSql = `SELECT j.* FROM (SELECT 1 AS marker) a JOIN (main.subject s
 const localProjectionSql = `WITH base AS (SELECT s.* FROM main.subject s), tail AS (SELECT base.*, base.main_marker AS main_marker FROM base) SELECT v."main_marker:1" AS renamed, v.* FROM (SELECT * FROM tail) v JOIN tail w USING ("main_marker:1") WHERE v.id=1 UNION ALL SELECT 'CTE_COMPOUND_FIRST','same',0,'CTE_COMPOUND_FIRST' ORDER BY "main_marker:1" ASC`;
 const outputAliasSql = `SELECT CASE WHEN id=1 THEN 'one' ELSE 'high' END AS bucket, count(*) AS amount FROM main.subject GROUP BY "bucket" HAVING "amount">0 ORDER BY "bucket" ASC`;
 const namedWindowSql = `SELECT printf('%d',row_number() OVER ([w] ORDER BY id)) FROM main.subject WINDOW [w] AS () ORDER BY id`;
-const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql, functionSql, compoundSql, localProjectionSql, outputAliasSql, namedWindowSql];
+const joinOnAliasSql = `SELECT m.main_marker picked,t.temp_marker FROM main.subject m
+LEFT JOIN temp.subject t ON "picked" LIKE '%中文%'
+JOIN main.outside_control c ON 1 ORDER BY m.id`;
+const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql, functionSql, compoundSql, localProjectionSql, outputAliasSql, namedWindowSql, joinOnAliasSql];
 let completed: { directory: string; database: string; firstPid?: number; secondPid?: number; platform: string } | undefined;
 let observeFailure: (() => Record<string, unknown>) | undefined;
 /** 任何失败保留准确窗口、profile及合成库，不自动重启/重试/强停/清理。 */
@@ -371,6 +374,25 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     stage = '显式执行含继承窗口的原SQL';
     await execute(namedWindowSql, 8, true);
     expect(result(operations(await step(audit), 'query.execute').at(-1)!.reply)).toMatchObject({ results: [{ rows: [{ c0: '1' }, { c0: '2' }] }] });
+    stage = '真实Monaco在外连接 ON 里接受当前输入的输出别名';
+    const beforeOn = { tasks: await tasks(), history: await history(), executions: 8, sessions: 2 };
+    let beforeOnReads = 0;
+    await choose(joinOnAliasSql.replace('ON "picked"', 'ON pi|suffix'), 'picked', joinOnAliasSql, undefined, async () => {
+      await settleMetadata();
+      beforeOnReads = completionFacts(await step(audit)).length;
+    });
+    await settleMetadata(); await metadataReadOnly(baseline, beforeOn);
+    const onReads = completionFacts(await step(audit)).slice(beforeOnReads).filter(fact => succeeded(fact) && fact.request.kind === 'columns');
+    expect(onReads.map(fact => fact.request)).toEqual([
+      expect.objectContaining({ table: 'subject', schema: 'main', prefix: 'pi', sessionId: sessionA }),
+      expect.objectContaining({ table: 'subject', schema: 'temp', prefix: 'pi', sessionId: sessionA }),
+      expect.objectContaining({ table: 'outside_control', schema: 'main', prefix: 'pi', sessionId: sessionA }),
+    ]);
+    stage = '显式执行接受 ON 别名后的原SQL';
+    await execute(joinOnAliasSql, 9, true);
+    expect(result(operations(await step(audit), 'query.execute').at(-1)!.reply)).toMatchObject({ results: [{ rows: [
+      { c0: 'SQLITE_COMPLETION_MAIN_中文🚢', c1: 'SQLITE_COMPLETION_TEMP_A' }, { c0: 'SQLITE_COMPLETION_MAIN_MAX', c1: null },
+    ] }] });
     const transactions = operations(await step(audit), 'query.transaction'); expect(transactions.map(fact => fact.request.action)).toEqual(['begin', 'rollback']); const firstTasks = await tasks(), firstHistory = await history(); expect(firstTasks.filter(task => task.kind === 'query.execute')).toHaveLength(explicitSql.length); expect(firstHistory.map(record => record.sql).sort()).toEqual([...explicitSql].sort()); expect(disk()).toEqual(baseline);
     stage = '保留一个无session新草稿，明确关闭原A/B释放真实会话及所有SQLite worker';
     const tabC = await createQuery(), retainedDraft = '-- SQLITE_COMPLETION_RETAINED_DRAFT\nSELECT main_marker FROM main.subject;'; await write(retainedDraft); await closeQuery(tabA); await closeQuery(tabB); await switchTab(tabC); await expectSql(retainedDraft); await settleMetadata(); await step(() => expect.poll(async () => { const facts = await audit(); return facts.pending === 0 && facts.workers.every(worker => worker.exit === 0); }).toBe(true));

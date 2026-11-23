@@ -131,11 +131,12 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     for (const relation of selected) {
       const binding = relation.alias ?? relation.name;
       const aliasSource = !!outputAliases && relation.scopeDepth === outputAliases.scopeDepth;
+      if (relation.afterOuterJoin && !aliasSource) continue;
       // INSERT列清单由分析器仅投影目标表；已有点限定时只替换最后的字段。
       const insert = (name: string) => qualifiers.length || analysis.unqualifiedColumns ? quote(name) : quote(binding) + '.' + quote(name);
       const addSourceColumn = (name: string, detail: string) => {
         if (aliasSource) sourceNames.add(fold(name));
-        add({ label: name, kind: 'column', insertText: insert(name), detail });
+        if (!relation.afterOuterJoin) add({ label: name, kind: 'column', insertText: insert(name), detail });
       };
       if (relation.kind === 'local') {
         const kind = relation.source === 'cte' ? text.cte : text.derived;
@@ -160,7 +161,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
           addSourceColumn(entry.name, binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : ''));
         }
       }
-      if (!qualifiers.length) add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail: relation.kind === 'local' && relation.source === 'group' ? text.joinGroup : text.alias, trigger: true });
+      if (!qualifiers.length && !relation.afterOuterJoin) add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail: relation.kind === 'local' && relation.source === 'group' ? text.joinGroup : text.alias, trigger: true });
     }
     // 当前查询块的来源列优先于输出别名，外层列在输出别名之后。目录无法确认隐式 rowid。
     if (outputAliases && !outputAliases.outputFirst && !aliasSourcesIncomplete) {
