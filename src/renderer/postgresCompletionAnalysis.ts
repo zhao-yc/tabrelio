@@ -730,12 +730,12 @@ function traceNamedWindows(parts: Part[], trace: ReferenceTrace): void {
 
 /** OLD/NEW 共享目标列，只能作为 RETURNING 的限定名。默认名称让位给已有关系。 */
 function returningScope(parts: Part[], refs: ScopedRelation[], outer: ScopedRelation[][],
-  target?: ScopedRelation, trace?: ReferenceTrace): { refs: ScopedRelation[]; start: number } | undefined {
+  target: ScopedRelation, trace?: ReferenceTrace): { refs: ScopedRelation[]; start: number } | undefined {
   const names = new Set([refs, ...outer].flat().map(ref => ref.alias ?? ref.name));
   const visible = [...refs], specified = new Set<string>();
   const addAlias = (alias: string, declaration?: Part) => {
     if (declaration) trace?.declarations.set(declaration.start, 'alias');
-    visible.push({ name: target?.name ?? alias, schema: target?.schema, physical: target?.physical, alias, declaration, qualifiedOnly: true });
+    visible.push({ ...target, alias, declaration, qualifiedOnly: true });
   };
   let start = 0;
   if (keyword(parts[0]) === 'WITH') {
@@ -757,12 +757,6 @@ function returningScope(parts: Part[], refs: ScopedRelation[], outer: ScopedRela
     if (!specified.has(role) && !names.has(name)) addAlias(name);
   }
   return { refs: visible, start };
-}
-
-function traceReturning(parts: Part[], scope: Scope, refs: ScopedRelation[], outer: ScopedRelation[][], trace: ReferenceTrace, target?: ScopedRelation): void {
-  const result = returningScope(parts, refs, outer, target, trace);
-  if (!result) { trace.unsupported = true; return; }
-  traceExpressions(parts.slice(result.start), scope, result.refs, outer, new Map(), trace);
 }
 
 function startsReferenceQuery(part?: Part): boolean {
@@ -806,34 +800,43 @@ function traceConflictTarget(parts: Part[], scope: Scope, target: ScopedRelation
   return !trace.unsupported;
 }
 
-/** INSERT 来源独立解析。目标只在冲突索引、更新动作和 RETURNING 的相应范围可见。 */
-function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], trace: ReferenceTrace): boolean {
-  if (keyword(parts[1]) !== 'INTO') return false;
+/** INSERT 的显式 AS 和真实目标表由引用与返回列补全共用。 */
+function readInsertTarget(parts: Part[], trace?: ReferenceTrace): { target: ScopedRelation; next: number } | undefined {
+  if (keyword(parts[1]) !== 'INTO') return;
   let index = 2, name = identifier(parts[index]), schema: string | undefined;
-  if (!name || stop.has(keyword(parts[index++]))) return false;
+  if (!name || stop.has(keyword(parts[index++]))) return;
   if (punct(parts[index], '.')) {
     schema = name;
     name = identifier(parts[index + 1]);
     index += 2;
-    if (!name || stop.has(keyword(parts[index - 1]))) return false;
+    if (!name || stop.has(keyword(parts[index - 1]))) return;
   }
-  trace.physicalRelations?.push({ name, ...(schema ? { schema } : {}), start: parts[2].start, end: parts[index - 1].end });
+  trace?.physicalRelations?.push({ name, ...(schema ? { schema } : {}), start: parts[2].start, end: parts[index - 1].end });
   const target: ScopedRelation = { name, schema, physical: true };
   if (keyword(parts[index]) === 'AS') {
     const declaration = parts[index + 1], alias = identifier(declaration);
-    if (!alias || stop.has(keyword(declaration))) return false;
+    if (!alias || stop.has(keyword(declaration))) return;
     target.alias = alias;
     target.declaration = declaration;
-    trace.declarations.set(declaration.start, 'alias');
+    trace?.declarations.set(declaration.start, 'alias');
     index += 2;
   }
+  return { target, next: index };
+}
+
+/** INSERT 来源独立解析。目标只在冲突索引、更新动作和 RETURNING 的相应范围可见。 */
+function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], trace: ReferenceTrace): Projection | undefined {
+  const destination = readInsertTarget(parts, trace);
+  if (!destination) return;
+  const { target } = destination;
+  let index = destination.next;
   const columns = parts[index];
   if (columns?.kind === 'group' && !startsReferenceQuery(columns)) {
-    if (columns.closing !== ')' || !identifier(columns.parts[0])) return false;
+    if (columns.closing !== ')' || !identifier(columns.parts[0])) return;
     index++;
   }
   if (keyword(parts[index]) === 'OVERRIDING') {
-    if (!['SYSTEM', 'USER'].includes(keyword(parts[index + 1])) || keyword(parts[index + 2]) !== 'VALUE') return false;
+    if (!['SYSTEM', 'USER'].includes(keyword(parts[index + 1])) || keyword(parts[index + 2]) !== 'VALUE') return;
     index += 3;
   }
   const returning = parts.findIndex((part, i) => i >= index && keyword(part) === 'RETURNING');
@@ -846,25 +849,26 @@ function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], tra
     for (conflict = action - 2; conflict >= index; conflict--) {
       if (keyword(parts[conflict]) === 'ON' && keyword(parts[conflict + 1]) === 'CONFLICT') break;
     }
-    if (conflict < index) return false;
+    if (conflict < index) return;
   }
   const source = parts.slice(index, conflict < 0 ? end : conflict);
   const defaults = source.length === 2 && keyword(source[0]) === 'DEFAULT' && keyword(source[1]) === 'VALUES';
   if (!defaults) {
-    if (!startsReferenceQuery(source[0])) return false;
+    if (!startsReferenceQuery(source[0])) return;
     parseQuery(source, scope, outer, undefined, trace);
   }
   if (action >= 0 && !trace.unsupported) {
     const arbiter = parts.slice(conflict + 2, action);
-    if (!traceConflictTarget(arbiter, scope, target, outer, trace)) return false;
+    if (!traceConflictTarget(arbiter, scope, target, outer, trace)) return;
     if (keyword(parts[action + 1]) === 'UPDATE') {
-      if (!arbiter.length || keyword(parts[action + 2]) !== 'SET') return false;
+      if (!arbiter.length || keyword(parts[action + 2]) !== 'SET') return;
       reserveImplicitName(trace, target.declaration, 'excluded');
       traceExpressions(parts.slice(action + 1, end), scope, [target, { ...target, alias: 'excluded', declaration: undefined, qualifiedOnly: true }], outer, new Map(), trace);
-    } else if (action + 2 !== end) return false;
+    } else if (action + 2 !== end) return;
   }
-  if (returning >= 0 && !trace.unsupported) traceReturning(parts.slice(returning + 1), scope, [target], outer, trace, target);
-  return !trace.unsupported;
+  if (trace.unsupported) return;
+  if (returning < 0) return unknown;
+  return parseReturning(parts.slice(returning), [target], target, { scope, outer, trace, names: new Set() })?.projection;
 }
 
 interface RelationAlias { declaration?: Part; alias?: string; names?: string[]; next: number; }
@@ -1252,11 +1256,11 @@ interface MergeAnalysis {
 
 /** 引用和补全沿用同一作用域，补全只进入包含光标的表达式或子查询。 */
 function mergeExpression(parts: Part[], refs: ScopedRelation[], analysis: MergeAnalysis, start: number, end: number,
-  joinInputs?: [MergeSource, MergeSource]): void {
+  options?: { joinCondition?: boolean; outputs?: Projection[] }): void {
   const { context, scope, outer, trace } = analysis;
   if (trace) {
     traceExpressions(parts, scope, refs, outer, new Map(), trace);
-  } else if (context && (!analysis.joinConditionsOnly || joinInputs) && !analysis.active && context.offset >= start && context.offset <= end) {
+  } else if (context && (!analysis.joinConditionsOnly || options?.joinCondition) && !analysis.active && context.offset >= start && context.offset <= end) {
     const cursorGroup = parts.find(part => part.kind === 'group' && contains(part, context.offset));
     let group = cursorGroup;
     while (group?.kind === 'group') {
@@ -1268,11 +1272,23 @@ function mergeExpression(parts: Part[], refs: ScopedRelation[], analysis: MergeA
     }
     const qualifier = punct(context.left.at(-1), '.') ? identifier(context.left.at(-2)) : undefined;
     const routine = !qualifier || !analysis.names.has(qualifier) ? expressionRoutine(parts, context.left, cursorGroup, [refs, ...outer], start) : undefined;
-    // 如果操作数已经包含 JOIN，裸列使用它的输出形状，之前 USING 合并的键仍只计一次。
-    const outputs = joinInputs?.some(input => input.joined) ? joinInputs.map(input => input.projection) : undefined;
     analysis.active = { projection: unknown,
-      query: keyword(context.left.at(-1)) === 'AS' ? undefined : columns(refs, outer, context.left, outputs), routine };
+      query: keyword(context.left.at(-1)) === 'AS' ? undefined : columns(refs, outer, context.left, options?.outputs), routine };
   }
+}
+
+/** RETURNING 的裸星号仅展开可裸用的输入列，旧行与新行的别名只参与限定列和限定星号。 */
+function parseReturning(parts: Part[], refs: ScopedRelation[], target: ScopedRelation, analysis: MergeAnalysis,
+  joined?: { stars: PostgresCompletionRelation[]; outputs?: Projection[] }): Parsed | undefined {
+  const { outer, trace } = analysis;
+  const output = returningScope(parts.slice(1), refs, outer, target, trace);
+  if (!output) return;
+  const expressions = parts.slice(1 + output.start);
+  mergeExpression(expressions, output.refs, analysis, parts[output.start].end, Infinity, { outputs: joined?.outputs });
+  if (trace?.unsupported) return;
+  const stars = joined?.stars ?? refs.filter(ref => !ref.qualifiedOnly);
+  const projection = !trace || trace.projected ? project([parts[0], ...expressions], output.refs, stars, trace) : unknown;
+  return { ...analysis.active, projection };
 }
 
 /** 只匹配入口之后的首段名称或 schema 限定符，别名和 JOIN 条件属于各自作用域。 */
@@ -1549,8 +1565,10 @@ function readMergeSource(parts: Part[], start: number, entryEnd: number, precedi
         while (next < parts.length && !punct(parts[next], ',') &&
           !['ON', 'USING'].includes(mergeKeyword(parts, next)) && !mergeJoin(parts, next)) next++;
         if (trace && next === condition) return;
+        // 如果操作数已经包含 JOIN，沿用它的输出形状，让前序合并的键只计一次。
+        const outputs = left.joined || right.joined ? [left.projection, right.projection] : undefined;
         mergeExpression(parts.slice(condition, next), relations, analysis, parts[condition - 1].end,
-          parts[next]?.start ?? end, [left, right]);
+          parts[next]?.start ?? end, { joinCondition: true, outputs });
       } else return;
     }
     const projection = !trace || trace.projected ? mergeJoinProjection(left.projection, right.projection, join.natural, keys, trace) : unknown;
@@ -1562,7 +1580,7 @@ function readMergeSource(parts: Part[], start: number, entryEnd: number, precedi
 interface JoinedFrom { start: number; end: number; refs: ScopedRelation[]; outputs: Projection[]; }
 
 /** 同一棵来源树负责 JOIN 条件补全及星号展开。每个顶层 FROM 项贡献一个独立输出。 */
-function readQueryJoinSources(parts: Part[], scope: Scope, outer: ScopedRelation[][], context?: QueryContext, trace?: ReferenceTrace):
+function readQueryJoinSources(parts: Part[], scope: Scope, outer: ScopedRelation[][], context?: QueryContext, trace?: ReferenceTrace, writeOutput = false):
   { active: Parsed } | JoinedFrom | undefined {
   const command = keyword(parts[0]);
   if (!['SELECT', 'UPDATE', 'DELETE'].includes(command)) return;
@@ -1585,7 +1603,7 @@ function readQueryJoinSources(parts: Part[], scope: Scope, outer: ScopedRelation
   const sourceEnd = parts[end]?.start ?? Infinity;
   const inside = !!context && context.offset >= parts[start].end && context.offset < sourceEnd;
   // 条件补全解析普通 JOIN；表达式在来源外时，只对会改变输出或作用域的 JOIN 采用树形分析。
-  if (!hasMergedOrGroupedJoin(sources, inside) || !inside && !trace && command !== 'SELECT') return;
+  if (!hasMergedOrGroupedJoin(sources, inside) || !inside && !trace && !writeOutput && command !== 'SELECT') return;
   const analysis: MergeAnalysis = { scope, outer, trace, context: inside ? context : undefined, names: new Set(), joinConditionsOnly: true };
   const preceding: ScopedRelation[] = [];
   const outputs: Projection[] = [];
@@ -1595,7 +1613,8 @@ function readQueryJoinSources(parts: Part[], scope: Scope, outer: ScopedRelation
     if (!source) break;
     preceding.push(...source.relations);
     outputs.push(source.projection);
-    if (source.next === sources.length) return (trace || command === 'SELECT' && !inside) ? { start, end, refs: preceding, outputs } : undefined;
+    if (source.next === sources.length) return (trace || !inside && (writeOutput || command === 'SELECT'))
+      ? { start, end, refs: preceding, outputs } : undefined;
     if (!punct(sources[source.next], ',')) break;
     entry = sources[source.next].end;
     index = source.next + 1;
@@ -1746,15 +1765,12 @@ function parseMerge(parts: Part[], analysis: MergeAnalysis): Parsed | undefined 
   }
   let projection = unknown;
   if (end < parts.length) {
-    const returning = parts.slice(end + 1);
-    if (trace && !returning.length) return;
-    const output = returningScope(returning, refs, outer, relation, trace);
-    if (!output) return trace ? undefined : analysis.active;
-    const expressions = returning.slice(output.start);
-    mergeExpression(expressions, output.refs, analysis, parts[end + output.start].end, Infinity);
     // MERGE RETURNING * 先展开来源的输出（含 JOIN 合并键），再展开目标，排除仅可限定访问的 OLD/NEW。
-    if (!trace || trace.projected) projection = project([parts[end], ...expressions], output.refs,
-      [{ name: '', projection: source.projection }, relation], trace);
+    if (trace && end + 1 === parts.length) return;
+    const output = parseReturning(parts.slice(end), refs, relation, analysis,
+      { stars: [{ name: '', projection: source.projection }, relation] });
+    if (!output) return trace ? undefined : analysis.active;
+    projection = output.projection;
   }
   return trace?.unsupported ? undefined : { ...analysis.active, projection };
 }
@@ -1814,9 +1830,21 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   }
   const main = parts.slice(start);
   const command = keyword(main[0]);
-  if (trace && command === 'INSERT') {
-    if (!traceInsert(main, scope, outer, trace)) return unsupported();
-    return { projection: trace.projected ? project(main, [], undefined, trace) : unknown };
+  const write = command === 'UPDATE' || command === 'DELETE';
+  const returning = write || command === 'INSERT' ? main.findIndex((_, index) => mergeKeyword(main, index) === 'RETURNING') : -1;
+  const returningHere = returning >= 0 && (!context || context.offset >= main[returning].end);
+  if (command === 'INSERT') {
+    if (trace) {
+      const projection = traceInsert(main, scope, outer, trace);
+      return projection ? { projection } : unsupported();
+    }
+    // INSERT SELECT 的来源（包括 UNION）及冲突动作都不会向 RETURNING 公开关系。
+    if (returningHere) {
+      const destination = readInsertTarget(main);
+      if (!destination) return { projection: unknown };
+      const { target } = destination;
+      return parseReturning(main.slice(returning), [target], target, { scope, outer, context, names: new Set() }) ?? { projection: unknown };
+    }
   }
   if (command === 'MERGE') {
     if (first === 'WITH' && keyword(parts[1]) === 'RECURSIVE') return unsupported();
@@ -1847,16 +1875,15 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     return { projection: output, query, routine, windows };
   }
 
-  const write = command === 'UPDATE' || command === 'DELETE';
-  const joined = readQueryJoinSources(main, scope, outer, context, trace);
+  const joined = readQueryJoinSources(main, scope, outer, context, trace, returningHere);
   if (trace?.unsupported) return unsupported();
   if (joined && 'active' in joined) return joined.active;
   const tableSource = !!trace && command === 'TABLE';
   if (trace && !write && !['SELECT', 'VALUES', 'TABLE'].includes(command)) return unsupported();
   if (write && command === 'DELETE' && keyword(main[1]) !== 'FROM') return unsupported();
-  const returning = trace && write ? main.findIndex(part => keyword(part) === 'RETURNING') : -1;
   const where = command === 'DELETE' ? main.findIndex(part => keyword(part) === 'WHERE') : -1;
   const refs: ScopedRelation[] = [];
+  let returningTarget: ScopedRelation | undefined;
   const spans = trace ? new Map<number, RelationSpan>() : undefined;
   const commas = new Set<number>();
   let from = false, deleteUsing = -1;
@@ -1864,7 +1891,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   let argumentRefs: ScopedRelation[] | undefined;
   let argumentStart: number | undefined;
   let inFunctionMetadata = false;
-  for (let i = 0; i < (returning < 0 ? main.length : returning); i++) {
+  for (let i = 0; i < (!write || returning < 0 ? main.length : returning); i++) {
     if (joined?.start === i) {
       spans?.set(i, {end: joined.end, relation: refs.length, joined: true});
       if (trace?.projected) {
@@ -1882,6 +1909,14 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     if (from && punct(main[i], ',')) commas.add(i);
     if (!usingSource && !(tableSource && i === 0) && !relationEntry(main, i) && !commas.has(i)) continue;
     const target = writeTarget(main, i);
+    if (!trace && write && target && returningHere) {
+      const destination = readMergeRelation(main, i + 1, main[i].end, true, [], { scope, outer, names: new Set() });
+      if (!destination) return { projection: unknown };
+      returningTarget = destination.relation;
+      refs.push(returningTarget);
+      i = destination.next - 1;
+      continue;
+    }
     if (!target && (word === 'FROM' || word === 'JOIN' || usingSource)) from = true;
     if (!target && word !== 'JOIN') joinChainStart = refs.length;
     let next = i + 1;
@@ -1969,8 +2004,10 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       if (target && command === 'DELETE' && main[end] && !['USING', 'WHERE', 'RETURNING'].includes(keyword(main[end]))) return unsupported();
       spans!.set(i, { end, relation: refs.length });
       if (alias) trace.declarations.set(part.start, 'alias');
-      refs.push({ name, alias, schema, declaration: alias ? part : cte, ...(trace.projected && projection ? { projection } : {}),
-        ...(name && !projection ? { physical: true } : {}) });
+      const relation: ScopedRelation = { name, alias, schema, declaration: alias ? part : cte,
+        ...(trace.projected && projection ? { projection } : {}), ...(name && !projection ? { physical: true } : {}) };
+      if (target && write) returningTarget = relation;
+      refs.push(relation);
       i = end - 1;
       continue;
     }
@@ -1979,7 +2016,10 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   if (trace) {
     traceExpressions(returning < 0 ? main : main.slice(0, returning), scope, refs, outer, spans!, trace);
     if (command === 'SELECT' && !trace.field && !trace.physicalRelations) traceNamedWindows(main, trace);
-    if (returning >= 0 && !trace.unsupported) traceReturning(main.slice(returning + 1), scope, refs, outer, trace, write ? refs[0] : undefined);
+    if (returning >= 0) {
+      if (trace.unsupported || !returningTarget) return unsupported();
+      return parseReturning(main.slice(returning), refs, returningTarget, { scope, outer, trace, names: new Set() }) ?? unsupported();
+    }
     if (!trace.projected) return { projection: unknown };
     const projection = tableSource ? refs[0]?.projection ?? unknown : project(main, refs,
       command === 'SELECT' ? joined?.outputs.map(projection => ({name: '', projection})) : undefined, trace);
@@ -1992,6 +2032,12 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       }
     }
     return { projection };
+  }
+  if (returningHere) {
+    if (!returningTarget) return { projection: unknown };
+    const outputs = joined ? [relationProjection(returningTarget), ...joined.outputs] : undefined;
+    const joinedResult = outputs ? { outputs, stars: outputs.map(projection => ({ name: '', projection })) } : undefined;
+    return parseReturning(main.slice(returning), refs, returningTarget, { scope, outer, context, names: new Set() }, joinedResult) ?? { projection: unknown };
   }
   const projection = project(main, refs, joined?.outputs.map(projection => ({name: '', projection})));
   if (!context || inFunctionMetadata || start > 0 && (main[0]?.start ?? context.start) > context.start) return { projection };

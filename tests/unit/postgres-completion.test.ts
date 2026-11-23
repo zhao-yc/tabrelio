@@ -246,6 +246,45 @@ it('后续 ON 的裸列候选使用前序 JOIN 的合并输出，不读取其它
   } finally { provider.dispose(); }
 });
 
+it('普通 RETURNING 的 OLD/NEW 使用写入目标，隔离 INSERT 来源和冲突动作', () => {
+  for (const statement of [
+    'INSERT INTO app.items AS t (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id=excluded.id',
+    'INSERT INTO app.items AS t SELECT id FROM a UNION ALL SELECT id FROM b',
+    'INSERT INTO app.items AS t DEFAULT VALUES',
+    'UPDATE ONLY (app.items) AS t SET id=1',
+    'DELETE FROM app.items AS t USING parent p WHERE t.id=p.id',
+  ]) {
+    expect(at(statement + ' RETURNING new.|')?.query, statement).toMatchObject({qualified: true,
+      relations: [{schema: 'app', name: 'items', alias: 'new'}]});
+    expect(at(statement + ' RETURNING WITH (OLD AS "之前", NEW AS after) "之前".|')?.query, statement)
+      .toMatchObject({relations: [{schema: 'app', name: 'items', alias: '之前'}]});
+    expect(at(statement + ' RETURNING WITH (OLD AS before) old.|')?.query, statement).toBeUndefined();
+  }
+  const insert = 'INSERT INTO app.items AS t SELECT incoming.id FROM source incoming';
+  expect(at(insert + ' RETURNING incoming.|')?.query).toBeUndefined();
+  expect(at(insert + ' RETURNING excluded.|')?.query).toBeUndefined();
+  expect(at(insert + ' RETURNING WITH (OLD AS be|fore) before.id')?.query).toBeUndefined();
+  expect(at(insert + ' RETURNING WITH (OLD AS t) t.|')?.query).toBeUndefined();
+  expect(at(insert + ' RETURNING WITH (OLD AS before) tools.pol|')?.routine).toEqual({context: 'expression', schema: 'tools'});
+  expect(at('UPDATE app.items AS t SET id=old.| RETURNING new.id')?.query).toBeUndefined();
+  expect(at('UPDATE app.items AS t SET id=1 FROM app.parent AS old RETURNING old.|')?.query)
+    .toMatchObject({relations: [{name: 'parent', alias: 'old'}]});
+});
+
+it('RETURNING 结果可传给外层查询，暴露 JOIN 输出及显式行别名的星号', () => {
+  const cte = 'WITH data(id, label) AS (VALUES (1, \'a\')), meta(id, info) AS (VALUES (1, \'b\')), changed AS (';
+  const update = 'UPDATE app.items SET id=1 FROM data JOIN meta USING (id)';
+  expect(at(update + ' RETURNING |')?.query).toMatchObject({qualified: false, joinOutput: {source: {kind: 'projection'}}});
+  expect(at(cte + update + ' RETURNING WITH (OLD AS before) before.id AS old_id, meta.info) SELECT changed.| FROM changed')?.query)
+    .toMatchObject({relations: [{projection: {names: ['old_id', 'info']}}]});
+  expect(at(cte + update + ' RETURNING *) SELECT changed.| FROM changed')?.query)
+    .toMatchObject({relations: [{projection: {names: ['id', 'label', 'info'], stars: [{schema: 'app', name: 'items'}]}}]});
+  expect(at('WITH changed AS (INSERT INTO app.items DEFAULT VALUES RETURNING WITH (NEW AS after) after.*) SELECT changed.| FROM changed')?.query)
+    .toMatchObject({relations: [{projection: {stars: [{schema: 'app', name: 'items'}]}}]});
+  expect(at('DELETE FROM app.items t RETURNING WITH (OLD AS before) (SELECT before.|)')?.query)
+    .toMatchObject({relations: [{name: 'items', alias: 'before'}]});
+});
+
 it('连接输出补全合并裸键，对仍重名的列给出可见限定名', async () => {
   const sql = 'WITH a(id, tag, only_a) AS (VALUES (1,2,3)), b(id, tag, only_b) AS (VALUES (1,4,5)) ' +
     'SELECT | FROM a FULL JOIN b USING (id) AS shared';

@@ -2408,6 +2408,55 @@ test('PostgreSQL JOIN USING 补全按原目录建议共有列并保留连接输�
   await quitDesktop();
 });
 
+test('PostgreSQL 普通 RETURNING 补全前后行、来源及写入 CTE 的返回列', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL 18');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query('CREATE TABLE public.returning_items (id int PRIMARY KEY, qty int DEFAULT 0); ' +
+      'INSERT INTO public.returning_items VALUES (1,3);');
+    await prepare({id: '', name: '隔离 PostgreSQL 返回列补全', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, 'SELECT 1');
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const baseline = await history(), identity = (await inspectModel()).identity;
+    const verify = async (source: string, placeholder: string, column: string, rows: unknown[][]) => {
+      await replaceDraft(source);
+      await modelSelection(1, source.indexOf(placeholder) + 2);
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText([column]);
+      await page.keyboard.press('Enter');
+      const completed = source.replace(placeholder, postgresIdentifier(column));
+      await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+      expect((await inspectModel()).identity).toEqual(identity);
+      expect(await history()).toEqual(baseline);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(source);
+      // 只在专用连接中执行验收 SQL，每条单独回滚，让下一条继续使用原始记录。
+      await observer.query('BEGIN');
+      try { expect((await observer.query({text: completed, rowMode: 'array'})).rows).toEqual(rows); }
+      finally { await observer.query('ROLLBACK'); }
+    };
+    await verify('UPDATE public.returning_items item SET qty=qty+1 WHERE id=1 ' +
+      'RETURNING WITH (OLD AS "旧行", NEW AS next_row) "旧行".q_tail AS prior, next_row.qty', 'q_tail', 'qty', [[3,4]]);
+    await verify('INSERT INTO public.returning_items VALUES (1,9) ON CONFLICT (id) DO UPDATE SET qty=excluded.qty ' +
+      'RETURNING old.q_tail, new.qty', 'q_tail', 'qty', [[3,9]]);
+    await verify("DELETE FROM public.returning_items item USING (VALUES (1,'来源甲')) AS src(id,label) WHERE item.id=src.id " +
+      'RETURNING WITH (OLD AS before) before.q_tail, src.label', 'q_tail', 'qty', [[3,'来源甲']]);
+    await verify("WITH changed AS (UPDATE public.returning_items item SET qty=5 FROM (VALUES (1,'来源乙')) src(id, source_label) " +
+      'WHERE item.id=src.id RETURNING *) SELECT changed.s_tail FROM changed', 's_tail', 'source_label', [['来源乙']]);
+    expect((await observer.query({text: 'SELECT id,qty FROM public.returning_items', rowMode: 'array'})).rows).toEqual([[1,3]]);
+    await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+    await page.screenshot({path: info.outputPath('PostgreSQL返回列补全.png'), animations: 'disabled'});
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL 字段悬停读取真实目录并区分同名、临时和歧义来源', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
