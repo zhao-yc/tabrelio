@@ -1,5 +1,5 @@
 export const localRenameZh = {
-  unavailable: '请选择已确认的表别名、CTE、SQLite 命名窗口或 SQLite 命名参数。',
+  unavailable: '请选择已确认的表别名、CTE、SQLite 命名窗口或查询命名参数。',
   collision: '新名称已在当前语句中使用，可能改变绑定，请换一个名称。',
   parameterCollision: '整份草稿中已有同名参数，请换一个名称。',
   parameterTemplate: '草稿中存在同名的 [$name] 模板，无法确定它的绑定含义。',

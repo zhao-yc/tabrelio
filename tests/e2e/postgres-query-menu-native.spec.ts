@@ -31,10 +31,11 @@ import { postgresSearchPathZh as searchPathText } from '../../src/renderer/local
 import { postgresQueryTimeoutsZh as timeoutText } from '../../src/renderer/locales/postgresQueryTimeouts.zh-CN';
 import { postgresNoticesZh as noticesText } from '../../src/renderer/locales/postgresNotices.zh-CN';
 import { postgresNoticeHiddenMessage } from '../../src/shared/postgresNotices';
+import { localRenameZh } from '../../src/renderer/locales/localRename.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
-const editor = () => tab().locator('.postgres-editor .monaco-editor');
+const editor = () => tab().locator('.postgres-editor .monaco-editor[role="code"]');
 const script = "SELECT '选区原值' AS result;\nSELECT '第二句原值' AS result;";
 
 async function prepare(connection: Extract<ConnectionProfile, {dialect: 'postgresql'}>, sql: string, resultLimit?: number) {
@@ -1854,6 +1855,59 @@ test('PostgreSQL 方言着色跨行匹配 dollar 标签和嵌套注释', async (
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
   await expect.poll(correct).toBe(true);
   expect((await inspectModel()).identity).toEqual(initial.identity);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('PostgreSQL 命名参数离线跨语句高亮、跳转及一次撤销改名', async ({}, info) => {
+  const sql = ["SELECT [$needle], '[$needle]', [$Needle];", '-- [$needle]',
+    'SELECT [$needle] AS next_value, $$[$needle]$$;'].join('\n');
+  await prepare({id: '', name: '离线 PostgreSQL 参数引用', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, sql);
+  await resizeQueryWindow(1280, 920, 0.75);
+  const initial = await inspectModel();
+  await modelSelection(1, 10);
+  await command('editor-local-references');
+  await modelSelection(1, 10);
+  const lines = editor().locator('.view-lines .view-line');
+  for (const line of [0, 2]) await expect(lines.nth(line).locator('.sql-local-reference').first()).toBeVisible();
+  await expect(lines.nth(1).locator('.sql-local-reference')).toHaveCount(0);
+  await expect(editor().locator('.sql-local-declaration')).toHaveCount(0);
+
+  await page.keyboard.press('Shift+F12');
+  const peek = editor().locator('.peekview-widget.reference-zone-widget');
+  const rows = peek.locator('.ref-tree .monaco-list-row[role="treeitem"][aria-level="1"]');
+  await expect(peek).toBeVisible();
+  await expect(rows).toHaveCount(2);
+  await expect(peek.locator('.ref-tree .monaco-list-row[aria-selected="true"]')).toHaveCount(1);
+  await expect(rows.last()).toContainText('next_value');
+  await page.screenshot({path: info.outputPath('PostgreSQL命名参数引用.png')});
+  await rows.last().dblclick();
+  await expect(peek).not.toBeVisible();
+  await expect.poll(async () => (await inspectModel()).position?.lineNumber).toBe(3);
+  expect((await inspectModel()).selected).toBe('[$needle]');
+
+  const rename = editor().locator('.rename-box input.rename-input');
+  const submitRename = async (name: string) => {
+    await page.keyboard.press('F2');
+    await expect(rename).toHaveValue('needle');
+    await rename.fill(name);
+    await rename.press('Enter');
+    await expect(rename).not.toBeVisible();
+  };
+  await modelSelection(3, 10);
+  await submitRename('Needle');
+  await expect(tab().getByRole('status').filter({hasText: localRenameZh.parameterCollision})).toBeVisible();
+  expect((await inspectModel()).sql).toBe(sql);
+  await modelSelection(3, 10);
+  await submitRename('new_name');
+  const expected = ["SELECT [$new_name], '[$needle]', [$Needle];", '-- [$needle]',
+    'SELECT [$new_name] AS next_value, $$[$needle]$$;'].join('\n');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(expected);
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+  expect((await inspectModel()).identity).toEqual(initial.identity);
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
   expect(pageErrors).toEqual([]);
 });

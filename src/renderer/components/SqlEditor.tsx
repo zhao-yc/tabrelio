@@ -385,7 +385,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const definition = createSqlDefinitionProvider({ ...ports, worker: {
       async analyze(source, offset): Promise<LocalDefinitionAnalysis> {
         const result = await analyze(source, offset);
-        if (result.status !== 'ready' || result.target.start === result.declaration.start) return { status: 'blocked' };
+        if (result.status !== 'ready' || !result.declaration || result.target.start === result.declaration.start) return { status: 'blocked' };
         return { status: 'ready', target: result.target, definition: result.declaration };
       },
       async dispose() {},

@@ -6,6 +6,35 @@ function at(marked: string, standardStrings?: boolean) {
   return analyzePostgresLocalReferences(sql, offset, standardStrings);
 }
 
+it('命名参数在整份草稿内按大小写匹配，位置参数和字面量不参与', () => {
+  const sql = `SELECT [$needle], [$Needle], '[$needle]', "[$needle]", $body$[$needle];$body$;\n` +
+    '/* 外层 /* [$needle] */ */ SELECT $1, [$needle]; -- [$needle]';
+  const occurrences = [...sql.matchAll(/\[\$needle\]/g)].map(match => ({ start: match.index, end: match.index + match[0].length }));
+  expect(analyzePostgresLocalReferences(sql, occurrences[0].start + 3)).toEqual({ status: 'ready',
+    target: occurrences[0], declaration: null, references: [occurrences[0], occurrences[5]] });
+  for (const index of [1, 2, 3, 4, 6]) {
+    expect(analyzePostgresLocalReferences(sql, occurrences[index].start + 3)).toMatchObject({ status: 'blocked' });
+  }
+  expect(analyzePostgresLocalReferences(sql, sql.indexOf('$1') + 1)).toMatchObject({ status: 'blocked' });
+});
+
+it('相邻模板共享边界时按右侧模板定位，64 位名称的尾端可查找', () => {
+  const name = '_'.repeat(64), left = '[$left]', right = '[$' + name + ']';
+  const sql = 'SELECT ' + left + right;
+  const target = { start: sql.indexOf(right), end: sql.length };
+  for (const offset of [target.start, target.end]) {
+    expect(analyzePostgresLocalReferences(sql, offset)).toEqual({ status: 'ready', target, declaration: null, references: [target] });
+  }
+});
+
+it('离线字符串规则有歧义时拒绝给出不完整引用，已知会话按实际规则查找', () => {
+  const sql = "SELECT [$needle], 'a\\', [$needle], '--' ;";
+  const offset = sql.indexOf('needle') + 1;
+  expect(analyzePostgresLocalReferences(sql, offset)).toEqual({ status: 'blocked', reason: 'syntax' });
+  expect(analyzePostgresLocalReferences(sql, offset, true)).toMatchObject({ status: 'ready', references: [expect.any(Object), expect.any(Object)] });
+  expect(analyzePostgresLocalReferences(sql, offset, false)).toMatchObject({ status: 'ready', references: [expect.any(Object)] });
+});
+
 it('同名内外层及集合分支各自归到原声明位置', () => {
   const sql = 'SELECT s.id, (SELECT s.id FROM child s) FROM parent s WHERE s.id=1 UNION ALL SELECT s.id FROM third s';
   const [first, inner, last, branch] = [...sql.matchAll(/s\.id/g)].map(match => match.index!);

@@ -1,7 +1,8 @@
 import { postgresCompletionLimits as limits, type PostgresCompletionReference, type PostgresRoutineCompletionTarget } from '../shared/postgresCompletion';
 import { currentPostgresStatement, scanPostgresEditorTokens, type PostgresEditorToken } from '../shared/postgresSql';
-import type { DeclaredLocalReferences, LocalBindingReferences, LocalReferenceRange } from '../shared/localReferences';
+import type { DeclaredLocalReferences, LocalBindingReferences, LocalReferenceRange, LocalReferences } from '../shared/localReferences';
 import { planLocalRename, type LocalRename } from '../shared/localRename';
+import { postgresNamedParameterReferences, postgresNamedParameterRename } from './postgresNamedParameterReferences';
 
 type Group = { kind: 'group'; start: number; end: number; closed: boolean; closing: ')' | ']'; parts: Part[] };
 type Part = PostgresEditorToken | Group;
@@ -1462,13 +1463,16 @@ function analyzePostgresBinding<T extends LocalBindingReferences | LocalRename>(
     ? noLocalReference : result;
 }
 
-/** 只返回绑定声明和引用的范围，供高亮与导航使用。 */
-export function analyzePostgresLocalReferences(source: string, offset: number, standardStrings?: boolean): LocalBindingReferences {
-  return analyzePostgresBinding(source, offset, standardStrings, references => references);
+/** 命名参数沿用执行时的全稿绑定，其余引用沿用当前语句的作用域。 */
+export function analyzePostgresLocalReferences(source: string, offset: number, standardStrings?: boolean): LocalReferences {
+  return postgresNamedParameterReferences(source, offset, standardStrings) ??
+    analyzePostgresBinding(source, offset, standardStrings, references => references);
 }
 
 /** 同名词只有确定属于另一个绑定才可略过，任何未确认的同名词都会阻止整组修改。 */
 export function analyzePostgresLocalRename(source: string, offset: number, standardStrings?: boolean, newName?: string): LocalRename {
+  const parameter = postgresNamedParameterRename(source, offset, standardStrings, newName);
+  if (parameter) return parameter;
   return analyzePostgresBinding(source, offset, standardStrings, (references, target, tokens, trace) => {
     const name = identifier(target)!;
     const declaration = references.declaration.start;

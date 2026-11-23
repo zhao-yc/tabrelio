@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { analyzePostgresLocalRename } from '../../src/renderer/postgresCompletionAnalysis';
 import { quoteLocalRename } from '../../src/shared/localRename';
+import { postgresParameterPlan, postgresQueryParameterSource } from '../../src/shared/postgresParameters';
 
 function rename(marked: string, name?: string, standardStrings?: boolean) {
   return analyzePostgresLocalRename(marked.replace('¦', ''), marked.indexOf('¦'), standardStrings, name);
@@ -12,6 +13,30 @@ function edited(marked: string, name: string) {
   if (result.status !== 'ready') throw Error('未能确认待改写的绑定');
   return result.edits.reduceRight((sql, edit) => sql.slice(0, edit.start) + edit.text + sql.slice(edit.end), marked.replace('¦', ''));
 }
+
+it('整稿改写命名参数，执行计划仍逐条编号并为同名参数提供一次输入', () => {
+  const source = "SELECT [$ne¦edle], '[$needle]', [$Needle];\nSELECT [$needle], $$[$needle]$$;";
+  expect(rename(source)).toMatchObject({ status: 'ready', kind: 'parameter', name: 'needle', edits: [] });
+  const updated = edited(source, 'next_1');
+  expect(updated).toBe("SELECT [$next_1], '[$needle]', [$Needle];\nSELECT [$next_1], $$[$needle]$$;");
+  const plan = postgresParameterPlan(postgresQueryParameterSource(updated, true));
+  expect(plan.names).toEqual(['next_1', 'Needle']);
+  expect(plan.statements.map(statement => statement.names)).toEqual([['next_1', 'Needle'], ['next_1']]);
+  expect(plan.statements.map(statement => statement.sql)).toEqual(["SELECT  $1 , '[$needle]',  $2 ", '\nSELECT  $1 , $$[$needle]$$']);
+});
+
+it('保护命名参数的既有绑定，拒绝非法名称及超出预算的批量替换', () => {
+  const source = "SELECT [$one¦], '[$ghost]'; SELECT [$other];";
+  expect(rename(source, 'other')).toEqual({ status: 'blocked', reason: 'parameter-collision' });
+  expect(rename(source, 'one')).toMatchObject({ status: 'ready', edits: [] });
+  expect(rename(source, 'One')).toMatchObject({ status: 'ready', edits: [{ text: '[$One]' }] });
+  expect(rename(source, 'ghost')).toMatchObject({ status: 'ready', edits: [{ text: '[$ghost]' }] });
+  for (const name of ['', '1x', '新名', 'a] + 1', 'x'.repeat(65)]) {
+    expect(rename(source, name)).toEqual({ status: 'blocked', reason: 'parameter-name' });
+  }
+  expect(rename('SELECT [$one¦], ' + '[$one], '.repeat(119) + '[$one]', 'next')).toEqual({ status: 'blocked', reason: 'budget' });
+  expect(rename("SELECT [$one¦], 'a\\', [$one], '--' ;", 'next')).toEqual({ status: 'blocked', reason: 'syntax' });
+});
 
 it('只替换外层别名的声明和引用，保留子查询及相邻语句的同名绑定', () => {
   const source = 'SELECT ¦s.id, (SELECT s.id FROM child s) FROM parent s WHERE s.id=1; SELECT s.id FROM next s';
