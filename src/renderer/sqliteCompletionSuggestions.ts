@@ -18,6 +18,9 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   };
   const bound = analysis.relations.filter(relation => relation.kind === 'physical' || !relation.declaration);
   const declarations = analysis.relations.filter(relation => relation.kind === 'local' && relation.declaration);
+  for (const name of analysis.outputColumns ?? []) {
+    add({ label: name, kind: 'column', insertText: quote(name), detail: text.outputColumn });
+  }
   if (analysis.syntax.includes('relation') && qualifiers.length <= 1) {
     const schema = qualifiers.length === 1 && ['main', 'temp'].includes(fold(qualifiers[0])) ? fold(qualifiers[0]) as 'main' | 'temp' : undefined;
     if (!qualifiers.length || schema) {

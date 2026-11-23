@@ -30,6 +30,14 @@ describe('SQLite字段悬停完整词法与准确目录', () => {
   it('显式限定仍可解析真实列，不把另一个输出别名套到它', async () => {
     expect((await hover('SELECT id AS field_🚢, s.fi|eld_🚢 FROM subject s')).value).toContain(text.declaredType);
   });
+  it('同别名的复合查询只悬停当前分支的实际字段，末尾排序别名不请求目录', async () => {
+    const second = await hover('SELECT s.field_🚢 FROM main.first s UNION ALL SELECT s.fi|eld_🚢 FROM temp.second s');
+    expect(second.value).toContain('"temp"."second"');
+    expect(second.port.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'second', schema: 'temp', prefix: 'field_🚢' });
+    const output = await hover('SELECT field_🚢 AS id FROM subject UNION ALL SELECT 2 ORDER BY i|d');
+    expect(output.value).toBeUndefined();
+    expect(output.port.load).not.toHaveBeenCalled();
+  });
   it('进入相关子查询或CTE体后只检查活动层别名，不借外层别名压制内层真实列', async () => {
     for (const sql of ['SELECT 1 AS field_🚢 FROM outer_table WHERE EXISTS(SELECT fi|eld_🚢 FROM subject)', 'WITH c AS (SELECT fi|eld_🚢 FROM subject) SELECT 1 AS field_🚢 FROM c']) {
       const result = await hover(sql); expect(result.value).toContain(text.declaredType); expect(result.port.load.mock.calls[0][0]).toMatchObject({ table: 'subject' });

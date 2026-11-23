@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
 import { analyzeSqliteCompletion, type SqliteCompletionAnalysis } from '../../src/shared/sqliteCompletionAnalysis';
 import type { SqliteCompletionEntry, SqliteCompletionLookup } from '../../src/shared/sqliteCompletion';
 import { sqliteCompletionSuggestions } from '../../src/renderer/sqliteCompletionSuggestions';
@@ -23,6 +24,28 @@ it('真实CTE显式输出列直接补全，既不查永久表也不读取用户�
   expect(result.status).toBe('ready'); if (result.status !== 'ready') throw Error(result.reason);
   const d = directory([]), candidates = await sqliteCompletionSuggestions(result, d);
   expect(d.load).not.toHaveBeenCalled(); expect(candidates.items).toEqual([expect.objectContaining({ label: 'name', kind: 'column', insertText: '"name"' })]);
+});
+it('UNION ALL 的右分支只读取自己的物理表目录', async () => {
+  const marked = 'SELECT s.name FROM main.first s UNION ALL SELECT s.na|suffix FROM temp.second s';
+  const result = analyzeSqliteCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  if (result.status !== 'ready') throw Error(result.reason);
+  const d = directory([column('name', 'second', 'temp')]), candidates = await sqliteCompletionSuggestions(result, d);
+  expect(d.load).toHaveBeenCalledExactlyOnceWith({ kind: 'columns', table: 'second', schema: 'temp', prefix: 'na' });
+  expect(candidates.items.map(item => item.insertText)).toEqual(['"name"']);
+});
+it('复合排序补入后一分支的明确别名，SQLite 实际按该输出列排序', async () => {
+  const marked = 'SELECT 2 AS id, 9 AS cost UNION ALL SELECT 1 AS item, 10 AS price ORDER BY pr|suffix DESC';
+  const source = marked.replace('|', ''), analysis = analyzeSqliteCompletion(source, marked.indexOf('|'));
+  if (analysis.status !== 'ready') throw Error(analysis.reason);
+  const d = directory([]), { items } = await sqliteCompletionSuggestions(analysis, d);
+  expect(d.load).not.toHaveBeenCalled();
+  expect(items).toEqual([{ label: 'price', kind: 'column', insertText: '"price"', detail: '复合查询输出列' }]);
+  const sql = source.slice(0, analysis.target.start) + items[0].insertText + source.slice(analysis.target.end);
+  const db = new DatabaseSync(':memory:');
+  try {
+    expect(sql).toContain('ORDER BY "price" DESC');
+    expect(db.prepare(sql).all()).toEqual([{ id: 1, cost: 10 }, { id: 2, cost: 9 }]);
+  } finally { db.close(); }
 });
 it('准确别名字段只替最后标识符，Unicode引号和片段语法保持普通文本', async () => {
   const d = directory([column('字段"🚢.${x}')]), result = await sqliteCompletionSuggestions(ready(), d);

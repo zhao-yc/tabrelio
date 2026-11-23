@@ -52,8 +52,9 @@ it('未指定意图与悬停不能接收声明范围，伪造出界/不同名称
   expect(() => validateSqliteCompletionAnalysis(result, f.source, f.offset)).toThrow();
   expect(() => validateSqliteCompletionAnalysis(result, f.source, f.offset, 'hover')).toThrow();
 });
-it('复合查询声明分支不放宽原补全或悬停，预算及坏Unicode继续拒绝', () => {
+it('复合查询声明、补全和悬停均限制在对应分支，预算及坏Unicode继续拒绝', () => {
   const f = input('SELECT |s.id FROM subject AS «s» UNION SELECT t.id FROM second t');
-  expect(analyzeSqliteCompletion(f.source, f.offset).status).toBe('blocked'); expect(analyzeSqliteCompletion(f.source, f.offset, 'hover').status).toBe('blocked');
+  expect(analyzeSqliteCompletion(f.source, f.offset)).toMatchObject({ status: 'ready', relations: [{ kind: 'physical', name: 'subject', alias: 's' }] });
+  expect(analyzeSqliteCompletion(f.source, f.offset, 'hover')).toMatchObject({ status: 'ready', relations: [{ kind: 'physical', name: 'subject', alias: 's', scopeDepth: 1 }] });
   expect(analyzeSqliteCompletion('x'.repeat(262145), 0, 'definition').status).toBe('blocked'); expect(analyzeSqliteCompletion('SELECT \ud800', 7, 'definition').status).toBe('blocked');
 });

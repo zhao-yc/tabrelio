@@ -26,11 +26,61 @@ it('CTE投影alias/简单字段可推导，count(*)内部星号不阻断明确al
 it.each(['SELECT * FROM real','SELECT x+y FROM real','SELECT a COLLATE nocase FROM real','SELECT x AS duplicate,y AS duplicate FROM real'])('未知/歧义CTE输出%s不退永久同名表',body=>{expect(analyze('WITH shadow AS ('+body+') SELECT shadow.| FROM shadow')).toMatchObject({status:'blocked',reason:'local-output'});});
 it('未知CTE只声明未绑定不泄列，显式main同名物理表可绕局部遮蔽',()=>{const declaration=ready('WITH shadow AS (SELECT * FROM real) SELECT * FROM sh|');expect(declaration.relations).toContainEqual({kind:'local',source:'cte',name:'shadow',columns:[],declaration:true});const explicit=ready('WITH shadow AS (SELECT * FROM real) SELECT p.| FROM main.shadow AS p');expect(explicit.relations).toContainEqual({kind:'physical',schema:'main',name:'shadow',alias:'p'});});
 it('嵌套CTE声明按最近作用域遮蔽，不把外层声明变成本层绑定',()=>{const value=ready('WITH c(outer_col) AS (SELECT 1) SELECT (WITH c(inner_col) AS (SELECT 2) SELECT c.| FROM c) FROM actual a');const local=value.relations.filter(item=>item.kind==='local'&&item.name==='c');expect(local).toHaveLength(2);expect(local.every(item=>item.kind==='local'&&item.columns.join(',')==='inner_col')).toBe(true);});
-it('递归CTE有显式列时外层可补，递归体复杂compound可明确阻断',()=>{expect(ready('WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT c.| FROM c').relations).toContainEqual({kind:'local',source:'cte',name:'c',columns:['x']});expect(analyze('WITH RECURSIVE c(x) AS (SELECT | UNION ALL SELECT x+1 FROM c) SELECT * FROM c')).toMatchObject({status:'blocked',reason:'compound'});});
+it('递归CTE的递归成员可补显式列，锚点不借递归成员中的绑定', () => {
+  expect(ready('WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT c.| FROM c').relations)
+    .toContainEqual({ kind: 'local', source: 'cte', name: 'c', columns: ['x'] });
+  expect(ready('WITH RECURSIVE c(x) AS (SELECT | UNION ALL SELECT x+1 FROM c) SELECT * FROM c').relations)
+    .toEqual([{ kind: 'local', source: 'cte', name: 'c', columns: ['x'], declaration: true }]);
+  expect(ready('WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT c.| + 1 FROM c WHERE x < 3) SELECT * FROM c').relations)
+    .toContainEqual({ kind: 'local', source: 'cte', name: 'c', columns: ['x'] });
+  expect(analyze('WITH c AS (VALUES(1) UNION ALL SELECT 2 AS later_name) SELECT c.| FROM c'))
+    .toMatchObject({ status: 'blocked', reason: 'local-output' });
+});
 it('派生表投影保持本地输出，不为同名别名查询永久元数据',()=>{expect(ready('SELECT d.| FROM (SELECT source.id AS item,1 AS flag FROM source) AS d').relations).toEqual([{kind:'local',source:'derived',name:'d',alias:'d',columns:['item','flag']}]);expect(analyze('SELECT d.| FROM (SELECT * FROM source) AS d')).toMatchObject({status:'blocked',reason:'local-output'});});
 it('普通相关子查询可见外层alias，FROM派生体不借外层行，内层同alias优先',()=>{const correlated=ready('SELECT * FROM outer_table o WHERE EXISTS (SELECT o.| FROM inner_table i)');expect(correlated.relations.map(item=>item.alias)).toEqual(['i','o']);const derived=ready('SELECT * FROM outer_table o JOIN (SELECT i.| FROM inner_table i) d ON 1=1');expect(derived.relations).toEqual([{kind:'physical',name:'inner_table',alias:'i'}]);const shadow=ready('SELECT * FROM outer_table t WHERE EXISTS (SELECT t.| FROM inner_table t)');expect(shadow.relations).toEqual([{kind:'physical',name:'inner_table',alias:'t'}]);});
 it('trigger体内分号不伪造独立SELECT；后继statement仍准确隔离',()=>{expect(analyze('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT x.| FROM secret x; END;')).toMatchObject({status:'blocked',reason:'trigger'});expect(ready('CREATE TRIGGER tr AFTER INSERT ON subject BEGIN SELECT CASE WHEN 1 THEN 2 END; END; SELECT t.| FROM actual t').relations).toEqual([{kind:'physical',name:'actual',alias:'t'}]);});
-it.each(['SELECT x.| FROM json_each(\'[]\') x','SELECT x.| FROM (a JOIN b) x','SELECT * FROM a JOIN b USING(|)','SELECT * FROM a INDEXED BY |','SELECT a.| FROM first a UNION SELECT b FROM second','WITH c(x) AS(SELECT 1) UPDATE c SET |'])('未知SQLite复杂上下文明确blocked，不伪造物理关系 %#',source=>{expect(analyze(source).status).toBe('blocked');});
+it.each(['SELECT x.| FROM json_each(\'[]\') x','SELECT x.| FROM (a JOIN b) x','SELECT * FROM a JOIN b USING(|)','SELECT * FROM a INDEXED BY |','WITH c(x) AS(SELECT 1) UPDATE c SET |'])('未知SQLite复杂上下文明确blocked，不伪造物理关系 %#',source=>{expect(analyze(source).status).toBe('blocked');});
+it.each(['UNION', 'UNION ALL', 'INTERSECT', 'EXCEPT'])('集合运算%s的两侧以光标所在分支为准', operator => {
+  expect(ready(`SELECT s.| FROM main.first AS s ${operator} SELECT s.id FROM temp.second AS s`).relations)
+    .toEqual([{ kind: 'physical', schema: 'main', name: 'first', alias: 's' }]);
+  expect(ready(`SELECT s.id FROM main.first AS s ${operator} SELECT s.| FROM temp.second AS s`).relations)
+    .toEqual([{ kind: 'physical', schema: 'temp', name: 'second', alias: 's' }]);
+});
+
+it('复合分支保留相关外层，隔离兄弟分支和 INSERT 目标', () => {
+  expect(ready('SELECT * FROM parent p WHERE EXISTS (SELECT x.id FROM src x UNION ALL SELECT p.| FROM child c)').relations.map(relation => relation.name))
+    .toEqual(['child', 'parent']);
+  expect(ready('INSERT INTO dst SELECT a.id FROM first a UNION ALL SELECT b.| FROM second b').relations)
+    .toEqual([{ kind: 'physical', name: 'second', alias: 'b' }]);
+  expect(ready('SELECT 1 UNION ALL SEL|').syntax).toEqual(['keyword']);
+});
+
+it('复合排序只交付可确认的输出名，兼容不同分支的别名、星号与大小写去重', () => {
+  const result = ready('SELECT a.*, a.cost * a.qty AS "合计🚢", a.id AS Key FROM first a UNION ALL SELECT b.*, 0 AS amount, b.id AS key FROM second b ORDER BY amount DESC, "合|计🚢" LIMIT 5');
+  expect(result).toMatchObject({ syntax: ['column'], qualifiers: [], relations: [], outputColumns: ['合计🚢', 'Key', 'amount'] });
+});
+
+it.each([
+  'SELECT * FROM first UNION ALL SELECT * FROM second ORDER BY |',
+  'SELECT id FROM first UNION ALL SELECT id FROM second ORDER BY second.|',
+  'SELECT id FROM first UNION ALL SELECT id FROM second ORDER BY id COLLATE no|case',
+  'SELECT id FROM first UNION ALL SELECT id FROM second ORDER BY i|d + 1',
+  'SELECT id FROM first UNION ALL SELECT id FROM second ORDER BY id LIMIT na|me',
+  'SELECT 1 AS id UNION ALL VALUES(2) ORDER BY i|d',
+])('复合排序/分页的其它位置不向分支目录回退 %s', source => {
+  expect(analyze(source)).toMatchObject({ status: 'blocked', reason: 'compound' });
+});
+
+it('复合输出候选回包独立于读取目录、悬停及定义范围', () => {
+  const marked = 'SELECT 1 AS id UNION ALL SELECT 2 AS item ORDER BY |';
+  const { source, offset } = query(marked), result = ready(marked);
+  const openTable = { kind: 'physical', name: 'first' };
+  for (const fields of [{ relations: [openTable] }, { qualifiers: ['first'] }, { outputColumns: [] },
+    { outputColumns: ['X', 'x'] }, { syntax: ['column', 'keyword'] }]) {
+    expect(() => validateSqliteCompletionAnalysis({ ...result, ...fields }, source, offset)).toThrow();
+  }
+  expect(() => validateSqliteCompletionAnalysis(result, source, offset, 'hover')).toThrow();
+});
 it('空文本与部分首keyword只补keyword，不读取物理元数据',()=>{expect(ready('|').syntax).toEqual(['keyword']);expect(ready('SEL|').relations).toEqual([]);});
 it('ASCII大小写折叠不把Unicode区域相似字符合并成同alias',()=>{expect(analyze('SELECT a.| FROM first a JOIN second A')).toMatchObject({status:'blocked',reason:'ambiguous'});expect(ready('SELECT İ.| FROM first İ JOIN second i').relations.map(item=>item.alias)).toEqual(['İ','i']);});
 it('预算含正文、token、深度、关系、名称与prefix，失败不返回截断关系',()=>{expect(analyzeSqliteCompletion(' '.repeat(limits.sourceUnits+1),0)).toMatchObject({status:'blocked',reason:'budget'});expect(analyzeSqliteCompletion(';'.repeat(limits.tokens+1),0)).toMatchObject({status:'blocked',reason:'budget'});expect(analyze('SELECT '+ '('.repeat(limits.depth+1)+'|')).toMatchObject({status:'blocked',reason:'budget'});expect(analyze('SELECT | FROM '+Array.from({length:limits.relations+1},(_,i)=>'t'+i+' a'+i).join(','))).toMatchObject({status:'blocked',reason:'budget'});expect(analyze('SELECT '+ 'a'.repeat(limits.prefixUnits+1)+'|')).toMatchObject({status:'blocked',reason:'prefix'});expect(analyze('SELECT '+ 'a'.repeat(limits.nameUnits+1)+'|')).toMatchObject({status:'blocked',reason:'budget'});});

@@ -6,7 +6,7 @@ import type { PhysicalObjectAnalysis } from './physicalObjectAnalysis';
 export type SqliteCompletionRelation = ({ kind: 'physical'; name: string; schema?: 'main' | 'temp'; alias?: string } | { kind: 'local'; source: 'cte' | 'derived'; name: string; alias?: string; columns: string[]; declaration?: true }) & { scopeDepth?: number };
 export type SqliteAnalysisIntent = 'hover' | 'definition' | 'object';
 export interface SqliteLocalDefinition { start: number; end: number; }
-export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; unqualifiedColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
+export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; outputColumns?: string[]; unqualifiedColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
 type Token = { kind: 'id' | 'string' | 'number' | 'parameter' | 'symbol'; value: string; start: number; end: number; depth: number; quoted?: boolean; closed?: boolean; pair?: number };
 type Cte = { name: string; columns?: string[]; start: number; end: number; declaration: SqliteLocalDefinition };
 type Binding = { relation: SqliteCompletionRelation; start: number; end: number; aliasIndex?: number; referenceIndex?: number; declaration?: SqliteLocalDefinition; unknown?: boolean; level?: number };
@@ -19,6 +19,8 @@ function fail(reason: string): never { throw new Error(reason); }
 const boundary = (source: string, offset: number) => !(offset > 0 && offset < source.length && /[\uD800-\uDBFF]/.test(source[offset - 1]) && /[\uDC00-\uDFFF]/.test(source[offset]));
 const keyword = (token: Token | undefined, word: string) => !!token && token.kind === 'id' && !token.quoted && fold(token.value) === word;
 const structural = new Set('select from where group having order limit offset returning set values into update delete insert replace join on using as left right full outer inner cross natural union except intersect window indexed not by and or when then else end case'.split(' '));
+const setOperators = ['union', 'intersect', 'except'];
+const literalNames = ['null', 'true', 'false', 'current_date', 'current_time', 'current_timestamp'];
 
 /** SQLite词法独立实现：--无需空白、块注释不嵌套、方括号在第一个]结束，不借用MySQL模式。 */
 function lex(source: string, offset: number, complete = false): Token[] {
@@ -137,23 +139,36 @@ export function sqlitePhysicalObjectContext(source: string, offset: number): { s
   } catch (reason) { return { status: 'blocked', reason: reason instanceof Error && /^[a-z-]{1,64}$/.test(reason.message) ? reason.message : 'analysis' }; }
 }
 
-/** 仅推导SQLite可证明的简单投影名/显式alias；星号和无alias复杂表达式绝不借永久同名表补列。 */
-function projectionColumns(tokens: Token[], start: number, end: number): string[] | undefined {
+/** CTE 和派生表需要完整的首分支投影。复合排序可独立使用各分支中已知的名称。 */
+function projectionColumns(tokens: Token[], start: number, end: number, knownOnly = false): string[] | undefined {
   const depth = tokens[start]?.depth ?? 0; let select = -1;
-  for (let i = start; i < end; i++) if (tokens[i].depth === depth && keyword(tokens[i], 'select')) { select = i; break; }
+  for (let i = start; i < end; i++) {
+    const token = tokens[i];
+    if (token.depth !== depth) continue;
+    if (setOperators.some(word => keyword(token, word))) return;
+    if (keyword(token, 'select')) { select = i; break; }
+  }
   if (select < 0) return; let finish = end;
-  for (let i = select + 1; i < end; i++) if (tokens[i].depth === depth && ['from', 'union', 'intersect', 'except', 'order', 'limit'].some(word => keyword(tokens[i], word))) { finish = i; break; }
+  for (let i = select + 1; i < end; i++) if (tokens[i].depth === depth && ['from', 'where', 'group', 'having', 'window', 'order', 'limit', ...setOperators].some(word => keyword(tokens[i], word))) { finish = i; break; }
   let begin = select + 1; if (keyword(tokens[begin], 'distinct') || keyword(tokens[begin], 'all')) begin++;
   const parts: Token[][] = []; for (let i = begin, last = begin; i <= finish; i++) if (i === finish || tokens[i].depth === depth && tokens[i].value === ',') { parts.push(tokens.slice(last, i)); last = i + 1; }
   const columns: string[] = [];
   for (const part of parts) {
-    if (!part.length || part.some(token => token.value === '*' && token.depth === depth)) return;
+    if (!part.length || part.at(-1)?.kind === 'symbol' && part.at(-1)?.value === '*' ||
+      !knownOnly && part.some(token => token.kind === 'symbol' && token.value === '*' && token.depth === depth)) {
+      if (knownOnly) continue;
+      return;
+    }
     let name: string | undefined, as = -1;
     for (let i = 0; i < part.length; i++) if (part[i].depth === depth && keyword(part[i], 'as')) as = i;
-    if (as >= 0) { if (as !== part.length - 2 || part[as + 1]?.kind !== 'id') return; name = part[as + 1].value; }
-    else if (part.length % 2 === 1 && part.every((token, i) => i % 2 ? token.value === '.' : token.kind === 'id')) name = part.at(-1)!.value;
+    if (as >= 0) { if (as > 0 && as === part.length - 2 && part[as + 1]?.kind === 'id') name = part[as + 1].value; }
+    else if (part.length % 2 === 1 && part.every((token, i) => i % 2 ? token.value === '.' : token.kind === 'id') &&
+      !(knownOnly && part.length === 1 && literalNames.some(word => keyword(part[0], word)))) name = part.at(-1)!.value;
     else if (part.at(-1)?.kind === 'id' && part.length > 1 && (part.at(-2)?.value === ')' || ['id', 'number', 'string'].includes(part.at(-2)!.kind) && !['collate', 'escape', 'is', 'like', 'glob', 'regexp', 'match', 'over', 'filter'].some(word => keyword(part.at(-2), word))) && !structural.has(fold(part.at(-1)!.value))) name = part.at(-1)!.value;
-    if (!name || !unicode(name) || columns.some(column => fold(column) === fold(name!))) return;
+    if (!name || !unicode(name) || columns.some(column => fold(column) === fold(name!))) {
+      if (knownOnly) continue;
+      return;
+    }
     columns.push(name); if (columns.length > limits.entries) fail('budget');
   }
   return columns.length ? columns : undefined;
@@ -196,24 +211,54 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       }
       return { head: i, ctes, declared };
     }
-    function scope(start: number, end: number, inherited: Map<string, Cte>, outer: Binding[], level: number): { bindings: Binding[]; ctes: Map<string, Cte>; syntax: Ready['syntax']; unqualified?: true } {
+    function scope(start: number, end: number, inherited: Map<string, Cte>, outer: Binding[], level: number): { bindings: Binding[]; ctes: Map<string, Cte>; syntax: Ready['syntax']; outputColumns?: string[]; unqualified?: true } {
       if (level > limits.depth) fail('budget');
       const parsed = withClause(start, end, inherited), ctes = parsed.ctes, head = parsed.head, base = tokens[head]?.depth ?? tokens[start]?.depth ?? 0;
       for (const cte of parsed.declared) if (offset >= (tokens[cte.start]?.start ?? source.length) && offset <= (tokens[cte.end]?.start ?? source.length)) return scope(cte.start, cte.end, ctes, [], level + 1);
       if (intent && target.start < (tokens[head]?.start ?? source.length)) fail('hover-target');
       if (head >= end) return { bindings: [], ctes, syntax: ['keyword'] };
       const command = fold(tokens[head].value);
-      if (!['select', 'update', 'insert', 'replace', 'delete'].includes(command) || tokens[head].quoted) {
+      if (!['select', 'values', 'update', 'insert', 'replace', 'delete'].includes(command) || tokens[head].quoted) {
         if (head === start && tokens.length === 1 && tokens[0].kind === 'id') return { bindings: [], ctes, syntax: ['keyword'] };
         fail('statement');
       }
-      const compounds = tokens.map((token, index) => index >= head && index < end && token.depth === base && ['union', 'intersect', 'except'].some(word => keyword(token, word)) ? index : -1).filter(index => index >= 0);
-      if (compounds.length) {
-        if (intent !== 'definition' && intent !== 'object') fail('compound');
-        // 声明导航只解析光标所属分支；复合查询末尾ORDER/LIMIT不猜测第一输出的血缘。
-        if (tokens.some((token, index) => index > compounds.at(-1)! && index < end && token.depth === base && ['order', 'limit'].some(word => keyword(token, word)) && offset >= token.start)) fail('compound');
-        let branchStart = head, branchEnd = compounds[0];
-        for (let i = 0; i < compounds.length; i++) if (offset >= tokens[compounds[i]].end) { branchStart = compounds[i] + 1; if (keyword(tokens[branchStart], 'all') || keyword(tokens[branchStart], 'distinct')) branchStart++; branchEnd = compounds[i + 1] ?? end; }
+      const compounds = tokens.map((token, index) => index >= head && index < end && token.depth === base && setOperators.some(word => keyword(token, word)) ? index : -1).filter(index => index >= 0);
+      if (compounds.length && (command === 'update' || command === 'delete')) fail('compound');
+      if (compounds.length && (command === 'select' || command === 'values')) {
+        // 同一层的兄弟分支共享 WITH 和合法外层绑定，各自独立解析 FROM，尾部排序只读投影名称。
+        const starts = [head, ...compounds.map(index => index + (keyword(tokens[index], 'union') && keyword(tokens[index + 1], 'all') ? 2 : 1))];
+        const lastStart = starts.at(-1)!;
+        let tail = lastStart;
+        while (tail < end && !(tokens[tail].depth === base && ['order', 'limit'].some(word => keyword(tokens[tail], word)))) tail++;
+        if (tail < end && offset >= tokens[tail].start) {
+          const by = tokens[tail + 1];
+          if (intent || qualifiers.length || !keyword(tokens[lastStart], 'select') || !keyword(tokens[tail], 'order') ||
+            !keyword(by, 'by') || target.start <= by.start) fail('compound');
+          // 只补排序项开头的裸名称，COLLATE、方向、表达式内部及 LIMIT 属于其它语法。
+          const previous = beforeTarget.at(-1);
+          const limit = tokens.findIndex((token, index) => index > tail && index < end && token.depth === base && keyword(token, 'limit'));
+          if (limit >= 0 && target.start >= tokens[limit].start || previous !== by &&
+            !(previous?.kind === 'symbol' && previous.value === ',' && previous.depth === base)) fail('compound');
+          const next = tokens.slice(tail + 2, end).find(token => token.start >= target.end && token.end > target.start);
+          if (next && !(next.kind === 'symbol' && next.value === ',') &&
+            !['collate', 'asc', 'desc', 'nulls', 'limit'].some(word => keyword(next, word))) fail('compound');
+          const columns = new Map<string, string>();
+          for (const [index, branchStart] of starts.entries()) {
+            if (!keyword(tokens[branchStart], 'select')) continue;
+            for (const name of projectionColumns(tokens, branchStart, compounds[index] ?? tail, true) ?? []) {
+              const key = fold(name);
+              if (!columns.has(key)) columns.set(key, name);
+              if (columns.size > limits.entries) fail('budget');
+            }
+          }
+          if (!columns.size) fail('compound');
+          return { bindings: [], ctes: new Map(), syntax: ['column'], outputColumns: [...columns.values()] };
+        }
+        const branch = compounds.filter(index => tokens[index].end <= offset).length;
+        const branchStart = starts[branch], branchEnd = compounds[branch] ?? tail;
+        if (!intent && branch > 0 && (branchStart >= branchEnd || offset <= tokens[branchStart].end)) {
+          return { bindings: [], ctes, syntax: ['keyword'] };
+        }
         return scope(branchStart, branchEnd, ctes, outer, level + 1);
       }
       const own: Binding[] = [], derived: { start: number; end: number }[] = []; let relationContext = false, aliasContext = false, targetBinding: Binding | undefined, insertList: { start: number; end: number } | undefined;
@@ -347,23 +392,29 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
     const relations = [...parsed.bindings.map(binding => intent === 'hover' ? { ...binding.relation, scopeDepth: binding.level! } : binding.relation), ...declarations];
     if (relations.length > limits.relations) fail('budget');
     if (parsed.syntax.includes('relation') && qualifiers.some(name => !['main', 'temp'].includes(fold(name))) || qualifiers.length === 2 && !['main', 'temp'].includes(fold(qualifiers[0]))) fail('schema');
-    return { status: 'ready', target, syntax: parsed.syntax, qualifiers, relations, ...(parsed.unqualified ? { unqualifiedColumns: true } : {}), ...(definition ? { definition } : {}) };
+    return { status: 'ready', target, syntax: parsed.syntax, qualifiers, relations,
+      ...(parsed.outputColumns ? { outputColumns: parsed.outputColumns } : {}),
+      ...(parsed.unqualified ? { unqualifiedColumns: true } : {}), ...(definition ? { definition } : {}) };
   } catch (reason) { return { status: 'blocked', reason: reason instanceof Error && /^[a-z-]{1,64}$/.test(reason.message) ? reason.message : 'analysis' }; }
 }
 
-const nameSchema = z.string().min(1).max(limits.nameUnits).refine(unicode), relationSchema = z.discriminatedUnion('kind', [
+const nameSchema = z.string().min(1).max(limits.nameUnits).refine(unicode);
+const columnNames = z.array(nameSchema).max(limits.entries).refine(columns => new Set(columns.map(fold)).size === columns.length);
+const relationSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('physical'), name: nameSchema, schema: z.enum(['main', 'temp']).optional(), alias: nameSchema.optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }).strict(),
-  z.object({ kind: z.literal('local'), source: z.enum(['cte', 'derived']), name: nameSchema, alias: nameSchema.optional(), columns: z.array(nameSchema).max(limits.entries).refine(columns => new Set(columns.map(fold)).size === columns.length), declaration: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }).strict(),
+  z.object({ kind: z.literal('local'), source: z.enum(['cte', 'derived']), name: nameSchema, alias: nameSchema.optional(), columns: columnNames, declaration: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }).strict(),
 ]);
 const resultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('blocked'), reason: z.string().regex(/^[a-z-]{1,64}$/) }).strict(),
-  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.nameUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations), unqualifiedColumns: z.literal(true).optional(), definition: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).strict().optional() }).strict(),
+  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.nameUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations), outputColumns: columnNames.optional(), unqualifiedColumns: z.literal(true).optional(), definition: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).strict().optional() }).strict(),
 ]);
 /** Client只核有界回包形状与原范围，不在渲染线程重新解析整份用户SQL。 */
 export function validateSqliteCompletionAnalysis(raw: unknown, source: string, offset: number, intent?: SqliteAnalysisIntent): SqliteCompletionAnalysis {
   const value = resultSchema.parse(raw) as SqliteCompletionAnalysis;
   if (new TextEncoder().encode(JSON.stringify(value)).length > limits.outputBytes) fail('budget');
   if (value.status === 'blocked') return value;
+  if (value.outputColumns && (!value.outputColumns.length || intent || value.relations.length || value.qualifiers.length ||
+    value.unqualifiedColumns || value.syntax.length !== 1 || value.syntax[0] !== 'column')) fail('response');
   if (value.relations.some(relation => relation.kind === 'local' && relation.declaration && relation.source !== 'cte')) fail('response');
   if (value.relations.some(relation => intent === 'hover' ? (relation.kind !== 'local' || !relation.declaration) && relation.scopeDepth === undefined : relation.scopeDepth !== undefined)) fail('response');
   const target = value.target;
