@@ -59,6 +59,24 @@ it.each([false, true])('同模型%s会话补全只有固定目录调用，完整
   const f = fixture(session), run = f.invoke(), result = await run.promise; expect(result.suggestions[0]).toMatchObject({ label: 'field_🚢', insertText: '"field_🚢"', range: { startLineNumber: 1, startColumn: 10, endLineNumber: 1, endColumn: 10 } });
   expect(f.request.mock.calls.map(([q]) => q.kind)).toEqual(['columns', 'stamp']); expect(f.request.mock.calls[0][0]).toMatchObject({ connectionId: 'c', prefix: '', kind: 'columns', table: 'subject', ...(session ? { sessionId: 'sqlite:s' } : {}) }); expect(JSON.stringify(f.request.mock.calls)).not.toContain('SELECT s.'); expect(f.state).toHaveBeenCalledTimes(session ? 2 : 0); expect(f.cancel).not.toHaveBeenCalled(); expect(run.token.listeners).toBe(0); expect(f.changes.size).toBe(0); await f.provider.dispose(); expect(f.worker.dispose).toHaveBeenCalledOnce();
 });
+it.each(['namesake', 'duplicate', 'collation', 'schema'] as const)('维护目录核对具体库、类型及同名候选 %s', async mode => {
+  const f = fixture(true), source = mode === 'schema' ? 'ANALYZE main.no' : 'ANALYZE no';
+  vi.mocked(f.model.getValue).mockReturnValue(source);
+  vi.mocked(f.model.getValueLength).mockReturnValue(source.length);
+  vi.spyOn(f.model, 'getOffsetAt').mockReturnValue(source.length);
+  f.worker.analyze.mockImplementation(async (sql, offset) => validateSqliteCompletionAnalysis(analyzeSqliteCompletion(sql, offset), sql, offset));
+  const table = { kind: 'maintenance-object', object: 'table', schema: 'temp', name: 'nocase' } as const;
+  const index = { kind: 'maintenance-object', object: 'index', schema: 'main', name: 'nocase', owner: 'subject' } as const;
+  f.request.mockImplementation(async input => input.kind === 'stamp' ? f.reply(input) : ({
+    ...f.reply(input), entries: mode === 'collation' ? [{ kind: 'collation', name: 'NOCASE' }] :
+      mode === 'duplicate' ? [table, table] : [table, index],
+  }));
+  try {
+    const result = await f.invoke().promise;
+    expect(result.suggestions.map(item => item.insertText)).toEqual(mode === 'namesake' ? ['"temp"."nocase"', '"main"."nocase"'] : []);
+    expect(f.request.mock.calls.map(([input]) => input.kind)).toEqual(mode === 'namesake' ? ['maintenance-objects', 'stamp'] : ['maintenance-objects']);
+  } finally { await f.provider.dispose(); }
+});
 it.each([false, true])('复合星号串行核对两处目录和最终代次，目录变化：%s', async changed => {
   const f = fixture(true);
   const source = 'SELECT * FROM main.first UNION ALL SELECT t.* FROM temp.second t ORDER BY field_old';

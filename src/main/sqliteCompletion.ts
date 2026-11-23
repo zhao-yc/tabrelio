@@ -31,7 +31,7 @@ const visibleSql = "type IN ('table','view','virtual') AND substr(name,1,7) COLL
 const dropColumnSql = ` AND p.pk = 0 AND (p.hidden <> 0 OR EXISTS (SELECT 1 FROM pragma_table_xinfo(?,?) c WHERE c.hidden = 0 AND c.cid <> p.cid))
   AND NOT EXISTS (SELECT 1 FROM pragma_index_list(?,?) i JOIN pragma_index_xinfo(i.name,?) k ON k."key" = 1 WHERE k.cid = p.cid)`;
 
-function supportsAlterNullability(version: string): boolean {
+function supportsSqlite353(version: string): boolean {
   const match = /^(\d+)\.(\d+)\./.exec(version);
   return !!match && (Number(match[1]) > 3 || Number(match[1]) === 3 && Number(match[2]) >= 53);
 }
@@ -124,6 +124,73 @@ const functionTypes = { s: 'scalar', a: 'aggregate', w: 'window' } as const;
 const publicSqliteFunctions = new Set(['sqlite_compileoption_get', 'sqlite_compileoption_used', 'sqlite_offset', 'sqlite_source_id', 'sqlite_version']);
 // SQLite 公共函数标志。允许索引使用确定性标量，但不建议只能在顶层调用的函数。
 const sqliteDeterministic = 0x800, sqliteDirectOnly = 0x80000;
+
+async function completionCollations(driver: SqliteDriverSession, input: { prefix: string; exact?: string }, control: CompletionControl) {
+  // 查询原连接规则目录，不调用排序规则，也不执行编辑器里的表达式。
+  const result = await read(driver, 'PRAGMA collation_list', [], control, sqliteCompletionLimits.entries + 1);
+  const names = new Map<string, string>(), prefix = fold(input.prefix);
+  const exact = input.exact === undefined ? undefined : fold(input.exact);
+  for (const [, name] of result.rows.slice(0, sqliteCompletionLimits.entries)) {
+    if (typeof name !== 'string') throw Error('SQLite补全排序规则目录无效');
+    const key = fold(name);
+    if (exact === undefined ? key.startsWith(prefix) : key === exact) names.set(key, name);
+  }
+  const entries = [...names.keys()].sort().map(key => ({ kind: 'collation' as const, name: names.get(key)! }));
+  return { entries, incomplete: result.truncated || result.rows.length > sqliteCompletionLimits.entries };
+}
+
+/** 维护目标只读当前连接目录。精确查询保留占用名称的对象，避免把原语句解释成另一库的维护操作。 */
+async function maintenanceObjects(driver: SqliteDriverSession, input: Extract<SqliteCompletionLookup, { kind: 'maintenance-objects' }>, control: CompletionControl) {
+  const { schema, operation, exact, prefix } = input, fullName = exact === undefined ? undefined : fold(exact);
+  const reindex = operation === 'reindex', modern = supportsSqlite353(driver.version);
+  const entries: SqliteCompletionEntry[] = [];
+  let incomplete = false;
+  if (!schema && !reindex && (fullName === 'main' || fullName === 'temp')) return { entries, incomplete };
+  if (!schema && reindex) {
+    if (modern && (fullName === undefined ? 'expressions'.startsWith(fold(prefix)) : fullName === 'expressions')) {
+      entries.push({ name: 'EXPRESSIONS', kind: 'maintenance-option' });
+    }
+    const collations = await completionCollations(driver, input, control);
+    entries.push(...collations.entries);
+    incomplete = collations.incomplete;
+    // 非限定排序规则优先于表和索引。规则目录缺失时无法证明精确对象解析。
+    if (exact !== undefined && (incomplete || collations.entries.length)) return { entries, incomplete };
+  }
+  const scope = schema ?? null;
+  const match = exact === undefined ? prefixSql : 'name = ? COLLATE NOCASE';
+  const parameters = exact === undefined ? [prefix, prefix] : [exact];
+  const candidates = exact === undefined ? " AND type = 'table' AND substr(owner_name,1,7) COLLATE NOCASE <> 'sqlite_'" : '';
+  const result = await read(driver, `WITH relations AS MATERIALIZED (
+      SELECT name,schema,type FROM pragma_table_list() WHERE schema IN ('main','temp') AND (? IS NULL OR schema = ?)
+    ), targets(name,schema,object,owner_name,type) AS (
+      SELECT name,schema,'table',name,type FROM relations
+      UNION ALL
+      SELECT i.name,p.schema,'index',p.name,p.type FROM relations p CROSS JOIN pragma_index_list(p.name,p.schema) i
+      WHERE p.type IN ('table','shadow')
+    )
+    SELECT name,schema,object,owner_name,type FROM targets WHERE ${match}${candidates}
+    ORDER BY name COLLATE NOCASE,schema DESC,object LIMIT 257`, [scope, scope, ...parameters], control, 257);
+  const targets = result.rows.map(([name, namespace, object, owner, type]) => {
+    if (typeof name !== 'string' || namespace !== 'main' && namespace !== 'temp' ||
+      object !== 'table' && object !== 'index' || typeof owner !== 'string' || typeof type !== 'string') throw Error('SQLite维护对象目录无效');
+    const entry: Extract<SqliteCompletionEntry, { kind: 'maintenance-object' }> = {
+      kind: 'maintenance-object', name, schema: namespace, object, ...(object === 'index' ? { owner } : {}),
+    };
+    return { entry, visible: type === 'table' && !fold(owner).startsWith('sqlite_') };
+  });
+  if (exact !== undefined) {
+    const table = targets.find(target => target.entry.object === 'table'), index = targets.find(target => target.entry.object === 'index');
+    // ANALYZE 先找索引，旧版 REINDEX 先找表。3.53 起 REINDEX 可以同时命中两个命名空间中的表和索引。
+    for (const target of reindex ? modern ? [table, index] : [table ?? index] : [index ?? table]) {
+      if (target?.visible) entries.push(target.entry);
+    }
+  } else {
+    for (const target of targets) entries.push(target.entry);
+  }
+  const limit = sqliteCompletionLimits.entries;
+  return { entries: entries.slice(0, limit), incomplete: incomplete || result.truncated || entries.length > limit };
+}
+
 /** 仅暴露main/temp用户关系；table_list的shadow标记不能靠名称猜测，temp命名空间优先遮蔽main。 */
 export async function readSqliteCompletion(driver: SqliteDriverSession, input: SqliteCompletionLookup, control: CompletionControl): Promise<SqliteCompletionOutput> {
   const before = await stamp(driver, control), entries: SqliteCompletionEntry[] = []; let incomplete = false;
@@ -152,7 +219,7 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
     const schema = target ? target[1] : input.schema ?? 'main';
     const allowed = input.indexTable || input.alterColumn || input.foreignKey ? target?.[2] === 'table' : target ? input.tableFunction ? target[2] === 'virtual' :
       ['table', 'view', 'virtual'].includes(target[2] as string) : input.tableFunction === true;
-    if (allowed && typeof table === 'string' && !/^sqlite_/i.test(table) && (input.alterColumn !== 'nullability' || supportsAlterNullability(driver.version))) {
+    if (allowed && typeof table === 'string' && !/^sqlite_/i.test(table) && (input.alterColumn !== 'nullability' || supportsSqlite353(driver.version))) {
       if (schema !== 'main' && schema !== 'temp') throw Error('SQLite补全字段所属库无效');
       // 自带表值模块通常不在 table_list 内。无同名关系遮蔽时只读 xinfo，不准备或执行原调用。
       const drop = input.alterColumn === 'drop';
@@ -223,6 +290,10 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
       if (typeof name !== 'string' || schema !== 'main' && schema !== 'temp' || owner !== null && typeof owner !== 'string') throw Error('SQLite删除对象目录无效');
       if (!append({ kind: 'drop-object', object: input.object, name, schema, ...(owner === null ? {} : { owner }) })) break;
     }
+  } else if (input.kind === 'maintenance-objects') {
+    const result = await maintenanceObjects(driver, input, control);
+    incomplete = result.incomplete;
+    for (const entry of result.entries) if (!append(entry)) break;
   } else if (input.kind === 'trigger-owner') {
     // 先按原会话定位，再核对触发目标类型。同名临时对象遮蔽时不回退到主库。
     const { rows: [target] } = await tableIdentity(driver, input, control);
@@ -239,16 +310,9 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
       append({ kind: 'table-options', name, schema, strict });
     }
   } else if (input.kind === 'collations') {
-    // 直接读原连接的规则目录，绕过同名表遮蔽，不调用规则，也不执行编辑器里的表达式。
-    const result = await read(driver, 'PRAGMA collation_list', [], control, sqliteCompletionLimits.entries + 1);
-    incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
-    const prefix = fold(input.prefix), names = new Map<string, string>();
-    for (const [, name] of result.rows.slice(0, sqliteCompletionLimits.entries)) {
-      if (typeof name !== 'string') throw Error('SQLite补全排序规则目录无效');
-      const key = fold(name);
-      if (key.startsWith(prefix)) names.set(key, name);
-    }
-    for (const key of [...names.keys()].sort()) if (!append({ kind: 'collation', name: names.get(key)! })) break;
+    const result = await completionCollations(driver, input, control);
+    incomplete = result.incomplete;
+    for (const entry of result.entries) if (!append(entry)) break;
   }
   const after = await stamp(driver, control); control.check();
   if (before !== after) throw Error('SQLite目录在补全读取期间变化，请重新触发');

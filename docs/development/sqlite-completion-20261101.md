@@ -4,6 +4,8 @@
 
 SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段、表别名，明确输出列的 CTE／派生表，以及 `main`／`temp` 限定。建议按准确名称使用 SQLite 双引号转义，以普通文本插入；同名字段保留各自别名限定。INSERT 字段清单、UPDATE 赋值左侧及 RETURNING 使用目标表字段。
 
+`ANALYZE` 支持数据库、表和索引候选与悬停，`REINDEX` 支持表、索引、连接上的排序规则以及 SQLite 3.53 起的 `EXPRESSIONS`。候选对具体表和索引补齐 `main` 或 `temp`，也保留已有库限定。悬停按当前实际写法解析，区分整库统计、单表或单索引维护，以及未限定排序规则的影响范围。两种语句均可选择 SQLite 自动生成的索引，补全和悬停只读取目录。 [SQLite ANALYZE](https://www.sqlite.org/lang_analyze.html) · [SQLite REINDEX](https://www.sqlite.org/lang_reindex.html)
+
 `DROP TABLE`、`DROP VIEW`、`DROP INDEX` 和 `DROP TRIGGER` 支持对象补全、悬停和查看完整只读定义。候选保留 `IF EXISTS`、显式库名和其它语句。未限定名称在原会话中解析。表、视图共享关系命名空间，索引和触发器分别查找各自类型。候选排除系统对象、自动索引和虚拟表影子表，普通及虚拟表本身仍可在 `DROP TABLE` 中选择。补全和定义读取只查目录。 [SQLite 对象查找规则](https://www.sqlite.org/lang_naming.html) · [DROP INDEX](https://www.sqlite.org/lang_dropindex.html)
 
 `CREATE TRIGGER` 支持在 `ON` 后补全触发目标并悬停，普通触发器匹配普通表，`INSTEAD OF` 匹配视图。`UPDATE OF` 提供尚未填写的可更新列。`WHEN` 和动作表达式按事件提供 `NEW`、`OLD` 及其字段。各条动作复用普通 SQL 的表、字段及表达式补全，按顶层分号隔离，`CASE … END` 保留在所属表达式。持久触发器的动作读取所属库，临时触发器沿用原会话的对象解析规则。写入目标补入单段名称。同名查询来源优先匹配自身字段，缺少该列时回退到触发行。 [SQLite 触发器](https://www.sqlite.org/lang_createtrigger.html)
@@ -65,6 +67,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-23 SQLite 维护目标增量。WIN11-TEST 不可达，本机 macOS arm64 使用 Node.js 24.17.0，通过原生运行时、严格类型检查、构建和 45 份套件的 1,193 项测试。SQLite 3.53 原生目录与执行计划核对了同名表和索引、自动索引、排序规则及 `EXPRESSIONS` 的范围。Electron 编辑器专项复跑 19 项全部通过，`ANALYZE` 接受候选及悬停前后磁盘统计和历史保持，明确执行一次才写入目标索引的统计。首轮旧 `CREATE VIEW` 用例的磁盘读回遇到 `database is locked`，原日志和夹具现场保留，同构建复跑通过。原会话完整回归 1 项通过，耗时 108.7 秒，两次应用退出码均为 0。报告位于 `.cache/sqlite-maintenance-completion/final/`。Windows 界面及安装包待验。
 
 2026-11-23 DROP 对象增量。WIN11-TEST 不可达，本机 macOS arm64 使用 Node.js 24.17.0，通过原生运行时、严格类型检查、构建和 44 份套件的 1,175 项测试。真实 SQLite 核对表和视图的同名遮蔽、索引和触发器的独立查找、自动索引及虚拟影子表排除。Electron 定义专项 1 项通过，在原事务中打开索引和触发器的完整只读定义，原数据与模型保持。编辑器专项 18 项通过，索引在接受候选和悬停后仍存在，显式执行后移除，表数据保持。原会话全流程回归 1 项在 108.3 秒通过。报告位于 `.cache/sqlite-drop-objects/final/`。Windows 界面及安装包待验。
 

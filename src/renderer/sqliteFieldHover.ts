@@ -31,6 +31,24 @@ export async function sqliteFieldHover(analysis: Extract<SqliteCompletionAnalysi
   if (body) directory = body.directory;
   const fallbackRow = () => analysis.triggerBody?.fallback && !sqliteRowidName.test(name) ?
     sqliteFieldHover({ ...analysis, triggerBody: undefined, trigger: analysis.triggerBody.fallback }, directory) : undefined;
+  if (analysis.maintenanceTarget) {
+    const { operation, schema } = analysis.maintenanceTarget, normalized = fold(name), labels = sqliteCompletionZh.maintenance;
+    if (operation === 'analyze' && !schema && (normalized === 'main' || normalized === 'temp')) {
+      return markdown([display(normalized), labels.analyze.schema]);
+    }
+    const result = await directory.load({ kind: 'maintenance-objects', operation, prefix: '', exact: name, ...(schema ? { schema } : {}) });
+    if (result.incomplete) return;
+    const lines: string[] = [];
+    for (const entry of result.entries) {
+      if (fold(entry.name) !== normalized) continue;
+      if (entry.kind === 'maintenance-option') lines.push(entry.name, labels.expressions);
+      if (entry.kind === 'collation') lines.push(display(entry.name), labels.collation, ...sqliteCollationDetails(entry.name));
+      if (entry.kind === 'maintenance-object') lines.push(labels[operation][entry.object], display(entry.schema) + '.' + display(entry.name),
+        ...(entry.owner ? [labels.owner + '：' + display(entry.owner)] : []));
+    }
+    if (lines.length) return markdown(lines);
+    return;
+  }
   if (analysis.dropTarget) {
     const { object, schema } = analysis.dropTarget;
     const result = await directory.load({ kind: 'drop-objects', object, prefix: '', exact: name, ...(schema ? { schema } : {}) });

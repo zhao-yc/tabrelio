@@ -31,6 +31,13 @@ export const sqliteCompletionZh = {
   triggerRow: { new: 'SQLite 触发器 NEW 行', old: 'SQLite 触发器 OLD 行' },
   dropObject: { table: 'SQLite 表', view: 'SQLite 视图', index: 'SQLite 索引', trigger: 'SQLite 触发器' },
   dropOwner: '关联对象',
+  maintenance: {
+    analyze: { schema: '收集整个数据库的查询规划统计', table: '收集表及其索引的查询规划统计', index: '收集单个索引的查询规划统计' },
+    reindex: { table: '重建表的所有索引', index: '重建单个索引' },
+    collation: '重建使用此排序规则的索引',
+    expressions: '重建所有表达式索引，并按名称解析规则处理同名排序规则、表或索引。',
+    owner: '所属表',
+  },
   variadicFunction: '可变',
   joinColumn: '连接两侧共有列',
   joinGroup: '连接组输出列',

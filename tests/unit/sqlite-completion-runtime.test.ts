@@ -59,6 +59,47 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('维护目录区分 ANALYZE 与 REINDEX 的实际目标，保留自动索引及原会话事务', async () => {
+    const p = profile('维护目标', `
+      CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT UNIQUE);
+      CREATE INDEX namesake ON subject(value);
+      CREATE TABLE shadowed(id INTEGER);
+      CREATE TABLE nocase(value TEXT);
+      CREATE TABLE expressions(value TEXT);
+      CREATE TABLE singleton(code TEXT PRIMARY KEY) WITHOUT ROWID;
+      CREATE VIRTUAL TABLE search_subject USING fts5(value);
+    `);
+    const { app, events } = runtime([p]), session = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, session.sessionId, 'BEGIN; CREATE TEMP TABLE namesake(id INTEGER); CREATE TEMP VIEW shadowed AS SELECT 1;');
+    const state = await app.request('query.completionState', session), count = events.length;
+    const read = async (operation: 'analyze' | 'reindex', lookup: { prefix?: string; exact?: string; schema?: 'main' | 'temp' }) =>
+      (await completion(app, p.id, { kind: 'maintenance-objects', operation, ...lookup }, session.sessionId)).entries;
+    const index = { kind: 'maintenance-object', object: 'index', schema: 'main', name: 'namesake', owner: 'subject' };
+    const table = { kind: 'maintenance-object', object: 'table', schema: 'temp', name: 'namesake' };
+    expect(await read('analyze', { prefix: 'NAME' })).toEqual([table, index]);
+    expect(await read('analyze', { exact: 'NAMESAKE' })).toEqual([index]);
+    expect(await read('analyze', { exact: 'namesake', schema: 'temp' })).toEqual([table]);
+    expect(await read('analyze', { exact: 'shadowed' })).toEqual([]);
+    expect(await read('reindex', { exact: 'namesake' })).toEqual([table, index]);
+    expect(await read('reindex', { exact: 'NOCASE' })).toEqual([{ kind: 'collation', name: 'NOCASE' }]);
+    expect(await read('reindex', { exact: 'nocase', schema: 'main' }))
+      .toEqual([{ kind: 'maintenance-object', object: 'table', schema: 'main', name: 'nocase' }]);
+    expect(await read('reindex', { exact: 'expressions' })).toEqual([
+      { kind: 'maintenance-option', name: 'EXPRESSIONS' },
+      { kind: 'maintenance-object', object: 'table', schema: 'main', name: 'expressions' },
+    ]);
+    expect(await read('reindex', { prefix: 'exp', schema: 'main' }))
+      .toEqual([{ kind: 'maintenance-object', object: 'table', schema: 'main', name: 'expressions' }]);
+    expect(await read('analyze', { prefix: 'sqlite_autoindex_' })).toEqual(['singleton', 'subject'].map(owner =>
+      ({ kind: 'maintenance-object', object: 'index', schema: 'main', name: 'sqlite_autoindex_' + owner + '_1', owner })));
+    expect(await read('analyze', { prefix: 'search_' })).toEqual([]);
+    expect(await app.request('query.completionState', session)).toEqual(state);
+    expect(await app.request('query.sessionState', session)).toMatchObject({ transactionOpen: true });
+    expect(events).toHaveLength(count);
+    expect(statements(processes.at(-1)!).filter(sql => /^\s*(ANALYZE|REINDEX)\b/i.test(sql))).toEqual([]);
+    await execute(app, session.sessionId, 'ROLLBACK');
+  });
+
   it('DROP 目录按语句类型、原会话遮蔽和显式限定选择实际对象', async () => {
     const p = profile('DROP目录', `
       CREATE TABLE main_table(id INTEGER UNIQUE);

@@ -15,6 +15,7 @@ export const sqliteAlterColumnMode = z.enum(['rename', 'drop', 'nullability']);
 export const sqliteTriggerTargetMode = z.enum(['table', 'view']);
 export const sqliteSchemaObjectKind = z.enum(['table', 'view', 'index', 'trigger']);
 export type SqliteSchemaObjectKind = z.infer<typeof sqliteSchemaObjectKind>;
+export const sqliteMaintenanceOperation = z.enum(['analyze', 'reindex']);
 export const sqliteForeignKeySelectionSchema = z.object({
   arity: z.number().int().min(1).max(sqliteCompletionLimits.entries),
   used: z.array(name).max(sqliteCompletionLimits.entries),
@@ -38,6 +39,8 @@ export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('trigger-owner'), table: name, triggerTarget: sqliteTriggerTargetMode, prefix: z.literal('') }).strict(),
   z.object({ ...base, kind: z.literal('drop-objects'), object: sqliteSchemaObjectKind, schema: schema.optional(), exact: name.optional() })
     .strict().refine(value => value.exact === undefined || value.prefix === ''),
+  z.object({ ...base, kind: z.literal('maintenance-objects'), operation: sqliteMaintenanceOperation, schema: schema.optional(), exact: name.optional() })
+    .strict().refine(value => value.exact === undefined || value.prefix === ''),
   z.object({ ...base, kind: z.literal('stamp') }).strict(),
 ]);
 export const sqliteCompletionEntrySchema = z.discriminatedUnion('kind', [
@@ -49,6 +52,9 @@ export const sqliteCompletionEntrySchema = z.discriminatedUnion('kind', [
   z.object({ name, kind: z.literal('table-options'), schema, strict: z.boolean() }).strict(),
   z.object({ name, kind: z.literal('drop-object'), schema, object: sqliteSchemaObjectKind, owner: name.optional() }).strict()
     .refine(value => (value.object === 'index' || value.object === 'trigger') === (value.owner !== undefined)),
+  z.object({ name, kind: z.literal('maintenance-object'), schema, object: z.enum(['table', 'index']), owner: name.optional() }).strict()
+    .refine(value => (value.object === 'index') === (value.owner !== undefined)),
+  z.object({ name: z.literal('EXPRESSIONS'), kind: z.literal('maintenance-option') }).strict(),
 ]);
 export const sqliteCompletionOutputSchema = z.object({ entries: z.array(sqliteCompletionEntrySchema).max(sqliteCompletionLimits.entries), incomplete: z.boolean(), stamp: z.string().regex(/^-?\d{1,10}:-?\d{1,10}$/), sessionRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional() }).strict().refine(value => new TextEncoder().encode(JSON.stringify(value)).byteLength <= sqliteCompletionLimits.outputBytes, 'SQLite补全目录超过传输预算');
 export type SqliteCompletionInput = z.infer<typeof sqliteCompletionInputSchema>;

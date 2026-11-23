@@ -117,6 +117,31 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   const body = triggerBody ? await resolveSqliteTriggerBody(triggerBody, directory) : undefined;
   if (body?.status === 'unavailable') return { items, incomplete: body.incomplete };
   if (body) directory = body.directory;
+  if (analysis.maintenanceTarget) {
+    const { operation, schema } = analysis.maintenanceTarget;
+    if (!schema) for (const namespace of ['main', 'temp']) {
+      if (operation === 'analyze') add({ label: namespace, kind: 'database', insertText: quote(namespace), detail: text.maintenance.analyze.schema });
+      add({ label: namespace, kind: 'database', insertText: quote(namespace) + '.', detail: text.schema, trigger: true });
+    }
+    const catalog = await directory.load({ kind: 'maintenance-objects', operation, prefix: analysis.target.prefix, ...(schema ? { schema } : {}) });
+    incomplete = catalog.incomplete;
+    const expressions = catalog.entries.some(entry => entry.kind === 'maintenance-option');
+    for (const entry of catalog.entries) {
+      if (entry.kind === 'maintenance-object') add({
+        label: entry.name, kind: entry.object,
+        // 非限定目标可能命中同名库、排序规则或另一库中的表和索引。选中对象时限定为用户所选的具体目标。
+        insertText: (schema ? '' : quote(entry.schema) + '.') + quote(entry.name),
+        detail: [text.maintenance[operation][entry.object], entry.schema, ...(entry.owner ? [text.maintenance.owner + ' ' + entry.owner] : [])].join(' · '),
+      });
+      if (entry.kind === 'collation' && (!expressions || fold(entry.name) !== 'expressions')) add({
+        label: entry.name, kind: 'collation', insertText: quote(entry.name), detail: text.maintenance.collation,
+      });
+      if (entry.kind === 'maintenance-option') add({
+        label: entry.name, kind: 'keyword', insertText: entry.name, detail: text.maintenance.expressions,
+      });
+    }
+    return { items, incomplete };
+  }
   if (analysis.dropTarget) {
     const { object, schema } = analysis.dropTarget;
     if (!schema) for (const namespace of ['main', 'temp']) add({

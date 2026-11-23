@@ -85,7 +85,13 @@ export function createSqliteCompletionProvider(ports: Ports) {
                 return entry.kind !== (query.kind === 'functions' ? 'function' : 'collation') || !fold(entry.name).startsWith(fold(query.prefix)) ||
                   query.kind === 'functions' && query.deterministicOnly === true && entry.kind === 'function' && entry.signatures.some(signature => signature.type !== 'scalar');
               }
-              if (entry.kind === 'function' || entry.kind === 'collation') return true;
+              if (query.kind === 'maintenance-objects') {
+                const name = fold(entry.name);
+                if (query.exact === undefined ? !name.startsWith(fold(query.prefix)) : name !== fold(query.exact)) return true;
+                return entry.kind === 'maintenance-object' ? query.schema !== undefined && entry.schema !== query.schema :
+                  query.operation !== 'reindex' || query.schema !== undefined || entry.kind !== 'maintenance-option' && entry.kind !== 'collation';
+              }
+              if (entry.kind === 'function' || entry.kind === 'collation' || entry.kind === 'maintenance-option' || entry.kind === 'maintenance-object') return true;
               if (query.kind === 'trigger-owner') return entry.kind !== query.triggerTarget || fold(entry.name) !== fold(query.table);
               if (query.schema !== undefined && entry.schema !== query.schema) return true;
               if (query.kind === 'drop-objects') return entry.kind !== 'drop-object' || entry.object !== query.object ||
@@ -96,7 +102,9 @@ export function createSqliteCompletionProvider(ports: Ports) {
               return (query.kind === 'columns' ? entry.kind !== 'column' : entry.kind !== 'index') ||
                 !('table' in entry) || fold(entry.table) !== fold(query.table);
             })) throw stale();
-            const names = result.entries.map(entry => fold(entry.name)); if (new Set(names).size !== names.length) throw stale();
+            const names = result.entries.map(entry => query.kind !== 'maintenance-objects' ? fold(entry.name) :
+              (entry.kind === 'maintenance-object' ? entry.object + '\0' + entry.schema : entry.kind) + '\0' + fold(entry.name));
+            if (new Set(names).size !== names.length) throw stale();
             stamp ??= result.stamp; return result;
           } finally { if (pending.cancel) await pending.cancel; operation.pending.delete(input.taskId); }
         };
