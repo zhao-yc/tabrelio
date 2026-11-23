@@ -59,6 +59,25 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('排序规则目录只读原物理连接，保持事务且不受同名临时表遮蔽', async () => {
+    const p = profile('排序规则目录'), { app, events } = runtime([p]);
+    const load = (prefix = '', sessionId?: string) => completion(app, p.id, { kind: 'collations', prefix }, sessionId);
+    expect(await load()).toMatchObject({ incomplete: false, entries: ['BINARY', 'NOCASE', 'RTRIM'].map(name => ({ kind: 'collation', name })) });
+    expect(await processes[0].exited).toEqual({ code: 0, signal: null });
+    expect(statements(processes[0]).filter(sql => sql === 'PRAGMA collation_list')).toHaveLength(1);
+    expect(events).toEqual([]);
+    const { sessionId } = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, sessionId, "BEGIN; CREATE TEMP TABLE pragma_collation_list(seq,name); INSERT INTO pragma_collation_list VALUES(0,'OTHER')");
+    const state = await app.request('query.completionState', { sessionId }), eventCount = events.length;
+    expect(await load('no', sessionId)).toMatchObject({ entries: [{ kind: 'collation', name: 'NOCASE' }], sessionRevision: state.objectsRevision });
+    expect((await load('%', sessionId)).entries).toEqual([]);
+    expect((await load('OTHER', sessionId)).entries).toEqual([]);
+    expect(events).toHaveLength(eventCount);
+    expect(await app.request('query.completionState', { sessionId })).toEqual(state);
+    expect((await app.request('query.sessionState', { sessionId })).transactionOpen).toBe(true);
+    await execute(app, sessionId, 'ROLLBACK');
+  });
+
   it('真实函数目录保留标量、聚合和变参重载，元数据读取不影响原会话', async () => {
     const p = profile('函数目录'), { app, events } = runtime([p]);
     const standalone = await completion(app, p.id, { kind: 'functions', prefix: 'JSON_EX' });

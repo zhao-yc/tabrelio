@@ -351,7 +351,6 @@ it('复合排序只交付可确认的输出名，兼容不同分支的别名、�
 it.each([
   'SELECT 1 + 2 UNION ALL SELECT 3 + 4 ORDER BY |',
   'SELECT id FROM first UNION ALL SELECT id FROM second ORDER BY second.|',
-  'SELECT id FROM first UNION ALL SELECT id FROM second ORDER BY id COLLATE no|case',
   'SELECT id FROM first UNION ALL SELECT id FROM second ORDER BY i|d + 1',
   'SELECT id FROM first UNION ALL SELECT id FROM second ORDER BY id LIMIT na|me',
   'SELECT 1 AS id UNION ALL VALUES(2) ORDER BY i|d',

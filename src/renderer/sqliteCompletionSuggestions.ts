@@ -3,13 +3,19 @@ import { foldSqliteCompletionName as fold, quoteSqliteCompletionName as quote, s
 import { sqliteCompletionZh as text } from './locales/sqliteCompletion.zh-CN';
 import { sqliteJoinRowidName, sqliteJoinStarColumns, sqliteProjectionReader, sqliteQualifiedJoinColumns, sqliteRowidName } from './sqliteJoinColumns';
 
-export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'index' | 'function' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; snippet?: true; }
+export interface SqliteCompletionItem { label: string; kind: 'database' | 'table' | 'view' | 'column' | 'index' | 'collation' | 'function' | 'alias' | 'keyword'; insertText: string; detail: string; trigger?: boolean; snippet?: true; }
 export interface SqliteCompletionDirectory { load(query: SqliteCompletionLookup): Promise<SqliteCompletionOutput>; }
 const keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'ON', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'WITH', 'AS', 'DISTINCT', 'UNION ALL', 'IS NULL', 'IS NOT NULL', 'RETURNING', 'WINDOW', 'OVER', 'FILTER', 'PARTITION BY', 'ROWS', 'RANGE', 'BETWEEN', 'UNBOUNDED', 'PRECEDING', 'FOLLOWING', 'CURRENT ROW', 'EXPLAIN QUERY PLAN'];
 const windowSpecKeywords = ['PARTITION BY', 'ORDER BY', 'ROWS', 'RANGE', 'GROUPS'];
 
 export function sqliteIndexDetails(entry: Extract<SqliteCompletionEntry, { kind: 'index' }>): string[] {
   return [text.indexOrigin[entry.origin], ...(entry.unique ? [text.uniqueIndex] : []), ...(entry.partial ? [text.partialIndex] : [])];
+}
+
+const builtinCollations = new Map([['binary', text.collationBinary], ['nocase', text.collationNocase], ['rtrim', text.collationRtrim]]);
+export function sqliteCollationDetails(name: string): string[] {
+  const detail = builtinCollations.get(fold(name));
+  return detail ? [text.collation, detail] : [text.collation];
 }
 
 const windowOnlyFunctions = new Set(['row_number', 'rank', 'dense_rank', 'percent_rank', 'cume_dist', 'ntile', 'lag', 'lead', 'first_value', 'last_value', 'nth_value']);
@@ -52,6 +58,14 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
   };
   if (analysis.functions?.existingCall) {
     await addFunctions(analysis.functions);
+    return { items, incomplete };
+  }
+  if (analysis.syntax.includes('collation')) {
+    const metadata = await directory.load({ kind: 'collations', prefix: analysis.target.prefix });
+    incomplete = metadata.incomplete;
+    for (const entry of metadata.entries) if (entry.kind === 'collation') {
+      add({ label: entry.name, kind: 'collation', insertText: quote(entry.name), detail: sqliteCollationDetails(entry.name).join(' · ') });
+    }
     return { items, incomplete };
   }
   if (analysis.indexSource) {

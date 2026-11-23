@@ -141,7 +141,7 @@ it('三段目标别名按原 INSERT 的 schema 验证，RETURNING 限定实际�
 
 it.each([
   ['INSERT INTO subject(id,value) VALUES(1,subject.va|lue) ON CONFLICT DO NOTHING', 'values'],
-  ['INSERT INTO subject(id,value) VALUES(1,\'new\') ON CONFLICT(id COLLATE no|case) DO NOTHING', 'collation'],
+  ['INSERT INTO subject(id,value) VALUES(1,\'new\') ON CONFLICT(id COLLATE main.no|case) DO NOTHING', 'collation'],
   ['INSERT INTO subject(id,value) VALUES(1,\'new\') ON CONFLICT DO UP|DATE SET value=excluded.value', 'upsert-action'],
   ['INSERT INTO subject(id,value) VALUES(1,\'new\') ON CONFLICT DO UPDATE SET subject.va|lue=excluded.value', 'qualified-target'],
 ])('保护非字段、非限定赋值位置：%s', (marked, reason) => {

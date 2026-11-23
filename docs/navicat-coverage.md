@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite 编辑器支持 `COLLATE` 的原生规则候选和悬停，覆盖比较、普通及复合排序、窗口、UPSERT 冲突目标、建表列和索引表达式。Q01 继续为部分覆盖。 [SQLite 排序规则](https://www.sqlite.org/datatype3.html#collation)
+
 2026-11-23 源码增量。SQLite 编辑器按实际运行时目录建议内置标量、聚合和窗口函数，支持参数位置、现有调用的名称替换，以及固定或可变参数悬停。函数候选按查询子句和写入表达式作用域过滤。Q01 继续为部分覆盖。 [SQLite 函数目录](https://www.sqlite.org/pragma.html#pragma_function_list)
 
 2026-11-23 源码增量。SQLite 支持实际表的 `INDEXED BY` 候选和索引悬停。`EXPLAIN` 和 `EXPLAIN QUERY PLAN` 内的语句沿用原字段、对象和索引作用域。索引目录遵循当前会话的临时对象和显式命名空间。Q01 继续为部分覆盖。 [SQLite INDEXED BY](https://www.sqlite.org/lang_indexedby.html)

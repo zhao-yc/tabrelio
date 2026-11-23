@@ -506,7 +506,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       const registration = monaco.languages.registerCompletionItemProvider(sqliteEditorLanguage, { triggerCharacters: provider.triggerCharacters,
         provideCompletionItems: async (model, position, context, token) => {
           const result = await provider.provideCompletionItems(model, position, context, token);
-          return { ...result, suggestions: result.suggestions.map(({ snippet, ...item }) => ({ ...item, kind: item.kind === 'index' ? monaco.languages.CompletionItemKind.Reference : completionKinds[item.kind],
+          return { ...result, suggestions: result.suggestions.map(({ snippet, ...item }) => ({ ...item, kind: item.kind === 'index' || item.kind === 'collation' ? monaco.languages.CompletionItemKind.Reference : completionKinds[item.kind],
             ...(snippet ? { insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet } : {}), ...(item.trigger ? { command: { id: 'editor.action.triggerSuggest', title: '' } } : {}) })) };
         },
       });

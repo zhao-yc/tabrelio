@@ -81,8 +81,10 @@ export function createSqliteCompletionProvider(ports: Ports) {
             const result = sqliteCompletionOutputSchema.parse(raw);
             if (new TextEncoder().encode(JSON.stringify(result)).length > sqliteCompletionLimits.outputBytes || result.sessionRevision !== state?.objectsRevision || stamp !== undefined && result.stamp !== stamp) throw stale();
             if (query.kind === 'stamp' ? result.entries.length || result.incomplete : result.entries.some(entry => {
-              if (query.kind === 'functions') return entry.kind !== 'function' || !fold(entry.name).startsWith(fold(query.prefix));
-              if (entry.kind === 'function') return true;
+              if (query.kind === 'functions' || query.kind === 'collations') {
+                return entry.kind !== (query.kind === 'functions' ? 'function' : 'collation') || !fold(entry.name).startsWith(fold(query.prefix));
+              }
+              if (entry.kind === 'function' || entry.kind === 'collation') return true;
               if (query.schema !== undefined && entry.schema !== query.schema) return true;
               if (query.kind === 'relations') return entry.kind !== 'table' && entry.kind !== 'view';
               return (query.kind === 'columns' ? entry.kind !== 'column' : entry.kind !== 'index') ||

@@ -4,6 +4,8 @@
 
 SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段、表别名，明确输出列的 CTE／派生表，以及 `main`／`temp` 限定。建议按准确名称使用 SQLite 双引号转义，以普通文本插入；同名字段保留各自别名限定。INSERT 字段清单、UPDATE 赋值左侧及 RETURNING 使用目标表字段。
 
+`COLLATE` 后可补全及悬停当前 SQLite 连接登记的排序规则。适用位置包括比较、分组、普通及复合查询排序、窗口、UPSERT 冲突目标，以及 `CREATE TABLE` 和 `CREATE INDEX` 的规则位置。候选整体替换规则名，兼容 SQLite 接受的引号写法。内置说明区分字节比较、ASCII 大小写折叠和忽略尾部空格。补全只读固定的 `PRAGMA collation_list`。 [SQLite 排序规则](https://www.sqlite.org/datatype3.html#collation) · [SQLite 排序规则目录](https://www.sqlite.org/pragma.html#pragma_collation_list)
+
 输入内置函数名的一部分即可在常见表达式位置补全。候选读取实际 SQLite 运行时的 `function_list`，显示固定或可变参数个数。接受候选自动插入括号并进入参数位置，已有括号时只替换函数名。`HAVING` 可建议聚合，必须带 `OVER` 的内置窗口函数仅在普通 `SELECT` 输出和排序表达式中提供模板。悬停已写出的调用可查看目录签名。`VALUES` 中的函数补全独立于写入目标的列目录。 [SQLite 函数目录](https://www.sqlite.org/pragma.html#pragma_function_list) · [SQLite 窗口函数](https://www.sqlite.org/windowfunctions.html)
 
 `EXPLAIN` 和 `EXPLAIN QUERY PLAN` 内的查询或写入语句沿用原补全作用域。`INDEXED BY` 只补全实际表的索引名，悬停显示所属命名空间、表、索引来源及唯一或部分属性。无显式命名空间时使用原会话的临时对象遮蔽规则，唯一约束等生成的索引也可选择。读取只传表名、命名空间和前缀，不准备编辑器内的 SQL。选中部分索引后由 SQLite 检查查询条件是否适用。 [SQLite INDEXED BY](https://www.sqlite.org/lang_indexedby.html) · [SQLite `index_list`](https://www.sqlite.org/pragma.html#pragma_index_list)
@@ -47,6 +49,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-23 排序规则增量。WIN11-TEST 不可达，未派发任务。本机 macOS arm64 通过严格类型检查、源码构建和 28 份相关套件的 825 项。原生单元验证固定规则目录不受同名临时表遮蔽，原事务和目录修订保持。Electron 编辑器专项 6 项通过。`COLLATE` 只读取规则目录，接受 `NOCASE` 后显式执行复合查询，结果依次为 `a`、`Z`。补全和悬停期间数据库、会话和历史保持原状。既有全流程回归 1 项在 109.1 秒通过，两次应用均正常退出。初轮单元测试中，光标夹具误取了拼接运算符 `||` 的竖线，修正后通过。日志与报告保存在 `.cache/sqlite-collation-completion/`。Windows 界面和安装包待验。
 
 2026-11-23 内置函数增量。WIN11-TEST 不可达，未派发任务。本机 macOS arm64 通过严格类型检查、源码构建和 27 份相关套件的 789 项。原生单元套件核对重载、`PRAGMA function_list` 免受同名临时表遮蔽、原会话事务与修订保持。Electron 专项 5 项通过，其中接受 `json_extract` 后插入括号并将光标置于参数位置，悬停显示可变参数，显式执行返回 `7`，补全期间数据库、查询会话和历史保持原状。长回归前两轮分别停在手动输出别名补全、写入排序文本引起的自动请求。旧夹具先拒绝了新目录类型，补入的前缀白名单随后漏了自动请求。夹具按固定目录类型和有界前缀核验自动请求，保留手动补全的准确会话与前缀断言。最终长回归 1 项在原 120 秒门槛内通过，两次应用均正常退出。通过报告及首两轮原始记录和隔离配置保留在 `.cache/sqlite-function-completion/`。Windows 界面和安装包待验。
 

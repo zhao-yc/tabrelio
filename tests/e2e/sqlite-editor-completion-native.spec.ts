@@ -21,6 +21,8 @@ const scenarios = [
     trail: " WHERE value='旧'", incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'subject_by_value' },
   { verb: '函数', prefix: 'SELECT ', typed: 'json_ex', column: 'json_extract', trail: ' AS extracted', args: `'{"id":7}', '$.id'`,
     incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: '7' },
+  { verb: 'COLLATE', prefix: "SELECT 'Z' AS marker UNION ALL SELECT 'a' ORDER BY marker COLLATE ", typed: 'no', column: 'NOCASE',
+    trail: '', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'a' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
@@ -28,7 +30,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     !['darwin', 'win32'].includes(process.platform)) throw Error('只允许 Windows 或 macOS 的离线源码验收');
   const filePath = join(realpathSync(dataDir), 'sqlite-editor-completion.sqlite');
   const connectionId = 'sqlite-editor-completion';
-  const lookupKind = scenario.verb === 'INDEXED BY' ? 'indexes' : scenario.verb === '函数' ? 'functions' : 'columns';
+  const lookupKind = scenario.verb === 'INDEXED BY' ? 'indexes' : scenario.verb === '函数' ? 'functions' : scenario.verb === 'COLLATE' ? 'collations' : 'columns';
   const { prefix, trail, typed, column } = scenario;
   const draft = prefix + typed + 'suffix' + trail;
   const accepted = prefix + (scenario.verb === '函数' ? column + '(' + scenario.args + ')' : '"' + column + '"') + trail;
@@ -70,8 +72,10 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
           if (command === 'query.execute' && (typeof input.sql !== 'string' || input.sql.replaceAll('\r\n', '\n') !== setup.accepted ||
             facts.some(fact => fact.command === 'query.execute'))) throw Error('SQL 不是本例唯一明确操作');
           if (command === 'sqlite.completion') {
-            if ('sql' in input || input.kind === 'functions' && (!setup.functionName || input.prefix !== setup.functionName && input.prefix !== setup.typed)) throw Error('函数目录越出本例');
-            if (input.kind === setup.lookupKind && input.kind !== 'functions' && (input.table !== 'subject' || input.schema !== 'main')) throw Error('目录越出真实目标');
+            if ('sql' in input) throw Error('目录接收了编辑器原文');
+            if (input.kind === 'functions' || input.kind === 'collations') {
+              if (input.kind !== setup.lookupKind || input.prefix !== setup.catalogName && input.prefix !== setup.typed || 'table' in input || 'schema' in input) throw Error('连接目录越出本例');
+            } else if (input.kind === setup.lookupKind && (input.table !== 'subject' || input.schema !== 'main')) throw Error('目录越出真实目标');
           }
           const fact: Fact = { command, input }; facts.push(fact);
           const reply = await entry(event, payload);
@@ -82,7 +86,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         }
         return entry(event, payload);
       });
-    }, { filePath, connectionId, accepted, lookupKind, typed, functionName: lookupKind === 'functions' ? column : undefined });
+    }, { filePath, connectionId, accepted, lookupKind, typed, catalogName: column });
 
     await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
     await page.evaluate(async ({ id, sql }) => {
@@ -123,7 +127,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     const completion = (await snapshot()).slice(previous).filter(fact => fact.command === 'sqlite.completion');
     const requests = completion.map(fact => sqliteCompletionInputSchema.parse(fact.input));
     expect(requests.filter(input => input.kind !== 'stamp')).toEqual([
-      lookupKind === 'functions' ? expect.objectContaining({ kind: 'functions', prefix: typed }) :
+      lookupKind === 'functions' || lookupKind === 'collations' ? expect.objectContaining({ kind: lookupKind, prefix: typed }) :
         expect.objectContaining({ kind: lookupKind, table: 'subject', schema: 'main', prefix: typed }),
     ]);
     expect(completion.every(fact => fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true)).toBe(true);
@@ -141,6 +145,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     if (scenario.incoming) await expect(hover).toContainText('UPSERT 待插入行');
     if (lookupKind === 'indexes') await expect(hover).toContainText('SQLite 索引');
     if (lookupKind === 'functions') await expect(hover).toContainText('SQLite 标量函数');
+    else if (lookupKind === 'collations') await expect(hover).toContainText('忽略 ASCII 字母的大小写');
     else await expect(hover).toContainText('"main"."subject"');
     await page.keyboard.press('Escape');
     expect((await snapshot()).filter(fact => fact.command === 'query.execute' || fact.command === 'sessions.open')).toEqual([]);
@@ -148,7 +153,12 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     expect(disk()).toEqual(before);
     await (await navigationMenuItem(query, { name: zh.query.text011, exact: true })).click();
     await expect.poll(disk).toEqual({ ...before, row: scenario.row });
-    await expect(query.locator('.result-body').getByRole('grid')).toContainText(scenario.output);
+    const grid = query.locator('.result-body').getByRole('grid');
+    await expect(grid).toContainText(scenario.output);
+    if (lookupKind === 'collations') {
+      await expect(grid.getByRole('row').nth(1).getByText('a', { exact: true })).toBeVisible();
+      await expect(grid.getByRole('row').nth(2).getByText('Z', { exact: true })).toBeVisible();
+    }
     const facts = await snapshot();
     const executions = facts.filter(fact => fact.command === 'query.execute');
     expect(executions).toEqual([expect.objectContaining({ reply: expect.objectContaining({ ok: true }) })]);
@@ -165,7 +175,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
 
 for (const scenario of scenarios) {
   test.describe(scenario.verb, () => {
-    const enabled = scenario.verb === '函数' ? process.env.DBARK_SQLITE_FUNCTION_COMPLETION_NATIVE === '1' : scenario.verb === 'INDEXED BY' ? process.env.DBARK_SQLITE_INDEX_COMPLETION_NATIVE === '1' :
+    const enabled = scenario.verb === 'COLLATE' ? process.env.DBARK_SQLITE_COLLATION_COMPLETION_NATIVE === '1' :
+      scenario.verb === '函数' ? process.env.DBARK_SQLITE_FUNCTION_COMPLETION_NATIVE === '1' : scenario.verb === 'INDEXED BY' ? process.env.DBARK_SQLITE_INDEX_COMPLETION_NATIVE === '1' :
       process.env.DBARK_SQLITE_DML_COMPLETION_NATIVE === '1' || scenario.verb === 'UPSERT' && process.env.DBARK_SQLITE_UPSERT_COMPLETION_NATIVE === '1';
     test.skip(!enabled || process.argv.includes('--list'), '需要显式启用离线 SQLite 编辑器专项');
     test(`SQLite ${scenario.verb} 补全、悬停和明确提交`, ({}, info) => exercise(scenario, info));

@@ -21,7 +21,7 @@ describe('SQLite字段悬停完整词法与准确目录', () => {
   it.each(['SELECT s.fi|eld_🚢 FROM subject s', 'SELECT s."fi|eld_🚢" FROM subject s', 'SELECT s.`fi|eld_🚢` FROM subject s', 'SELECT s.[fi|eld_🚢] FROM subject s'])('完整标识符而非光标前缀：%s', async marked => {
     const result = await hover(marked); expect(result.analysis).toMatchObject({ status: 'ready', target: { prefix: 'field_🚢' } }); expect(result.value).toContain('"field_🚢"'); expect(result.value).toContain(text.declaredType + '："INTEGER"'); expect(result.port.load.mock.calls[0][0]).toMatchObject({ kind: 'columns', table: 'subject', prefix: 'field_🚢' });
   });
-  it.each(['SELECT -- fi|eld_🚢', "SELECT 'fi|eld_🚢' FROM subject", 'SELECT :fi|eld_🚢 FROM subject', 'SELECT 12|34 FROM subject', 'SEL|ECT field_🚢 FROM subject', 'SELECT s."fi|eld_🚢 FROM subject s', 'SELECT CAST(field_🚢 AS TE|XT) FROM subject', 'SELECT field_🚢 COLLATE no|case FROM subject'])('非字段不请求目录：%s', async marked => {
+  it.each(['SELECT -- fi|eld_🚢', "SELECT 'fi|eld_🚢' FROM subject", 'SELECT :fi|eld_🚢 FROM subject', 'SELECT 12|34 FROM subject', 'SEL|ECT field_🚢 FROM subject', 'SELECT s."fi|eld_🚢 FROM subject s', 'SELECT CAST(field_🚢 AS TE|XT) FROM subject', 'SELECT field_🚢 COLLATE main.no|case FROM subject'])('非字段不请求目录：%s', async marked => {
     const result = await hover(marked); expect(result.value).toBeUndefined(); expect(result.port.load).not.toHaveBeenCalled();
   });
   it.each(['SELECT id AS fi|eld_🚢 FROM subject', 'WITH c(fi|eld_🚢) AS (SELECT id FROM subject) SELECT * FROM c'])('声明不伪装同名物理列：%s', async marked => {

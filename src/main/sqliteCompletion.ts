@@ -115,6 +115,17 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
       entry.signatures.sort((a, b) => a.arity - b.arity);
       if (!append(entry)) break;
     }
+  } else if (input.kind === 'collations') {
+    // 直接读原连接的规则目录，绕过同名表遮蔽，不调用规则，也不执行编辑器里的表达式。
+    const result = await read(driver, 'PRAGMA collation_list', [], control, sqliteCompletionLimits.entries + 1);
+    incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
+    const prefix = fold(input.prefix), names = new Map<string, string>();
+    for (const [, name] of result.rows.slice(0, sqliteCompletionLimits.entries)) {
+      if (typeof name !== 'string') throw Error('SQLite补全排序规则目录无效');
+      const key = fold(name);
+      if (key.startsWith(prefix)) names.set(key, name);
+    }
+    for (const key of [...names.keys()].sort()) if (!append({ kind: 'collation', name: names.get(key)! })) break;
   }
   const after = await stamp(driver, control); control.check();
   if (before !== after) throw Error('SQLite目录在补全读取期间变化，请重新触发');
