@@ -26,6 +26,21 @@ it('参数定位识别最近调用、命名参数、数组和嵌套逗号', () =
     'SELECT f(1); SELECT (|)']) expect(signature(marked)).toBeUndefined();
 });
 
+it('PostgreSQL窗口函数和聚合筛选关键字可从编辑器补全', async () => {
+  const window = editor('SELECT WIN|', async () => ({ items: [], incomplete: false }));
+  const frame = editor('SELECT PRE|', async () => ({ items: [], incomplete: false }));
+  const filter = editor('SELECT FIL|', async () => ({ items: [], incomplete: false }));
+  try {
+    expect((await window.suggest())?.suggestions?.map(item => item.label)).toContain('WINDOW');
+    expect((await frame.suggest())?.suggestions?.map(item => item.label)).toContain('PRECEDING');
+    expect((await filter.suggest())?.suggestions?.map(item => item.label)).toContain('FILTER');
+  } finally {
+    window.provider.dispose();
+    frame.provider.dispose();
+    filter.provider.dispose();
+  }
+});
+
 describe('PostgreSQL 补全词法和关系作用域', () => {
   it('关系位置读取 schema，引用前缀和后半个词使用完整替换范围', () => {
     expect(at('SELECT * FROM /* 说明 */ "业.务"."品|名"')).toMatchObject({ prefix: '品', quoted: true,

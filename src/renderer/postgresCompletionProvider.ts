@@ -10,7 +10,8 @@ type Kind = 'schema' | 'table' | 'view' | 'column' | 'routine' | 'keyword';
 type Status = 'idle' | 'partial' | 'unavailable' | 'limited' | 'sessionUnknown';
 const keywords = ['SELECT','FROM','JOIN','LEFT JOIN','RIGHT JOIN','INNER JOIN','WHERE','GROUP BY','ORDER BY',
   'HAVING','LIMIT','OFFSET','INSERT INTO','VALUES','UPDATE','SET','DELETE FROM','RETURNING','ON CONFLICT',
-  'DISTINCT','WITH','UNION ALL','IS NULL','IS NOT NULL','CASE','WHEN','THEN','ELSE','END','BEGIN','COMMIT','ROLLBACK'];
+  'DISTINCT','WITH','UNION ALL','IS NULL','IS NOT NULL','CASE','WHEN','THEN','ELSE','END','BEGIN','COMMIT','ROLLBACK',
+  'WINDOW','OVER','FILTER','PARTITION BY','ROWS','RANGE','BETWEEN','UNBOUNDED','PRECEDING','FOLLOWING','CURRENT ROW'];
 
 /** 等待短防抖，编辑取消立即唤醒，目录在途请求只由原承诺收尾。 */
 function debounce(signal: AbortSignal, milliseconds: number): Promise<void> {
