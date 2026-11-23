@@ -29,7 +29,8 @@ const functionSql = `SELECT j."value", g."value" AS grouped_value FROM (SELECT i
 const compoundSql = `SELECT j.* FROM (SELECT 1 AS marker) a JOIN (main.subject s JOIN json_each('["COMPOUND_FIRST","COMPOUND_SECOND"]') j ON s.id=1) ON 1 UNION ALL SELECT 5,'COMPOUND_LAST','text','COMPOUND_LAST',999,NULL,'','' ORDER BY "id:1" DESC`;
 const localProjectionSql = `WITH base AS (SELECT s.* FROM main.subject s), tail AS (SELECT base.*, base.main_marker AS main_marker FROM base) SELECT v."main_marker:1" AS renamed, v.* FROM (SELECT * FROM tail) v JOIN tail w USING ("main_marker:1") WHERE v.id=1 UNION ALL SELECT 'CTE_COMPOUND_FIRST','same',0,'CTE_COMPOUND_FIRST' ORDER BY "main_marker:1" ASC`;
 const outputAliasSql = `SELECT CASE WHEN id=1 THEN 'one' ELSE 'high' END AS bucket, count(*) AS amount FROM main.subject GROUP BY "bucket" HAVING "amount">0 ORDER BY "bucket" ASC`;
-const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql, functionSql, compoundSql, localProjectionSql, outputAliasSql];
+const namedWindowSql = `SELECT printf('%d',row_number() OVER ([w] ORDER BY id)) FROM main.subject WINDOW [w] AS () ORDER BY id`;
+const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql, functionSql, compoundSql, localProjectionSql, outputAliasSql, namedWindowSql];
 let completed: { directory: string; database: string; firstPid?: number; secondPid?: number; platform: string } | undefined;
 let observeFailure: (() => Record<string, unknown>) | undefined;
 /** 任何失败保留准确窗口、profile及合成库，不自动重启/重试/强停/清理。 */
@@ -198,11 +199,12 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     stage = '无session真实字段悬停不执行SQL或建立session';
     await showHover('SELECT s.ma|in_marker FROM subject s', ['main_marker', hoverText.permanent, hoverText.declaredType + '："TEXT"']);
     await showHover('WITH local_only(field_name) AS (SELECT 1) SELECT l.fi|eld_name FROM local_only l', ['field_name', hoverText.cte, hoverText.unknown]);
-    stage = '真实F12只导航本文别名、CTE及派生声明，保持模型版本/撤销和零目录增量';
+    stage = '真实F12导航本文别名、CTE、派生声明和命名窗口，保持模型版本/撤销和零目录增量';
     await navigate('SELECT |s.id FROM subject AS s', ' AS s', 4);
     await navigate('WITH local_cte(id) AS (SELECT 1) SELECT * FROM |local_cte', 'WITH local_cte', 5);
     await navigate('SELECT |d.id FROM (SELECT * FROM subject) AS d', ' AS d', 4);
     await navigate('SELECT |click_alias.id FROM subject AS click_alias', ' AS click_alias', 4, 'modifier-click');
+    await navigate('SELECT sum(1) OVER [|w] WINDOW [w] AS ()', 'WINDOW [w]', 7);
     await info.attach('SQLite本文声明真实导航窗口', { body: await step(() => page.screenshot()), contentType: 'image/png' });
     await info.attach('SQLite本文声明真实导航原件', { body: JSON.stringify({ navigationProof, directoryReadsAdded: 0, queryExecutionsAdded: 0, modelVersionUnchanged: true, undoRedoUnchanged: true }), contentType: 'application/json' });
     await metadataReadOnly(baseline, statelessBefore);
@@ -213,6 +215,7 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
       ['WITH |q(n) AS (SELECT 1) SELECT q.n FROM q', 2, 'q'],
       ['SELECT |d.n FROM (SELECT 1 n) AS d WHERE d.n=1', 2, 'd'],
       ['SELECT |"s🚢".id, (SELECT "s🚢".id FROM subject "s🚢") FROM subject AS "S🚢" WHERE [s🚢].id=1', 2, '[s🚢]'],
+      ['SELECT sum(1) OVER [|w],sum(2) OVER ([w]) WINDOW [w] AS ()', 2, '[w]'],
     ] as const) {
       const input = await at(marked); await settleMetadata(); const before = await navigationModel(), reads = completionFacts(await step(audit)).length, workers = (await referenceAnalysis()).length;
       await step(() => page.keyboard.press('Shift+F12'));
@@ -231,11 +234,12 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     }
     await info.attach('SQLite本文引用真实导航原件', { body: JSON.stringify({ referenceProof, workers: await referenceAnalysis(), realMain: true, realSQLiteWorker: true, queryExecutionsAdded: 0, directoryReadsAdded: 0 }), contentType: 'application/json' });
     await metadataReadOnly(baseline, statelessBefore);
-    stage = '真实F2局部别名及CTE重命名，整组单次撤销／重做、零SQL与目录读取';
+    stage = '真实F2局部别名、CTE及命名窗口重命名，整组单次撤销／重做、零SQL与目录读取';
     const renameProof: unknown[] = [];
     for (const [marked, name, expected] of [
       ['SELECT |s.id,S.main_marker FROM subject AS S WHERE s.id=1', '新名🚢', 'SELECT "新名🚢".id,"新名🚢".main_marker FROM subject AS "新名🚢" WHERE "新名🚢".id=1'],
       ['WITH |q(n) AS (SELECT 1) SELECT q.n FROM q', '新CTE', 'WITH "新CTE"(n) AS (SELECT 1) SELECT "新CTE".n FROM "新CTE"'],
+      ['SELECT sum(1) OVER |w WINDOW w AS ()', '新窗🚢', 'SELECT sum(1) OVER "新窗🚢" WINDOW "新窗🚢" AS ()'],
     ] as const) {
       const input = await at(marked); await settleMetadata(); const before = await navigationModel(), reads = completionFacts(await step(audit)).length, workers = (await referenceAnalysis()).length;
       await step(() => page.keyboard.press('F2')); const rename = query().locator('.rename-box input.rename-input'); await step(() => expect(rename).toBeVisible({ timeout: 13000 }));
@@ -249,7 +253,7 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
       for (const record of actual.slice(-2)) expect(record).toMatchObject({ intent: 'rename', posted: 1, ready: 1, replied: 1, terminated: 1, errors: 0, status: 'ready' });
       renameProof.push({ before, after, undoRedoWholeGroup: true, directoryReadsAdded: 0, userSqlAdded: 0 });
     }
-    await info.attach('SQLite局部重命名原件', { body: JSON.stringify({ renameProof, workers: (await referenceAnalysis()).slice(-4), realMain: true, realSQLiteWorker: true }), contentType: 'application/json' });
+    await info.attach('SQLite局部重命名原件', { body: JSON.stringify({ renameProof, workers: (await referenceAnalysis()).slice(-renameProof.length * 2), realMain: true, realSQLiteWorker: true }), contentType: 'application/json' });
     await metadataReadOnly(baseline, statelessBefore);
     const statelessFacts = await step(audit); expect(completionFacts(statelessFacts).length).toBeGreaterThan(0); expect(completionFacts(statelessFacts).every(fact => fact.request.sessionId === undefined)).toBe(true); for (const fact of completionFacts(statelessFacts)) { sqliteCompletionInputSchema.parse(fact.request); if (succeeded(fact)) sqliteCompletionOutputSchema.parse(result(fact.reply)); else expect(operations(statelessFacts, 'query.cancel').some(cancel => cancel.request.taskId === fact.request.taskId), '失败元数据必须有同编号真实取消请求，不能忽略无缘失败').toBe(true); expect(fact.request).not.toHaveProperty('sql'); expect(fact.request).not.toHaveProperty('source'); }
     stage = '用户明确执行TEMP脚本并在原查询事务创建未提交DDL；独立观察仍只见原主文件';
@@ -356,6 +360,17 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     const beforeAliasHover = { tasks: await tasks(), history: await history(), executions: 7, sessions: 2 };
     await showHover('SELECT id AS main_marker FROM main.subject ORDER BY main_|marker', ['查询输出别名', 'main_marker'], true);
     await metadataReadOnly(baseline, beforeAliasHover);
+    stage = '真实Monaco补全继承窗口时保留声明引号，不读取列目录';
+    let beforeWindowReads = 0;
+    await choose(namedWindowSql.replace('OVER ([w]', 'OVER (w|suffix'), 'w', namedWindowSql, undefined, async () => {
+      await settleMetadata();
+      beforeWindowReads = completionFacts(await step(audit)).length;
+    });
+    await settleMetadata(); await metadataReadOnly(baseline, beforeAliasHover);
+    expect(completionFacts(await step(audit))).toHaveLength(beforeWindowReads);
+    stage = '显式执行含继承窗口的原SQL';
+    await execute(namedWindowSql, 8, true);
+    expect(result(operations(await step(audit), 'query.execute').at(-1)!.reply)).toMatchObject({ results: [{ rows: [{ c0: '1' }, { c0: '2' }] }] });
     const transactions = operations(await step(audit), 'query.transaction'); expect(transactions.map(fact => fact.request.action)).toEqual(['begin', 'rollback']); const firstTasks = await tasks(), firstHistory = await history(); expect(firstTasks.filter(task => task.kind === 'query.execute')).toHaveLength(explicitSql.length); expect(firstHistory.map(record => record.sql).sort()).toEqual([...explicitSql].sort()); expect(disk()).toEqual(baseline);
     stage = '保留一个无session新草稿，明确关闭原A/B释放真实会话及所有SQLite worker';
     const tabC = await createQuery(), retainedDraft = '-- SQLITE_COMPLETION_RETAINED_DRAFT\nSELECT main_marker FROM main.subject;'; await write(retainedDraft); await closeQuery(tabA); await closeQuery(tabB); await switchTab(tabC); await expectSql(retainedDraft); await settleMetadata(); await step(() => expect.poll(async () => { const facts = await audit(); return facts.pending === 0 && facts.workers.every(worker => worker.exit === 0); }).toBe(true));

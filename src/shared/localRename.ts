@@ -3,8 +3,9 @@ import type { LocalReferences } from './localReferences';
 
 export type LocalRenameDialect = 'mysql' | 'sqlite';
 type RenameDialect = LocalRenameDialect | 'postgresql';
+type LocalRenameKind = 'alias' | 'cte' | 'window';
 export type LocalRename = { status: 'blocked'; reason: string } | {
-  status: 'ready'; target: { start: number; end: number }; name: string; kind: 'alias' | 'cte';
+  status: 'ready'; target: { start: number; end: number }; name: string; kind: LocalRenameKind;
   edits: { start: number; end: number; text: string }[];
 };
 export type LocalRenameContext = { status: 'blocked'; reason: string } | { status: 'ready'; target: LocalReferenceToken; tokens: LocalReferenceToken[] };
@@ -26,14 +27,17 @@ const folded = (name: string, dialect: RenameDialect) => {
 };
 
 /** 完整同名token必须全部落到这一声明，无法证明的词整份拒绝，绝不输出部分替换。 */
-export function planLocalRename(context: LocalRenameContext, references: LocalReferences, dialect: RenameDialect, classify: (reference: { start: number; end: number }) => 'alias' | 'cte' | 'physical' | undefined, newName?: string): LocalRename {
+export function planLocalRename(context: LocalRenameContext, references: LocalReferences, dialect: RenameDialect, classify: (reference: { start: number; end: number }) => LocalRenameKind | 'physical' | undefined, newName?: string): LocalRename {
   if (context.status !== 'ready') return context;
   if (references.status !== 'ready') return references;
   const { target, tokens } = context, group = [references.declaration, ...references.references].sort((a, b) => a.start - b.start);
   const same = tokens.filter(token => folded(token.value, dialect) === folded(target.value, dialect));
   if (same.length !== group.length || same.some((token, index) => token.start !== group[index].start || token.end !== group[index].end)) return { status: 'blocked', reason: 'unresolved' };
-  let direct: 'alias' | 'cte' | undefined;
-  for (const reference of references.references) { const kind = classify(reference); if (kind === 'alias' || kind === 'cte') { direct = kind; break; } }
+  let direct: LocalRenameKind | undefined;
+  for (const reference of references.references) {
+    const kind = classify(reference);
+    if (kind === 'alias' || kind === 'cte' || kind === 'window' && dialect === 'sqlite') { direct = kind; break; }
+  }
   if (!direct) return { status: 'blocked', reason: 'physical' };
   const result = { status: 'ready' as const, target: { start: target.start, end: target.end }, name: target.value, kind: direct, edits: [] as { start: number; end: number; text: string }[] };
   if (newName === undefined) return result;
@@ -50,7 +54,9 @@ export function validLocalRename(value: unknown, context: LocalRenameContext, di
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const result = value as Record<string, unknown>;
   if (result.status === 'blocked') return Object.keys(result).sort().join(',') === 'reason,status' && typeof result.reason === 'string' && /^[a-z-]{1,64}$/.test(result.reason);
-  if (context.status !== 'ready' || Object.keys(result).sort().join(',') !== 'edits,kind,name,status,target' || result.status !== 'ready' || result.kind !== 'alias' && result.kind !== 'cte' || result.name !== context.target.value || !Array.isArray(result.edits)) return false;
+  if (context.status !== 'ready' || Object.keys(result).sort().join(',') !== 'edits,kind,name,status,target' || result.status !== 'ready' ||
+    result.kind !== 'alias' && result.kind !== 'cte' && !(result.kind === 'window' && dialect === 'sqlite') ||
+    result.name !== context.target.value || !Array.isArray(result.edits)) return false;
   const target = result.target as Record<string, unknown> | null;
   if (!target || Object.keys(target).sort().join(',') !== 'end,start' || target.start !== context.target.start || target.end !== context.target.end) return false;
   if (newName === undefined || newName === result.name) return result.edits.length === 0;

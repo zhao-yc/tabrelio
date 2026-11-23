@@ -6,7 +6,7 @@ import { planLocalRename } from './localRename';
 export function analyzeSqliteLocalRename(source: string, offset: number, newName?: string) {
   const references = analyzeSqliteLocalReferences(source, offset);
   return planLocalRename(sqliteReferenceContext(source, offset), references, 'sqlite', reference => {
-    let kind: 'alias' | 'cte' | 'physical' | undefined;
+    let kind: 'alias' | 'cte' | 'window' | 'physical' | undefined;
     const proof = analyzeSqliteCompletion(source, reference.end, 'definition', value => { kind = value; });
     return proof.status === 'ready' && references.status === 'ready' && proof.definition?.start === references.declaration.start ? kind : undefined;
   }, newName);
