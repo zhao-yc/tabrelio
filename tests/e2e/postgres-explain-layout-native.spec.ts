@@ -106,6 +106,9 @@ test('PostgreSQL 最小窗口可读，当前估算和实测计划直接对照基
     const comparison = page.getByRole('dialog', { name: snapshotText.compareTitle, exact: true });
     await plan.getByRole('button', { name: snapshotText.compareBaseline, exact: true }).click();
     await expect(comparison).toContainText(basename(estimatedPath));
+    const findChange = comparison.getByRole('searchbox', { name: snapshotText.compareFind, exact: true });
+    await findChange.fill('NODE TYPE');
+    await expect(comparison.getByRole('status', { name: snapshotText.compareFind, exact: true })).toHaveText(snapshotText.compareFindCount(1, 2));
     const estimatedDiff = comparison.getByRole('row', { name: /^Node Type / }).getByRole('cell');
     await expect(estimatedDiff.nth(0)).toHaveText('Seq Scan');
     await expect(estimatedDiff.nth(1)).toHaveText('Limit');
@@ -128,7 +131,8 @@ test('PostgreSQL 最小窗口可读，当前估算和实测计划直接对照基
     await actualPlan.getByRole('button', { name: snapshotText.compareBaseline, exact: true }).click();
     await expect(comparison).toContainText(basename(actualPath));
     await expect(comparison.getByRole('columnheader', { name: snapshotText.compareCurrent, exact: true })).toBeVisible();
-    await expect(comparison.getByRole('rowheader', { name: 'Actual Rows', exact: true })).toBeVisible();
+    await findChange.fill('Actual Rows');
+    await expect(comparison.getByRole('row', { name: /^Actual Rows / })).toHaveAttribute('data-plan-match', 'true');
     await page.screenshot({ path: info.outputPath('PostgreSQL当前实测计划对照基准.png') });
     await comparison.getByRole('button', { name: zh.dialogs.text001, exact: true }).click();
     expect(await receipts()).toEqual(actualReceipt);

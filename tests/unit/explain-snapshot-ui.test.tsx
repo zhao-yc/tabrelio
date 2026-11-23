@@ -17,6 +17,8 @@ import type { QueryOutcome } from '../../src/shared/contracts';
 import { parseExplainPlan } from '../../src/shared/explain';
 import { captureExplainSnapshot, capturePlanSnapshot, encodeExplainSnapshot, explainSnapshotLimits } from '../../src/shared/explainSnapshot';
 import { buildSqliteExplainPlan } from '../../src/shared/sqliteExplain';
+import { comparePlanSnapshots } from '../../src/shared/planSnapshotComparison';
+import { PlanComparisonView } from '../../src/renderer/components/PlanComparisonView';
 import { sqliteExplainZh } from '../../src/renderer/locales/sqliteExplain.zh-CN';
 import { explainSnapshotZh as text } from '../../src/shared/explainSnapshot.zh-CN';
 import { explainZh as planText } from '../../src/renderer/locales/explain.zh-CN';
@@ -73,6 +75,8 @@ function button(label: string) { const node = navigationMenuRamButton(document, 
 async function click(label: string) { await act(async () => button(label).dispatchEvent(new MemoryEvent('click'))); }
 function props(node: ReturnType<typeof memoryDocument>['body']) { return (node as any)[Object.keys(node).find(key => key.startsWith('__reactProps$'))!]; }
 async function search(value: string) { const input = document.querySelector(`input[aria-label="${planText.find}"]`)!; await act(async () => { input.value = value; input.dispatchEvent(new MemoryEvent('input')); }); }
+function compareSearchInput() { return document.querySelector(`input[aria-label="${text.compareFind}"]`)!; }
+async function compareSearch(value: string) { const input = compareSearchInput(); await act(async () => { input.value = value; input.dispatchEvent(new MemoryEvent('input')); }); }
 const opened = (name = '原始.dbark-plan.json', outcome = fixture()) => ({ name, snapshot: captureExplainSnapshot(outcome) });
 
 it('挂载不选择文件且无需连接，明示离线，不出现任何数据库执行按钮', async () => {
@@ -120,16 +124,68 @@ it('离线对比 SQLite 快照，异类文件与取消保留比较，返回后�
   expect(comparison?.textContent).toContain('基准.json · 3.50.0');
   expect(comparison?.textContent).toContain('对比.json · 3.53.0');
   expect(comparison?.textContent).toContain('SEARCH subject USING INDEX subject_index');
+  await compareSearch('SUBJECT_INDEX');
   bridge.mockResolvedValueOnce(opened()); await click(text.compareChoose);
   expect(document.querySelector('[role="alert"]')?.textContent).toContain(text.sqliteCompareUnsupported);
   expect(region()).toBe(comparison);
   bridge.mockResolvedValueOnce(null); await click(text.compareChoose);
   expect(region()).toBe(comparison);
+  expect(compareSearchInput().value).toBe('SUBJECT_INDEX');
+  bridge.mockResolvedValueOnce(file('新对比.json', 'SEARCH subject USING INDEX new_index', '3.53.4')); await click(text.compareChoose);
+  expect(compareSearchInput().value).toBe('');
+  expect(region()?.textContent).toContain('new_index');
   await click(text.compareClose);
   expect(region()).toBeNull();
   expect(document.querySelector('[role="tree"]')?.textContent).toContain('SCAN subject');
   bridge.mockResolvedValueOnce(null); await click(text.saveAs);
-  expect(bridge.mock.calls).toEqual([...Array.from({ length: 4 }, () => ['explainFiles.open', {}]), ['explainFiles.save', { snapshot: before.snapshot }]]);
+  expect(bridge.mock.calls).toEqual([...Array.from({ length: 5 }, () => ['explainFiles.open', {}]), ['explainFiles.save', { snapshot: before.snapshot }]]);
+});
+
+it('差异查找匹配路径、两侧字段和值，在匹配间环绕并保留原选择', async () => {
+  const capture = (details: string[]) => {
+    const result = { columns: ['id', 'parent', 'notused', 'detail'].map(key => ({ key, name: key, type: 'SQLITE' })),
+      rows: details.map((detail, index) => ({ id: String(index + 1), parent: '0', notused: '0', detail })), truncated: false, statement: '', elapsedMs: 0 };
+    return capturePlanSnapshot({ results: [result], elapsedMs: 0, sqliteExplain: buildSqliteExplainPlan(result, '3.53.4') });
+  };
+  const left = capture(['SEARCH subject USING INDEX old_idx🚢', 'SCAN subject', 'SCAN keep_only']);
+  const right = capture(['SEARCH subject USING INDEX idx_replacement', 'SEARCH subject USING INDEX new_idx', 'SCAN keep_only']);
+  const comparison = comparePlanSnapshots(left, right);
+  await mount(<PlanComparisonView comparison={comparison} dialect="sqlite" left="基准" right="当前"/>);
+  const activePath = () => document.querySelector('[aria-pressed="true"]')?.querySelector('small')?.textContent;
+  expect(activePath()).toBe('1');
+  await act(async () => {
+    const node = document.querySelectorAll('button').find(item => item.textContent.includes('new_idx'))!;
+    node.dispatchEvent(new MemoryEvent('click'));
+  });
+  expect(activePath()).toBe('2');
+
+  await compareSearch(' OLD_IDX🚢 ');
+  expect(document.body.textContent).toContain(text.compareFindCount(1, 1));
+  expect(activePath()).toBe('1');
+  expect(document.querySelector('tr[data-plan-match="true"]')?.textContent).toContain('old_idx🚢');
+  expect(button(text.compareFindNext).disabled).toBe(true);
+  await click(text.compareFindClear);
+  expect(activePath()).toBe('2');
+
+  await compareSearch('DETAIL');
+  expect(document.body.textContent).toContain(text.compareFindCount(2, 2));
+  const press = async (shiftKey = false, isComposing = false) => act(async () => {
+    compareSearchInput().dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'Enter', shiftKey, isComposing }));
+  });
+  await press(false, true);
+  expect(activePath()).toBe('2');
+  await press(); expect(activePath()).toBe('1');
+  await press(true); expect(activePath()).toBe('2');
+  await click(text.compareFindPrevious); expect(activePath()).toBe('1');
+
+  await compareSearch('3');
+  expect(document.body.textContent).toContain(text.compareFindEmpty);
+  const showAll = document.querySelector('input[type="checkbox"]')!;
+  await act(async () => props(showAll).onChange({ currentTarget: { checked: true } }));
+  expect(activePath()).toBe('3');
+  expect(document.body.textContent).toContain(text.compareFindCount(1, 1));
+  expect(document.body.textContent).toContain(text.compareCount(2, 3));
+  expect(bridge).not.toHaveBeenCalled();
 });
 
 it('取消和不合法新文件保留原计划、查找、节点选择和文件名', async () => {

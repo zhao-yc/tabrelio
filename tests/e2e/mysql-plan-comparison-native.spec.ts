@@ -83,7 +83,10 @@ test('MySQL 系列估算、实测及离线快照可通过真实窗口对照基�
     const beforeEstimate = await receipts();
     await compareButton(estimated).click();
     await expect(compare).toContainText(basename(estimateFile));
-    await compare.getByText(tablePath, { exact: true }).click();
+    const diffSearch = compare.getByRole('searchbox', { name: text.compareFind, exact: true });
+    await diffSearch.fill('ACCESS_TYPE');
+    await expect(compare.getByRole('status', { name: text.compareFind, exact: true })).toHaveText(text.compareFindCount(1, 1));
+    await expect(compare.getByRole('button', { pressed: true })).toContainText(tablePath);
     const access = compare.getByRole('row', { name: /^access_type / }).getByRole('cell');
     await expect(access.nth(0)).toHaveText('ALL');
     await expect(access.nth(1)).toHaveText('const');
@@ -101,11 +104,11 @@ test('MySQL 系列估算、实测及离线快照可通过真实窗口对照基�
     const beforeActual = await receipts();
     await compareButton(actualPlan).click();
     await expect(compare).toContainText(basename(actualFile));
+    const actualField = dialect === 'mysql' ? 'actual.rows' : 'r_rows';
+    await diffSearch.fill(actualField);
+    const actualRow = compare.getByRole('row', { name: new RegExp('^' + actualField.replace('.', '\\.') + ' ') });
+    await expect(actualRow).toHaveAttribute('data-plan-match', 'true');
     if (dialect === 'mysql') await expect(compare.getByRole('rowheader', { name: text.compareDescription, exact: true })).toBeVisible();
-    else {
-      await compare.getByText(tablePath, { exact: true }).click();
-      await expect(compare.getByRole('rowheader', { name: 'r_rows', exact: true })).toBeVisible();
-    }
     await page.screenshot({ path: info.outputPath(`${dialect}-实际计划对比.png`) });
     await compare.getByRole('button', { name: zh.dialogs.text001, exact: true }).click();
     expect(await receipts()).toEqual(beforeActual);

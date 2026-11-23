@@ -8,8 +8,10 @@
 .explain-comparison{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;height:min(57vh,640px);overflow:auto}
 .explain-comparison p{margin:0}.explain-comparison-sources{display:grid;grid-template-columns:1fr 1fr;gap:12px;overflow-wrap:anywhere}
 .explain-comparison-summary{display:flex;flex-wrap:wrap;align-items:center;gap:12px}.explain-comparison-summary label{display:inline-flex;align-items:center;gap:4px}
+.explain-comparison-search{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.explain-comparison-search>input{min-width:0;width:min(230px,100%)}
 .explain-comparison-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(150px,1fr) minmax(0,2.4fr);border:1px solid var(--line)}
 .explain-comparison-paths,.explain-comparison-detail{min-width:0;overflow:auto;padding:8px}.explain-comparison-detail{border-inline-start:1px solid var(--line)}
 .explain-comparison-paths>button{width:100%;display:flex;align-items:flex-start;flex-direction:column;white-space:normal;text-align:start;overflow-wrap:anywhere;margin-block-end:4px}
 .explain-comparison-paths>button[aria-pressed=true]{background:var(--accent-bg);border-color:var(--accent)}
 .explain-comparison-detail table{border-collapse:collapse;width:100%;table-layout:fixed;margin-block-start:8px}.explain-comparison-detail td,.explain-comparison-detail th{border-block-end:1px solid var(--line);padding:5px;text-align:start;overflow-wrap:anywhere;white-space:pre-wrap;vertical-align:top}
+.explain-comparison-detail tr[data-plan-match]{background:var(--accent-bg)}
