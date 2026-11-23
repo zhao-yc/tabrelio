@@ -19,7 +19,7 @@ function pragmaObjectHover(name: string, title: string, entries: SqliteCompletio
 }
 
 function fieldHover(binding: string, column: string, entry: Extract<SqliteCompletionEntry, { kind: 'column' }> | undefined, tableFunction: boolean, localSource?: string, excluded = false) {
-  const lines = [text.title, text.column + '：' + display(column), text.binding + '：' + display(binding)];
+  const lines = [text.title, text.column + '：' + display(column), ...(binding ? [text.binding + '：' + display(binding)] : [])];
   if (entry) {
     if (excluded) lines.push(sqliteCompletionZh.excludedRow);
     const sourceKind = tableFunction ? sqliteCompletionZh.tableFunction : entry.schema === 'temp' ? text.temporary : text.permanent;

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。SQLite 的 VALUES CTE 和派生表可补全及悬停隐式输出名，支持显式列清单、首分支投影、星号和 `USING`。匿名来源按可见查询块的同名列消歧。Q01 继续为部分覆盖。 [SQLite VALUES](https://www.sqlite.org/lang_select.html#values)
+
 2026-11-24 源码增量。SQLite UPSERT 编辑器按实际主键、rowid 及唯一索引提供完整冲突目标候选，支持复合键补齐、排序规则、表达式和部分索引谓词。Q01 继续为部分覆盖。 [SQLite UPSERT](https://www.sqlite.org/lang_upsert.html)
 
 2026-11-24 源码增量。SQLite 查询来源支持表值 PRAGMA 名称、对象名和库名参数补全与悬停。模块签名来自原生隐藏参数，区分函数命名空间和对象所在库，同名表、视图与 CTE 可遮蔽模块。Q01 继续为部分覆盖。 [SQLite PRAGMA 函数](https://www.sqlite.org/pragma.html#pragfunc)

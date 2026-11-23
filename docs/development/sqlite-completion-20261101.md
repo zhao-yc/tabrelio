@@ -4,6 +4,8 @@
 
 SQLite 查询标签支持输入时建议及 `Ctrl+Space`：表、视图、字段、表别名，明确输出列的 CTE／派生表，以及 `main`／`temp` 限定。建议按准确名称使用 SQLite 双引号转义，以普通文本插入；同名字段保留各自别名限定。INSERT 字段清单、UPDATE 赋值左侧及 RETURNING 使用目标表字段。
 
+`WITH … AS (VALUES …)` 和 `FROM (VALUES …)` 支持从完整的值列表推导 `column1`、`column2` 等局部输出列。显式 CTE 列清单优先，复合输出沿用首分支，星号和 `USING` 可使用已知列。匿名来源的裸列只在最近作用域内能唯一匹配时补全或悬停。相关引用可能继承实际列名、行宽不符或行边界未闭合时，推导保留未知状态。 [SQLite VALUES](https://www.sqlite.org/lang_select.html#values)
+
 SQLite UPSERT 的 `ON CONFLICT` 可按当前连接的主键、rowid 和唯一索引补齐完整冲突目标。直接在关键字后补全可带入表达式及部分索引的原有 `WHERE`。在已有括号中可补齐普通唯一键的剩余项，保留已输入的项和后续动作。候选使用索引真实排序规则，复杂手写表达式和谓词仍提供列提示。完整与部分索引可能匹配同组目标时，目录标记部分可用。 [SQLite UPSERT](https://www.sqlite.org/lang_upsert.html)
 
 编辑 `PRAGMA` 时可补全库限定和名称，候选来自当前 SQLite 的 `pragma_list`，并受查询窗口的只读 PRAGMA 授权约束。表结构、索引、外键和完整性检查语句还可在括号或等号后补入对象名。候选保留原库限定和参数写法。通常同名临时对象优先，`table_list` 展示全部匹配，`index_info` 和 `index_xinfo` 在没有同名索引时可解析无 rowid 表。接受候选和悬停只读目录，设置写入继续由 SQLite 原生授权拦截。 [SQLite PRAGMA](https://www.sqlite.org/pragma.html)
@@ -73,6 +75,8 @@ SQLite 使用独立词法分析 Worker，不复用 MySQL 解析器。SQL 正文�
 明确执行、计划、参数识别及事务只可接管本会话正在运行的准确补全短读：同步占排他用户意图，边界取消元数据并等待原终态后重新核对目标，再发送一次原动作；其它查询或事务仍立即互斥。等待期间取消用户任务不会发送 SQL，关闭／物理配置变化使交接失效，不自动重连或重放。
 
 ## 验证记录
+
+2026-11-24 SQLite VALUES 输出增量。WIN11-TEST 不可达，本机 macOS arm64 使用 Node.js 24.17.0，通过原生运行时、严格类型检查、源码构建和 47 份套件的 1,245 项测试。原生 SQLite 对照覆盖递归种子、显式列名、星号传递、`USING`、相关列和匿名来源的同名歧义。Electron 编辑器 27 项通过，两条新增用例分别补入 CTE 和匿名 VALUES 的 `column2`，以本地解析提供悬停，显式执行返回预期值。原会话完整回归 1 项通过，耗时 113.7 秒，两次应用正常退出。报告位于 `.cache/sqlite-values-completion/final/`。Windows 界面及安装包待验。
 
 2026-11-24 UPSERT 冲突目标增量。WIN11-TEST 不可达，本机 macOS arm64 使用 Node.js 24.17.0，通过原生运行时、严格类型检查、源码构建和 46 份套件的 1,228 项测试。合成 SQLite 逐项编译确认实际目录候选，覆盖临时表遮蔽、rowid 别名、无 rowid 复合主键和部分表达式索引。Electron 编辑器 25 项通过。新用例验证反序复合键和带 `WHERE` 的表达式索引，接受候选时只读目录，显式执行后各更新原行，行数均保持一行且返回生成列。原会话完整回归 1 项通过，耗时 108.7 秒，两次应用正常退出。报告位于 `.cache/sqlite-conflict-completion/final/`。Windows 界面及安装包待验。
 

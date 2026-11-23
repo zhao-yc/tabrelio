@@ -70,6 +70,12 @@ const scenarios = [
     typed: 'lo', column: 'lower(old_extra)', target: '((lower(old_extra)) COLLATE "BINARY") WHERE id_related = \'启用\'',
     trail: ' DO UPDATE SET value=excluded.value RETURNING virtual_value', incoming: false,
     row: { id: 1, value: '新', virtual_value: '新!' }, output: '新!' },
+  { verb: 'VALUES CTE', prefix: "WITH seed AS (VALUES(1,'第一'),(2,'第二')) SELECT seed.",
+    typed: 'column2', column: 'column2', trail: ' FROM seed ORDER BY seed.column1', incoming: false,
+    row: { id: 1, value: '旧', virtual_value: '旧!' }, output: '第二' },
+  { verb: 'VALUES ANONYMOUS', prefix: 'SELECT ', typed: 'column2', column: 'column2',
+    trail: " FROM (VALUES(1, '本地'),(2, '匿名来源'))", incoming: false,
+    row: { id: 1, value: '旧', virtual_value: '旧!' }, output: '匿名来源' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
@@ -91,13 +97,14 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
   const pragmaFunctionSource = scenario.verb === 'PRAGMA FUNCTION SOURCE';
   const pragmaFunctionArgument = scenario.verb === 'PRAGMA FUNCTION ARGUMENT';
   const conflictKey = 'target' in scenario;
+  const valuesSource = scenario.verb === 'VALUES CTE' || scenario.verb === 'VALUES ANONYMOUS';
   const targetTable = strictType ? 'strict_subject' : triggerAction ? 'trigger_log' : 'subject';
   const lookupKind = conflictKey ? 'conflict-keys' : pragmaName ? 'pragmas' : pragmaObject ? 'pragma-objects' :
     analyzeIndex ? 'maintenance-objects' : dropIndex ? 'drop-objects' : foreignTable || triggerTarget ? 'relations' : strictType ? 'table-options' : scenario.verb === 'INDEXED BY' ? 'indexes' :
     scenario.verb === '函数' ? 'functions' : scenario.verb === 'COLLATE' ? 'collations' : 'columns';
   const alterColumn = scenario.verb === 'RENAME COLUMN' ? 'rename' : scenario.verb === 'DROP COLUMN' ? 'drop' : undefined;
   const { prefix, trail, typed, column } = scenario;
-  const opener = pragmaFunctionArgument ? "'" : '', cursor = prefix + opener + typed;
+  const opener = pragmaFunctionArgument ? "'" : scenario.verb === 'VALUES ANONYMOUS' ? '"' : '', cursor = prefix + opener + typed;
   const draft = cursor + 'suffix' + opener + trail;
   const accepted = prefix + (conflictKey ? scenario.target : scenario.verb === '函数' ? column + '(' + scenario.args + ')' :
     strictType || createType || pragmaName || pragmaFunctionSource ? column : pragmaFunctionArgument ? "'" + column + "'" : '"' + column + '"') + trail;
@@ -166,7 +173,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
           if (command === 'query.execute' && (typeof input.sql !== 'string' || input.sql.replaceAll('\r\n', '\n') !== setup.accepted ||
             facts.some(fact => fact.command === 'query.execute'))) throw Error('SQL 不是本例唯一明确操作');
           if (command === 'sqlite.completion') {
-            if (setup.createType) throw Error('建表声明类型无需访问目录');
+            if (setup.createType || setup.valuesSource) throw Error('本地编辑位置无需访问目录');
             if ('sql' in input) throw Error('目录接收了编辑器原文');
             if (setup.dropIndex && input.kind !== 'stamp' && (input.kind !== 'drop-objects' || input.object !== 'index' ||
               input.schema !== 'main' || (input.exact === undefined ? input.prefix !== setup.typed : input.prefix !== '' || input.exact !== setup.catalogName))) {
@@ -239,7 +246,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         return entry(event, payload);
       });
     }, { filePath, connectionId, accepted, lookupKind, targetTable, typed, catalogName: column, createType, foreignChild, foreignColumn, triggerTarget, isTrigger, triggerAction, dropIndex, analyzeIndex, pragmaName, pragmaObject,
-      pragmaFunctionSource, pragmaFunctionArgument, conflictKey, createIndex: scenario.verb === 'CREATE INDEX', alterColumn });
+      pragmaFunctionSource, pragmaFunctionArgument, conflictKey, valuesSource, createIndex: scenario.verb === 'CREATE INDEX', alterColumn });
 
     await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
     await page.evaluate(async ({ id, sql }) => {
@@ -282,7 +289,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     await expect.poll(async () => (await inspect()).sql).toBe(inserted);
     const completion = (await snapshot()).slice(previous).filter(fact => fact.command === 'sqlite.completion');
     const requests = completion.map(fact => sqliteCompletionInputSchema.parse(fact.input));
-    expect(requests.filter(input => input.kind !== 'stamp')).toEqual(createType ? [] : [
+    expect(requests.filter(input => input.kind !== 'stamp')).toEqual(createType || valuesSource ? [] : [
       ...(foreignColumn ? [expect.objectContaining({ kind: 'table-options', table: foreignChild, prefix: '' })] : []),
       ...(triggerAction ? [expect.objectContaining({ kind: 'trigger-owner', triggerTarget: 'table', table: 'subject', prefix: '' })] : []),
       ...(pragmaFunctionSource ? [expect.objectContaining({ kind: 'relations', prefix: typed })] : []),
@@ -331,6 +338,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
       else if (pragmaObject) await expect(hover).toContainText('"main"."subject"');
       else if (pragmaFunctionSource) await expect(hover).toContainText('SQLite 表值函数 pragma_table_xinfo');
       else if (pragmaFunctionArgument) await expect(hover).toContainText('"main"."subject"');
+      else if (valuesSource) await expect(hover).toContainText(scenario.verb === 'VALUES CTE' ? 'CTE 局部输出' : '派生表局部输出');
       else if (analyzeIndex) {
         await expect(hover).toContainText('"main"."subject_by_value"');
         await expect(hover).toContainText('收集单个索引的查询规划统计');
@@ -401,6 +409,7 @@ for (const scenario of scenarios) {
       scenario.verb.startsWith('PRAGMA FUNCTION ') ? process.env.DBARK_SQLITE_PRAGMA_FUNCTION_COMPLETION_NATIVE === '1' :
       scenario.verb.startsWith('PRAGMA ') ? process.env.DBARK_SQLITE_PRAGMA_COMPLETION_NATIVE === '1' :
       scenario.verb.startsWith('CONFLICT ') ? process.env.DBARK_SQLITE_CONFLICT_COMPLETION_NATIVE === '1' :
+      scenario.verb.startsWith('VALUES ') ? process.env.DBARK_SQLITE_VALUES_COMPLETION_NATIVE === '1' :
       scenario.verb.startsWith('TRIGGER ') ? process.env.DBARK_SQLITE_TRIGGER_COMPLETION_NATIVE === '1' :
       scenario.verb === 'FOREIGN KEY TABLE' || scenario.verb === 'FOREIGN KEY COLUMN' ? process.env.DBARK_SQLITE_FOREIGN_KEY_COMPLETION_NATIVE === '1' :
       scenario.verb === 'STRICT TYPE' || scenario.verb === 'CREATE TYPE' ? process.env.DBARK_SQLITE_COLUMN_TYPE_COMPLETION_NATIVE === '1' :

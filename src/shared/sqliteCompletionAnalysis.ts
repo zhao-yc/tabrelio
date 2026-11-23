@@ -77,7 +77,7 @@ export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: numbe
 type Token = { kind: 'id' | 'string' | 'number' | 'parameter' | 'symbol'; value: string; start: number; end: number; depth: number; quoted?: boolean; closed?: boolean; pair?: number; pragmaLiteral?: true };
 type ProjectionSource = { start: number; end: number; ctes: Map<string, Cte> };
 type Cte = { name: string; columns?: string[]; start: number; end: number; declaration: SqliteLocalDefinition; projectionSource?: ProjectionSource };
-type Binding = { relation: SqliteCompletionRelation; start: number; end: number; aliasIndex?: number; referenceIndex?: number; declaration?: SqliteLocalDefinition; unknown?: boolean; nestedProjection?: true; level?: number; afterOuterJoin?: true;
+type Binding = { relation: SqliteCompletionRelation; start: number; end: number; aliasIndex?: number; referenceIndex?: number; declaration?: SqliteLocalDefinition; unknown?: boolean; anonymousValues?: true; nestedProjection?: true; level?: number; afterOuterJoin?: true;
   group?: { root: number; groups: SqliteJoinGroup[]; members: Binding[] }; projectionSource?: ProjectionSource; };
 type JoinStarScope = { inputs: JoinStarInput[]; groups: SqliteJoinGroup[]; owners: Map<Binding, number>; uniqueLeft: boolean };
 type Ready = Extract<SqliteCompletionAnalysis, { status: 'ready' }>;
@@ -455,9 +455,11 @@ function conflictKeySlot(tokens: Token[], arm: ConflictArm, finish: number, targ
   if (at(first, close)) return { table: table.name, schema: table.schema, mode: 'terms', used };
 }
 
+const queryHead = (token: Token | undefined) => ['select', 'with', 'values'].some(word => keyword(token, word));
+
 function subqueryAt(tokens: Token[], start: number, end: number, offset: number, sourceEnd: number): { start: number; end: number } | undefined {
   for (let at = start; at < end; at++) {
-    if (tokens[at].kind !== 'symbol' || tokens[at].value !== '(' || !(keyword(tokens[at + 1], 'select') || keyword(tokens[at + 1], 'with'))) continue;
+    if (tokens[at].kind !== 'symbol' || tokens[at].value !== '(' || !queryHead(tokens[at + 1])) continue;
     const finish = tokens[at].pair ?? end;
     if (offset >= (tokens[at + 1]?.start ?? sourceEnd) && offset <= (tokens[finish]?.start ?? sourceEnd)) return { start: at + 1, end: finish };
     at = finish;
@@ -686,15 +688,64 @@ export function sqlitePhysicalObjectContext(source: string, offset: number): Phy
 
 type ProjectionItem = { name?: string; star?: string | null; alias?: Token; expression?: Token[] };
 const aliasOperators = new Set('collate escape is like glob regexp match over filter between in isnull notnull'.split(' '));
+
+function firstProjectionHead(tokens: Token[], start: number, end: number): number {
+  const depth = tokens[start]?.depth ?? 0;
+  for (let index = start; index < end; index++) {
+    const token = tokens[index];
+    if (token.depth !== depth) continue;
+    if (setOperators.some(word => keyword(token, word))) return -1;
+    if (keyword(token, 'select') || keyword(token, 'values')) return index;
+  }
+  return -1;
+}
+
+/** SQLite 会穿过括号和 COLLATE 保留相关列名，不能把这类投影猜成 columnN。 */
+function valuesMayInheritName(tokens: Token[], first: number, end: number): boolean {
+  while (first < end) {
+    const token = tokens[first];
+    const collate = tokens[end - 2], rule = tokens[end - 1];
+    if (end - first >= 3 && collate.depth === token.depth && keyword(collate, 'collate') &&
+      (rule.kind === 'id' || rule.kind === 'string')) { end -= 2; continue; }
+    if (token.kind === 'symbol' && token.value === '(' && token.pair === end - 1) { first++; end--; continue; }
+    if ((end - first) % 2 !== 1 || end - first === 1 && literalNames.some(word => keyword(token, word))) return false;
+    return tokens.slice(first, end).every((part, index) => index % 2 ? part.kind === 'symbol' && part.value === '.' : part.kind === 'id');
+  }
+  return true;
+}
+
+/** 只核对行边界和投影名称，实参、表达式值和嵌套查询无需执行。 */
+function valuesProjection(tokens: Token[], head: number, end: number): ProjectionItem[] {
+  let at = head + 1, width = 0;
+  while (at < end) {
+    const open = tokens[at], close = open.pair;
+    if (open.kind !== 'symbol' || open.value !== '(' || close === undefined || close >= end || close === at + 1) return [];
+    let first = at + 1, count = 0;
+    for (let index = first; index <= close; index++) {
+      const token = tokens[index], top = token.depth === open.depth + 1;
+      if (index < close && top && keyword(token, 'as')) return [];
+      if (index !== close && !(top && token.kind === 'symbol' && token.value === ',')) continue;
+      if (index === first || index === first + 1 && tokens[first].kind === 'symbol' ||
+        !width && valuesMayInheritName(tokens, first, index)) return [];
+      if (++count > limits.entries) fail('budget');
+      first = index + 1;
+    }
+    if (width && count !== width) return [];
+    width = count;
+    at = close + 1;
+    if (at === end || setOperators.some(word => keyword(tokens[at], word))) {
+      return Array.from({ length: width }, (_, index) => ({ name: 'column' + (index + 1) }));
+    }
+    if (tokens[at].kind !== 'symbol' || tokens[at].value !== ',') return [];
+    at++;
+  }
+  return [];
+}
+
 /** 保持首分支投影顺序，星号和显式名字的先后决定 SQLite 的重名后缀。 */
 function projectionItems(tokens: Token[], start: number, end: number): ProjectionItem[] {
-  const depth = tokens[start]?.depth ?? 0; let select = -1;
-  for (let i = start; i < end; i++) {
-    const token = tokens[i];
-    if (token.depth !== depth) continue;
-    if (setOperators.some(word => keyword(token, word))) return [];
-    if (keyword(token, 'select')) { select = i; break; }
-  }
+  const depth = tokens[start]?.depth ?? 0, select = firstProjectionHead(tokens, start, end);
+  if (keyword(tokens[select], 'values')) return valuesProjection(tokens, select, end);
   if (select < 0) return []; let finish = end;
   for (let i = select + 1; i < end; i++) if (tokens[i].depth === depth && (fromClause(tokens, i) ||
     ['where', 'group', 'having', 'window', 'order', 'limit', ...setOperators].some(word => keyword(tokens[i], word)))) { finish = i; break; }
@@ -1540,8 +1591,9 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         if (tokens[at]?.kind === 'symbol' && tokens[at].value === '(') {
           const open = at++, close = tokens[open].pair ?? bound;
           if (isTarget || close > bound) fail('relation-group');
-          if (!keyword(tokens[at], 'select') && !keyword(tokens[at], 'with')) return relationGroup(open, close, bound, hasPrefix, parentJoins);
+          if (!queryHead(tokens[at])) return relationGroup(open, close, bound, hasPrefix, parentJoins);
           derived.push({ start: at, end: close }); const columns = projectionColumns(tokens, at, close);
+          const anonymousValues = !!columns && keyword(tokens[firstProjectionHead(tokens, at, close)], 'values');
           const plan = columns ? undefined : projectionSource(at, close, ctes);
           at = close < bound ? close + 1 : bound;
           if (keyword(tokens[at], 'as')) at++;
@@ -1549,10 +1601,11 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
           if (alias?.kind === 'id' && alias.value && (alias.quoted || !structural.has(fold(alias.value)))) {
             binding = { relation: { kind: 'local', source: 'derived', name: alias.value, alias: alias.value, columns: columns ?? [] }, start: begin, end: at + 1, aliasIndex: at, unknown: !columns && !plan, projectionSource: plan }; at++;
           } else {
-            if (!relationOnly && !parentJoins) { if (offset >= tokens[open].start && offset <= (tokens[close]?.start ?? source.length)) return at; fail('derived-alias'); }
             if (keyword(tokens[at - 1], 'as')) fail('alias');
-            // 匿名派生表参与裸星号展开，不参与任何名称限定匹配。
-            binding = { relation: { kind: 'local', source: 'derived', name: '', columns: columns ?? [] }, start: begin, end: at, unknown: !columns && !plan, projectionSource: plan };
+            if (!anonymousValues && !relationOnly && !parentJoins) { if (offset >= tokens[open].start && offset <= (tokens[close]?.start ?? source.length)) return at; fail('derived-alias'); }
+            // 匿名 VALUES 可按裸列名匹配；没有真实别名，不能伪造限定词。
+            binding = { relation: { kind: 'local', source: 'derived', name: '', columns: columns ?? [] }, start: begin, end: at,
+              unknown: !columns && !plan, projectionSource: plan, ...(anonymousValues ? { anonymousValues: true } : {}) };
           }
         } else {
           const first = tokens[at]; if (!first || first.kind !== 'id') { if (!first || first.start >= offset) { relationContext = true; return at; } fail('relation'); }
@@ -1798,7 +1851,11 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         }
         aliases.add(name);
       }
-      const lexicalBindings = [...visibleOwn.filter(binding => binding.relation.name), ...outer.filter(binding => !aliases.has(fold(binding.relation.alias ?? binding.relation.name)))];
+      const includeAnonymous = !qualifiers.length && (!intent || intent === 'hover');
+      const lexicalBindings = [
+        ...visibleOwn.filter(binding => binding.relation.name || includeAnonymous && binding.anonymousValues),
+        ...outer.filter(binding => binding.relation.name ? !aliases.has(fold(binding.relation.alias ?? binding.relation.name)) : includeAnonymous && binding.anonymousValues),
+      ];
       let bindings = lexicalBindings.filter(binding => !binding.afterOuterJoin || intent === 'hover' && !qualifiers.length);
       if (aliasContext && intent !== 'object') fail('alias');
       for (let at = head; at < end; at++) if (keyword(tokens[at], 'using') && tokens[at + 1]?.value === '(' && offset >= tokens[at + 1].end && offset <= (tokens[tokens[at + 1].pair ?? end]?.start ?? source.length)) fail('using');
@@ -1826,7 +1883,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
           }
           if (names.length) {
             // 无名派生表未进入限定字段目录，连接组的重名后缀也可能与输出别名冲突。
-            const sourcesIncomplete = visibleOwn.some(binding => binding.unknown || !binding.relation.name) ||
+            const sourcesIncomplete = visibleOwn.some(binding => binding.unknown || !binding.relation.name && !binding.anonymousValues) ||
               names.some(name => /:\d+$/.test(name)) && visibleOwn.some(binding => binding.nestedProjection);
             outputAliases = { ...context, names, scopeDepth: level, ...(sourcesIncomplete ? { sourcesIncomplete: true } : {}) };
             // 后续表仍可能抢占未限定的别名。仅为同层别名消歧保留其目录身份。
@@ -1846,7 +1903,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         if (functions.mode !== 'scalar' && tokens.slice(head, priorIndex + 1).some((token, index) => token.kind === 'symbol' && token.value === '(' &&
           (token.pair ?? end) > priorIndex && (keyword(tokens[head + index - 1], 'over') || keyword(tokens[head + index - 1], 'filter')))) functions.mode = 'scalar';
       }
-      return { bindings, ctes, syntax: relationContext ? ['relation', 'keyword'] : ['column', 'keyword'],
+      return { bindings: relationContext ? bindings.filter(binding => binding.relation.name) : bindings, ctes, syntax: relationContext ? ['relation', 'keyword'] : ['column', 'keyword'],
         ...(triggerWriteTarget && relationContext ? { triggerWriteTarget: true } : {}),
         ...(pragmaFunction && relationContext ? { pragmaFunction } : {}),
         ...(outputAliases ? { outputAliases } : {}), ...(functions ? { functions } : {}) };
@@ -1999,12 +2056,13 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
     }
     const declarations: SqliteCompletionRelation[] = [...parsed.ctes.values()].map(cte => ({ kind: 'local', source: 'cte', name: cte.name, columns: cte.columns ?? [], declaration: true }));
     const columnIntent = (!intent || intent === 'hover') && parsed.syntax.includes('column');
+    const anonymousValues = columnIntent && parsed.bindings.some(binding => binding.anonymousValues);
     const alias = columnIntent ? parsed.bindings.find(binding => binding.group && qualifiers.length === 1 && fold(binding.relation.name) === fold(qualifiers[0])) : undefined;
     const relations = [...parsed.bindings.map(binding => {
       const { relation, projectionSource, afterOuterJoin } = binding;
       const projection = columnIntent && !alias && projectionSource && relation.kind === 'local' && (!qualifiers.length ||
         qualifiers.length === 1 && fold(relation.alias ?? relation.name) === fold(qualifiers[0])) ? compileProjection(projectionSource) : undefined;
-      return { ...relation, ...(intent === 'hover' || parsed.outputAliases ? { scopeDepth: binding.level! } : {}),
+      return { ...relation, ...(intent === 'hover' || parsed.outputAliases || anonymousValues ? { scopeDepth: binding.level! } : {}),
         ...(afterOuterJoin ? { afterOuterJoin } : {}), ...(projection === undefined ? {} : { projection }) };
     }), ...declarations];
     if (relations.filter(relation => relation.kind !== 'local' || relation.source !== 'group').length > limits.relations) fail('budget');
@@ -2120,8 +2178,10 @@ const windowNameSchema = z.object({ names: z.array(z.object({ name: nameSchema, 
 );
 const relationSchema = z.discriminatedUnion('kind', [
   outputSource.safeExtend({ kind: z.literal('physical'), alias: nameSchema.optional(), visibleColumnsOnly: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional(), afterOuterJoin: z.literal(true).optional(), dmlRole: z.enum(['mutation-target', 'excluded', 'returning-target']).optional() }),
-  z.object({ kind: z.literal('local'), source: z.enum(['cte', 'derived', 'group']), name: nameSchema, alias: nameSchema.optional(), columns: columnNames,
-    declaration: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional(), projection: projectionIndex.optional(), afterOuterJoin: z.literal(true).optional() }).strict(),
+  z.object({ kind: z.literal('local'), source: z.enum(['cte', 'derived', 'group']), name: z.union([nameSchema, z.literal('')]), alias: nameSchema.optional(), columns: columnNames,
+    declaration: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional(), projection: projectionIndex.optional(), afterOuterJoin: z.literal(true).optional() }).strict()
+    .refine(relation => !!relation.name || relation.source === 'derived' && !relation.alias && !relation.declaration && relation.projection === undefined &&
+      relation.columns.length > 0 && relation.columns.every((name, index) => name === 'column' + (index + 1))),
 ]);
 const resultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('blocked'), reason: z.string().regex(/^[a-z-]{1,64}$/) }).strict(),
@@ -2256,8 +2316,10 @@ export function validateSqliteCompletionAnalysis(raw: unknown, source: string, o
   if (visited.size !== localProjections.length || catalog.size > limits.relations) fail('response');
   if (value.relations.some(relation => relation.kind === 'local' && relation.declaration && relation.source !== 'cte')) fail('response');
   const aliasDepth = value.outputAliases?.scopeDepth;
+  const anonymousValues = value.relations.some(relation => !relation.name);
+  if (anonymousValues && (value.qualifiers.length || !value.syntax.includes('column') || intent === 'definition' || intent === 'object' || value.unqualifiedColumns)) fail('response');
   if (value.relations.some(relation => {
-    const needsDepth = (relation.kind !== 'local' || !relation.declaration) && (intent === 'hover' || aliasDepth !== undefined);
+    const needsDepth = (relation.kind !== 'local' || !relation.declaration) && (intent === 'hover' || aliasDepth !== undefined || anonymousValues);
     if (needsDepth !== (relation.scopeDepth !== undefined)) return true;
     if (relation.afterOuterJoin && (!needsDepth || value.qualifiers.length || intent !== 'hover' &&
       (value.outputAliases?.clause !== 'on' || relation.scopeDepth !== aliasDepth))) return true;

@@ -450,6 +450,8 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
     const selected = bound.filter(relation => sqliteCompletionRelationMatches(relation, qualifiers, body?.schema));
     if (qualifiers.length && selected.length > 1) return { items: [], incomplete: true };
     const outputAliases = analysis.outputAliases, sourceNames = new Set<string>();
+    const anonymous = selected.some(relation => !relation.name);
+    const unqualified = new Map<string, { name: string; depth: number; count: number; anonymous: boolean }>();
     const addOutputAlias = (name: string) => add({ label: name, kind: 'column', insertText: quote(name), detail: text.outputAlias });
     let aliasSourcesIncomplete = outputAliases?.sourcesIncomplete === true;
     let aliasMayResolveToRowid = false;
@@ -462,8 +464,14 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
       // INSERT列清单由分析器仅投影目标表；已有点限定时只替换最后的字段。
       const insert = (name: string) => qualifiers.length || analysis.unqualifiedColumns ? quote(name) : quote(binding) + '.' + quote(name);
       const addSourceColumn = (name: string, detail: string) => {
-        if (aliasSource) sourceNames.add(fold(name));
-        if (!relation.afterOuterJoin) add({ label: name, kind: 'column', insertText: insert(name), detail });
+        const key = fold(name);
+        if (aliasSource) sourceNames.add(key);
+        if (anonymous && key.startsWith(prefix) && (relation.kind !== 'physical' || relation.dmlRole !== 'excluded')) {
+          const depth = relation.scopeDepth ?? 0, existing = unqualified.get(key);
+          if (!existing || existing.depth < depth) unqualified.set(key, { name, depth, count: 1, anonymous: !binding });
+          else if (existing.depth === depth) existing.count++;
+        }
+        if (binding && !relation.afterOuterJoin) add({ label: name, kind: 'column', insertText: insert(name), detail });
       };
       if (relation.kind === 'local') {
         const kind = relation.source === 'cte' ? text.cte : text.derived;
@@ -489,10 +497,16 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
           addSourceColumn(entry.name, binding + ' · ' + (source ?? entry.schema) + ' · ' + (entry.declaredType || text.column) + (entry.generated ? ' · ' + text.generated : '') + (entry.hidden ? ' · ' + text.hidden : ''));
         }
       }
-      if (!qualifiers.length && !relation.afterOuterJoin && !analysis.unqualifiedColumns) {
+      if (binding && !qualifiers.length && !relation.afterOuterJoin && !analysis.unqualifiedColumns) {
         const detail = relation.kind === 'physical' && relation.dmlRole === 'excluded' ? text.excludedRow : relation.kind === 'local' && relation.source === 'group' ? text.joinGroup : text.alias;
         add({ label: binding, kind: 'alias', insertText: quote(binding) + '.', detail, trigger: true });
       }
+    }
+    // 匿名 VALUES 只能插入裸列名。只有最近作用域内查到唯一来源时才提供候选。
+    if (!incomplete) for (const [key, result] of unqualified) {
+      if (!result.anonymous || result.count !== 1 || outputAliases?.names.some(name => fold(name) === key) &&
+        (outputAliases.outputFirst || outputAliases.scopeDepth > result.depth)) continue;
+      add({ label: result.name, kind: 'column', insertText: quote(result.name), detail: text.derived });
     }
     for (const row of triggerBody?.rows ?? []) {
       const label = row.toUpperCase();

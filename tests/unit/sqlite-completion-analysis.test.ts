@@ -162,8 +162,8 @@ it('递归CTE的递归成员可补显式列，锚点不借递归成员中的绑�
     .toEqual([{ kind: 'local', source: 'cte', name: 'c', columns: ['x'], declaration: true }]);
   expect(ready('WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT c.| + 1 FROM c WHERE x < 3) SELECT * FROM c').relations)
     .toContainEqual({ kind: 'local', source: 'cte', name: 'c', columns: ['x'] });
-  expect(analyze('WITH c AS (VALUES(1) UNION ALL SELECT 2 AS later_name) SELECT c.| FROM c'))
-    .toMatchObject({ status: 'blocked', reason: 'local-output' });
+  expect(ready('WITH c AS (VALUES(1) UNION ALL SELECT 2 AS later_name) SELECT c.| FROM c').relations)
+    .toContainEqual({ kind: 'local', source: 'cte', name: 'c', columns: ['column1'] });
 });
 it('派生表显式输出保持离线，星号只携带实际来源的目录引用', () => {
   expect(ready('SELECT d.| FROM (SELECT source.id AS item,1 AS flag FROM source) AS d').relations)
