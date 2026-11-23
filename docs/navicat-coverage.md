@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 查询编辑器支持用 F2 给当前语句的显式投影别名及 CTE、派生表列清单整组改名，更新已确认的透传引用。交付修改前会重新核对名称及引用关系，保留其它作用域和物理字段。可离线操作，一次撤销恢复原稿。Q01 继续为部分覆盖。 [Navicat 编辑器重构](https://www3.navicat.com/en/navicat-18-highlights)
+
 2026-11-24 源码增量。PostgreSQL 查询编辑器支持对作用域已确认的 CTE、派生表和 SELECT 输出列使用 F12、Shift+F12 和引用高亮。识别显式列清单、原名透传、递归首分支及集合查询的 ORDER BY，保留内外层同名列各自的声明。可离线操作。Q01 继续为部分覆盖。 [Navicat 编辑器 Code Insight](https://www3.navicat.com/en/navicat-18-highlights)
 
 2026-11-24 源码增量。PostgreSQL 查询编辑器可在确认物理字段来源时悬停查看模式、表、数据类型、目录可空性、默认值或生成表达式及备注。原会话的搜索路径、临时对象和精确引号规则参与解析。同一未限定字段命中多个来源时提示加限定名。Q01、R01 继续为部分覆盖。 [Navicat 编辑器 Hover Info](https://pgsql.navicat.com/en/navicat-18-highlights)

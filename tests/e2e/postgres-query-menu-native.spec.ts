@@ -1860,6 +1860,45 @@ test('PostgreSQL 方言着色跨行匹配 dollar 标签和嵌套注释', async (
   expect(pageErrors).toEqual([]);
 });
 
+test('PostgreSQL 离线整组重命名投影列并保留物理字段和内层同名列', async ({}, info) => {
+  const lines = ['WITH q(amount) AS (SELECT s.amount FROM ledger s),',
+    '  copied AS (SELECT q.* FROM q)',
+    'SELECT c.amount, (SELECT d.amount FROM (SELECT 2 AS amount) d) AS other_value',
+    'FROM copied c', 'ORDER BY amount;'];
+  const sql = lines.join('\n');
+  await prepare({id: '', name: '离线 PostgreSQL 投影改名', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, sql);
+  await resizeQueryWindow(1280, 920, 0.75);
+  const initial = await inspectModel(), column = lines[2].indexOf('amount') + 3;
+  const input = editor().locator('.rename-box input.rename-input');
+  const enter = async (value: string) => {
+    await modelSelection(3, column);
+    await page.keyboard.press('F2');
+    await expect(input).toHaveValue('amount');
+    await input.fill(value);
+    await input.press('Enter');
+    await expect(input).not.toBeVisible();
+  };
+  await enter('other_value');
+  await expect(tab().getByRole('status').filter({hasText: localRenameZh.collision})).toBeVisible();
+  expect((await inspectModel()).sql).toBe(sql);
+
+  await enter('total_usd');
+  const expected = [lines[0].replace('q(amount)', 'q("total_usd")'), lines[1],
+    lines[2].replace('c.amount', 'c."total_usd"'), lines[3], 'ORDER BY "total_usd";'].join('\n');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(expected);
+  await modelSelection(3, column);
+  await page.keyboard.press('F12');
+  await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 1, column: lines[0].indexOf('amount') + 1});
+  await page.screenshot({path: info.outputPath('PostgreSQL投影列成组改名.png'), animations: 'disabled'});
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+  expect((await inspectModel()).identity).toEqual(initial.identity);
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('PostgreSQL 离线定位 CTE 列声明并高亮同一投影的引用', async ({}, info) => {
   const lines = ['WITH q AS (SELECT 1 AS amount),',
     '  copied AS (SELECT q.amount FROM q)',

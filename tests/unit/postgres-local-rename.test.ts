@@ -14,6 +14,42 @@ function edited(marked: string, name: string) {
   return result.edits.reduceRight((sql, edit) => sql.slice(0, edit.start) + edit.text + sql.slice(edit.end), marked.replace('¦', ''));
 }
 
+it('整组改写 CTE 列清单与透传引用，保留物理同名字段、内层同名列和相邻语句', () => {
+  const source = 'WITH q(amount) AS (SELECT s.amount FROM ledger s), ' +
+    'chain AS (SELECT q.* FROM q) SELECT c.am¦ount, (SELECT d.amount FROM (SELECT 2 AS amount) d) AS other_value ' +
+    'FROM chain c ORDER BY amount; SELECT amount FROM app.table_name;';
+  expect(rename(source)).toMatchObject({ status: 'ready', kind: 'column', name: 'amount', edits: [] });
+  expect(edited(source, '总额"USD')).toBe('WITH q("总额""USD") AS (SELECT s.amount FROM ledger s), ' +
+    'chain AS (SELECT q.* FROM q) SELECT c."总额""USD", (SELECT d.amount FROM (SELECT 2 AS amount) d) AS other_value ' +
+    'FROM chain c ORDER BY "总额""USD"; SELECT amount FROM app.table_name;');
+  expect(edited('WITH q(¦id) AS (SELECT id FROM ledger) SELECT q.id FROM q', 'entry_id'))
+    .toBe('WITH q("entry_id") AS (SELECT id FROM ledger) SELECT q."entry_id" FROM q');
+});
+
+it('重命名派生表和递归 CTE 的显式列，保留原表达式和其它输出名称', () => {
+  expect(edited('SELECT d.¦total FROM (SELECT 1 AS base) d(total) ORDER BY total', 'total_usd'))
+    .toBe('SELECT d."total_usd" FROM (SELECT 1 AS base) d("total_usd") ORDER BY "total_usd"');
+  expect(edited('WITH RECURSIVE q(n) AS (VALUES (1) UNION ALL SELECT q.¦n+1 FROM q WHERE q.n<4) SELECT q.n FROM q', 'step'))
+    .toBe('WITH RECURSIVE q("step") AS (VALUES (1) UNION ALL SELECT q."step"+1 FROM q WHERE q."step"<4) SELECT q."step" FROM q');
+  expect(edited('SELECT 1 AS ¦amount', 'next_amount')).toBe('SELECT 1 AS "next_amount"');
+  expect(edited("SELECT 'amount' AS ¦amount /* amount */ ORDER BY amount", 'next_amount'))
+    .toBe("SELECT 'amount' AS \"next_amount\" /* amount */ ORDER BY \"next_amount\"");
+});
+
+it('拒绝显式和隐式名称碰撞，以及无法完整改写的分组和连接依赖', () => {
+  expect(rename('WITH q(¦old) AS (VALUES (1,2)) SELECT q.old FROM q', 'column2')).toEqual({ status: 'blocked', reason: 'collision' });
+  expect(rename('SELECT 1 AS ¦old, 2 AS existing ORDER BY old', 'existing')).toEqual({ status: 'blocked', reason: 'collision' });
+  expect(rename('SELECT 1 AS ¦old, 2 AS old', 'new_name')).toEqual({ status: 'blocked', reason: 'collision' });
+  expect(rename('SELECT 1 AS ¦old ORDER BY old', 'x'.repeat(64))).toEqual({ status: 'blocked', reason: 'name' });
+  for (const sql of [
+    'SELECT 1 AS ¦old GROUP BY old',
+    'WITH q AS (SELECT 1 AS ¦old) SELECT q.old FROM q NATURAL JOIN other',
+    'WITH q AS (SELECT 1 AS ¦old) SELECT q.old FROM q JOIN other USING (old)',
+    'WITH q AS (SELECT 1 AS ¦old) SELECT q.old, other.* FROM q CROSS JOIN other',
+  ]) expect(rename(sql, 'next_name'), sql).toEqual({ status: 'blocked', reason: 'unresolved' });
+  expect(rename('SELECT t.¦old FROM ledger t ORDER BY old', 'next_name')).toMatchObject({ status: 'blocked' });
+});
+
 it('整稿改写命名参数，执行计划仍逐条编号并为同名参数提供一次输入', () => {
   const source = "SELECT [$ne¦edle], '[$needle]', [$Needle];\nSELECT [$needle], $$[$needle]$$;";
   expect(rename(source)).toMatchObject({ status: 'ready', kind: 'parameter', name: 'needle', edits: [] });

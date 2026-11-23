@@ -7,7 +7,7 @@ const maximumRenameRanges = 256;
 export type LocalRenameDialect = 'mysql' | 'sqlite';
 type RenameDialect = LocalRenameDialect | 'postgresql';
 type LocalDeclarationKind = 'alias' | 'cte' | 'window';
-type LocalRenameKind = LocalDeclarationKind | 'parameter';
+type LocalRenameKind = LocalDeclarationKind | 'parameter' | 'column';
 export type LocalRename = { status: 'blocked'; reason: string } | {
   status: 'ready'; target: { start: number; end: number }; name: string; kind: LocalRenameKind;
   edits: { start: number; end: number; text: string }[];
