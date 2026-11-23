@@ -291,10 +291,10 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     stage = '当前原生计划直接读取基准，关闭后保留结果视图';
     await step(() => view().getByRole('button', { name: sqliteExplainZh.rawLabel, exact: true }).click());
     const beforeLiveCompare = await step(audit);
-    await step(() => view().getByRole('button', { name: snapshotText.sqliteCompareBaseline, exact: true }).click());
+    await step(() => view().getByRole('button', { name: snapshotText.compareBaseline, exact: true }).click());
     const live = page.getByRole('dialog', { name: snapshotText.sqliteCompareTitle, exact: true });
     await step(() => expect(live.getByRole('status')).toHaveText(snapshotText.compareCount(plan.expectedNodes.length, plan.expectedNodes.length)));
-    await step(() => expect(live.getByText(`${snapshotText.sqliteCompareCurrent}　${targetPlan.version}`, { exact: true })).toBeVisible());
+    await step(() => expect(live.getByText(`${snapshotText.compareCurrent}　${targetPlan.version}`, { exact: true })).toBeVisible());
     const liveDiff = live.getByRole('row', { name: /^detail / }).getByRole('cell');
     await step(() => expect(liveDiff.nth(0)).toHaveText(plan.expectedNodes[0].detail));
     await step(() => expect(liveDiff.nth(1)).toHaveText(targetPlan.expectedNodes[0].detail));

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 查询标签可将当前估算或实测 JSON 计划直接与同类基准快照对比，并排显示路径和字段变化，保留服务器返回的指标精度。Q07 继续为部分覆盖。 [PostgreSQL EXPLAIN](https://www.postgresql.org/docs/current/sql-explain.html)
+
 2026-11-24 源码增量。SQLite 查询标签可将当前计划直接与保存的基准快照对比，按树位置显示节点变化，关闭后恢复原计划阅读。Q07 继续为部分覆盖。 [SQLite 执行计划](https://www.sqlite.org/eqp.html)
 
 2026-11-24 源码增量。SQLite 优化器计划可保存为 `.dbark-plan.json`，离线打开后从原始四列重建树、表格和节点查找，并可另存副本。两份完整快照可按关系树位置对照原始节点说明，查看新增、移除和变化。Q07 继续为部分覆盖。 [SQLite 执行计划](https://www.sqlite.org/eqp.html)

@@ -6,6 +6,7 @@ import { explainLimits, explainNodeDetail, explainQueryArrayKinds, type ExplainN
 import { explainZh as t } from '../locales/explain.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
 import { ExplainSnapshotSaveButton } from './ExplainSnapshotSaveButton';
+import { LivePlanFileActions } from './LivePlanFileActions';
 import '../explain.css';
 import '../explainSnapshot.css';
 
@@ -23,16 +24,16 @@ function displayTitle(node: ExplainNode): string {
 }
 
 /** 展示有界的真实计划；所有视图切换都读取已有结果，只有明确的文本按钮会发送请求。 */
-type ExplainPlanViewProps = { outcome: QueryOutcome; onText?(): void; busy: boolean; fileBusy?: boolean; fileActions?: boolean; fileSnapshot?: ExplainSnapshotDocument; saveAs?: boolean; onFileBusyChange?(busy: boolean): void };
-export function ExplainPlanView({ outcome, onText, busy, fileBusy, fileActions = false, fileSnapshot, saveAs, onFileBusyChange }: ExplainPlanViewProps) {
+type ExplainPlanViewProps = { outcome: QueryOutcome; onText?(): void; busy: boolean; fileBusy?: boolean; fileActions?: boolean; fileSnapshot?: ExplainSnapshotDocument; saveAs?: boolean; isFileCurrent?(): boolean; onFileBusyChange?(busy: boolean): void };
+export function ExplainPlanView({ outcome, ...props }: ExplainPlanViewProps) {
   const owner = useRef({ outcome, plan: outcome.explain, generation: 0 });
   // 父查询保留组件时仍以真实结果对象换代；A→B→A不能复活旧节点和查找闭包。
   if (owner.current.outcome !== outcome || owner.current.plan !== outcome.explain) owner.current = { outcome, plan: outcome.explain, generation: owner.current.generation + 1 };
-  return <OwnedExplainPlan key={owner.current.generation} outcome={outcome} onText={onText} busy={busy} fileBusy={fileBusy} fileActions={fileActions} fileSnapshot={fileSnapshot} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/>;
+  return <OwnedExplainPlan key={owner.current.generation} outcome={outcome} {...props}/>;
 }
 
 /** 交互状态只归属于本轮结果；本地阅读永远不产生新的数据库请求。 */
-function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSnapshot, saveAs, onFileBusyChange }: ExplainPlanViewProps) {
+function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSnapshot, saveAs, isFileCurrent, onFileBusyChange }: ExplainPlanViewProps) {
   const plan = outcome.explain!;
   const postgres = plan.dialect === 'postgresql';
   const rowLabel = postgres ? t.postgresRows : t.rows;
@@ -107,7 +108,10 @@ function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSn
     <div className="explain-toolbar" role="group" aria-label={t.title}>
       {(['tree', 'raw', 'table'] as const).map(mode => <button key={mode} aria-pressed={view === mode} onClick={() => setView(mode)}>{t[mode]}</button>)}
       {onText && <button disabled={busy} onClick={() => { if (alive.current && !busy) onText(); }}>{t.text}</button>}
-      {fileActions && <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={fileBusy ?? busy} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/>}
+      {fileActions && (postgres && plan.format === 'json' && !fileSnapshot && !saveAs ?
+        <LivePlanFileActions outcome={outcome} complete={!!plan.nodes.length && !plan.rawTruncated && !!result && !result.truncated}
+          busy={fileBusy ?? busy} isCurrent={() => alive.current && (isFileCurrent?.() ?? true)} onFileBusyChange={onFileBusyChange}/> :
+        <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={fileBusy ?? busy} saveAs={saveAs} isCurrent={isFileCurrent} onFileBusyChange={onFileBusyChange}/>)}
       <span className="muted">{t.source}：{postgres ? 'PostgreSQL' : plan.dialect === 'mysql' ? 'MySQL' : 'MariaDB'} {plan.version} · {plan.format === 'json' ? postgres ? 'EXPLAIN (FORMAT JSON)' : 'EXPLAIN FORMAT=JSON' : 'EXPLAIN'}</span>
     </div>
     <div className="explain-search" role="search" aria-label={t.find}>

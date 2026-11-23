@@ -60,10 +60,10 @@ describe('SQLite 计划专属视图真实 React RAM', () => {
     f.invoke.mockResolvedValueOnce({ name: '基准.json', snapshot: baseline });
     await search('idx_name'); await click(findText.next);
     const original = selected();
-    await click(snapshotText.sqliteCompareBaseline);
+    await click(snapshotText.compareBaseline);
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog?.textContent).toContain('基准.json · 3.53.4');
-    expect(dialog?.textContent).toContain(snapshotText.sqliteCompareCurrent);
+    expect(dialog?.textContent).toContain(snapshotText.compareCurrent);
     expect(dialog?.textContent).toContain('SCAN 表');
     expect(dialog?.textContent).toContain('SEARCH 表 USING INDEX idx_name');
     expect(dialog?.textContent).toContain(snapshotText.compareCount(1, 1));
@@ -80,7 +80,7 @@ describe('SQLite 计划专属视图真实 React RAM', () => {
     let finish!: (value: unknown) => void;
     const pending = new Promise(resolve => { finish = resolve; });
     f.invoke.mockReturnValueOnce(pending);
-    const compare = callback(button(snapshotText.sqliteCompareBaseline));
+    const compare = callback(button(snapshotText.compareBaseline));
     const save = callback(button(snapshotText.save));
     await act(async () => { compare(); compare(); save(); });
     expect(f.invoke.mock.calls).toEqual([['explainFiles.open', {}]]);
@@ -89,7 +89,7 @@ describe('SQLite 计划专属视图真实 React RAM', () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(selected()?.textContent).toContain('SCAN 新计划');
     expect(document.body.textContent).not.toContain('迟到.json');
-    expect(button(snapshotText.sqliteCompareBaseline).disabled).toBe(false);
+    expect(button(snapshotText.compareBaseline).disabled).toBe(false);
   });
 
   it('原数值id和detail逐字保留，不解释脚本或构造MySQL估计指标', async () => {

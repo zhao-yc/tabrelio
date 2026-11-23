@@ -1,3 +1,4 @@
+import type { QueryOutcome } from './contracts';
 import type { PlanSnapshotDocument } from './explainSnapshot';
 import { explainSnapshotZh as text } from './explainSnapshot.zh-CN';
 import { comparePlanNodes, type PlanComparison, type PlanComparisonSourceNode } from './planComparison';
@@ -44,4 +45,15 @@ export function comparePostgresPlanSnapshots(left: PlanSnapshotDocument, right: 
       left.format !== 'json' || right.format !== 'json') throw Error(text.compareUnsupported);
   if (left.rawTruncated || right.rawTruncated || left.result.truncated || right.result.truncated) throw Error(text.compareIncomplete);
   return comparePlanNodes(sourceNodes(left.raw), sourceNodes(right.raw), display);
+}
+
+/** 使用已返回的 JSON 对照同类基准。估算和实测指标分别比较。 */
+export function compareCurrentPostgresPlan(baseline: PlanSnapshotDocument, outcome: QueryOutcome): PlanComparison {
+  const current = outcome.analysis ?? outcome.explain;
+  const kind = outcome.analysis ? 'dbark.analyze-snapshot' : 'dbark.explain-snapshot';
+  if (baseline.kind !== kind || baseline.dialect !== 'postgresql' || baseline.format !== 'json' ||
+      current?.dialect !== 'postgresql' || current.format !== 'json') throw Error(text.compareUnsupported);
+  if (baseline.rawTruncated || baseline.result.truncated || current.rawTruncated ||
+      outcome.results.length !== 1 || outcome.results[0].truncated) throw Error(text.compareIncomplete);
+  return comparePlanNodes(sourceNodes(baseline.raw), sourceNodes(current.raw), display);
 }

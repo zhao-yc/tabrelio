@@ -6,6 +6,7 @@ import type { AnalyzeSnapshotDocument } from '../../shared/explainSnapshot';
 import { explainSnapshotZh as snapshotText } from '../../shared/explainSnapshot.zh-CN';
 import { queryAnalyzeZh as t } from '../locales/queryAnalyze.zh-CN';
 import { ExplainSnapshotSaveButton } from './ExplainSnapshotSaveButton';
+import { LivePlanFileActions } from './LivePlanFileActions';
 import '../queryAnalyze.css';
 import '../explainSnapshot.css';
 
@@ -17,18 +18,18 @@ function metricValue(metric: QueryAnalyzeMetric): string { return metric.value +
 /** 文件入口只接收当前计划对应结果；未启用时保持纯只读展示。 */
 export interface QueryAnalyzeViewProps {
   plan: QueryAnalyzePlan; outcome?: QueryOutcome; fileSnapshot?: AnalyzeSnapshotDocument;
-  fileActions?: boolean; busy?: boolean; saveAs?: boolean; onFileBusyChange?(busy: boolean): void;
+  fileActions?: boolean; busy?: boolean; saveAs?: boolean; isFileCurrent?(): boolean; onFileBusyChange?(busy: boolean): void;
 }
 /** 新结果即换代，A→B→A不能继承旧计划的所选节点或折叠状态。 */
 export function QueryAnalyzeView(props: QueryAnalyzeViewProps) {
-  const { plan } = props;
-  const owner = useRef({ plan, generation: 0 });
-  if (owner.current.plan !== plan) owner.current = { plan, generation: owner.current.generation + 1 };
+  const { plan, outcome } = props;
+  const owner = useRef({ plan, outcome, generation: 0 });
+  if (owner.current.plan !== plan || owner.current.outcome !== outcome) owner.current = { plan, outcome, generation: owner.current.generation + 1 };
   return <OwnedQueryAnalyzeView key={owner.current.generation} {...props}/>;
 }
 
 /** 这里只阅读已经返回的分析结果；展开、选择及切换原文都不会执行 SQL 或调用 IPC。 */
-function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, fileActions = false, busy = false, saveAs = false, onFileBusyChange }: QueryAnalyzeViewProps) {
+function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, fileActions = false, busy = false, saveAs = false, isFileCurrent, onFileBusyChange }: QueryAnalyzeViewProps) {
   const postgres = plan.dialect === 'postgresql';
   const [view, setView] = useState<'tree' | 'raw'>(plan.nodes.length ? 'tree' : 'raw');
   const [selected, setSelected] = useState(plan.nodes[0]?.id ?? '');
@@ -45,6 +46,7 @@ function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, fileActions = fals
     });
   }, [plan, collapsed]);
   const current = plan.nodes.find(node => node.id === selected) ?? plan.nodes[0];
+  const result = outcome?.results[0];
   useLayoutEffect(() => {
     if (!focusRequest || !alive.current) return;
     const element = buttons.current.get(focusRequest); element?.focus(); element?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -77,7 +79,11 @@ function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, fileActions = fals
   return <section className="query-analyze-view" aria-label={t.view}>
     <div className="query-analyze-toolbar" role="group" aria-label={t.view}>
       <button aria-pressed={view === 'tree'} onClick={() => { if (alive.current) setView('tree'); }}>{t.tree}</button><button aria-pressed={view === 'raw'} onClick={() => { if (alive.current) setView('raw'); }}>{t.raw}</button>
-      {fileActions && (outcome && outcome.analysis === plan ? <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={busy} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/> : <span className="explain-snapshot-save"><button disabled title={snapshotText.unavailable}>{saveAs ? snapshotText.saveAs : snapshotText.save}</button></span>)}
+      {fileActions && (outcome && outcome.analysis === plan ? (postgres && plan.format === 'json' && !fileSnapshot && !saveAs ?
+        <LivePlanFileActions outcome={outcome} complete={!!plan.nodes.length && !plan.rawTruncated && !!result && !result.truncated}
+          busy={busy} isCurrent={() => alive.current && (isFileCurrent?.() ?? true)} onFileBusyChange={onFileBusyChange}/> :
+        <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={busy} saveAs={saveAs} isCurrent={isFileCurrent} onFileBusyChange={onFileBusyChange}/>) :
+        <span className="explain-snapshot-save"><button disabled title={snapshotText.unavailable}>{saveAs ? snapshotText.saveAs : snapshotText.save}</button></span>)}
       <span className="muted">{t.source}：{postgres ? 'PostgreSQL' : plan.dialect === 'mysql' ? 'MySQL' : 'MariaDB'} {plan.version} · {postgres ? 'EXPLAIN (ANALYZE, FORMAT JSON)' : plan.format === 'tree' ? 'EXPLAIN ANALYZE' : 'ANALYZE FORMAT=JSON'}</span>
     </div>
     <div className="query-analyze-hints"><UsageHelp><p>{postgres ? t.postgresHint : plan.dialect === 'mysql' ? t.mysqlHint : t.mariaHint}</p><p>{t.estimateHint}</p><p>{postgres ? t.postgresRelation : t.relationHint}</p><p>{t.keyboard}</p></UsageHelp>{plan.rawTruncated && <p className="query-analyze-warning" role="alert">{t.truncated}</p>}{plan.warnings.map((warning, index) => <p className="query-analyze-warning" role="status" key={index}>{warning}</p>)}</div>

@@ -1157,6 +1157,13 @@ export function PostgresQueryTab({
       current.settings.activeTabId === tab.id && same(scope);
   }
 
+  /** 计划文件操作会占用 fileBusy，回执仍须核对原标签、连接及模态状态。 */
+  function planFileCurrent() {
+    const current = useWorkspace.getState();
+    return same(scope) && current.settings.activeTabId === tab.id && !current.activeJobs[tab.id] &&
+      !phase.current && !closeRef.current && !document.querySelector(appModalSelector);
+  }
+
   /** 选择归属于当前显示顺序及工作区代次，旧网格回调不能读取后来切换的行。 */
   function resultCurrent() {
     return resultScopeCurrent() && !sortDraftRef.current && !filterDraftRef.current && !columnDraftRef.current &&
@@ -2471,8 +2478,8 @@ export function PostgresQueryTab({
           {matchView.active && <QueryResultMatchView active={matchView.active} disabled={locked || !binding}
             onClear={() => changeMatchView()}/>}
           <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>
-            {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
-              !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
+            {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions isFileCurrent={planFileCurrent} onFileBusyChange={setFileBusy} /> :
+              !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions isFileCurrent={planFileCurrent} onFileBusyChange={setFileBusy} /> : result ? (
               result.columns.length ? (
                 <div className="query-result-with-details">
                   <div className="query-result-grid" inert={!!recordEdit?.cell}>
