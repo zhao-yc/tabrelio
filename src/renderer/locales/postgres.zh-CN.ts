@@ -7,6 +7,7 @@ export const postgresZh = {
   namedWindow: '命名窗口',
   rowLockTarget: '行锁目标',
   sampleMethod: '表抽样方法',
+  recursiveCteKey: '递归 CTE 键列',
   joinSharedColumn: '两侧共有列',
   joinOutputColumn: '连接输出列',
   conflictPrimary: '主键',

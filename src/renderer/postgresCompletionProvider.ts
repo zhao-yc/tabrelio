@@ -177,6 +177,30 @@ export function createPostgresCompletionProvider(options: {
         const start = model.getPositionAt(analysis.start), end = model.getPositionAt(analysis.end);
         if (start.lineNumber !== end.lineNumber) return empty;
         const range = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+        if (query?.kind === 'recursiveKeys') {
+          let names = query.names;
+          const relations = query.source && joinCatalogRelations([query.source]);
+          if (query.source && relations) {
+            const result: PostgresCompletionResult = { items: [], incomplete: false };
+            let catalog: PostgresCompletionResult | undefined = result;
+            if (relations.length) {
+              await debounce(controller.signal, 100);
+              try { catalog = await request({ ...target, kind: 'joinColumns', prefix: '', relations }, current); }
+              catch { catalog = undefined; if (current()) options.status('unavailable'); }
+              if (!current()) return empty;
+            }
+            if (catalog?.deferred) options.status(catalog.deferred === 'transaction' ? 'sessionUnknown' : 'unavailable');
+            else if (catalog?.incomplete) options.status('partial');
+            const known = catalog && joinedOutputColumns({ source: query.source, qualifiers: [] }, relations, catalog);
+            if (known) names = known.map(item => item.name);
+          }
+          const fold = (name: string) => quoted ? name : name.replace(/[A-Z]/g, letter => letter.toLowerCase());
+          const prefixKey = fold(prefix);
+          return { incomplete: true, suggestions: names.filter(name => !query.excluded.includes(name) && fold(name).startsWith(prefixKey))
+            .slice(0, postgresCompletionLimits.items).map((name, index) => ({ range, kind: options.kinds.column,
+              label: { label: name, description: postgresZh.recursiveCteKey }, insertText: postgresIdentifier(name),
+              filterText: quoted ? postgresIdentifier(name) : name, sortText: String(index).padStart(3, '0') })) };
+        }
         if (query?.kind === 'lockKeywords') {
           return { incomplete: true, suggestions: query.items.map((label, index) => ({ range, kind: options.kinds.keyword,
             label, insertText: label, sortText: String(index).padStart(3, '0') })) };

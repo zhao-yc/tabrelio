@@ -2594,6 +2594,80 @@ test('PostgreSQL 普通 UPDATE 和 DELETE 按会话权限补全赋值、条件�
   await quitDesktop();
 });
 
+test('PostgreSQL 递归 SEARCH 和 CYCLE 补全真实键并定位生成列', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query(`CREATE TABLE public.recursive_search_edges (node_id int PRIMARY KEY, next_id int);
+      INSERT INTO public.recursive_search_edges VALUES (1,2), (2,1), (3,NULL);`);
+    const warmup = 'SELECT 1 AS recursive_search_ready';
+    await prepare({id: '', name: '隔离 PostgreSQL 递归键', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, warmup);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await command('execute-all');
+    await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === warmup)).toBe(true);
+    await expect.poll(() => enabled('execute-all')).toBe(true);
+    const baseline = await history(), identity = (await inspectModel()).identity;
+    const accept = async (draft: string, prefix: string, name: string) => {
+      await replaceDraft(draft);
+      await modelSelection(1, draft.indexOf(prefix + 'tail') + prefix.length + 1);
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText([name]);
+      await page.keyboard.press('Enter');
+      const completed = draft.replace(prefix + 'tail', postgresIdentifier(name));
+      await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+      return completed;
+    };
+    const header = 'WITH RECURSIVE walk AS (SELECT e.node_id,e.next_id FROM public.recursive_search_edges e WHERE e.node_id=1 ' +
+      "UNION ALL SELECT n.node_id,n.next_id FROM public.recursive_search_edges n JOIN walk w ON n.node_id=w.next_id WHERE w.cycle_state='new') ";
+    const tail = "SEARCH BREADTH FIRST BY node_tail SET visit_order CYCLE node_id SET cycle_state TO 'again' DEFAULT 'new' USING visit_path " +
+      ', result AS (SELECT w.*,w.visit_order,w.cycle_state,w.visit_path FROM walk w) ' +
+      'SELECT r.node_id,r.cycle_tail,cardinality(r.visit_path) AS depth FROM result r ORDER BY r.visit_order';
+    const withKey = await accept(header + tail, 'node_', 'node_id');
+    const completed = await accept(withKey, 'cycle_', 'cycle_state');
+    const fromCatalog = await accept(header.replace('e.node_id,e.next_id', 'e.*') + tail.replace('cycle_tail', 'cycle_state'), 'node_', 'node_id');
+    await replaceDraft(completed);
+    await modelSelection(1, completed.lastIndexOf('cycle_state') + 2);
+    await page.keyboard.press('F12');
+    const cycleDeclaration = completed.indexOf('SET cycle_state') + 'SET '.length + 1;
+    await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 1, column: cycleDeclaration});
+    await page.keyboard.press('F2');
+    const rename = editor().locator('.rename-box input.rename-input');
+    await expect(rename).toHaveValue('cycle_state');
+    await rename.fill('seen_again');
+    await rename.press('Enter');
+    const renamed = completed.replace('SET cycle_state', 'SET "seen_again"')
+      .replaceAll('w.cycle_state', 'w."seen_again"').replace('r."cycle_state"', 'r."seen_again"');
+    await expect.poll(async () => (await inspectModel()).sql).toBe(renamed);
+    await page.keyboard.press('ControlOrMeta+Z');
+    await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+    expect(await history()).toEqual(baseline);
+    expect((await inspectModel()).identity).toEqual(identity);
+    const expected = [[1, 'new', 1], [2, 'new', 2], [1, 'again', 3]];
+    for (const [label, sql] of [['显式投影', completed], ['目录展开', fromCatalog], ['生成列已改名', renamed]]) {
+      await test.step(label, async () => {
+        expect((await observer.query({text: sql, rowMode: 'array'})).rows).toEqual(expected);
+      });
+    }
+    const cte = completed.slice(0, completed.indexOf(', result'));
+    expect((await observer.query(cte + ' SELECT * FROM walk')).fields.map(field => field.name))
+      .toEqual(['node_id', 'next_id', 'visit_order', 'cycle_state', 'visit_path']);
+    expect((await observer.query(cte + ', nested_rows AS (SELECT w.* FROM walk w) SELECT * FROM nested_rows')).fields.map(field => field.name))
+      .toEqual(['node_id', 'next_id']);
+    await page.screenshot({path: info.outputPath('PostgreSQL-递归列原文定位.png'), animations: 'disabled'});
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL TABLESAMPLE 按原会话补全实际方法并保留字段导航', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

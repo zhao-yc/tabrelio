@@ -15,6 +15,63 @@ function at(marked: string) {
   return analyzePostgresCompletion(marked.slice(0, offset) + marked.slice(offset + 1), offset);
 }
 
+const recursiveWalk = 'WITH RECURSIVE walk(node_id,parent_id) AS (SELECT 1 AS n,2 AS p UNION ALL ' +
+  'SELECT w.parent_id,0 FROM walk w WHERE w.node_id<2)';
+
+it('SEARCH 和 CYCLE 的键只用当前 CTE 的原投影，生成列按查询层级展开', async () => {
+  const clauses = ' SEARCH BREADTH FIRST BY node_id SET order_seq CYCLE node_id SET looped TO \'cycle\' DEFAULT \'new\' USING visited';
+  const partial = editor(recursiveWalk + ' SEARCH BREADTH FIRST BY node_id, par|tail SET order_seq' +
+    ' CYCLE node_id SET looped USING visited SELECT * FROM walk', async () => ({items: [], incomplete: false}));
+  try {
+    expect((await partial.suggest())?.suggestions).toMatchObject([{label: {label: 'parent_id'}, insertText: '"parent_id"'}]);
+  } finally { partial.provider.dispose(); }
+  expect(at(recursiveWalk + ' CYCLE no|')?.query).toMatchObject({kind: 'recursiveKeys', names: ['node_id', 'parent_id']});
+  expect(at(recursiveWalk + clauses + ', output AS (SELECT w.*,w.order_seq,w.looped,w.visited FROM walk w) SELECT o.| FROM output o')?.query)
+    .toMatchObject({kind: 'columns', relations: [{projection: {names: ['node_id', 'parent_id', 'order_seq', 'looped', 'visited']}}]});
+  expect(at(recursiveWalk + clauses + ', output AS (SELECT w.* FROM walk w) SELECT o.| FROM output o')?.query)
+    .toMatchObject({kind: 'columns', relations: [{projection: {names: ['node_id', 'parent_id']}}]});
+  expect(at(recursiveWalk + clauses + ' SELECT o.| FROM (SELECT * FROM walk) o')?.query)
+    .toMatchObject({kind: 'columns', relations: [{projection: {names: ['node_id', 'parent_id']}}]});
+  expect(at(recursiveWalk.replace('w.node_id<2', 'w.|<2') + clauses + ' SELECT * FROM walk')?.query)
+    .toMatchObject({kind: 'columns', relations: [{projection: {names: ['node_id', 'parent_id', 'order_seq', 'looped', 'visited'],
+      starProjection: {names: ['node_id', 'parent_id']}}}]});
+  expect(at(recursiveWalk + ' CYCLE node_id SET node_id USING visited SELECT w.| FROM walk w')?.query).toBeUndefined();
+  const reservedLike = recursiveWalk.replaceAll('node_id', 'set').replace('w.set<2', 'w."set"<2');
+  expect(at(reservedLike + ' CYCLE set SET looped USING visited SELECT w.lo|oped FROM walk w')?.query)
+    .toMatchObject({kind: 'columns', relations: [{projection: {names: ['set', 'parent_id', 'looped', 'visited']}}]});
+});
+
+it('递归键通配符请求真实来源目录，重复及已用的列退出候选', async () => {
+  const request = vi.fn(async (): Promise<PostgresCompletionResult> => ({items: [
+    {kind: 'joinColumns', reference: 0, names: ['used', 'kept', 'ambiguous']},
+  ], incomplete: false}));
+  const edit = editor('WITH RECURSIVE walk AS (SELECT a.*,1 AS ambiguous FROM app.nodes a UNION ALL SELECT w.* FROM walk w)' +
+    ' CYCLE used, | SET looped USING visited SELECT * FROM walk', request, '原会话');
+  try {
+    expect((await edit.suggest())?.suggestions).toMatchObject([{label: {label: 'kept'}, insertText: '"kept"'}]);
+    expect(request).toHaveBeenCalledWith({kind: 'joinColumns', prefix: '', connectionId: '原连接', database: '原库',
+      sessionId: '原会话', relations: [{name: 'nodes', schema: 'app'}]});
+  } finally { edit.provider.dispose(); }
+});
+
+it('递归键和生成列沿原声明定位，整组改名保留另一个名称空间', () => {
+  const sql = recursiveWalk + ' SEARCH DEPTH FIRST BY node_id SET seq CYCLE node_id SET looped USING visited ' +
+    'SELECT r.looped FROM (SELECT w.*,w.looped,w.seq FROM walk w) r ORDER BY r.seq';
+  const generated = sql.lastIndexOf('seq');
+  const declaration = sql.indexOf('seq');
+  expect(analyzePostgresLocalReferences(sql, generated)).toMatchObject({status: 'ready',
+    declaration: {start: declaration, end: declaration + 'seq'.length}});
+  expect(analyzePostgresLocalRename(sql, generated, true, 'search_order')).toMatchObject({status: 'ready', kind: 'column', edits: [
+    {start: declaration, text: '"search_order"'}, {start: sql.indexOf('w.seq') + 2, text: '"search_order"'},
+    {start: generated, text: '"search_order"'},
+  ]});
+  const key = sql.indexOf('node_id', sql.indexOf('BY'));
+  const renamed = analyzePostgresLocalRename(sql, key, true, 'new_key');
+  expect(renamed).toMatchObject({status: 'ready', kind: 'column'});
+  if (renamed.status === 'ready') expect(renamed.edits).toHaveLength(4);
+  expect(analyzePostgresObjectDefinition(sql, sql.indexOf('walk w'))).toBeUndefined();
+});
+
 it('TABLESAMPLE 按方法槽和原查询表达式分派，抽样后的别名与物理来源可导航', () => {
   expect(at('SELECT * FROM app.jobs j TABLESAMPLE |')?.query).toEqual({kind: 'sampleMethods'});
   expect(at('SELECT * FROM app.jobs AS j(id) TABLESAMPLE "方法"."Ca|se" /* 描述 */ (10)')?.query)

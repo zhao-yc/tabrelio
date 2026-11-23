@@ -11,6 +11,7 @@ type Part = PostgresEditorToken | Group;
 interface Projection {
   names: (string | null)[]; stars: PostgresCompletionReference[]; exact: boolean;
   declaration?: LocalReferenceRange; origins?: (LocalReferenceRange | null)[];
+  starProjection?: Projection;
 }
 export interface PostgresCompletionRelation extends PostgresCompletionReference { alias?: string; projection?: Projection; qualifiedOnly?: boolean; }
 interface ScopedRelation extends PostgresCompletionRelation { declaration?: LocalReferenceRange; usingColumns?: string[]; physical?: true; }
@@ -45,6 +46,7 @@ type Query = { kind: 'relations'; schema?: string; ctes?: string[]; mergeTarget?
   { kind: 'lockTargets'; names: string[] } |
   { kind: 'lockKeywords'; items: string[] } |
   { kind: 'sampleMethods'; schema?: string } |
+  { kind: 'recursiveKeys'; names: string[]; source?: PostgresJoinSource; excluded: string[] } |
   { kind: 'conflictTarget'; relation: PostgresCatalogRelation; selection: PostgresConflictSelection } | PostgresUsingColumns;
 export interface PostgresCompletionAnalysis {
   start: number;
@@ -71,8 +73,8 @@ const expressionOperators = new Set(['(', '[', ',', '=', '+', '-', '*', '/', '%'
 const unknown: Projection = { names: [], stars: [], exact: false };
 const joinSources = new WeakMap<Projection, PostgresJoinSource>();
 const joinedOutputs = new WeakSet<Projection>();
+const recursiveBase = new WeakMap<Projection, Projection>();
 const referenceCommands = new Set(['SELECT', 'WITH', 'VALUES', 'TABLE']);
-const unsupportedReferenceSyntax = new Set(['SEARCH', 'CYCLE']);
 const declaredTableSyntax = new Set(['JSON_TABLE', 'XMLTABLE']);
 
 /** PostgreSQL 未引用标识符折叠 ASCII 大写字母，引用名称保留原大小写。 */
@@ -245,6 +247,8 @@ function rename(projection: Projection, names: string[], aliases?: Part, trace?:
     stars: [],
     exact: projection.exact && (!aliases || names.length <= projection.names.length),
     ...(origins ? { origins } : {}),
+    ...(projection.starProjection ? { starProjection: recursiveBase.has(projection)
+      ? rename(projection.starProjection, names, aliases, trace) : unknown } : {}),
   };
   const input = !trace && joinSources.get(projection);
   if (input) joinSources.set(output, { kind: 'alias', input, names });
@@ -267,6 +271,22 @@ function projectedJoinSource(projection: Projection): PostgresJoinSource | undef
   if (source) return source;
   if (projection.exact && projection.names.every((name): name is string => name !== null))
     return { kind: 'names', names: projection.names };
+}
+
+/** 外层 CTE 的生成列仍可显式引用，但 PostgreSQL 在下一级查询的星号展开时跳过它们。 */
+function nestedCteScope(scope: Scope): Scope {
+  let nested: Map<string, Projection> | undefined;
+  for (const [name, projection] of scope) {
+    const base = recursiveBase.get(projection);
+    if (!base || projection.starProjection) continue;
+    const enclosed = { ...projection, starProjection: base };
+    recursiveBase.set(enclosed, base);
+    const source = joinSources.get(projection);
+    if (source) joinSources.set(enclosed, source);
+    if (joinedOutputs.has(projection)) joinedOutputs.add(enclosed);
+    (nested ??= new Map(scope)).set(name, enclosed);
+  }
+  return nested ?? scope;
 }
 
 /** 连接投影缺少完整目录时，不能拿单表星号或部分输出代替合并结果。 */
@@ -389,7 +409,8 @@ function project(parts: Part[], refs: PostgresCompletionRelation[], starSources?
         (column.length === 3 || schema && punct(column[1], '.')) ? refs.filter(ref => schema
           ? !ref.alias && ref.name === owner && ref.schema === schema : (ref.alias ?? ref.name) === owner) : [];
       if (match.length && (column.length === 1 || match.length === 1)) {
-        for (const ref of match) {
+        for (const relation of match) {
+          const ref = relation.projection?.starProjection ? { ...relation, projection: relation.projection.starProjection } : relation;
           if (knownJoinShape) {
             const input = relationJoinSource(ref);
             if (input) joins.push(input);
@@ -609,7 +630,7 @@ function traceExpressions(parts: Part[], scope: Scope, refs: ScopedRelation[], o
     if (endsFrom.has(word) || word === 'ON') bare = bareSelect && (word === 'WHERE' || word === 'ON');
     if (part.kind === 'group') {
       const command = keyword(part.parts[0]);
-      if (referenceCommands.has(command)) parseQuery(part.parts, scope, levels, undefined, trace);
+      if (referenceCommands.has(command)) parseQuery(part.parts, nestedCteScope(scope), levels, undefined, trace);
       else traceExpressions(part.parts, scope, levels[0], outer, new Map(), trace);
     } else {
       traceQualifier(parts, i, levels, trace);
@@ -1035,7 +1056,7 @@ function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], tra
   const defaults = source.length === 2 && keyword(source[0]) === 'DEFAULT' && keyword(source[1]) === 'VALUES';
   if (!defaults) {
     if (!startsReferenceQuery(source[0])) return;
-    parseQuery(source, scope, outer, undefined, trace);
+    parseQuery(source, nestedCteScope(scope), outer, undefined, trace);
   }
   if (conflict && !trace.unsupported) {
     const { on, action } = conflict;
@@ -1454,7 +1475,7 @@ function mergeExpression(parts: Part[], refs: ScopedRelation[], analysis: MergeA
     let group = cursorGroup;
     while (group?.kind === 'group') {
       if (commands.has(keyword(group.parts[0]))) {
-        analysis.active = parseQuery(group.parts, scope, [refs, ...outer], context);
+        analysis.active = parseQuery(group.parts, nestedCteScope(scope), [refs, ...outer], context);
         return;
       }
       group = group.parts.find(part => part.kind === 'group' && contains(part, context.offset));
@@ -1568,7 +1589,7 @@ function readMergeRelation(parts: Part[], start: number, entryEnd: number, targe
   let projection: Projection | undefined;
   if (!target && !only && first?.kind === 'group' && isMergeSourceQuery(first)) {
     const active = context && contains(first, context.offset) ? context : undefined;
-    const parsed = parseQuery(first.parts, scope, lateral ? [preceding, ...outer] : outer, active, trace);
+    const parsed = parseQuery(first.parts, nestedCteScope(scope), lateral ? [preceding, ...outer] : outer, active, trace);
     if (active) analysis.active = parsed;
     projection = parsed.projection;
     next++;
@@ -1657,6 +1678,13 @@ function mergeJoinProjection(left: Projection, right: Projection, natural: boole
   // 合并键可能来自左右两边，保留一个输出位置，避免给它猜测单侧声明。
   const origins = trace?.projected ? [...merged.map(() => null), ...unmerged.map(column => column.origin)] : undefined;
   // 即使顺序有未知目录，保留已知来源供实际的星号投影或位置改名标记歧义。
+  if (left.starProjection || right.starProjection) {
+    const leftStar = left.starProjection ?? left, rightStar = right.starProjection ?? right;
+    // 合并了隐藏列时是否展开由服务器选择的 JOIN 列及类型决定，静态分析不猜测该输出。
+    output.starProjection = merged.some(name => left.starProjection && left.names.includes(name) && !leftStar.names.includes(name) ||
+      right.starProjection && right.names.includes(name) && !rightStar.names.includes(name)) ? unknown
+      : mergeJoinProjection(leftStar, rightStar, natural, keys, trace);
+  }
   return Object.assign(output, { names: names.slice(0, limits.items), stars: stars.length <= limits.relations ? stars : [],
     exact, ...(origins ? {origins: origins.slice(0, limits.items)} : {}) });
 }
@@ -1871,7 +1899,7 @@ const rowLockModeWords = new Set<string>(rowLockModes.flat());
 const rowLockWaitWords = new Set(['OF', 'NOWAIT', 'SKIP', 'LOCKED']);
 const beforeRowLock = new Set(['FROM', 'WHERE', 'GROUP', 'HAVING', 'WINDOW', 'ORDER']);
 
-function isRowLockNameList(parts: Part[]): boolean {
+function isBareNameList(parts: Part[]): boolean {
   return parts.length % 2 === 1 && parts.every((part, index) => index % 2 ? punct(part, ',') : !!identifier(part));
 }
 
@@ -1906,8 +1934,8 @@ function completeRowLockKeywords(parts: Part[], context: QueryContext): Query | 
   const options = tail.slice(mode.length);
   const of = keyword(options[0]) === 'OF';
   const names = of ? options.slice(1) : [];
-  const skip = keyword(options.at(-1)) === 'SKIP' && (of ? isRowLockNameList(names.slice(0, -1)) : options.length === 1);
-  if (of && !skip && (!isRowLockNameList(names) || punct(following[0], ',') || punct(following[0], '.'))) return;
+  const skip = keyword(options.at(-1)) === 'SKIP' && (of ? isBareNameList(names.slice(0, -1)) : options.length === 1);
+  if (of && !skip && (!isBareNameList(names) || punct(following[0], ',') || punct(following[0], '.'))) return;
   if (!of && !skip && options.length) return;
 
   const ties = parts.some((_, index) => mergeKeyword(parts, index) === 'WITH' && keyword(parts[index + 1]) === 'TIES');
@@ -1950,7 +1978,7 @@ function rowLockTargets(rows: RowLockRelation[], lists: RowLockList[], active: R
   }
   if (!trace) return;
   for (const list of lists) {
-    if (!isRowLockNameList(list.parts)) continue;
+    if (!isBareNameList(list.parts)) continue;
     for (let i = 0; i < list.parts.length; i += 2) {
       const token = list.parts[i], row = targets.get(identifier(token)!);
       if (token.kind === 'group' || !row?.allowed) continue;
@@ -2095,7 +2123,7 @@ function completeInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], 
   const first = parts[header.start];
   if (first && startsReferenceQuery(first) && context.offset >= first.start && context.offset < (parts[sourceEnd]?.start ?? Infinity)) {
     // 查询来源只继承 WITH 和真实外层，写入目标与冲突动作不参与 SELECT 的名称绑定。
-    return parseQuery(parts.slice(header.start, sourceEnd), scope, outer, context);
+    return parseQuery(parts.slice(header.start, sourceEnd), nestedCteScope(scope), outer, context);
   }
 }
 
@@ -2205,6 +2233,105 @@ function parseMerge(parts: Part[], analysis: MergeAnalysis): Parsed | undefined 
   return trace?.unsupported ? undefined : { ...analysis.active, projection };
 }
 
+interface RecursiveKeys { parts: Part[]; start: number; end: number; }
+interface RecursiveTail { keys: RecursiveKeys[]; outputs: PostgresEditorToken[]; next: number; complete: boolean; }
+
+function recursiveColumn(part?: Part): PostgresEditorToken | undefined {
+  const name = identifier(part);
+  if (part && part.kind !== 'group' && name && new TextEncoder().encode(name).length <= 63 &&
+      (keyword(part) === 'SET' || !stop.has(keyword(part)))) return part;
+}
+
+/** 先识别各 CTE 自己的键清单和输出声明，常量值以及后续查询不进入列命名空间。 */
+function readRecursiveTail(parts: Part[], start: number, context?: QueryContext): RecursiveTail | undefined {
+  const tail: RecursiveTail = { keys: [], outputs: [], next: start, complete: true };
+  const seen = new Set<string>();
+  for (let word = keyword(parts[tail.next]); word === 'SEARCH' || word === 'CYCLE'; word = keyword(parts[tail.next])) {
+    if (seen.has(word) || word === 'SEARCH' && seen.has('CYCLE')) return;
+    seen.add(word);
+    let index = tail.next + 1;
+    if (word === 'SEARCH') {
+      if (!['BREADTH', 'DEPTH'].includes(keyword(parts[index])) || keyword(parts[index + 1]) !== 'FIRST' ||
+          keyword(parts[index + 2]) !== 'BY') return;
+      index += 3;
+    }
+    const first = index;
+    while (index < parts.length) {
+      const current = keyword(parts[index]);
+      const keySlot = index === first || punct(parts[index - 1], ',');
+      // 非保留词 SET、SEARCH 和 CYCLE 也可作列名，后接逗号或真正的 SET 时仍属于键清单。
+      const namedKey = keySlot && (punct(parts[index + 1], ',') || keyword(parts[index + 1]) === 'SET');
+      if (['SELECT', 'TABLE'].includes(current) || !namedKey &&
+          ['SET', 'VALUES', 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'SEARCH', 'CYCLE'].includes(current)) break;
+      index++;
+    }
+    const keys: RecursiveKeys = { parts: parts.slice(first, index), start: parts[first - 1].end, end: parts[index]?.start ?? Infinity };
+    tail.keys.push(keys);
+    const active = context && keys.start <= context.offset && context.offset <= keys.end;
+    const form = isBareNameList(keys.parts);
+    if (!form && !active) return;
+    if (keyword(parts[index]) !== 'SET') return active ? { ...tail, next: parts.length, complete: false } : undefined;
+    const output = recursiveColumn(parts[++index]);
+    if (!output) return active ? { ...tail, next: parts.length, complete: false } : undefined;
+    tail.outputs.push(output);
+    index++;
+    if (word === 'CYCLE') {
+      if (keyword(parts[index]) === 'TO') {
+        const marker = index++;
+        while (index < parts.length && !['DEFAULT', 'USING', 'SELECT', 'VALUES', 'TABLE'].includes(keyword(parts[index]))) index++;
+        if (index <= marker + 1 || keyword(parts[index]) !== 'DEFAULT') return;
+        const fallback = index++;
+        while (index < parts.length && !['USING', 'SELECT', 'VALUES', 'TABLE'].includes(keyword(parts[index]))) index++;
+        if (index <= fallback + 1) return;
+      }
+      const path = recursiveColumn(parts[index + 1]);
+      if (keyword(parts[index]) !== 'USING' || !path) return active ? { ...tail, next: parts.length, complete: false } : undefined;
+      tail.outputs.push(path);
+      index += 2;
+    }
+    tail.complete &&= form;
+    tail.next = index;
+  }
+  return tail;
+}
+
+function completeRecursiveKeys(projection: Projection, keys: RecursiveKeys, context: QueryContext): Query {
+  const excluded = activeNameList(keys.parts, keys.start, keys.end, context);
+  const source = excluded && projectedJoinSource(projection);
+  const names = excluded ? projection.names.filter((name): name is string => !!name &&
+    projection.names.indexOf(name) === projection.names.lastIndexOf(name) && !excluded.includes(name)) : [];
+  return { kind: 'recursiveKeys', names, ...(source ? { source } : {}), excluded: excluded ?? [] };
+}
+
+/** PostgreSQL 在原投影末尾依次添加搜索列、循环标记和路径列，星号展开另按查询层级决定。 */
+function recursiveOutput(projection: Projection, tail: RecursiveTail, trace?: ReferenceTrace): Projection | undefined {
+  if (!tail.complete) return;
+  const appended = tail.outputs.map(token => identifier(token)!);
+  if (!appended.length) return projection;
+  if (new Set(appended).size !== appended.length || appended.some(name => projection.names.includes(name))) return;
+  for (const list of tail.keys) {
+    const names = list.parts.filter((_, index) => index % 2 === 0).map(part => identifier(part)!);
+    if (new Set(names).size !== names.length || knownProjection(projection) && names.some(name => !projection.names.includes(name))) return;
+  }
+  if (trace?.projected && projection.exact) {
+    for (const list of tail.keys) for (let i = 0; i < list.parts.length; i += 2) {
+      const token = list.parts[i];
+      if (token.kind !== 'group') recordProjectedMatch(token, projectedMatches(projection, identifier(token)!), trace);
+    }
+  }
+  const names = [...projection.names, ...appended];
+  const exact = projection.exact && names.length <= limits.items;
+  const origins = trace?.projected ? [...projection.names.map((_, i) => projection.origins?.[i] ?? null), ...tail.outputs] : undefined;
+  const output: Projection = { ...projection, names: names.slice(0, limits.items), exact,
+    ...(origins ? { origins: origins.slice(0, limits.items) } : {}) };
+  recursiveBase.set(output, projection);
+  for (const declaration of tail.outputs) trace?.projectionRename?.explicit.add(declaration.start);
+  const base = !trace && projectedJoinSource(projection);
+  if (base) joinSources.set(output, { kind: 'projection', parts: [base, { kind: 'names', names: appended }] });
+  if (!trace && joinedOutputs.has(projection)) joinedOutputs.add(output);
+  return keepProjection(output, origins ?? [], trace?.projectionRename);
+}
+
 /** 在同一作用域树内推导查询输出。递归项在首分支解析完后才能引用已确认的列。 */
 function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], context?: QueryContext, trace?: ReferenceTrace,
   firstBranch?: (projection: Projection) => void): Parsed {
@@ -2221,7 +2348,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     const ctes = new Map(inherited);
     scope = ctes;
     const recursive = keyword(parts[1]) === 'RECURSIVE';
-    const definitions: { name: string; names: string[]; aliases?: Part; body: Group; declaration: Part }[] = [];
+    const definitions: { name: string; names: string[]; aliases?: Part; body: Group; declaration: Part; tail?: RecursiveTail }[] = [];
     start = recursive ? 2 : 1;
     do {
       const declaration = parts[start++];
@@ -2238,24 +2365,44 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       if (keyword(parts[start]) === 'MATERIALIZED') start++;
       const body = parts[start++];
       if (body?.kind !== 'group') return unsupported();
-      definitions.push({ name, names, aliases, body, declaration });
+      let tail: RecursiveTail | undefined;
+      if (['SEARCH', 'CYCLE'].includes(keyword(parts[start]))) {
+        if (!recursive) return unsupported();
+        tail = readRecursiveTail(parts, start, context);
+        if (!tail && (!context || !contains(body, context.offset))) return unsupported();
+        start = tail?.next ?? parts.length;
+      }
+      definitions.push({ name, names, aliases, body, declaration, tail });
       trace?.declarations.set(declaration.start, 'cte');
     } while (punct(parts[start], ',') && ++start);
     // 递归 WITH 中先占住所有声明名，避免自引用或后置定义落到同名物理表。
     if (recursive) for (const { name, names, declaration } of definitions)
       ctes.set(name, trace ? { ...unknown, declaration } : rename(unknown, names));
-    for (const { name, names, aliases, body, declaration } of definitions) {
+    for (const { name, names, aliases, body, declaration, tail } of definitions) {
       const active = context && contains(body, context.offset) ? context : undefined;
-      const anchorEnd = recursive ? body.parts.findIndex(part => keyword(part) === 'UNION') : -1;
-      if (active && anchorEnd > 0 && body.parts[anchorEnd].end <= active.offset) {
-        const anchor = parseQuery(body.parts.slice(0, anchorEnd), ctes, outer);
-        ctes.set(name, rename(anchor.projection, names));
-      }
+      let arms = body.parts;
+      while (arms.length === 1 && arms[0].kind === 'group' && arms[0].closing === ')') arms = arms[0].parts;
+      const anchorEnd = recursive ? arms.findIndex(part => keyword(part) === 'UNION') : -1;
+      if (tail && anchorEnd <= 0 && !active) return unsupported();
+      const bodyScope = new Map(nestedCteScope(ctes));
       const projected = (projection: Projection) => ({ ...rename(projection, names, aliases, trace), declaration });
-      const parsed = parseQuery(body.parts, ctes, outer, active, trace,
-        trace?.projected && anchorEnd > 0 ? projection => ctes.set(name, projected(projection)) : undefined);
+      const setRecursiveInput = (projection: Projection) => {
+        const base = trace?.projected ? projected(projection) : rename(projection, names);
+        bodyScope.set(name, tail ? recursiveOutput(base, tail, trace) ?? base : base);
+      };
+      if (active && anchorEnd > 0 && arms[anchorEnd].end <= active.offset) {
+        const anchor = parseQuery(arms.slice(0, anchorEnd), bodyScope, outer);
+        setRecursiveInput(anchor.projection);
+      }
+      const parsed = parseQuery(body.parts, bodyScope, outer, active, trace,
+        trace?.projected && anchorEnd > 0 ? setRecursiveInput : undefined);
       if (active) return parsed;
-      ctes.set(name, trace?.projected ? projected(parsed.projection) : trace ? { ...unknown, declaration } : rename(parsed.projection, names));
+      const base = trace?.projected ? projected(parsed.projection) : trace ? { ...unknown, declaration } : rename(parsed.projection, names);
+      const keys = context && tail?.keys.find(list => list.start <= context.offset && context.offset <= list.end);
+      if (keys && context) return { projection: unknown, query: completeRecursiveKeys(base, keys, context) };
+      const output = tail ? recursiveOutput(base, tail, trace) : base;
+      if (!output) return unsupported();
+      ctes.set(name, output);
     }
   }
   const main = parts.slice(start);
@@ -2275,7 +2422,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     if (first === 'WITH' && keyword(parts[1]) === 'RECURSIVE') return unsupported();
     return parseMerge(main, { scope, outer, trace, context, names: new Set() }) ?? unsupported();
   }
-  if (trace && main.some(part => unsupportedReferenceSyntax.has(keyword(part)) || keyword(part) === 'INTO')) return unsupported();
+  if (trace && main.some(part => keyword(part) === 'INTO')) return unsupported();
   const firstSet = main.findIndex(part => setOperators.has(keyword(part)));
   if (firstSet >= 0) {
     let output = unknown, branchStart = 0, query: Query | undefined, routine: PostgresRoutineCompletionTarget | undefined;
@@ -2290,7 +2437,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
         ? ['ORDER', 'LIMIT', 'OFFSET', 'FETCH', 'FOR'].includes(mergeKeyword(branch, index))
         : ['ORDER', 'FOR'].includes(mergeKeyword(branch, index))) : -1;
       const inOrder = active && order >= 0 && active.offset >= branch[order].start;
-      const parsed = parseQuery(order >= 0 ? branch.slice(0, order) : branch, scope, outer, inOrder ? undefined : active, trace);
+      const parsed = parseQuery(order >= 0 ? branch.slice(0, order) : branch, nestedCteScope(scope), outer, inOrder ? undefined : active, trace);
       if (branchStart === 0) { output = parsed.projection; firstBranch?.(output); }
       if (trace?.projected && order >= 0) traceProjectionOrder(branch.slice(order), output, trace);
       if (inOrder) query = keyword(branch[order]) === 'FOR' || rowLockLists(branch.slice(order)).some(list => list.start <= active.offset)
@@ -2396,7 +2543,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     if (part?.kind === 'group') {
       if (trace && (target || part.closing !== ')')) return unsupported();
       const active = context && contains(part, context.offset) ? context : undefined;
-      const parsed = parseQuery(part.parts, scope, modifier === 'LATERAL' ? [preceding, ...outer] : outer, active, trace);
+      const parsed = parseQuery(part.parts, nestedCteScope(scope), modifier === 'LATERAL' ? [preceding, ...outer] : outer, active, trace);
       if (active) return parsed;
       projection = parsed.projection;
       next++;
@@ -2471,7 +2618,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       return parseReturning(main.slice(returning), refs, writeRelation, { scope, outer, trace, names: new Set() }) ?? unsupported();
     }
     if (!trace.projected) return { projection: unknown };
-    const projection = tableSource ? refs[0]?.projection ?? unknown : project(main, refs,
+    const projection = tableSource ? refs[0]?.projection?.starProjection ?? refs[0]?.projection ?? unknown : project(main, refs,
       command === 'SELECT' ? joined?.outputs.map(projection => ({name: '', projection})) : undefined, trace);
     if (command === 'SELECT' || tableSource) {
       const input = [refs, ...outer].map(level => level.filter(ref => !ref.qualifiedOnly));
@@ -2503,7 +2650,8 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     }
     return analysis.active ?? { projection: unknown };
   }
-  const projection = tableSource && refs[0] ? relationProjection(refs[0]) : project(main, refs, joined?.outputs.map(projection => ({name: '', projection})));
+  const projection = tableSource && refs[0] ? refs[0].projection?.starProjection ?? relationProjection(refs[0])
+    : project(main, refs, joined?.outputs.map(projection => ({name: '', projection})));
   if (lockQuery) return { projection, query: lockQuery };
   if (!context || inFunctionMetadata || start > 0 && (main[0]?.start ?? context.start) > context.start) return { projection };
 
@@ -2514,7 +2662,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     let group = cursorGroup;
     // 只深入包含光标的表达式括号，普通函数参数仍沿用本层字段。
     while (true) {
-      if (commands.has(keyword(group.parts[0]))) return parseQuery(group.parts, scope, [visible, ...outer], context);
+      if (commands.has(keyword(group.parts[0]))) return parseQuery(group.parts, nestedCteScope(scope), [visible, ...outer], context);
       const nested = group.parts.find(part => part.kind === 'group' && contains(part, offset));
       if (nested?.kind !== 'group') break;
       group = nested;
@@ -2861,7 +3009,7 @@ export function analyzePostgresCompletion(source: string, offset: number, standa
   const parsed = query && parseStatementQuery(query, { offset, start, end, left,
     keywordPrefix: !quoted && !punct(previous, '.') ? prefixUpper : undefined });
   if (parsed?.query?.kind === 'using' || parsed?.query?.kind === 'conflictTarget' || parsed?.query?.kind === 'lockTargets' ||
-      parsed?.query?.kind === 'lockKeywords' || parsed?.query?.kind === 'sampleMethods' ||
+      parsed?.query?.kind === 'lockKeywords' || parsed?.query?.kind === 'sampleMethods' || parsed?.query?.kind === 'recursiveKeys' ||
       parsed?.query?.kind === 'columns' && parsed.query.joinOutput) {
     // 目录目标和锁子句必须在离线的两种字符串模式下有一致的词法边界。
     if (standardStrings === undefined && source.includes('\\') &&
