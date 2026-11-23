@@ -2261,7 +2261,7 @@ test('PostgreSQL 语句折叠使用真实会话缓存更新范围', async () => 
   await quitDesktop();
 });
 
-test('PostgreSQL JOIN USING 补全按原目录只建议两侧共有列', async ({}, info) => {
+test('PostgreSQL JOIN USING 补全按原目录建议共有列并保留连接输出', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
   const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
@@ -2282,13 +2282,14 @@ test('PostgreSQL JOIN USING 补全按原目录只建议两侧共有列', async (
     await resizeQueryWindow(1280, 920, 0.75);
     const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
     const identity = (await inspectModel()).identity;
-    const accept = async (source: string, placeholder: string, name: string) => {
+    const accept = async (source: string, placeholder: string, name: string, onlyColumn = true) => {
       await replaceDraft(source);
       const baseline = await history();
       await modelSelection(1, source.indexOf(placeholder) + 2);
       await triggerSuggestions();
       const names = tab().locator('.suggest-widget.visible .monaco-list-row .label-name');
-      await expect(names).toHaveText([name]);
+      if (onlyColumn) await expect(names).toHaveText([name]);
+      else await expect(tab().locator('.suggest-widget.visible .monaco-list-row.focused .label-name')).toHaveText(name);
       await page.keyboard.press('Enter');
       const expected = source.replace(placeholder, postgresIdentifier(name));
       await expect.poll(async () => (await inspectModel()).sql).toBe(expected);
@@ -2300,6 +2301,16 @@ test('PostgreSQL JOIN USING 补全按原目录只建议两侧共有列', async (
     };
     const filled = await accept(sql, 'i_tail', 'id');
     expect((await observer.query({text: filled, rowMode: 'array'})).rows).toEqual([['东', 4, '左', '右']]);
+    const joined = await accept('SELECT i_tail FROM public.using_left l(id) JOIN public.using_right r USING (id)', 'i_tail', 'id', false);
+    expect(joined.startsWith('SELECT "id"')).toBe(true);
+    expect((await observer.query({text: joined, rowMode: 'array'})).rows).toEqual([[4]]);
+    const cte = await accept('WITH merged AS (SELECT * FROM public.using_left l(id) FULL JOIN public.using_right r USING (id)) ' +
+      'SELECT q.r_tail FROM merged q("合并键")', 'r_tail', 'right_only');
+    expect((await observer.query({text: cte, rowMode: 'array'})).rows).toEqual([['右']]);
+    const alias = await accept('SELECT q.地_tail FROM (public.using_left NATURAL JOIN public.using_right) q("地区")', '地_tail', '地区');
+    expect((await observer.query({text: alias, rowMode: 'array'})).rows).toEqual([['东']]);
+    const keys = await accept('SELECT shared.i_tail FROM public.using_left l(id) JOIN public.using_right r USING (id) AS shared', 'i_tail', 'id');
+    expect((await observer.query({text: keys, rowMode: 'array'})).rows).toEqual([[4]]);
     await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
     const changeSession = async (statement: string) => {
       await replaceDraft(statement);

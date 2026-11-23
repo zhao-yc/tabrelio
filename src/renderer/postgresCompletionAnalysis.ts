@@ -3,7 +3,7 @@ import { currentPostgresStatement, scanPostgresEditorTokens, type PostgresEditor
 import type { DeclaredLocalReferences, LocalBindingReferences, LocalReferenceRange, LocalReferences } from '../shared/localReferences';
 import { planLocalRename, quoteLocalRename, type LocalRename } from '../shared/localRename';
 import { postgresNamedParameterReferences, postgresNamedParameterRename } from './postgresNamedParameterReferences';
-import type { PostgresJoinSource, PostgresUsingColumns } from './postgresJoinColumns';
+import type { PostgresJoinOutput, PostgresJoinSource, PostgresUsingColumns } from './postgresJoinColumns';
 
 type Group = { kind: 'group'; start: number; end: number; closed: boolean; closing: ')' | ']'; parts: Part[] };
 type Part = PostgresEditorToken | Group;
@@ -38,7 +38,7 @@ interface ReferenceTrace {
 interface RelationSpan { end: number; relation: number; }
 type Scope = ReadonlyMap<string, Projection>;
 type Query = { kind: 'relations'; schema?: string; ctes?: string[]; mergeTarget?: true } |
-  { kind: 'columns'; relations: PostgresCompletionRelation[]; qualified: boolean } | PostgresUsingColumns;
+  { kind: 'columns'; relations: PostgresCompletionRelation[]; qualified: boolean; joinOutput?: PostgresJoinOutput } | PostgresUsingColumns;
 export interface PostgresCompletionAnalysis {
   start: number;
   end: number;
@@ -63,6 +63,7 @@ const expressionEntries = new Set(['SELECT', 'WHERE', 'HAVING', 'ON', 'RETURNING
 const expressionOperators = new Set(['(', '[', ',', '=', '+', '-', '*', '/', '%', '<', '>', '|', '&', '^', '~']);
 const unknown: Projection = { names: [], stars: [], exact: false };
 const joinSources = new WeakMap<Projection, PostgresJoinSource>();
+const joinedOutputs = new WeakSet<Projection>();
 const referenceCommands = new Set(['SELECT', 'WITH', 'VALUES', 'TABLE']);
 const unsupportedReferenceSyntax = new Set(['TABLESAMPLE', 'SEARCH', 'CYCLE']);
 const declaredTableSyntax = new Set(['JSON_TABLE', 'XMLTABLE']);
@@ -122,6 +123,7 @@ function rename(projection: Projection, names: string[], aliases?: Part, trace?:
   };
   const input = !trace && joinSources.get(projection);
   if (input) joinSources.set(output, { kind: 'alias', input, names });
+  if (!trace && joinedOutputs.has(projection)) joinedOutputs.add(output);
   return keepProjection(output, origins ?? [], trace?.projectionRename);
 }
 
@@ -140,6 +142,11 @@ function projectedJoinSource(projection: Projection): PostgresJoinSource | undef
   if (source) return source;
   if (projection.exact && projection.names.every((name): name is string => name !== null))
     return { kind: 'names', names: projection.names };
+}
+
+/** 连接投影缺少完整目录时，不能拿单表星号或部分输出代替合并结果。 */
+export function isJoinedProjection(ref: PostgresCompletionRelation): boolean {
+  return !!ref.projection && joinedOutputs.has(ref.projection);
 }
 
 /** 列名列表必须由完整标识符和逗号组成。 */
@@ -203,7 +210,7 @@ function expressionRoutine(main: Part[], left: PostgresEditorToken[], cursorGrou
 }
 
 /** 收集确定的投影名称，并将单源通配符的目录读取留给现有只读接口。 */
-function project(parts: Part[], refs: PostgresCompletionRelation[], returningStars?: PostgresCompletionRelation[], trace?: ReferenceTrace): Projection {
+function project(parts: Part[], refs: PostgresCompletionRelation[], starSources?: PostgresCompletionRelation[], trace?: ReferenceTrace): Projection {
   const row = parts[1];
   if (keyword(parts[0]) === 'VALUES' && row?.kind === 'group' && row.closed && row.parts.length) {
     const count = 1 + row.parts.filter(part => punct(part, ',')).length;
@@ -221,6 +228,7 @@ function project(parts: Part[], refs: PostgresCompletionRelation[], returningSta
   const stars: PostgresCompletionReference[] = [];
   const joins: PostgresJoinSource[] = [];
   let knownJoinShape = !trace;
+  let includesJoin = false;
   const mergedJoinColumns = parts.some(part => ['NATURAL', 'USING'].includes(keyword(part)));
   let exact = true;
   let end = start;
@@ -241,8 +249,8 @@ function project(parts: Part[], refs: PostgresCompletionRelation[], returningSta
     if (punct(last, '*')) {
       const owner = identifier(column.at(-3));
       const schema = column.length === 5 ? identifier(column[0]) : undefined;
-      const match = column.length === 1 && !select ? returningStars ?? refs.slice(0, 1)
-        : column.length === 1 && !mergedJoinColumns ? refs : punct(column.at(-2), '.') && owner &&
+      const match = column.length === 1 ? starSources ?? (!select ? refs.slice(0, 1) : mergedJoinColumns ? [] : refs)
+        : punct(column.at(-2), '.') && owner &&
         (column.length === 3 || schema && punct(column[1], '.')) ? refs.filter(ref => schema
           ? !ref.alias && ref.name === owner && ref.schema === schema : (ref.alias ?? ref.name) === owner) : [];
       if (match.length && (column.length === 1 || match.length === 1)) {
@@ -253,6 +261,7 @@ function project(parts: Part[], refs: PostgresCompletionRelation[], returningSta
             else knownJoinShape = false;
           }
           if (ref.projection) {
+            includesJoin ||= joinedOutputs.has(ref.projection);
             names.push(...ref.projection.names);
             if (trace?.projected) origins.push(...ref.projection.names.map((_, index) => ref.projection?.origins?.[index] ?? null));
             stars.push(...ref.projection.stars);
@@ -282,26 +291,51 @@ function project(parts: Part[], refs: PostgresCompletionRelation[], returningSta
   const output = { names: names.slice(0, limits.items), stars: stars.length <= limits.relations ? stars : [],
     exact: exact && names.length <= limits.items,
     ...(trace?.projected && exact && names.length <= limits.items ? { origins } : {}) };
-  if (knownJoinShape && joins.length && !output.exact) joinSources.set(output, { kind: 'projection', parts: joins });
+  if (knownJoinShape && joins.length && (!output.exact || includesJoin))
+    joinSources.set(output, { kind: 'projection', parts: joins });
+  if (includesJoin) joinedOutputs.add(output);
   return keepProjection(output, origins, trace?.projectionRename);
 }
 
+/** 星号按 FROM 项的顺序展开，限定名另用于消除连接输出里仍然重名的列。 */
+function joinColumnOutput(projections: Projection[], refs: PostgresCompletionRelation[]): PostgresJoinOutput | undefined {
+  const sources = projections.map(projectedJoinSource);
+  if (!sources.length || sources.some(source => source === undefined)) return;
+  const candidates = refs.flatMap(ref => {
+    const name = ref.alias ?? ref.name;
+    const source = relationJoinSource(ref);
+    if (!source || !name) return [];
+    return [{ qualifier: { name, ...(!ref.alias && ref.schema ? { schema: ref.schema } : {}) }, source }];
+  });
+  const qualifiers = candidates.filter(({qualifier}) => candidates.filter(item =>
+    item.qualifier.name === qualifier.name && item.qualifier.schema === qualifier.schema).length === 1);
+  return { source: { kind: 'projection', parts: sources as PostgresJoinSource[] }, qualifiers };
+}
+
 /** 在当前查询层或可关联的外层查找限定名，当前层同名别名遮蔽外层。 */
-function columns(refs: PostgresCompletionRelation[], outer: PostgresCompletionRelation[][], left: PostgresEditorToken[]): Query | undefined {
+function columns(refs: PostgresCompletionRelation[], outer: PostgresCompletionRelation[][], left: PostgresEditorToken[],
+  outputs?: Projection[]): Query | undefined {
   if (punct(left.at(-1), '.')) {
     const qualifier = identifier(left.at(-2));
     if (!qualifier) return;
     const schema = punct(left.at(-3), '.') ? identifier(left.at(-4)) : undefined;
     for (const level of [refs, ...outer]) {
       const matches = level.filter(ref => schema ? !ref.alias && ref.schema === schema && ref.name === qualifier : (ref.alias ?? ref.name) === qualifier);
-      if (matches.length) return matches.length === 1 ? { kind: 'columns', relations: matches, qualified: true } : undefined;
+      if (matches.length > 1) return;
+      if (matches.length === 1) {
+        const projection = matches[0].projection;
+        const source = projection && joinedOutputs.has(projection) ? projectedJoinSource(projection) : undefined;
+        return { kind: 'columns', relations: matches, qualified: true, ...(source ? { joinOutput: { source, qualifiers: [] } } : {}) };
+      }
     }
     return;
   }
   const level = [refs, ...outer].map(group => group.filter(ref => !ref.qualifiedOnly)).find(group => group.length) ?? [];
   const names = level.map(ref => ref.alias ?? (ref.schema ? JSON.stringify([ref.schema, ref.name]) : ref.name));
   if (level.length && level.length <= limits.relations && (level.length === 1 || names.every(Boolean) && new Set(names).size === level.length)) {
-    return { kind: 'columns', relations: level, qualified: false };
+    const projections = outputs ?? (level.some(isJoinedProjection) ? level.map(relationProjection) : undefined);
+    const joinOutput = projections ? joinColumnOutput(projections, refs) : undefined;
+    return { kind: 'columns', relations: level, qualified: false, ...(joinOutput ? {joinOutput} : {}) };
   }
 }
 
@@ -1351,6 +1385,7 @@ function relationProjection(ref: ScopedRelation): Projection {
 function mergeJoinProjection(left: Projection, right: Projection, natural: boolean, keys?: string[]): Projection {
   const leftSource = projectedJoinSource(left), rightSource = projectedJoinSource(right);
   const output: Projection = { ...unknown };
+  joinedOutputs.add(output);
   if (leftSource && rightSource) joinSources.set(output, { kind: 'join', left: leftSource, right: rightSource, keys, natural });
   if (natural && (!left.exact || !right.exact || left.names.includes(null) || right.names.includes(null))) return output;
   const merged = keys ?? (natural ? left.names.filter((name): name is string => !!name && right.names.includes(name)) : []);
@@ -1460,6 +1495,7 @@ function readMergeSource(parts: Part[], start: number, entryEnd: number, precedi
           trace?.declarations.set(declaration.start, 'alias');
           analysis.names.add(name);
           root = { name, declaration, usingColumns: keys, qualifiedOnly: true, projection: { names: keys, stars: [], exact: true } };
+          if (!trace && root.projection) joinedOutputs.add(root.projection);
           relations.push(root);
           next += 2;
         }
@@ -1478,27 +1514,47 @@ function readMergeSource(parts: Part[], start: number, entryEnd: number, precedi
   return left;
 }
 
-/** 仅在 JOIN USING 的括号内重用 JOIN 操作数解析。逗号分隔的其它来源不属于本次连接。 */
-function completeJoinUsing(parts: Part[], scope: Scope, outer: ScopedRelation[][], context: QueryContext): Parsed | undefined {
+interface JoinedFrom { start: number; end: number; refs: ScopedRelation[]; outputs: Projection[]; }
+
+/** 同一棵来源树负责 USING 补全及星号展开。每个顶层 FROM 项贡献一个独立输出。 */
+function readQueryJoinSources(parts: Part[], scope: Scope, outer: ScopedRelation[][], context?: QueryContext):
+  { active: Parsed } | JoinedFrom | undefined {
   const command = keyword(parts[0]);
   if (!['SELECT', 'UPDATE', 'DELETE'].includes(command)) return;
-  const start = parts.findIndex((_, index) => command === 'DELETE' ? mergeKeyword(parts, index) === 'USING' :
-    mergeKeyword(parts, index) === 'FROM' && relationEntry(parts, index));
-  if (start < 0 || parts[start].end >= context.offset) return;
-  const end = parts.findIndex((_, index) => index > start && endsFrom.has(mergeKeyword(parts, index)));
-  const sources = parts.slice(start + 1, end >= 0 ? end : undefined);
+  const start = parts.findIndex((part, index) => {
+    if (command === 'DELETE') return mergeKeyword(parts, index) === 'USING';
+    if (keyword(part) !== 'FROM' || !relationEntry(parts, index)) return false;
+    const previous = parts[index - 1];
+    // 光标可停在尚未写列名的 q. 后，后面的 FROM 仍属于查询。
+    return !punct(previous, '.') || !!context && previous.end <= context.offset && context.offset < part.start;
+  });
+  if (start < 0) return;
+  const boundary = parts.findIndex((_, index) => index > start && endsFrom.has(mergeKeyword(parts, index)));
+  const end = boundary < 0 ? parts.length : boundary;
+  const sources = parts.slice(start + 1, end);
   function cursorInsideUsing(items: Part[]): boolean {
-    return items.some((part, index) => part.kind === 'group' && contains(part, context.offset) &&
+    return !!context && items.some((part, index) => part.kind === 'group' && contains(part, context.offset) &&
       (mergeKeyword(items, index - 1) === 'USING' || cursorInsideUsing(part.parts)));
   }
-  if (!cursorInsideUsing(sources)) return;
-  const analysis: MergeAnalysis = { scope, outer, context, names: new Set(), usingOnly: true };
+  function hasMergedOrGroupedJoin(items: Part[], grouped = false): boolean {
+    return items.some((part, index) => ['NATURAL', 'USING'].includes(mergeKeyword(items, index)) ||
+      grouped && mergeKeyword(items, index) === 'JOIN' || part.kind === 'group' &&
+      part.closing === ')' && !isMergeSourceQuery(part) && hasMergedOrGroupedJoin(part.parts, true));
+  }
+  const using = cursorInsideUsing(sources);
+  const outside = !context || context.offset < parts[start].start || context.offset >= (parts[end]?.start ?? Infinity);
+  if (!using && (command !== 'SELECT' || !outside || !hasMergedOrGroupedJoin(sources))) return;
+  const analysis: MergeAnalysis = { scope, outer, context: using ? context : undefined, names: new Set(), usingOnly: true };
   const preceding: ScopedRelation[] = [];
+  const outputs: Projection[] = [];
   for (let index = 0, entry = parts[start].end; index < sources.length;) {
     const source = readMergeSource(sources, index, entry, preceding, analysis);
-    if (analysis.active?.query?.kind === 'using') return analysis.active;
-    if (!source || !punct(sources[source.next], ',')) break;
+    if (analysis.active?.query?.kind === 'using') return { active: analysis.active };
+    if (!source) return;
     preceding.push(...source.relations);
+    outputs.push(source.projection);
+    if (source.next === sources.length) return command === 'SELECT' && outside ? { start, end, refs: preceding, outputs } : undefined;
+    if (!punct(sources[source.next], ',')) return;
     entry = sources[source.next].end;
     index = source.next + 1;
   }
@@ -1748,8 +1804,8 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   }
 
   const write = command === 'UPDATE' || command === 'DELETE';
-  const using = context && !trace ? completeJoinUsing(main, scope, outer, context) : undefined;
-  if (using) return using;
+  const joined = !trace ? readQueryJoinSources(main, scope, outer, context) : undefined;
+  if (joined && 'active' in joined) return joined.active;
   const tableSource = !!trace && command === 'TABLE';
   if (trace && !write && !['SELECT', 'VALUES', 'TABLE'].includes(command)) return unsupported();
   if (write && command === 'DELETE' && keyword(main[1]) !== 'FROM') return unsupported();
@@ -1764,6 +1820,11 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   let argumentStart: number | undefined;
   let inFunctionMetadata = false;
   for (let i = 0; i < (returning < 0 ? main.length : returning); i++) {
+    if (joined?.start === i) {
+      refs.push(...joined.refs);
+      i = joined.end - 1;
+      continue;
+    }
     const word = keyword(main[i]);
     if (endsFrom.has(word)) from = false;
     const usingSource = command === 'DELETE' && word === 'USING' && deleteUsing < 0 && !from && (where < 0 || i < where);
@@ -1880,7 +1941,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     }
     return { projection };
   }
-  const projection = project(main, refs);
+  const projection = project(main, refs, joined?.outputs.map(projection => ({name: '', projection})));
   if (!context || inFunctionMetadata || start > 0 && (main[0]?.start ?? context.start) > context.start) return { projection };
 
   const { left, offset } = context;
@@ -1914,7 +1975,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   }
   const windows = command === 'SELECT' ? completeWindowNames(main, context) : undefined;
   if (windows) return { projection, windows };
-  return { projection, query: keyword(left.at(-1)) === 'AS' ? undefined : columns(visible, outer, left),
+  return { projection, query: keyword(left.at(-1)) === 'AS' ? undefined : columns(visible, outer, left, joined?.outputs),
     routine: expressionRoutine(main, left, cursorGroup, [visible, ...outer], argumentStart) };
 }
 
@@ -2213,11 +2274,11 @@ export function analyzePostgresCompletion(source: string, offset: number, standa
     ? selectClauseKeywords(source, parts, { start, end, offset, prefix: prefixUpper }) : undefined;
   if (clause?.continuation) return { start, end, prefix, quoted, keywords: clause.items };
   const parsed = parts && parseQuery(parts, new Map(), [], { offset, start, left });
-  if (parsed?.query?.kind === 'using') {
+  if (parsed?.query?.kind === 'using' || parsed?.query?.kind === 'columns' && parsed.query.joinOutput) {
     // 目录目标必须在离线的两种字符串模式下有一致的词法边界。
     if (standardStrings === undefined && source.includes('\\') &&
       JSON.stringify(all) !== JSON.stringify(scanPostgresEditorTokens(source, limits.tokens, false))) return;
-    return { start, end, prefix, quoted, query: parsed.query };
+    if (parsed.query.kind === 'using') return { start, end, prefix, quoted, query: parsed.query };
   }
   if (parsed?.windows) {
     const result = { start, end, prefix, quoted, windows: parsed.windows };

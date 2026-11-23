@@ -15,6 +15,11 @@ export interface PostgresUsingColumns {
   excluded: string[];
 }
 
+export interface PostgresJoinOutput {
+  source: PostgresJoinSource;
+  qualifiers: { qualifier: PostgresCatalogRelation; source: PostgresJoinSource }[];
+}
+
 const relationKey = ({ schema, name }: PostgresCatalogRelation) => JSON.stringify([schema ?? null, name]);
 const maxWidth = limits.relations * postgresJoinColumnLimit;
 const encoder = new TextEncoder();
@@ -22,7 +27,7 @@ const columnName = (name: unknown): name is string => typeof name === 'string' &
   !/[\u0000\uD800-\uDFFF]/u.test(name) && encoder.encode(name).length <= 63;
 
 /** 有界遍历来源树，重复引用的目录目标只读一次，输出仍按每个操作数独立计数。 */
-export function joinCatalogRelations(using: PostgresUsingColumns): PostgresCatalogRelation[] | undefined {
+export function joinCatalogRelations(sources: readonly (PostgresJoinSource | undefined)[]): PostgresCatalogRelation[] | undefined {
   const catalog = new Map<string, PostgresCatalogRelation>();
   let budget = limits.tokens;
   function visit(source: PostgresJoinSource | undefined, depth: number): boolean {
@@ -38,7 +43,7 @@ export function joinCatalogRelations(using: PostgresUsingColumns): PostgresCatal
       case 'projection': return source.parts.every(part => visit(part, depth + 1));
     }
   }
-  if (visit(using.left, 0) && visit(using.right, 0)) return [...catalog.values()];
+  if (sources.every(source => visit(source, 0))) return [...catalog.values()];
 }
 
 function columnCounts(names: string[]): Map<string, number> {
@@ -47,9 +52,9 @@ function columnCounts(names: string[]): Map<string, number> {
   return counts;
 }
 
-/** 先重建有序 JOIN 输出，再判断当前两个操作数中的名称是否各自唯一。 */
-export function sharedJoinColumns(using: PostgresUsingColumns, relations: PostgresCatalogRelation[],
-  result: PostgresCompletionResult): string[] | undefined {
+/** 保留每个输入的列顺序和重复名称，目录缺失时不推断列是否唯一。 */
+function resolveJoinSources(sources: readonly (PostgresJoinSource | undefined)[], relations: PostgresCatalogRelation[],
+  result: PostgresCompletionResult): (string[] | undefined)[] | undefined {
   if (result.incomplete || result.deferred || result.items.length !== relations.length) return;
   const catalog = new Map<string, string[]>();
   for (const item of result.items) {
@@ -90,8 +95,31 @@ export function sharedJoinColumns(using: PostgresUsingColumns, relations: Postgr
       }
     }
   }
-  const left = resolve(using.left), right = resolve(using.right);
+  return sources.map(resolve);
+}
+
+/** 先重建有序 JOIN 输出，再判断当前两个操作数中的名称是否各自唯一。 */
+export function sharedJoinColumns(using: PostgresUsingColumns, relations: PostgresCatalogRelation[],
+  result: PostgresCompletionResult): string[] | undefined {
+  const [left, right] = resolveJoinSources([using.left, using.right], relations, result) ?? [];
   if (!left || !right) return;
   const leftCounts = columnCounts(left), rightCounts = columnCounts(right), excluded = new Set(using.excluded);
   return [...leftCounts.keys()].filter(name => leftCounts.get(name) === 1 && rightCounts.get(name) === 1 && !excluded.has(name));
+}
+
+/** 合并后的唯一列可直接引用，歧义列只能使用在各自可见限定名下唯一的名称。 */
+export function joinedOutputColumns(output: PostgresJoinOutput, relations: PostgresCatalogRelation[],
+  result: PostgresCompletionResult): { name: string; qualifier?: PostgresCatalogRelation }[] | undefined {
+  const [joined, ...qualified] = resolveJoinSources([output.source, ...output.qualifiers.map(item => item.source)], relations, result) ?? [];
+  if (!joined) return;
+  const counts = columnCounts(joined);
+  const items: { name: string; qualifier?: PostgresCatalogRelation }[] = [...counts.keys()]
+    .filter(name => counts.get(name) === 1).map(name => ({ name }));
+  for (const [index, names] of qualified.entries()) {
+    if (!names) continue;
+    for (const [name, count] of columnCounts(names)) {
+      if (count === 1 && (counts.get(name) ?? 0) > 1) items.push({ name, qualifier: output.qualifiers[index].qualifier });
+    }
+  }
+  return items;
 }

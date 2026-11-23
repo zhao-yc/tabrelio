@@ -2,8 +2,8 @@ import type * as monaco from 'monaco-editor';
 import type { PostgresCompletionInput, PostgresCompletionReference, PostgresCompletionResult } from '../shared/postgresCompletion';
 import { postgresCompletionLimits } from '../shared/postgresCompletion';
 import { postgresIdentifier } from '../shared/postgresSql';
-import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresSignature, type PostgresFieldTarget } from './postgresCompletionAnalysis';
-import { joinCatalogRelations, sharedJoinColumns } from './postgresJoinColumns';
+import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresSignature, isJoinedProjection, type PostgresFieldTarget } from './postgresCompletionAnalysis';
+import { joinCatalogRelations, joinedOutputColumns, sharedJoinColumns } from './postgresJoinColumns';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from './postgresNamedParameterReferences';
 import { postgresSignatureHelp } from './postgresSignatureHelp';
 import { postgresZh } from './locales/postgres.zh-CN';
@@ -189,43 +189,54 @@ export function createPostgresCompletionProvider(options: {
           }
           return { suggestions: suggestions.slice(0, postgresCompletionLimits.items), incomplete: true };
         }
-        if (query?.kind === 'using') {
-          const relations = joinCatalogRelations(query);
-          if (!relations) return empty;
-          let result: PostgresCompletionResult = { items: [], incomplete: false };
-          if (relations.length) {
-            await debounce(controller.signal, 100);
-            try {
-              const inventory = await request({ ...target, kind: 'joinColumns', prefix: '', relations }, current);
-              if (!inventory || !current()) return empty;
-              result = inventory;
-            } catch {
-              if (current()) options.status('unavailable');
-              return empty;
+        const using = query?.kind === 'using' ? query : undefined;
+        const joinOutput = query?.kind === 'columns' ? query.joinOutput : undefined;
+        let joined: ReturnType<typeof joinedOutputColumns>;
+        let inventoryFailed = false;
+        const normalize = (name: string) => quoted ? name : name.replace(/[A-Z]/g, letter => letter.toLowerCase());
+        const joinMatches = (name: string) => normalize(name).startsWith(normalize(prefix));
+        if (using || joinOutput) {
+          const sources = using ? [using.left, using.right] : joinOutput
+            ? [joinOutput.source, ...joinOutput.qualifiers.map(item => item.source)] : [];
+          const relations = joinCatalogRelations(sources);
+          if (relations) {
+            let inventory: PostgresCompletionResult = { items: [], incomplete: false };
+            if (relations.length) {
+              await debounce(controller.signal, 100);
+              try {
+                const result = await request({ ...target, kind: 'joinColumns', prefix: '', relations }, current);
+                if (!result || !current()) return empty;
+                inventory = result;
+              } catch {
+                if (!current()) return empty;
+                options.status('unavailable');
+                if (using) return empty;
+                inventoryFailed = true;
+              }
             }
+            if (inventory.deferred) options.status(inventory.deferred === 'transaction' ? 'sessionUnknown' : 'unavailable');
+            else if (inventory.incomplete) options.status('partial');
+            if (using) {
+              const names = sharedJoinColumns(using, relations, inventory)?.filter(joinMatches);
+              if (!names) return empty;
+              if (names.length > postgresCompletionLimits.items) options.status('partial');
+              return { incomplete: true, suggestions: names.slice(0, postgresCompletionLimits.items).map((name, index) => ({
+                range, kind: options.kinds.column, label: { label: name, description: postgresZh.joinSharedColumn },
+                insertText: postgresIdentifier(name), filterText: quoted ? postgresIdentifier(name) : name,
+                sortText: String(index).padStart(3, '0'),
+              })) };
+            }
+            if (joinOutput && !inventoryFailed) joined = joinedOutputColumns(joinOutput, relations, inventory);
           }
-          if (result.deferred) {
-            options.status(result.deferred === 'transaction' ? 'sessionUnknown' : 'unavailable');
-            return empty;
-          }
-          const names = sharedJoinColumns(query, relations, result);
-          if (result.incomplete) options.status('partial');
-          if (!names) return empty;
-          const normalize = (name: string) => quoted ? name : name.replace(/[A-Z]/g, letter => letter.toLowerCase());
-          const suggestions = names.filter(name => normalize(name).startsWith(normalize(prefix)));
-          if (suggestions.length > postgresCompletionLimits.items) options.status('partial');
-          return { incomplete: true, suggestions: suggestions.slice(0, postgresCompletionLimits.items).map((name, index) => ({
-            range, kind: options.kinds.column, label: { label: name, description: postgresZh.joinSharedColumn },
-            insertText: postgresIdentifier(name), filterText: quoted ? postgresIdentifier(name) : name,
-            sortText: String(index).padStart(3, '0'),
-          })) };
+          if (using) return empty;
         }
         const references: PostgresCompletionReference[] = [];
         const origins: number[] = [];
         const localColumns: { reference: number; name: string; type?: string }[] = [];
         const matches = (name: string) => name.toLowerCase().startsWith(prefix.toLowerCase());
-        if (query?.kind === 'columns') {
+        if (query?.kind === 'columns' && !joined) {
           for (const [index, ref] of query.relations.entries()) {
+            if (isJoinedProjection(ref)) continue;
             const { name, schema, projection } = ref;
             const directory = projection?.stars ?? [{ name, ...(schema ? { schema } : {}) }];
             for (const source of directory) {
@@ -239,7 +250,7 @@ export function createPostgresCompletionProvider(options: {
         }
         const base = { ...target, prefix, ...(routine ? { routine } : {}) };
         // CTE 名称、别名和投影只在编辑器中使用，目录只接收实际物理目标。
-        const input: PostgresCompletionInput | undefined = query?.kind === 'relations'
+        const input: PostgresCompletionInput | undefined = inventoryFailed ? undefined : query?.kind === 'relations'
           ? { ...base, kind: 'relations', ...(query.schema ? { schema: query.schema } : {}), ...(query.mergeTarget ? { mergeTarget: true } : {}) }
           : references.length > 0 && references.length <= postgresCompletionLimits.relations
             ? { ...base, kind: 'columns', relations: references } : routine ? { ...base, kind: 'routines', routine } : undefined;
@@ -251,6 +262,15 @@ export function createPostgresCompletionProvider(options: {
           if (!current()) return empty;
         }
         const suggestions: monaco.languages.CompletionItem[] = [];
+        for (const {name, qualifier} of joined ?? []) {
+          if (!joinMatches(name)) continue;
+          const qualifiedName = qualifier ? [qualifier.schema, qualifier.name].filter((part): part is string => !!part)
+            .map(postgresIdentifier).join('.') : undefined;
+          suggestions.push({ range, kind: options.kinds.column,
+            label: { label: name, description: qualifiedName ?? postgresZh.joinOutputColumn },
+            insertText: (qualifiedName ? qualifiedName + '.' : '') + postgresIdentifier(name),
+            filterText: quoted ? postgresIdentifier(name) : name, sortText: '0' + String(suggestions.length).padStart(3, '0') });
+        }
         // 本地对象排在目录前；显式 schema 仍可选择同名物理关系。
         for (const name of query?.kind === 'relations' ? query.ctes ?? [] : []) {
           if (!matches(name)) continue;

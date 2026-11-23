@@ -982,6 +982,8 @@ PostgreSQL 查询编辑器可离线追踪 CTE 和派生表的已确认输出列�
 
 在 PostgreSQL 的 `JOIN … USING (...)` 中按 Ctrl+空格，可补全两侧各自唯一、尚未列出的同名列。候选会考虑前一个 JOIN 的合并列、嵌套连接和位置列别名。已知的 CTE 与派生表可离线计算。物理表使用只读目录，连接后按原会话的搜索路径和临时表解析。来源、列清单或权限无法完整确认时停止建议。 [PostgreSQL 连接表](https://www.postgresql.org/docs/18/queries-table-expressions.html)
 
+PostgreSQL 的 `JOIN USING` 和 `NATURAL JOIN` 合并键在结果里只建议一次。连接输出经 `SELECT *`、派生表或 CTE 后仍保留列顺序，位置列别名按该顺序替换。整个连接的别名遮蔽内部来源。用 `USING (...) AS alias` 时，`alias.` 只补全连接键。 [PostgreSQL SELECT](https://www.postgresql.org/docs/18/sql-select.html)
+
 在 PostgreSQL 的显式投影别名、列清单或已确认引用上按 F2，可整组更新当前语句，按 Ctrl／Cmd+Z 一次撤销。名称冲突、未确认的同名依赖及 `NATURAL JOIN` 会阻止整组修改，保留草稿。[PostgreSQL SELECT 名称规则](https://www.postgresql.org/docs/18/sql-select.html)
 
 `GROUP BY` 中的裸列名优先指向当前查询的输入列，确定没有同名输入列时才使用输出别名。`ORDER BY` 和 `DISTINCT ON` 的裸列名优先指向输出。以上绑定可用于 F12、Shift+F12 和 F2，分组展开也适用于 `GROUPING SETS`、`ROLLUP` 与 `CUBE`。目录信息未知或输入列有歧义时，编辑器会停在可确认的范围。[PostgreSQL SELECT 名称规则](https://www.postgresql.org/docs/18/sql-select.html)

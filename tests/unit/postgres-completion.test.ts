@@ -198,6 +198,65 @@ it('USING 列不接受表限定符、重复的其它键或无法确认输出的�
   }
 });
 
+it('连接输出补全合并裸键，对仍重名的列给出可见限定名', async () => {
+  const sql = 'WITH a(id, tag, only_a) AS (VALUES (1,2,3)), b(id, tag, only_b) AS (VALUES (1,4,5)) ' +
+    'SELECT | FROM a FULL JOIN b USING (id) AS shared';
+  const request = vi.fn(async () => ({items: [], incomplete: true}));
+  const {provider, suggest} = editor(sql, request);
+  try {
+    expect((await suggest())?.suggestions.filter(item => typeof item.label === 'object').map(item => item.insertText))
+      .toEqual(['"id"', '"only_a"', '"only_b"', '"a"."tag"', '"b"."tag"']);
+    expect(request).not.toHaveBeenCalled();
+  } finally { provider.dispose(); }
+});
+
+it('USING AS 只公开连接键，整个 JOIN 的别名遮蔽内部来源', async () => {
+  const request = vi.fn(async () => ({items: [], incomplete: true}));
+  const sql = 'WITH a(id, only_a) AS (VALUES (1,2)), b(id, only_b) AS (VALUES (1,3)) ';
+  const narrow = editor(sql + 'SELECT shared.| FROM a JOIN b USING (id) AS shared', request);
+  const parenthesized = editor(sql + 'SELECT whole.| FROM (a JOIN b USING (id) AS shared) whole("新键")', request);
+  try {
+    expect((await narrow.suggest())?.suggestions.map(item => item.insertText)).toEqual(['"id"']);
+    expect((await parenthesized.suggest())?.suggestions.map(item => item.insertText)).toEqual(['"新键"', '"only_a"', '"only_b"']);
+    expect(at(sql + 'SELECT a.| FROM (a JOIN b USING (id) AS shared) whole')?.query).toBeUndefined();
+    expect(at(sql + 'SELECT shared.| FROM (a JOIN b USING (id) AS shared) whole')?.query).toBeUndefined();
+    expect(request).not.toHaveBeenCalled();
+  } finally { narrow.provider.dispose(); parenthesized.provider.dispose(); }
+});
+
+it('连接星号通过派生表和 CTE 保留合并顺序，作为后续 USING 的输入', async () => {
+  const request = vi.fn(async () => ({items: [], incomplete: true}));
+  const sources = 'WITH a(extra_a, id) AS (VALUES (2,1)), b(id, extra_b) AS (VALUES (1,3)), ' +
+    'merged AS (SELECT * FROM a NATURAL JOIN b), wrapped AS (SELECT d.* FROM (SELECT * FROM merged) d) ';
+  const qualified = editor(sources + 'SELECT w.| FROM wrapped w(new_id)', request);
+  const mixed = editor(sources + 'SELECT | FROM wrapped w, (VALUES (7)) extra(extra_a)', request);
+  const nextJoin = editor(sources + 'SELECT * FROM wrapped w JOIN (VALUES (1,7)) next(id, ignored) USING (i|d)', request);
+  try {
+    expect((await qualified.suggest())?.suggestions.map(item => item.insertText)).toEqual(['"new_id"', '"extra_a"', '"extra_b"']);
+    expect((await mixed.suggest())?.suggestions.filter(item => typeof item.label === 'object').map(item => item.insertText))
+      .toEqual(['"id"', '"extra_b"', '"w"."extra_a"', '"extra"."extra_a"']);
+    expect((await nextJoin.suggest())?.suggestions.map(item => item.insertText)).toEqual(['"id"']);
+    expect(request).not.toHaveBeenCalled();
+  } finally { qualified.provider.dispose(); mixed.provider.dispose(); nextJoin.provider.dispose(); }
+});
+
+it('物理连接星号按完整目录生成一次输出，缺列或结果歧义时不猜候选', async () => {
+  const source = 'WITH merged AS (SELECT * FROM app.a JOIN app.b USING (id)) SELECT merged.| FROM merged AS merged("键")';
+  const inventory: PostgresCompletionResult = {incomplete: false, items: [
+    {kind: 'joinColumns', reference: 0, names: ['left_only', 'id', 'tag']},
+    {kind: 'joinColumns', reference: 1, names: ['id', 'right_only', 'tag']},
+  ]};
+  const request = vi.fn(async () => inventory);
+  const ready = editor(source, request, '原会话');
+  const partial = editor(source, async () => ({...inventory, incomplete: true}));
+  try {
+    expect((await ready.suggest())?.suggestions.map(item => item.insertText)).toEqual(['"键"', '"left_only"', '"right_only"']);
+    expect(request).toHaveBeenCalledExactlyOnceWith({kind: 'joinColumns', prefix: '', connectionId: '原连接',
+      database: '原库', sessionId: '原会话', relations: [{schema: 'app', name: 'a'}, {schema: 'app', name: 'b'}]});
+    expect((await partial.suggest())?.suggestions).toEqual([]);
+  } finally { ready.provider.dispose(); partial.provider.dispose(); }
+});
+
 it.each([
   ['SELECT 1 ORDER BY 1 NU|', 'NULLS LAST', 'SELECT 1 ORDER BY 1 NULLS LAST'],
   ['SELECT 1 ORDER BY 1 NULLS F|suffix', 'FIRST', 'SELECT 1 ORDER BY 1 NULLS FIRST'],
@@ -300,7 +359,7 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
     expect(at('SELECT d.| FROM (SELECT a.*, b.* FROM a JOIN b USING (id)) d')?.query)
       .toMatchObject({ relations: [{ projection: { stars: [{ name: 'a' }, { name: 'b' }] } }] });
     expect(at('SELECT d.| FROM (SELECT * FROM a JOIN b USING (id)) d')?.query)
-      .toMatchObject({ relations: [{ projection: { names: [], stars: [] } }] });
+      .toMatchObject({ joinOutput: { qualifiers: [] }, relations: [{ projection: { names: ['id'], stars: [] } }] });
   });
   it('表函数声明列、位置别名和序号列沿派生关系补全', () => {
     expect(at('SELECT r.| FROM get_records() AS r(id int, "对外值" numeric(12,3))')?.query)
