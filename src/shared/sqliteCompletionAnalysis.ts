@@ -31,7 +31,7 @@ const functionContext = z.object({ mode: z.enum(['scalar', 'aggregate', 'result'
 type FunctionContext = z.infer<typeof functionContext>;
 const indexTargetContext = z.object({ schema: z.enum(['main', 'temp']).optional() }).strict();
 type IndexTargetContext = z.infer<typeof indexTargetContext>;
-export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword' | 'index' | 'collation' | 'query-start')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; viewSchema?: 'main'; indexTarget?: IndexTargetContext; indexSource?: SqliteCompletionTable; functions?: FunctionContext; output?: OutputProjection; outputAliases?: OutputAliasHints; windowNames?: SqliteWindowNames; using?: UsingProjection; joinGroup?: QualifiedJoinGroup; localProjections?: SqliteLocalProjection[]; unqualifiedColumns?: true; writableColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
+export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword' | 'index' | 'collation' | 'query-start')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; viewSchema?: 'main'; indexTarget?: IndexTargetContext; alterTable?: true; indexSource?: SqliteCompletionTable; functions?: FunctionContext; output?: OutputProjection; outputAliases?: OutputAliasHints; windowNames?: SqliteWindowNames; using?: UsingProjection; joinGroup?: QualifiedJoinGroup; localProjections?: SqliteLocalProjection[]; unqualifiedColumns?: true; writableColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
 type Token = { kind: 'id' | 'string' | 'number' | 'parameter' | 'symbol'; value: string; start: number; end: number; depth: number; quoted?: boolean; closed?: boolean; pair?: number };
 type ProjectionSource = { start: number; end: number; ctes: Map<string, Cte> };
 type Cte = { name: string; columns?: string[]; start: number; end: number; declaration: SqliteLocalDefinition; projectionSource?: ProjectionSource };
@@ -114,8 +114,9 @@ function createIndexTarget(tokens: Token[], head: number, end: number): { tableI
 }
 
 /** 从绑定取准确目录身份，别名和 SQL 实参不会进入列元数据请求。 */
-function columnSource({ name, schema, tableFunction, indexTable }: Extract<SqliteCompletionRelation, { kind: 'physical' }>): SqliteCompletionSource {
-  return { name, ...(schema ? { schema } : {}), ...(tableFunction ? { tableFunction } : {}), ...(indexTable ? { indexTable } : {}) };
+function columnSource({ name, schema, tableFunction, indexTable, alterColumn }: Extract<SqliteCompletionRelation, { kind: 'physical' }>): SqliteCompletionSource {
+  return { name, ...(schema ? { schema } : {}), ...(tableFunction ? { tableFunction } : {}), ...(indexTable ? { indexTable } : {}),
+    ...(alterColumn ? { alterColumn } : {}) };
 }
 
 /** 写入表达式允许 schema.目标别名。未显式指定 schema 时，目录仍按原语句的目标解析。 */
@@ -804,7 +805,35 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       }
       return { head: i, ctes, declared };
     }
-    type ScopeResult = { bindings: Binding[]; ctes: Map<string, Cte>; syntax: Ready['syntax']; indexSource?: SqliteCompletionTable; indexTarget?: IndexTargetContext; functions?: FunctionContext; output?: OutputProjection; outputAliases?: OutputAliasHints; windowNames?: SqliteWindowNames; windowDefinition?: SqliteLocalDefinition; using?: UsingProjection; joinStarScope?: JoinStarScope; unqualified?: true; writable?: true };
+    type ScopeResult = { bindings: Binding[]; ctes: Map<string, Cte>; syntax: Ready['syntax']; indexSource?: SqliteCompletionTable; indexTarget?: IndexTargetContext; alterTable?: true; functions?: FunctionContext; output?: OutputProjection; outputAliases?: OutputAliasHints; windowNames?: SqliteWindowNames; windowDefinition?: SqliteLocalDefinition; using?: UsingProjection; joinStarScope?: JoinStarScope; unqualified?: true; writable?: true };
+    function alterScope(head: number, end: number): ScopeResult {
+      const first = head + 2, ctes = new Map<string, Cte>();
+      let at = first, schema: 'main' | 'temp' | undefined;
+      if (at + 1 < end && tokens[at + 1].kind === 'symbol' && tokens[at + 1].value === '.') {
+        const namespace = fold(tokens[at].value);
+        if (!ddlName(tokens[at]) || namespace !== 'main' && namespace !== 'temp') fail('alter-table');
+        schema = namespace;
+        at += 2;
+      }
+      const inSlot = (index: number) => targetIndex === index || target.start === target.end &&
+        target.start >= tokens[index - 1].end && target.start <= (tokens[Math.min(index, end)]?.start ?? source.length);
+      const tableTarget = inSlot(at), table = at < end ? tokens[at] : undefined;
+      if (tableTarget && !intent) return { bindings: [], ctes, syntax: ['relation'], alterTable: true };
+      if (!table || !ddlName(table)) fail('alter-table');
+      const relation: Extract<SqliteCompletionRelation, { kind: 'physical' }> = { kind: 'physical', name: table.value, ...(schema ? { schema } : {}) };
+      const binding: Binding = { relation, start: first, end: at + 1, referenceIndex: at, unknown: false, level: 0 };
+      if (tableTarget && intent === 'object') return { bindings: [binding], ctes, syntax: ['relation'] };
+      const operation = tokens[++at];
+      let column = at + 1;
+      if (keyword(tokens[column], 'column')) column++;
+      if (keyword(operation, 'add') && ddlName(tokens[column]) && collationAt(column, end)) return collationScope();
+      // 只读取源列。RENAME TO、新列定义和约束动作都没有旧列目录角色。
+      const alterColumn = keyword(operation, 'rename') && !keyword(tokens[column], 'to') ? 'rename' :
+        keyword(operation, 'drop') ? 'drop' : keyword(operation, 'alter') ? 'nullability' : undefined;
+      if (!alterColumn || !inSlot(column) || qualifiers.length ||
+        tokens[column + 1]?.kind === 'symbol' && ['.', '('].includes(tokens[column + 1].value)) fail('alter-column');
+      return { bindings: [{ ...binding, relation: { ...relation, alterColumn } }], ctes, syntax: ['column'], unqualified: true };
+    }
     function indexScope({ tableIndex, schema }: NonNullable<typeof indexDraft>, end: number): ScopeResult {
       const table = tableIndex < end ? tokens[tableIndex] : undefined, open = tableIndex + 1 < end ? tokens[tableIndex + 1] : undefined;
       const on = tokens[tableIndex - 1], ctes = new Map<string, Cte>();
@@ -835,6 +864,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       const createQuery = !projectionOnly && queryBody?.start === start;
       if (createQuery && atQueryStart(start, end)) return queryStart();
       const parsed = withClause(start, end, inherited), ctes = parsed.ctes, head = parsed.head, base = tokens[head]?.depth ?? tokens[start]?.depth ?? 0;
+      if (!projectionOnly && head === statementHead && keyword(tokens[head], 'alter') && keyword(tokens[head + 1], 'table')) return alterScope(head, end);
       if (!projectionOnly && indexDraft && head === statementHead) return indexScope(indexDraft, end);
       if (createQuery && !['select', 'values'].some(word => keyword(tokens[head], word))) fail('create-query');
       if (!projectionOnly) for (const cte of parsed.declared) if (offset >= (tokens[cte.start]?.start ?? source.length) && offset <= (tokens[cte.end]?.start ?? source.length)) return scope(cte.start, cte.end, ctes, [], level + 1);
@@ -1442,6 +1472,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
     } : undefined;
     return { status: 'ready', target, syntax: parsed.syntax, qualifiers, relations,
       ...(viewSchema && parsed.syntax.includes('relation') && !intent ? { viewSchema } : {}), ...(parsed.indexTarget ? { indexTarget: parsed.indexTarget } : {}),
+      ...(parsed.alterTable ? { alterTable: true } : {}),
       ...(parsed.functions ? { functions: parsed.functions } : {}),
       ...(parsed.output ? { output: parsed.output } : {}), ...(parsed.outputAliases ? { outputAliases: parsed.outputAliases } : {}),
       ...(parsed.windowNames ? { windowNames: parsed.windowNames } : {}),
@@ -1550,7 +1581,7 @@ const relationSchema = z.discriminatedUnion('kind', [
 ]);
 const resultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('blocked'), reason: z.string().regex(/^[a-z-]{1,64}$/) }).strict(),
-  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.nameUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword', 'index', 'collation', 'query-start'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations * 2 - 1), viewSchema: z.literal('main').optional(), indexTarget: indexTargetContext.optional(), indexSource: sqliteCompletionTableSchema.optional(), functions: functionContext.optional(), output: outputProjection.optional(), outputAliases: outputAliasSchema.optional(), windowNames: windowNameSchema.optional(), using: usingProjection.optional(), joinGroup: qualifiedGroup.optional(), localProjections: localProjectionSchema.optional(), unqualifiedColumns: z.literal(true).optional(), writableColumns: z.literal(true).optional(), definition: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).strict().optional() }).strict(),
+  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.nameUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword', 'index', 'collation', 'query-start'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations * 2 - 1), viewSchema: z.literal('main').optional(), indexTarget: indexTargetContext.optional(), alterTable: z.literal(true).optional(), indexSource: sqliteCompletionTableSchema.optional(), functions: functionContext.optional(), output: outputProjection.optional(), outputAliases: outputAliasSchema.optional(), windowNames: windowNameSchema.optional(), using: usingProjection.optional(), joinGroup: qualifiedGroup.optional(), localProjections: localProjectionSchema.optional(), unqualifiedColumns: z.literal(true).optional(), writableColumns: z.literal(true).optional(), definition: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).strict().optional() }).strict(),
 ]);
 /** Client只核有界回包形状与原范围，不在渲染线程重新解析整份用户SQL。 */
 export function validateSqliteCompletionAnalysis(raw: unknown, source: string, offset: number, intent?: SqliteAnalysisIntent): SqliteCompletionAnalysis {
@@ -1560,15 +1591,22 @@ export function validateSqliteCompletionAnalysis(raw: unknown, source: string, o
   const collation = value.syntax.includes('collation');
   const queryStart = value.syntax.includes('query-start');
   if ((collation || queryStart) && (intent === 'object' || intent === 'definition' || value.syntax.length !== 1 || value.qualifiers.length || value.relations.length || value.viewSchema ||
-    value.indexTarget || value.indexSource || value.functions || value.output || value.outputAliases || value.windowNames || value.using || value.joinGroup ||
+    value.indexTarget || value.alterTable || value.indexSource || value.functions || value.output || value.outputAliases || value.windowNames || value.using || value.joinGroup ||
     value.localProjections || value.unqualifiedColumns || value.writableColumns || value.definition)) fail('response');
   if (queryStart && (intent || value.target.quoted || !sqliteQueryBodyKeywords.some(word => fold(word).startsWith(fold(value.target.prefix))))) fail('response');
   if (value.viewSchema && (intent || !value.syntax.includes('relation') || value.qualifiers.length > 1 ||
     value.qualifiers.length === 1 && fold(value.qualifiers[0]) !== value.viewSchema ||
     value.relations.some(relation => relation.kind === 'physical' && relation.schema !== value.viewSchema))) fail('response');
   if (value.indexTarget && (intent || value.syntax.length !== 1 || value.syntax[0] !== 'relation' || value.qualifiers.length || value.relations.length ||
+    value.viewSchema || value.alterTable || value.indexSource || value.functions || value.output || value.outputAliases || value.windowNames || value.using ||
+    value.joinGroup || value.localProjections || value.unqualifiedColumns || value.writableColumns || value.definition)) fail('response');
+  if (value.alterTable && (intent || value.syntax.length !== 1 || value.syntax[0] !== 'relation' || value.qualifiers.length > 1 || value.relations.length ||
     value.viewSchema || value.indexSource || value.functions || value.output || value.outputAliases || value.windowNames || value.using ||
     value.joinGroup || value.localProjections || value.unqualifiedColumns || value.writableColumns || value.definition)) fail('response');
+  const alterColumns = value.relations.filter(relation => relation.kind === 'physical' && relation.alterColumn);
+  if (alterColumns.length && (value.relations.length !== 1 || !value.unqualifiedColumns || value.syntax.length !== 1 || value.syntax[0] !== 'column' ||
+    value.writableColumns || value.output || value.using || value.functions || value.outputAliases || value.joinGroup || value.localProjections ||
+    value.relations.some(relation => relation.kind === 'physical' && (relation.alias || relation.dmlRole || relation.afterOuterJoin)))) fail('response');
   const indexTables = value.relations.filter(relation => relation.kind === 'physical' && relation.indexTable);
   if (indexTables.length && (value.relations.length !== 1 || value.output || value.using || value.outputAliases || value.localProjections ||
     value.writableColumns || value.windowNames || value.relations.some(relation => relation.kind === 'physical' &&

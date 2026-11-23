@@ -25,6 +25,14 @@ async function stamp(driver: SqliteDriverSession, control: CompletionControl): P
 /** 前缀用substr与绑定参数作字面比较；百分号、下划线及引号均没有模式或SQL语义。 */
 const prefixSql = 'substr(name,1,length(?)) = ? COLLATE NOCASE';
 const visibleSql = "type IN ('table','view','virtual') AND substr(name,1,7) COLLATE NOCASE <> 'sqlite_'";
+// 只排除目录可直接验证的删列限制，完整约束和表达式依赖由 SQLite 在明确执行时检查。
+const dropColumnSql = ` AND p.pk = 0 AND (p.hidden <> 0 OR EXISTS (SELECT 1 FROM pragma_table_xinfo(?,?) c WHERE c.hidden = 0 AND c.cid <> p.cid))
+  AND NOT EXISTS (SELECT 1 FROM pragma_index_list(?,?) i JOIN pragma_index_xinfo(i.name,?) k ON k."key" = 1 WHERE k.cid = p.cid)`;
+
+function supportsAlterNullability(version: string): boolean {
+  const match = /^(\d+)\.(\d+)\./.exec(version);
+  return !!match && (Number(match[1]) > 3 || Number(match[1]) === 3 && Number(match[2]) >= 53);
+}
 
 function tableIdentity(driver: SqliteDriverSession, input: { schema?: 'main' | 'temp'; table: string }, control: CompletionControl) {
   // 先定位实际关系再看类型，避免临时视图或虚拟表遮蔽时误读 main 的目录。
@@ -50,7 +58,7 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
   };
   if (input.kind === 'relations') {
     const scope = input.schema ? 'schema = ?' : "schema IN ('main','temp') AND (schema = 'temp' OR NOT EXISTS (SELECT 1 FROM pragma_table_list() t WHERE t.schema = 'temp' AND t.name = p.name COLLATE NOCASE))";
-    const visible = input.indexTable ? visibleSql + " AND type = 'table'" : visibleSql;
+    const visible = visibleSql + (input.indexTable ? " AND type = 'table'" : input.alterTable ? " AND type <> 'view'" : '');
     const result = await read(driver, 'SELECT name,type,schema FROM pragma_table_list() p WHERE ' + scope + ' AND ' + visible + ' AND ' + prefixSql + " ORDER BY schema DESC,name COLLATE NOCASE,name LIMIT 257", [...(input.schema ? [input.schema] : []), input.prefix, input.prefix], control, 257);
     incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
     for (const row of result.rows.slice(0, sqliteCompletionLimits.entries)) {
@@ -63,12 +71,15 @@ export async function readSqliteCompletion(driver: SqliteDriverSession, input: S
     const target = found.rows[0];
     const table = target ? target[0] : input.table;
     const schema = target ? target[1] : input.schema ?? 'main';
-    const allowed = input.indexTable ? target?.[2] === 'table' : target ? input.tableFunction ? target[2] === 'virtual' :
+    const allowed = input.indexTable || input.alterColumn ? target?.[2] === 'table' : target ? input.tableFunction ? target[2] === 'virtual' :
       ['table', 'view', 'virtual'].includes(target[2] as string) : input.tableFunction === true;
-    if (allowed && typeof table === 'string' && !/^sqlite_/i.test(table)) {
+    if (allowed && typeof table === 'string' && !/^sqlite_/i.test(table) && (input.alterColumn !== 'nullability' || supportsAlterNullability(driver.version))) {
       if (schema !== 'main' && schema !== 'temp') throw Error('SQLite补全字段所属库无效');
       // 自带表值模块通常不在 table_list 内。无同名关系遮蔽时只读 xinfo，不准备或执行原调用。
-      const result = await read(driver, 'SELECT name,type,hidden FROM pragma_table_xinfo(?,?) WHERE ' + prefixSql + ' ORDER BY cid LIMIT 257', [table, schema, input.prefix, input.prefix], control, 257);
+      const drop = input.alterColumn === 'drop';
+      const result = await read(driver, 'SELECT name,type,hidden FROM pragma_table_xinfo(?,?)' + (input.alterColumn ? ' p' : '') + ' WHERE ' + prefixSql +
+        (input.alterColumn ? ' AND p.hidden <> 1' : '') + (drop ? dropColumnSql : '') + ' ORDER BY cid LIMIT 257',
+      [table, schema, input.prefix, input.prefix, ...(drop ? [table, schema, table, schema, schema] : [])], control, 257);
       incomplete = result.truncated || result.rows.length > sqliteCompletionLimits.entries;
       if (input.tableFunction && !target && !incomplete && !result.rows.length) {
         const available = input.prefix && await read(driver, 'SELECT 1 FROM pragma_table_xinfo(?,?) LIMIT 1', [table, schema], control, 1);

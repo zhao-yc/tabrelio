@@ -180,6 +180,10 @@ test('活动A查询在树选B及概要替换后仍由更多和右键读取A完�
     await read('CREATE INDEX main.preview_index ON sub|ject(id)', 'more', { name: 'subject', kind: 'table', schema: 'main', marker: 'OBJECT_DEFINITION_A_MAIN', session });
     expect(facts(await step(audit), 'query.objectDefinition').at(-1)?.request.database).toBe('main');
     expect(await sessionState()).toEqual(beforeTransaction); expect(disk()).toEqual(baseline);
+    stage = 'ALTER TABLE 草稿的未限定表仍由原事务解析到临时表';
+    await read('ALTER TABLE sub|ject RENAME TO preview_subject', 'more', { name: 'subject', kind: 'table', schema: 'temp', marker: 'OBJECT_DEFINITION_A_TEMP', session });
+    expect(facts(await step(audit), 'query.objectDefinition').at(-1)?.request).not.toHaveProperty('database');
+    expect(await sessionState()).toEqual(beforeTransaction); expect(disk()).toEqual(baseline);
     stage = '实际关闭正在打开的预览，只取消所属读取且磁盘及原事务保持';
     const cancelModel = await at('SELECT s|.temp_marker FROM subject s'), cancelBefore = await step(audit); await clickMenu(query(), text.entry); await step(() => expect(dialog()).toBeVisible()); await step(() => page.keyboard.press('Escape')); await step(() => expect(dialog()).toHaveCount(0)); await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); expect(await model()).toEqual(cancelModel); expect(await sessionState()).toEqual(beforeTransaction); expect(disk()).toEqual(baseline);
     const cancelAfter = await step(audit); expect(facts(cancelAfter, 'query.execute')).toHaveLength(1); expect(facts(cancelAfter, 'sessions.open')).toHaveLength(1);

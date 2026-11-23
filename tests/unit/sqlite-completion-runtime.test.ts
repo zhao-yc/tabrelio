@@ -59,6 +59,29 @@ function userAction(app: SqliteRuntime, sessionId: string, action: UserAction, t
 }
 
 describe('SQLite补全真实运行时与原会话边界', () => {
+  it('ALTER TABLE 目录保留临时遮蔽，对删列只筛已确认的结构限制', async () => {
+    const p = profile('修改表目录', `CREATE TABLE subject(id INTEGER PRIMARY KEY,indexed TEXT,extra TEXT,
+      generated TEXT GENERATED ALWAYS AS (lower(indexed))); CREATE INDEX idx_direct ON subject(indexed);
+      CREATE VIEW subject_view AS SELECT * FROM subject; CREATE VIRTUAL TABLE subject_search USING fts5(extra);
+      CREATE TABLE last_base(only_base TEXT,computed TEXT GENERATED ALWAYS AS (lower(only_base)));`);
+    const { app, events } = runtime([p]), { sessionId } = await app.request('sessions.open', { connectionId: p.id });
+    await execute(app, sessionId, 'BEGIN; CREATE TEMP TABLE subject(temporary TEXT,keep TEXT)');
+    const state = await app.request('query.completionState', { sessionId }), count = events.length;
+    const read = (lookup: OptionalPrefix<SqliteCompletionLookup>) => completion(app, p.id, lookup, sessionId);
+    const names = async (lookup: OptionalPrefix<SqliteCompletionLookup>) => (await read(lookup)).entries.map(entry => entry.name);
+    expect(await names({ kind: 'relations', schema: 'main', prefix: 'subject', alterTable: true })).toEqual(['subject', 'subject_search']);
+    expect(await names({ kind: 'columns', table: 'subject_search', schema: 'main', alterColumn: 'rename' })).toEqual([]);
+    expect(await names({ kind: 'columns', table: 'subject', alterColumn: 'rename' })).toEqual(['temporary', 'keep']);
+    expect(await names({ kind: 'columns', table: 'subject', schema: 'main', alterColumn: 'rename' })).toEqual(['id', 'indexed', 'extra', 'generated']);
+    expect(await names({ kind: 'columns', table: 'subject', schema: 'main', alterColumn: 'drop' })).toEqual(['extra', 'generated']);
+    expect(await names({ kind: 'columns', table: 'last_base', schema: 'main', alterColumn: 'drop' })).toEqual(['computed']);
+    expect(await names({ kind: 'columns', table: 'subject', schema: 'main', alterColumn: 'nullability', prefix: 'ex' })).toEqual(['extra']);
+    expect(await app.request('query.completionState', { sessionId })).toEqual(state);
+    expect(await app.request('query.sessionState', { sessionId })).toMatchObject({ transactionOpen: true });
+    expect(events).toHaveLength(count);
+    await execute(app, sessionId, 'ROLLBACK');
+  });
+
   it('索引目标只返回普通表、准确库和确定性标量，原会话临时视图仍可遮蔽', async () => {
     const p = profile('建索引目录', 'CREATE TABLE subject(main_value TEXT,generated TEXT GENERATED ALWAYS AS (lower(main_value))); CREATE VIEW subject_view AS SELECT * FROM subject; CREATE VIRTUAL TABLE subject_search USING fts5(main_value)');
     const { app, events } = runtime([p]), { sessionId } = await app.request('sessions.open', { connectionId: p.id });

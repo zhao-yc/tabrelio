@@ -27,6 +27,10 @@ const scenarios = [
     trail: ' FROM subject s', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: '旧!' },
   { verb: 'CREATE INDEX', prefix: 'CREATE UNIQUE INDEX main.completion_index ON subject(', typed: 'vir', column: 'virtual_value',
     trail: ") WHERE value='旧'", incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'completion_index' },
+  { verb: 'RENAME COLUMN', prefix: 'ALTER TABLE main.subject RENAME COLUMN ', typed: 'old', column: 'old_extra',
+    trail: ' TO renamed_extra', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: '保留' },
+  { verb: 'DROP COLUMN', prefix: 'ALTER TABLE main.subject DROP COLUMN ', typed: 'old', column: 'old_extra',
+    trail: '', incoming: false, row: { id: 1, value: '旧', virtual_value: '旧!' }, output: 'old_extra' },
 ] as const;
 
 async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
@@ -35,12 +39,13 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
   const filePath = join(realpathSync(dataDir), 'sqlite-editor-completion.sqlite');
   const connectionId = 'sqlite-editor-completion';
   const lookupKind = scenario.verb === 'INDEXED BY' ? 'indexes' : scenario.verb === '函数' ? 'functions' : scenario.verb === 'COLLATE' ? 'collations' : 'columns';
+  const alterColumn = scenario.verb === 'RENAME COLUMN' ? 'rename' : scenario.verb === 'DROP COLUMN' ? 'drop' : undefined;
   const { prefix, trail, typed, column } = scenario;
   const draft = prefix + typed + 'suffix' + trail;
   const accepted = prefix + (scenario.verb === '函数' ? column + '(' + scenario.args + ')' : '"' + column + '"') + trail;
   const db = new DatabaseSync(filePath);
   try {
-    db.exec(`CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT,virtual_value TEXT GENERATED ALWAYS AS (value||'!'));
+    db.exec(`CREATE TABLE subject(id INTEGER PRIMARY KEY,value TEXT,virtual_value TEXT GENERATED ALWAYS AS (value||'!'),old_extra TEXT DEFAULT '保留');
       CREATE UNIQUE INDEX subject_by_value ON subject(value);
       CREATE TABLE excluded(other TEXT); CREATE TABLE inbox(id INTEGER PRIMARY KEY,value TEXT); CREATE INDEX inbox_other ON inbox(value);
       INSERT INTO subject(id,value) VALUES(1,'旧'); INSERT INTO excluded VALUES('不变'); INSERT INTO inbox VALUES(1,'新🚢');`);
@@ -51,9 +56,11 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
       const view = db.prepare("SELECT sql FROM sqlite_schema WHERE name='completion_view' AND type='view'").get();
       const index = db.prepare("SELECT name,\"unique\",partial FROM pragma_index_list('subject','main') WHERE name='completion_index'").get();
       const indexed = index ? { index, keys: db.prepare("SELECT name FROM pragma_index_info('completion_index','main') ORDER BY seqno").all() } : undefined;
+      const extra = alterColumn ? db.prepare("SELECT name FROM pragma_table_xinfo('subject','main') WHERE name IN ('old_extra','renamed_extra')").get()?.name : undefined;
+      const altered = alterColumn ? { extra, value: extra === 'renamed_extra' ? db.prepare('SELECT renamed_extra FROM subject').get()?.renamed_extra : undefined } : undefined;
       return { row: db.prepare('SELECT id,value,virtual_value FROM subject').get(), other: db.prepare('SELECT * FROM excluded').get(),
         inbox: db.prepare('SELECT * FROM inbox').get(), ...(view ? { view: { sql: view.sql, rows: db.prepare('SELECT display_value FROM completion_view').all() } } : {}),
-        ...(indexed ? { indexed } : {}) };
+        ...(indexed ? { indexed } : {}), ...(altered ? { altered } : {}) };
     }
     finally { db.close(); }
   };
@@ -86,7 +93,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
             if (input.kind === 'functions' || input.kind === 'collations') {
               const indexFunction = setup.createIndex && input.kind === 'functions' && input.deterministicOnly === true && input.prefix === setup.typed;
               if (!indexFunction && (input.kind !== setup.lookupKind || input.prefix !== setup.catalogName && input.prefix !== setup.typed) || 'table' in input || 'schema' in input) throw Error('连接目录越出本例');
-            } else if (input.kind === setup.lookupKind && (input.table !== 'subject' || input.schema !== 'main' || setup.createIndex && input.indexTable !== true)) throw Error('目录越出真实目标');
+            } else if (input.kind === setup.lookupKind && (input.table !== 'subject' || input.schema !== 'main' || setup.createIndex && input.indexTable !== true ||
+              input.alterColumn !== setup.alterColumn)) throw Error('目录越出真实目标');
           }
           const fact: Fact = { command, input }; facts.push(fact);
           const reply = await entry(event, payload);
@@ -97,7 +105,7 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
         }
         return entry(event, payload);
       });
-    }, { filePath, connectionId, accepted, lookupKind, typed, catalogName: column, createIndex: scenario.verb === 'CREATE INDEX' });
+    }, { filePath, connectionId, accepted, lookupKind, typed, catalogName: column, createIndex: scenario.verb === 'CREATE INDEX', alterColumn });
 
     await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
     await page.evaluate(async ({ id, sql }) => {
@@ -139,7 +147,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     const requests = completion.map(fact => sqliteCompletionInputSchema.parse(fact.input));
     expect(requests.filter(input => input.kind !== 'stamp')).toEqual([
       lookupKind === 'functions' || lookupKind === 'collations' ? expect.objectContaining({ kind: lookupKind, prefix: typed }) :
-        expect.objectContaining({ kind: lookupKind, table: 'subject', schema: 'main', prefix: typed, ...(scenario.verb === 'CREATE INDEX' ? { indexTable: true } : {}) }),
+        expect.objectContaining({ kind: lookupKind, table: 'subject', schema: 'main', prefix: typed,
+          ...(scenario.verb === 'CREATE INDEX' ? { indexTable: true } : {}), ...(alterColumn ? { alterColumn } : {}) }),
       ...(scenario.verb === 'CREATE INDEX' ? [expect.objectContaining({ kind: 'functions', prefix: typed, deterministicOnly: true })] : []),
     ]);
     expect(completion.every(fact => fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true)).toBe(true);
@@ -166,9 +175,11 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
     await (await navigationMenuItem(query, { name: zh.query.text011, exact: true })).click();
     const created = scenario.verb === 'CREATE VIEW' ? { view: { sql: accepted, rows: [{ display_value: scenario.output }] } } :
       scenario.verb === 'CREATE INDEX' ? { indexed: { index: { name: scenario.output, unique: 1, partial: 1 }, keys: [{ name: column }] } } : {};
-    await expect.poll(disk).toEqual({ ...before, row: scenario.row, ...created });
+    const altered = alterColumn === 'rename' ? { altered: { extra: 'renamed_extra', value: scenario.output } } :
+      alterColumn === 'drop' ? { altered: { extra: undefined, value: undefined } } : {};
+    await expect.poll(disk).toEqual({ ...before, row: scenario.row, ...created, ...altered });
     const grid = query.locator('.result-body').getByRole('grid');
-    if (scenario.verb !== 'CREATE VIEW' && scenario.verb !== 'CREATE INDEX') await expect(grid).toContainText(scenario.output);
+    if (scenario.verb !== 'CREATE VIEW' && scenario.verb !== 'CREATE INDEX' && !alterColumn) await expect(grid).toContainText(scenario.output);
     if (lookupKind === 'collations') {
       await expect(grid.getByRole('row').nth(1).getByText('a', { exact: true })).toBeVisible();
       await expect(grid.getByRole('row').nth(2).getByText('Z', { exact: true })).toBeVisible();
@@ -189,7 +200,8 @@ async function exercise(scenario: typeof scenarios[number], info: TestInfo) {
 
 for (const scenario of scenarios) {
   test.describe(scenario.verb, () => {
-    const enabled = scenario.verb === 'CREATE INDEX' ? process.env.DBARK_SQLITE_CREATE_INDEX_COMPLETION_NATIVE === '1' :
+    const enabled = scenario.verb === 'RENAME COLUMN' || scenario.verb === 'DROP COLUMN' ? process.env.DBARK_SQLITE_ALTER_TABLE_COMPLETION_NATIVE === '1' :
+      scenario.verb === 'CREATE INDEX' ? process.env.DBARK_SQLITE_CREATE_INDEX_COMPLETION_NATIVE === '1' :
       scenario.verb === 'CREATE VIEW' ? process.env.DBARK_SQLITE_CREATE_QUERY_COMPLETION_NATIVE === '1' :
       scenario.verb === 'COLLATE' ? process.env.DBARK_SQLITE_COLLATION_COMPLETION_NATIVE === '1' :
       scenario.verb === '函数' ? process.env.DBARK_SQLITE_FUNCTION_COMPLETION_NATIVE === '1' : scenario.verb === 'INDEXED BY' ? process.env.DBARK_SQLITE_INDEX_COMPLETION_NATIVE === '1' :

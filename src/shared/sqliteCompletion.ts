@@ -11,11 +11,15 @@ const schema = z.enum(['main', 'temp']);
 const functionName = z.string().max(sqliteCompletionLimits.prefixUnits).regex(/^[a-z][a-z0-9_]*$/);
 const functionSignatures = z.array(z.object({ arity: z.number().int().min(-32768).max(32767), type: z.enum(['scalar', 'aggregate', 'window']) }).strict()).min(1).max(sqliteCompletionLimits.entries)
   .refine(value => new Set(value.map(({ arity, type }) => type + ':' + arity)).size === value.length);
+export const sqliteAlterColumnMode = z.enum(['rename', 'drop', 'nullability']);
+const columnMode = { tableFunction: z.literal(true).optional(), indexTable: z.literal(true).optional(), alterColumn: sqliteAlterColumnMode.optional() };
+const oneColumnMode = (value: { tableFunction?: true; indexTable?: true; alterColumn?: z.infer<typeof sqliteAlterColumnMode> }) =>
+  [value.tableFunction, value.indexTable, value.alterColumn].filter(Boolean).length <= 1;
 const base = { connectionId: id, sessionId: id.optional(), taskId: id.refine(value => value.startsWith(sqliteCompletionTaskPrefix) && value.length > sqliteCompletionTaskPrefix.length), prefix: z.string().max(sqliteCompletionLimits.prefixUnits).refine(value => value.length <= sqliteCompletionLimits.prefixUnits && unicode(value)) };
 export const sqliteCompletionInputSchema = z.discriminatedUnion('kind', [
-  z.object({ ...base, kind: z.literal('relations'), schema: schema.optional(), indexTable: z.literal(true).optional() }).strict(),
-  z.object({ ...base, kind: z.literal('columns'), schema: schema.optional(), table: name, tableFunction: z.literal(true).optional(), indexTable: z.literal(true).optional() }).strict()
-    .refine(value => !(value.tableFunction && value.indexTable)),
+  z.object({ ...base, kind: z.literal('relations'), schema: schema.optional(), indexTable: z.literal(true).optional(), alterTable: z.literal(true).optional() }).strict()
+    .refine(value => !(value.indexTable && value.alterTable)),
+  z.object({ ...base, kind: z.literal('columns'), schema: schema.optional(), table: name, ...columnMode }).strict().refine(oneColumnMode),
   z.object({ ...base, kind: z.literal('indexes'), schema: schema.optional(), table: name }).strict(),
   z.object({ ...base, kind: z.literal('functions'), prefix: base.prefix.regex(/^[a-z][a-z0-9_]*$/i), deterministicOnly: z.literal(true).optional() }).strict(),
   z.object({ ...base, kind: z.literal('collations') }).strict(),
@@ -36,21 +40,21 @@ type Lookup<T> = T extends SqliteCompletionInput ? Omit<T, 'connectionId' | 'ses
 export type SqliteCompletionLookup = Lookup<SqliteCompletionInput>;
 export const sqliteCompletionTableSchema = z.object({ name, schema: schema.optional() }).strict();
 export type SqliteCompletionTable = z.infer<typeof sqliteCompletionTableSchema>;
-export const sqliteCompletionSourceSchema = sqliteCompletionTableSchema.extend({ tableFunction: z.literal(true).optional(), indexTable: z.literal(true).optional() })
-  .refine(value => !(value.tableFunction && value.indexTable));
+export const sqliteCompletionSourceSchema = sqliteCompletionTableSchema.extend(columnMode).refine(oneColumnMode);
 export type SqliteCompletionSource = z.infer<typeof sqliteCompletionSourceSchema>;
 
 /** 所有列入口带上调用标记，只传来源和前缀。函数参数留在编辑器内。 */
-export function sqliteCompletionColumns({ name, schema, tableFunction, indexTable }: SqliteCompletionSource, prefix: string): Extract<SqliteCompletionLookup, { kind: 'columns' }> {
-  return { kind: 'columns', table: name, prefix, ...(schema ? { schema } : {}), ...(tableFunction ? { tableFunction } : {}), ...(indexTable ? { indexTable } : {}) };
+export function sqliteCompletionColumns({ name, schema, tableFunction, indexTable, alterColumn }: SqliteCompletionSource, prefix: string): Extract<SqliteCompletionLookup, { kind: 'columns' }> {
+  return { kind: 'columns', table: name, prefix, ...(schema ? { schema } : {}), ...(tableFunction ? { tableFunction } : {}),
+    ...(indexTable ? { indexTable } : {}), ...(alterColumn ? { alterColumn } : {}) };
 }
 
 export function sqliteCompletionIndexes({ name, schema }: SqliteCompletionTable, prefix: string): Extract<SqliteCompletionLookup, { kind: 'indexes' }> {
   return { kind: 'indexes', table: name, prefix, ...(schema ? { schema } : {}) };
 }
 
-export function sqliteCompletionSourceKey({ name, schema, tableFunction, indexTable }: SqliteCompletionSource): string {
-  return (tableFunction ? 'function' : indexTable ? 'index-table' : 'relation') + '\0' + (schema ?? '') + '\0' + foldSqliteCompletionName(name);
+export function sqliteCompletionSourceKey({ name, schema, tableFunction, indexTable, alterColumn }: SqliteCompletionSource): string {
+  return (tableFunction ? 'function' : indexTable ? 'index-table' : alterColumn ?? 'relation') + '\0' + (schema ?? '') + '\0' + foldSqliteCompletionName(name);
 }
 
 /** SQLite名称只折叠ASCII字母；Unicode不借JavaScript区域规则合并成另一标识符。 */

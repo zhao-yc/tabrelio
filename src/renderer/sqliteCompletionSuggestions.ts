@@ -175,7 +175,7 @@ export async function sqliteCompletionSuggestions(analysis: Extract<SqliteComple
         for (const namespace of analysis.viewSchema ? [analysis.viewSchema] : ['main', 'temp']) add({ label: namespace, kind: 'database', insertText: quote(namespace) + '.', detail: text.schema, trigger: true });
       }
       const metadata = await directory.load({ kind: 'relations', prefix: analysis.target.prefix, ...(schema ? { schema } : {}),
-        ...(analysis.indexTarget ? { indexTable: true } : {}) }); incomplete ||= metadata.incomplete;
+        ...(analysis.indexTarget ? { indexTable: true } : {}), ...(analysis.alterTable ? { alterTable: true } : {}) }); incomplete ||= metadata.incomplete;
       const shadowed = new Set(declarations.map(relation => fold(relation.name)));
       for (const entry of metadata.entries) {
         if (entry.kind !== 'table' && entry.kind !== 'view' || !explicit && shadowed.has(fold(entry.name))) continue;

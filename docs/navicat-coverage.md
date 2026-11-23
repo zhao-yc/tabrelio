@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-23 源码增量。SQLite `ALTER TABLE` 支持目标表、重命名和删列源字段、SQLite 3.53 的空值约束字段补全与悬停。对象定位遵循原连接命名空间，删列候选筛选可直接确认的结构限制。Q01 继续为部分覆盖。 [SQLite ALTER TABLE](https://www.sqlite.org/lang_altertable.html)
+
 2026-11-23 源码增量。SQLite `CREATE INDEX` 支持目标普通表、索引键和部分索引谓词补全。目标库由索引名或原会话遮蔽确定，表达式可补全目标表的生成列及确定性标量函数，`ON` 表名支持对象定义定位。Q01 继续为部分覆盖。 [SQLite 建索引](https://www.sqlite.org/lang_createindex.html) · [部分索引](https://www.sqlite.org/partialindex.html)
 
 2026-11-23 源码增量。SQLite `CREATE VIEW … AS` 和 `CREATE TABLE … AS` 的查询体支持候选、悬停和对象定义定位。永久视图固定使用 `main`，临时视图和查询建表遵循原会话的同名临时对象规则。Q01 继续为部分覆盖。 [SQLite CREATE VIEW](https://www.sqlite.org/lang_createview.html) · [SQLite CREATE TABLE AS](https://www.sqlite.org/lang_createtable.html#createtabas)
