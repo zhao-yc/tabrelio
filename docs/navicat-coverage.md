@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 从查询创建表、普通视图、递归视图和物化视图时，语义补全和导航限于查询正文。递归自引用使用声明及锚点列，显式 schema 仍解析物理对象。也覆盖 `EXPLAIN` 中的建表和物化视图查询。Q01、R01 继续为部分覆盖。 [建表](https://www.postgresql.org/docs/18/sql-createtableas.html) · [视图](https://www.postgresql.org/docs/18/sql-createview.html) · [物化视图](https://www.postgresql.org/docs/18/sql-creatematerializedview.html)
+
 2026-11-24 源码增量。PostgreSQL 查询编辑器在执行计划、预处理语句、游标声明和查询导出正文中沿用查询补全和原文导航。计划选项、参数类型与导出目标和正文作用域隔离。Q01、R01 继续为部分覆盖。 [EXPLAIN](https://www.postgresql.org/docs/18/sql-explain.html) · [PREPARE](https://www.postgresql.org/docs/18/sql-prepare.html) · [DECLARE](https://www.postgresql.org/docs/18/sql-declare.html) · [COPY](https://www.postgresql.org/docs/18/sql-copy.html)
 
 2026-11-24 源码增量。PostgreSQL MERGE 的 ON、分支条件和值表达式按实际可见来源和 SELECT 权限补全。更新和插入按各自的目标列权限筛选，动作表达式保留来源 JOIN 的合并键。Q01、R01 继续为部分覆盖。 [PostgreSQL MERGE](https://www.postgresql.org/docs/18/sql-merge.html)

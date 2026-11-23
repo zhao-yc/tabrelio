@@ -2594,6 +2594,80 @@ test('PostgreSQL 普通 UPDATE 和 DELETE 按会话权限补全赋值、条件�
   await quitDesktop();
 });
 
+test('PostgreSQL 从查询创建表和视图时补全正文与递归字段', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host, port, user, password, database: user, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query(`CREATE TABLE public.create_query_source (data_value int);
+      INSERT INTO public.create_query_source VALUES (7), (14);
+      CREATE SCHEMA workflow_shadow;
+      CREATE TABLE workflow_shadow."Walk" (node_shadow int);
+      INSERT INTO workflow_shadow."Walk" VALUES (9);`);
+    const searchPath = 'SET search_path TO workflow_shadow, public';
+    await prepare({id: '', name: '隔离 PostgreSQL 创建查询', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false}, searchPath);
+    await resizeQueryWindow(1280, 920, 0.75);
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await command('execute-all');
+    await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === searchPath)).toBe(true);
+    await expect.poll(() => enabled('execute-all')).toBe(true);
+    const baseline = await history(), identity = (await inspectModel()).identity;
+    const accept = async (draft: string, prefix: string, column: string) => {
+      await replaceDraft(draft);
+      await modelSelection(1, draft.indexOf(prefix + 'tail') + prefix.length + 1);
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row .label-name')).toHaveText([column]);
+      await page.keyboard.press('Enter');
+      const completed = draft.replace(prefix + 'tail', postgresIdentifier(column));
+      await expect.poll(async () => (await inspectModel()).sql).toBe(completed);
+      await page.keyboard.press('ControlOrMeta+Z');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+      return completed;
+    };
+    const source = 'SELECT s.data_tail FROM public.create_query_source s';
+    const table = await accept(`CREATE TEMP TABLE query_stage (result_value) USING heap ON COMMIT PRESERVE ROWS AS ${source} WITH NO DATA`,
+      'data_', 'data_value');
+    const view = await accept(`CREATE OR REPLACE VIEW public.query_view (result_value) WITH (security_invoker=true) AS ${source} WHERE s.data_value>8 WITH LOCAL CHECK OPTION`,
+      'data_', 'data_value');
+    const materialized = await accept(`CREATE MATERIALIZED VIEW public.query_materialized (result_value) AS (${source}) WITH NO DATA`,
+      'data_', 'data_value');
+    const plan = await accept(`EXPLAIN (FORMAT JSON) CREATE TEMP TABLE query_plan_only AS ${source}`, 'data_', 'data_value');
+    const recursive = await accept('CREATE RECURSIVE VIEW public."Walk" (node_number) AS SELECT 1 AS seed_number ' +
+      'UNION ALL SELECT w.node_tail+1 FROM "Walk" w WHERE w.node_number < 3', 'node_', 'node_number');
+    await replaceDraft(recursive);
+    await modelSelection(1, recursive.indexOf('FROM "Walk"') + 'FROM "'.length + 1);
+    await page.keyboard.press('F12');
+    await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 1, column: recursive.indexOf('"Walk"') + 1});
+    expect(await history()).toEqual(baseline);
+    expect((await inspectModel()).identity).toEqual(identity);
+    expect((await observer.query("SELECT to_regclass('public.query_view') AS view_oid, to_regclass('public.query_materialized') AS mat_oid")).rows)
+      .toEqual([{view_oid: null, mat_oid: null}]);
+    await observer.query('BEGIN');
+    try {
+      await observer.query(`SET LOCAL search_path TO workflow_shadow, public`);
+      for (const sql of [table, view, materialized, recursive]) await observer.query(sql);
+      expect((await observer.query('SELECT * FROM query_stage')).rows).toEqual([]);
+      expect((await observer.query('SELECT * FROM public.query_view')).rows).toEqual([{result_value: 14}]);
+      expect((await observer.query("SELECT relispopulated FROM pg_class WHERE oid='public.query_materialized'::regclass")).rows)
+        .toEqual([{relispopulated: false}]);
+      await observer.query('REFRESH MATERIALIZED VIEW public.query_materialized');
+      expect((await observer.query('SELECT * FROM public.query_materialized ORDER BY result_value')).rows).toEqual([{result_value: 7}, {result_value: 14}]);
+      expect((await observer.query('SELECT * FROM public."Walk" ORDER BY node_number')).rows)
+        .toEqual([{node_number: 1}, {node_number: 2}, {node_number: 3}]);
+      expect((await observer.query(plan)).rows[0]['QUERY PLAN'][0].Plan['Relation Name']).toBe('create_query_source');
+      expect((await observer.query("SELECT to_regclass('pg_temp.query_plan_only') AS plan_oid")).rows).toEqual([{plan_oid: null}]);
+    } finally { await observer.query('ROLLBACK'); }
+    await page.screenshot({path: info.outputPath('PostgreSQL-递归视图原文导航.png'), animations: 'disabled'});
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL 包装语句复用正文补全、权限与原文导航', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';

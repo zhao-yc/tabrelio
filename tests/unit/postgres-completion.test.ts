@@ -4,8 +4,8 @@ import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../src/shared/postgresCompletion';
 import { createPostgresCompletionProvider } from '../../src/renderer/postgresCompletionProvider';
 import { describe, expect, it, vi } from 'vitest';
-import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresLocalReferences, analyzePostgresObjectDefinition,
-  analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
+import { analyzePostgresCompletion, analyzePostgresFieldHover, analyzePostgresLocalReferences, analyzePostgresLocalRename,
+  analyzePostgresObjectDefinition, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
 import { postgresNamedParameterCompletion, postgresNamedParameterHover } from '../../src/renderer/postgresNamedParameterReferences';
 import { postgresConflictExpression } from '../../src/shared/postgresConflictExpression';
 
@@ -14,6 +14,57 @@ function at(marked: string) {
   const offset = marked.indexOf('|');
   return analyzePostgresCompletion(marked.slice(0, offset) + marked.slice(offset + 1), offset);
 }
+
+it.each([
+  'CREATE LOCAL TEMP TABLE IF NOT EXISTS stage(amount) USING heap WITH (fillfactor=90) ON COMMIT PRESERVE ROWS AS SELECT q.am|ount FROM public.records q WITH NO DATA',
+  'CREATE UNLOGGED TABLE "stage" USING heap WITHOUT OIDS TABLESPACE pg_default AS SELECT q.am|ount FROM public.records q WITH DATA',
+  'CREATE OR REPLACE TEMP VIEW "as"(total) WITH (security_invoker=true) AS SELECT q.am|ount FROM public.records q WITH CASCADED CHECK OPTION',
+  'CREATE MATERIALIZED VIEW IF NOT EXISTS public.stage(total) USING heap WITH (fillfactor=80) TABLESPACE pg_default AS (SELECT q.am|ount FROM public.records q) WITH NO DATA',
+  'EXPLAIN (FORMAT JSON) CREATE TEMP TABLE stage AS SELECT q.am|ount FROM public.records q',
+  'EXPLAIN VERBOSE CREATE MATERIALIZED VIEW stage AS SELECT q.am|ount FROM public.records q WITH DATA',
+])('创建关系的查询正文沿用语义范围：%s', marked => {
+  const sql = marked.replace('|', ''), offset = marked.indexOf('|');
+  const result = at(marked)!;
+  expect(result.query).toEqual({ kind: 'columns', qualified: true, relations: [{ name: 'records', schema: 'public', alias: 'q' }] });
+  expect(sql.slice(result.start, result.end)).toBe('amount');
+  expect(analyzePostgresFieldHover(sql, offset)).toMatchObject({ name: 'amount', relations: [{ name: 'records', schema: 'public', alias: 'q' }] });
+  expect(analyzePostgresObjectDefinition(sql, sql.indexOf('records') + 1)).toMatchObject({ name: 'records', schema: 'public' });
+});
+
+it.each([
+  'CREATE TABLE st|age AS SELECT q.amount FROM public.records q',
+  'CREATE TABLE stage (am|ount) AS SELECT q.amount FROM public.records q',
+  'CREATE TABLE stage AS SELECT q.amount FROM public.records q WITH NO DA|TA',
+  'CREATE VIEW stage WITH (security_in|voker=true) AS SELECT q.amount FROM public.records q',
+  'CREATE VIEW stage AS SELECT q.amount FROM public.records q WITH LOCAL CH|ECK OPTION',
+  'CREATE TABLE stage (amount int GENERATED ALWAYS AS (q.am|ount) STORED)',
+  'CREATE FUNCTION stage() RETURNS int LANGUAGE SQL AS $$SELECT q.am|ount FROM public.records q$$',
+  'CREATE VIEW stage AS UPDATE public.records SET am|ount=1 RETURNING amount',
+  'EXPLAIN CREATE VIEW stage AS SELECT q.am|ount FROM public.records q',
+])('创建语句的定义头、尾部选项和其他语法保持查询隔离：%s', marked => {
+  expect(at(marked)?.query).toBeUndefined();
+  expect(analyzePostgresFieldHover(marked.replace('|', ''), marked.indexOf('|'))).toBeUndefined();
+});
+
+it('递归视图继承明确列和锚点输出，裸自引用与同名物理来源分开', () => {
+  const marked = 'CREATE OR REPLACE RECURSIVE VIEW public."Walk"(step_no) AS (WITH seed AS (SELECT 1 AS start_no) ' +
+    'SELECT seed.start_no, 10 AS step_limit FROM seed UNION ALL SELECT w.st|ep_no+1, w.step_limit ' +
+    'FROM "Walk" w WHERE w.step_no < (SELECT max(a.amount) FROM archive."Walk" a))';
+  const sql = marked.replace('|', ''), column = marked.indexOf('|');
+  expect(at(marked)?.query).toMatchObject({ kind: 'columns', qualified: true,
+    relations: [{ name: 'Walk', alias: 'w', projection: { names: ['step_no', 'step_limit'], stars: [], exact: true } }] });
+  const declaredColumn = sql.indexOf('step_no');
+  expect(analyzePostgresLocalReferences(sql, column)).toMatchObject({ status: 'ready', declaration: {
+    start: declaredColumn, end: declaredColumn + 'step_no'.length } });
+  const recursive = sql.indexOf('FROM "Walk"') + 'FROM "'.length;
+  const declaredView = sql.indexOf('"Walk"');
+  expect(analyzePostgresLocalReferences(sql, recursive)).toMatchObject({ status: 'ready', declaration: {
+    start: declaredView, end: declaredView + '"Walk"'.length } });
+  expect(analyzePostgresLocalRename(sql, column, true, 'next_step').status).toBe('blocked');
+  expect(analyzePostgresLocalRename(sql, recursive, true, 'NextWalk').status).toBe('blocked');
+  expect(analyzePostgresObjectDefinition(sql, recursive)).toBeUndefined();
+  expect(analyzePostgresObjectDefinition(sql, sql.lastIndexOf('"Walk"') + 1)).toMatchObject({ name: 'Walk', schema: 'archive' });
+});
 
 it.each([
   'EXPLAIN (FORMAT JSON, COSTS OFF) SELECT q.am|ount FROM public.records q',

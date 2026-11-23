@@ -110,10 +110,76 @@ function groupStatement(tokens: PostgresEditorToken[], offset: number, length: n
   return strict && stack.length ? undefined : root;
 }
 
+interface StatementQuery {
+  parts: Part[];
+  recursiveView?: { name: string; declaration: Part; columns: Group; names: string[] };
+}
+
+/** 依据定义头识别查询起点，避免把建表字段、存储选项和填充选项当作查询内容。 */
+function createStatementQuery(parts: Part[], offset: number, explain: boolean): StatementQuery | undefined {
+  let index = 1;
+  const take = (word: string) => {
+    if (keyword(parts[index]) !== word) return false;
+    index++;
+    return true;
+  };
+  const replace = take('OR');
+  if (replace && !take('REPLACE')) return;
+  const locality = take('GLOBAL') || take('LOCAL');
+  const temporary = take('TEMP') || take('TEMPORARY');
+  if (locality && !temporary) return;
+  if (!temporary) take('UNLOGGED');
+  const recursive = take('RECURSIVE');
+  const materialized = !recursive && take('MATERIALIZED');
+  const table = !recursive && !materialized && take('TABLE');
+  if (!table && !take('VIEW')) return;
+  const ordinary = !materialized && !table;
+  if ((!ordinary && replace) || (explain && ordinary) || (materialized && temporary)) return;
+  if (!ordinary && take('IF') && (!take('NOT') || !take('EXISTS'))) return;
+
+  let declaration = parts[index++];
+  if (!identifier(declaration) || stop.has(keyword(declaration))) return;
+  if (punct(parts[index], '.')) {
+    declaration = parts[++index];
+    if (!identifier(declaration)) return;
+    index++;
+  }
+  const name = identifier(declaration)!;
+  if (name.length > limits.name) return;
+  const columns = parts[index];
+  const names = nameList(columns);
+  if (columns?.kind === 'group') {
+    if (!names.length) return;
+    index++;
+  } else if (recursive) return;
+
+  if (!ordinary && take('USING') && !identifier(parts[index++])) return;
+  if (take('WITH')) {
+    const options = parts[index++];
+    if (options?.kind !== 'group' || options.closing !== ')' || !options.closed) return;
+  } else if (table && take('WITHOUT') && !take('OIDS')) return;
+  if (table && take('ON') && (!take('COMMIT') || !(take('DROP') || (take('DELETE') || take('PRESERVE')) && take('ROWS')))) return;
+  if (!ordinary && take('TABLESPACE') && !identifier(parts[index++])) return;
+  if (!take('AS') || !startsReferenceQuery(parts[index]) || offset < parts[index].start) return;
+
+  let end = parts.length;
+  if (!ordinary && keyword(parts[end - 1]) === 'DATA') {
+    const suffix = end - (keyword(parts[end - 2]) === 'NO' ? 3 : 2);
+    if (keyword(parts[suffix]) === 'WITH') end = suffix;
+  } else if (ordinary && keyword(parts[end - 1]) === 'OPTION' && keyword(parts[end - 2]) === 'CHECK') {
+    const suffix = end - (['LOCAL', 'CASCADED'].includes(keyword(parts[end - 3])) ? 4 : 3);
+    if (keyword(parts[suffix]) === 'WITH') end = suffix;
+  }
+  if (end <= index || end < parts.length && offset >= parts[end].start) return;
+  return { parts: parts.slice(index, end), ...(recursive && columns?.kind === 'group'
+    ? { recursiveView: { name, declaration, columns, names } } : {}) };
+}
+
 /** 只把实际查询交给语义分析，保留原文位置，排除选项、参数类型和导出目标。 */
-function statementQuery(parts: Part[], offset: number): Part[] | undefined {
+function statementQuery(parts: Part[], offset: number): StatementQuery | undefined {
   const command = keyword(parts[0]);
-  if (!['EXPLAIN', 'PREPARE', 'DECLARE', 'COPY'].includes(command)) return parts;
+  if (command === 'CREATE') return createStatementQuery(parts, offset, false);
+  if (!['EXPLAIN', 'PREPARE', 'DECLARE', 'COPY'].includes(command)) return { parts };
 
   const first = parts[1];
   let start = 1;
@@ -153,12 +219,13 @@ function statementQuery(parts: Part[], offset: number): Part[] | undefined {
   }
   const body = parts[start];
   if (!body || offset < body.start) return;
+  if (command === 'EXPLAIN' && keyword(body) === 'CREATE') return createStatementQuery(parts.slice(start), offset, true);
   if (command === 'EXPLAIN' && keyword(body) === 'DECLARE') return statementQuery(parts.slice(start), offset);
   if (!startsReferenceQuery(body)) {
     const write = command === 'COPY' && body.kind === 'group' ? body.parts[0] : body;
     if (command === 'DECLARE' || !['INSERT', 'UPDATE', 'DELETE', 'MERGE'].includes(keyword(write))) return;
   }
-  return parts.slice(start, end);
+  return { parts: parts.slice(start, end) };
 }
 
 /** 位置别名覆盖已知输出；通配展开缺少位置时只保留显式声明。 */
@@ -2306,6 +2373,21 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
 const noLocalReference = { status: 'blocked', reason: 'syntax' } as const;
 const rangeOf = ({ start, end }: LocalReferenceRange): LocalReferenceRange => ({ start, end });
 
+/** 递归视图的裸同名关系等价于递归 CTE。显式 schema 仍按物理关系解析。 */
+function parseStatementQuery(query: StatementQuery, context?: QueryContext, trace?: ReferenceTrace): Parsed {
+  const scope = new Map<string, Projection>();
+  const view = query.recursiveView;
+  if (!view) return parseQuery(query.parts, scope, [], context, trace);
+
+  const { name, declaration, columns, names } = view;
+  const self = { ...rename(unknown, names), declaration };
+  scope.set(name, self);
+  // WITH 子句会复制作用域。更新同一个投影，让后续分支沿用锚点列，同时保留内层同名 CTE 的遮蔽。
+  // 视图名和显式列名可定位到声明，但属于持久对象接口，不能由局部改名修改。
+  return parseQuery(query.parts, scope, [], context, trace,
+    anchor => Object.assign(self, rename(anchor, names, trace?.projected ? columns : undefined)));
+}
+
 /** 声明及物理对象共用严格作用域分析，不能将引用截断或猜作同名关系。 */
 function tracePostgresStatement(source: string, offset: number, mode: boolean,
   intent: 'binding' | 'references' | 'projectionRename' | 'relation' | 'field' = 'binding'):
@@ -2330,7 +2412,7 @@ function tracePostgresStatement(source: string, offset: number, mode: boolean,
     ...(intent === 'relation' ? { physicalRelations: [] } : intent === 'field' ? { field: { offset } } :
       intent === 'references' || intent === 'projectionRename' ? { projected: true } : {}),
     ...(intent === 'projectionRename' ? { projectionRename: { explicit: new Set(), separate: new Set(), uncertain: new Set(), outputs: [] } } : {}) };
-  parseQuery(query, new Map(), [], undefined, trace);
+  parseStatementQuery(query, undefined, trace);
   return trace.unsupported ? noLocalReference : { tokens, trace };
 }
 
@@ -2593,7 +2675,7 @@ export function analyzePostgresCompletion(source: string, offset: number, standa
   if (prefix.length > limits.name) return;
   const parts = groupStatement(all, offset, source.length);
   const query = parts && statementQuery(parts, offset);
-  const queryStart = query !== parts ? query?.[0]?.start ?? 0 : 0;
+  const queryStart = query?.parts !== parts ? query?.parts[0]?.start ?? 0 : 0;
   const left = all.filter(token => token !== target && token.start >= queryStart && token.end <= start &&
     !(token.kind === 'blocked' && token.text === 'comment'));
   const previous = left.at(-1);
@@ -2601,9 +2683,9 @@ export function analyzePostgresCompletion(source: string, offset: number, standa
   const clause = query && !quoted && !punct(previous, '.') && (clauseStarts.some(word => word === keyword(previous) ||
     prefix && word.startsWith(prefixUpper)) || paginationWords.some(word => word.startsWith(prefixUpper)) &&
     left.some(part => ['FETCH', 'OFFSET'].includes(keyword(part))))
-    ? selectClauseKeywords(source, query, { start, end, offset, prefix: prefixUpper }) : undefined;
+    ? selectClauseKeywords(source, query.parts, { start, end, offset, prefix: prefixUpper }) : undefined;
   if (clause?.continuation) return { start, end, prefix, quoted, keywords: clause.items };
-  const parsed = query && parseQuery(query, new Map(), [], { offset, start, left });
+  const parsed = query && parseStatementQuery(query, { offset, start, left });
   if (parsed?.query?.kind === 'using' || parsed?.query?.kind === 'conflictTarget' || parsed?.query?.kind === 'columns' && parsed.query.joinOutput) {
     // 目录目标必须在离线的两种字符串模式下有一致的词法边界。
     if (standardStrings === undefined && source.includes('\\') &&
