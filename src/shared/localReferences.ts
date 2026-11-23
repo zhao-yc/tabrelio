@@ -2,9 +2,10 @@ import { completionLexicalContext, type CompletionLexicalMode } from './completi
 import { completionLimits } from './sqlCompletion';
 
 export interface LocalReferenceRange { start: number; end: number; }
-export type LocalReferences = { status: 'blocked'; reason: string } | {
-  status: 'ready'; target: LocalReferenceRange; declaration: LocalReferenceRange; references: LocalReferenceRange[];
-};
+interface LocalReferenceMatch { status: 'ready'; target: LocalReferenceRange; references: LocalReferenceRange[]; }
+export type DeclaredLocalReferences = LocalReferenceMatch & { declaration: LocalReferenceRange };
+export type LocalBindingReferences = { status: 'blocked'; reason: string } | DeclaredLocalReferences;
+export type LocalReferences = LocalBindingReferences | (LocalReferenceMatch & { declaration: null });
 
 /** 引用列表只接受当前语句中完整、同名的标识符范围，不接受URI、正文或任意附加字段。 */
 export function validLocalReferences(value: unknown, source: string, offset: number, mode: CompletionLexicalMode): value is LocalReferences {

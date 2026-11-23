@@ -14,9 +14,12 @@ export function createSqlRenameProvider(ports: RenamePorts) {
   let active: AbortController | undefined, disposed = false, closing: Promise<void> | undefined, generation = 0;
   let prepared: { model: editor.ITextModel; version: number; start: number; end: number; name: string; kind: string } | undefined;
   const cancel = () => { generation++; active?.abort(); active = undefined; prepared = undefined; };
-  const rejected = (reason: string) => reason === 'collision' ? zh.collision : reason === 'unresolved' ? zh.unresolved : reason === 'name' ? zh.name : ['cancelled', 'context'].includes(reason) ? zh.stale : zh.unavailable;
+  const messages = new Map<string, string>([
+    ['collision', zh.collision], ['unresolved', zh.unresolved], ['name', zh.name], ['cancelled', zh.stale], ['context', zh.stale],
+    ['parameter-name', zh.parameterName], ['parameter-template', zh.parameterTemplate], ['parameter-collision', zh.parameterCollision],
+  ]);
   /** standalone Monaco的通知服务不保证可见，拒绝原因同时交给原编辑器的可访问提示。 */
-  const report = (model: editor.ITextModel, reason: string) => { const message = rejected(reason); if (!disposed && ports.current() && ports.model() === model && !model.isDisposed()) ports.notify?.(message); return message; };
+  const report = (model: editor.ITextModel, reason: string) => { const message = messages.get(reason) ?? zh.unavailable; if (!disposed && ports.current() && ports.model() === model && !model.isDisposed()) ports.notify?.(message); return message; };
   /** 每个await后核原模型、版本、scope及取消；旧请求不能交付修改或清除继任请求。 */
   async function analyze(model: editor.ITextModel, position: IPosition, token: CancellationToken, newName?: string): Promise<LocalRename> {
     if (disposed || !ports.current() || model.isDisposed() || ports.model() !== model || token.isCancellationRequested || model.getValueLength() > ports.sourceLimit) return { status: 'blocked', reason: 'cancelled' };

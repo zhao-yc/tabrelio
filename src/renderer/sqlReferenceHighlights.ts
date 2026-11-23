@@ -38,13 +38,13 @@ export function bindSqlReferenceHighlights(instance: Editor, ports: {
     try {
       const sql = model.getValue(), result = await ports.analyze(sql, offset, controller.signal);
       if (active !== controller || controller.signal.aborted || !sameSource() || result.status !== 'ready') return;
-      const ranges = [result.declaration, ...result.references];
+      const ranges = result.declaration ? [result.declaration, ...result.references] : result.references;
       if (!result.references.length || ranges.some(range => !Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end) ||
           range.start < 0 || range.start >= range.end || range.end > sql.length)) return;
-      const values = ranges.map((range, index) => {
+      const values = ranges.map(range => {
         const start = model.getPositionAt(range.start), end = model.getPositionAt(range.end);
         return { range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column },
-          options: { description: 'sql-local-reference', inlineClassName: index === 0 ? 'sql-local-declaration' : 'sql-local-reference' } };
+          options: { description: 'sql-local-reference', inlineClassName: range === result.declaration ? 'sql-local-declaration' : 'sql-local-reference' } };
       });
       decorations.set(values);
       shown = { ...source, ranges };

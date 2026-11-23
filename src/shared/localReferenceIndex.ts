@@ -1,10 +1,10 @@
-import type { LocalReferenceRange, LocalReferences } from './localReferences';
+import type { LocalBindingReferences, LocalReferenceRange } from './localReferences';
 
 export interface LocalReferenceToken extends LocalReferenceRange { value: string; }
 type Definition = { status: 'blocked'; reason: string } | { status: 'ready'; definition?: LocalReferenceRange };
 
 /** 只索引方言声明解析器确认的语义边；候选必须是同一语句的同名完整token，不做文本匹配回退。 */
-export function indexLocalReferences(target: LocalReferenceToken, candidates: LocalReferenceToken[], limit: number, resolve: (token: LocalReferenceToken) => Definition): LocalReferences {
+export function indexLocalReferences(target: LocalReferenceToken, candidates: LocalReferenceToken[], limit: number, resolve: (token: LocalReferenceToken) => Definition): LocalBindingReferences {
   if (candidates.length > limit) return { status: 'blocked', reason: 'budget' };
   const edges = new Map<number, LocalReferenceRange>();
   for (const token of candidates) {

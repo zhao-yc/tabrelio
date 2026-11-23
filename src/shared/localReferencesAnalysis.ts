@@ -2,11 +2,11 @@ import { analyzeCompletionDefinition } from './completionDefinitionAnalysis';
 import { completionLexicalContext, type CompletionLexicalMode } from './completionLexical';
 import type { CompletionScopeCapabilities } from './completionCapabilities';
 import { completionLimits } from './sqlCompletion';
-import type { LocalReferences } from './localReferences';
+import type { LocalBindingReferences } from './localReferences';
 import { indexLocalReferences } from './localReferenceIndex';
 
 /** 反向索引复用同一个声明解析器；作用域、遮蔽、分支和CTE链均以已确认的声明范围为身份。 */
-export function analyzeLocalReferences(source: string, offset: number, mode: CompletionLexicalMode = {}, capabilities: CompletionScopeCapabilities = {}): LocalReferences {
+export function analyzeLocalReferences(source: string, offset: number, mode: CompletionLexicalMode = {}, capabilities: CompletionScopeCapabilities = {}): LocalBindingReferences {
   const context = completionLexicalContext(source, offset, mode, completionLimits.aliasUnits);
   if (context.status !== 'ready') return context;
   const target = context.tokens.find(token => token.start === context.target.start && token.end === context.target.end);

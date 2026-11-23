@@ -40,6 +40,14 @@ it('停稳后只高亮外层声明和两处引用，移动到同一绑定不重�
   f.controller.dispose(); expect(f.events.size).toBe(0);
 });
 
+it('没有声明的参数各处都使用引用样式', async () => {
+  const f = fixture(), target = { start: 7, end: 11 };
+  f.analyze.mockResolvedValue({ status: 'ready', target, declaration: null, references: [target, { start: 22, end: 26 }] });
+  await vi.advanceTimersByTimeAsync(280);
+  expect(f.decorations.set.mock.calls.at(-1)?.[0].map(item => item.options.inlineClassName)).toEqual(['sql-local-reference', 'sql-local-reference']);
+  f.controller.dispose();
+});
+
 it.each(['edit', 'blur', 'model', 'select', 'deactivate', 'dispose'] as const)('%s后撤销在途分析，迟到结果不能涂到当前编辑器', async reason => {
   const f = fixture(); let finish!: (value: LocalReferences) => void;
   f.analyze.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));

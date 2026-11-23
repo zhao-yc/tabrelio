@@ -3,7 +3,8 @@ import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits, sql
 import { sqlitePragmaFunctionBase } from './sqlitePragmaAccess';
 import { sqliteBindName, sqliteNamedBindAt } from './sqliteNamedBind';
 import { queryParameterLimits } from './queryParameterLimits';
-import type { LocalReferenceToken } from './localReferenceIndex';
+import type { LocalRenameContext } from './localRename';
+import { navicatParameterNameAt } from './navicatParameter';
 import type { PhysicalObjectAnalysis, PhysicalObjectTokenContext } from './physicalObjectValidation';
 import type { SqliteDefinitionTriggerScope } from './objectDefinition';
 
@@ -580,7 +581,7 @@ function usingNames(tokens: Token[], open: number, end: number, target?: Ready['
 }
 
 /** SQLite词法独立实现：--无需空白、块注释不嵌套、方括号在第一个]结束，不借用MySQL模式。 */
-function lex(source: string, offset: number, complete = false, completionNames = false): Token[] {
+function lex(source: string, offset: number, complete = false, names?: 'completion' | 'reference'): Token[] {
   const tokens: Token[] = [], stack: number[] = []; let i = 0, depth = 0;
   const push = (token: Token) => { if (tokens.length >= limits.tokens) fail('budget'); tokens.push(token); };
   const inSpan = (start: number, end: number, open: boolean) => offset >= start && (offset < end || open && offset === end);
@@ -596,7 +597,7 @@ function lex(source: string, offset: number, complete = false, completionNames =
         const point = source.codePointAt(i)!; value += String.fromCodePoint(point); i += point > 65535 ? 2 : 1;
       }
       // SQLite 在 COLLATE 后也接受单引号名称。仅把当前目标当标识符，普通字符串仍不进入补全。
-      const current = completionNames && offset >= start && offset <= i, open = stack.at(-1), prior = tokens.at(-1);
+      const current = names === 'completion' && offset >= start && offset <= i, open = stack.at(-1), prior = tokens.at(-1);
       // 暂时保留表值 PRAGMA 的当前单引号参数，随后由 FROM 作用域确认模块与准确参数槽。
       const pragmaLiteral = current && character === "'" && open !== undefined && prior?.kind === 'symbol' &&
         (open === tokens.length - 1 || prior.value === ',' && prior.depth === depth) &&
@@ -621,8 +622,10 @@ function lex(source: string, offset: number, complete = false, completionNames =
         if (source[i] === ')') i++;
       }
       const draft = i === start + 1 && source[start - 1] !== ':' && ![':', '('].includes(source[i]);
-      const editable = completionNames && character === ':' && offset > start && (draft || !!sqliteNamedBindAt(source, start, i));
-      if (offset >= start && offset <= i && !editable) fail('parameter');
+      if (offset >= start && offset <= i) {
+        const name = sqliteNamedBindAt(source, start, i);
+        if (!(names === 'reference' && name || names === 'completion' && character === ':' && offset > start && (draft || name))) fail('parameter');
+      }
       push({ kind: 'parameter', value: source.slice(start, i), start, end: i, depth }); continue;
     }
     if (idStart(String.fromCodePoint(source.codePointAt(i)!))) {
@@ -698,17 +701,30 @@ function statementAt(tokens: Token[], offset: number): { start: number; end: num
   return { start, end: tokens.length, ...(triggerStart >= 0 ? { trigger: true } : {}) };
 }
 
-/** 引用索引复用SQLite自己的词法、语句及trigger边界；声明位置也可选中，不借MySQL引号或名称规则。 */
-export function sqliteReferenceContext(source: string, offset: number): { status: 'ready'; target: LocalReferenceToken; tokens: LocalReferenceToken[] } | { status: 'blocked'; reason: string } {
+/** 局部声明按语句消歧，原生值参数按整份草稿及精确大小写匹配绑定名。 */
+export function sqliteReferenceContext(source: string, offset: number): LocalRenameContext {
   try {
     if (typeof source !== 'string' || source.length > limits.sourceUnits) fail('budget');
     if (!unicode(source) || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || !boundary(source, offset)) fail('input');
-    const tokens = lex(source, offset), statement = statementAt(tokens, offset);
+    const tokens = lex(source, offset, false, 'reference'), statement = statementAt(tokens, offset);
     if (statement.trigger) fail('trigger');
+    const activeParameter = tokens.find(token => token.kind === 'parameter' && token.start <= offset && offset <= token.end);
+    const rangeOf = ({ start, end, value }: Token) => ({ start, end, value });
+    if (activeParameter) {
+      const parameters = tokens.filter(token => token.kind === 'parameter' && sqliteNamedBindAt(source, token.start, token.end)).map(rangeOf);
+      // 方括号模板只有参数表单的显式模式才转换，编辑器保留原有标识符含义。
+      const navicatNames = new Set<string>();
+      for (const token of tokens) {
+        if (token.kind !== 'id' || !token.closed || source[token.start] !== '[' || !token.value.startsWith('$')) continue;
+        const name = navicatParameterNameAt(source, token.start);
+        if (name) navicatNames.add(':' + name);
+      }
+      return { status: 'ready', target: rangeOf(activeParameter), tokens: parameters, parameter: { navicatNames } };
+    }
     const active = tokens.slice(statement.start, statement.end).filter(token => token.kind === 'id' && (!token.quoted || token.closed));
     const target = active.find(token => token.start <= offset && offset <= token.end);
     if (!target || !target.quoted && structural.has(fold(target.value))) fail('reference-target');
-    return { status: 'ready', target: { start: target.start, end: target.end, value: target.value }, tokens: active.map(token => ({ start: token.start, end: token.end, value: token.value })) };
+    return { status: 'ready', target: rangeOf(target), tokens: active.map(rangeOf) };
   } catch (reason) { return { status: 'blocked', reason: reason instanceof Error && /^[a-z-]{1,64}$/.test(reason.message) ? reason.message : 'analysis' }; }
 }
 
@@ -1055,7 +1071,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
     if (typeof source !== 'string' || source.length > limits.sourceUnits) fail('budget');
     if (!unicode(source) || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || !boundary(source, offset)) fail('input');
     if (intent !== undefined && intent !== 'hover' && intent !== 'definition' && intent !== 'object') fail('input');
-    const tokens = lex(source, offset, intent === 'object', !intent || intent === 'hover'), statement = statementAt(tokens, offset);
+    const tokens = lex(source, offset, intent === 'object', !intent || intent === 'hover' ? 'completion' : undefined), statement = statementAt(tokens, offset);
     const statementHead = explainedHead(tokens, statement.start);
     if (keyword(tokens[statementHead], 'pragma')) return analyzePragma(source, tokens, statementHead, statement.end, offset, intent);
     const parameter = tokens.slice(statement.start, statement.end).find(token => token.kind === 'parameter' && token.start < offset && offset <= token.end);

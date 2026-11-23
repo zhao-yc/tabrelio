@@ -28,7 +28,7 @@ export function createSqlReferencesProvider(ports: ReferencesPorts) {
         if (!current() || result.status !== 'ready') return null;
         ports.prepare?.();
         if (!current()) return null;
-        const ranges = [...result.references, ...(context.includeDeclaration ? [result.declaration] : [])].sort((a, b) => a.start - b.start);
+        const ranges = [...result.references, ...(context.includeDeclaration && result.declaration ? [result.declaration] : [])].sort((a, b) => a.start - b.start);
         if (ranges.some(item => !Number.isSafeInteger(item.start) || !Number.isSafeInteger(item.end) || item.start < 0 || item.start >= item.end || item.end > source.length)) return null;
         return ranges.map(item => { const from = model.getPositionAt(item.start), to = model.getPositionAt(item.end); return { uri: model.uri, range: { startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column } }; });
       } catch { return null; }

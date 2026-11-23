@@ -60,11 +60,16 @@ it('只折叠ASCII，不把非ASCII大小写或相似显示字符合并', () => 
 it.each([
   ['SELECT s.id FROM subject S JOIN other s ON 1', 7], ['SELECT s.f() FROM subject s', 7],
   ['SELECT id FROM subject', 7], ['SELECT 1 FROM subject s', 22], ['SELECT s.id FROM subject AS x', 7],
-  ["SELECT 's.id' FROM subject s", 9], ['SELECT --s.id\n1 FROM subject s', 10], ['SELECT :s FROM subject s', 8],
+  ["SELECT 's.id' FROM subject s", 9], ['SELECT --s.id\n1 FROM subject s', 10], ['SELECT @s FROM subject s', 8],
   ['SELECT [s.id FROM subject s', 8], ['SELECT main.subject.id FROM main.subject', 7],
   ['SELECT s.id FROM subject s UNION SELECT t.id FROM other t ORDER BY s.id', 63],
   ['CREATE TRIGGER x AFTER INSERT ON subject BEGIN SELECT s.id FROM subject s; END', 53],
 ])('无法确认绑定时不回退文本匹配：%s', (source, offset) => expect(analyzeSqliteLocalReferences(source, offset).status).toBe('blocked'));
+it('同名的关系别名与原生参数保持不同绑定', () => {
+  expect(analyzeSqliteLocalReferences('SELECT :s FROM subject s', 8)).toEqual({
+    status: 'ready', target: { start: 7, end: 9 }, declaration: null, references: [{ start: 7, end: 9 }],
+  });
+});
 it('位置、Unicode、来源、深度和候选超预算整份阻断', () => {
   for (const [source, offset] of [['SELECT \ud800', 7], ['SELECT "🚢".id FROM subject "🚢"', 9], ['SELECT s.id FROM subject s', -1], ['x'.repeat(262145), 0], ['SELECT ' + '('.repeat(65) + 's.id', 72]] as const) expect(analyzeSqliteLocalReferences(source, offset).status).toBe('blocked');
   const source = 'SELECT ' + Array.from({ length: 256 }, () => 's.id').join(',') + ' FROM subject s';

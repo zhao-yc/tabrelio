@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。SQLite `:name` 支持跨语句引用查找、高亮和 F2 整体重命名，沿用编辑器的一次撤销。大小写不同的参数拥有独立绑定，目标名称冲突时保留草稿。Q01 继续为部分覆盖。 [SQLite 参数](https://www.sqlite.org/lang_expr.html#parameters)
+
 2026-11-24 源码增量。SQLite 函数实参提示在已有查询会话中可补充实际内置函数的重载与变参，并标出光标所在参数。常用函数仍可离线查看签名。Q01 继续为部分覆盖。 [SQLite 函数目录](https://www.sqlite.org/pragma.html#pragma_function_list)
 
 2026-11-24 源码增量。SQLite 查询编辑器按当前草稿补全 `:name` 命名参数，区分大小写并优先建议本语句中使用的名称，悬停可查看引用次数。参数名称补全和悬停由编辑器本地处理。Q01 继续为部分覆盖。 [SQLite 参数](https://www.sqlite.org/lang_expr.html#parameters)

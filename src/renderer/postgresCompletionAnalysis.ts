@@ -1,6 +1,6 @@
 import { postgresCompletionLimits as limits, type PostgresCompletionReference, type PostgresRoutineCompletionTarget } from '../shared/postgresCompletion';
 import { currentPostgresStatement, scanPostgresEditorTokens, type PostgresEditorToken } from '../shared/postgresSql';
-import type { LocalReferenceRange, LocalReferences } from '../shared/localReferences';
+import type { DeclaredLocalReferences, LocalBindingReferences, LocalReferenceRange } from '../shared/localReferences';
 import { planLocalRename, type LocalRename } from '../shared/localRename';
 
 type Group = { kind: 'group'; start: number; end: number; closed: boolean; closing: ')' | ']'; parts: Part[] };
@@ -1423,13 +1423,13 @@ const noLocalReference = { status: 'blocked', reason: 'syntax' } as const;
 const rangeOf = ({ start, end }: LocalReferenceRange): LocalReferenceRange => ({ start, end });
 
 /** 只读取光标所在语句，为导航和重命名提供同一套原文绑定。 */
-function analyzePostgresBinding<T extends LocalReferences | LocalRename>(source: string, offset: number, standardStrings: boolean | undefined,
-  plan: (references: Extract<LocalReferences, { status: 'ready' }>, target: PostgresEditorToken,
-    tokens: PostgresEditorToken[], trace: ReferenceTrace) => T): T | Extract<LocalReferences, { status: 'blocked' }> {
+function analyzePostgresBinding<T extends LocalBindingReferences | LocalRename>(source: string, offset: number, standardStrings: boolean | undefined,
+  plan: (references: DeclaredLocalReferences, target: PostgresEditorToken,
+    tokens: PostgresEditorToken[], trace: ReferenceTrace) => T): T | Extract<LocalBindingReferences, { status: 'blocked' }> {
   if (source.length > limits.source) return { status: 'blocked', reason: 'budget' };
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > source.length || /[\uD800-\uDFFF]/u.test(source)) return noLocalReference;
 
-  function analyze(mode: boolean): T | Extract<LocalReferences, { status: 'blocked' }> {
+  function analyze(mode: boolean): T | Extract<LocalBindingReferences, { status: 'blocked' }> {
     let statement: ReturnType<typeof currentPostgresStatement>;
     try { statement = currentPostgresStatement(source, offset, mode); }
     catch { return noLocalReference; }
@@ -1463,7 +1463,7 @@ function analyzePostgresBinding<T extends LocalReferences | LocalRename>(source:
 }
 
 /** 只返回绑定声明和引用的范围，供高亮与导航使用。 */
-export function analyzePostgresLocalReferences(source: string, offset: number, standardStrings?: boolean): LocalReferences {
+export function analyzePostgresLocalReferences(source: string, offset: number, standardStrings?: boolean): LocalBindingReferences {
   return analyzePostgresBinding(source, offset, standardStrings, references => references);
 }
 
