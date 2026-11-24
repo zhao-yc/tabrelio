@@ -2707,10 +2707,11 @@ export function PostgresQueryTab({
               </select>}
               {hasResultNavigation && <QueryResultNavigator control={resultNavigator} tabId={tab.id} results={results} names={resultNames}
                 statementOrdinals={resultStatementOrdinals} executionErrors={failureNavigation}
-                statementDraft={onChooseQueryTarget ? {
-                  canOpen: entry => entry.kind === 'current' ? canOpenResultDraft(entry.index, entry.result) : canOpenFailureDraft(entry.failure),
-                  open: entry => entry.kind === 'current' ? openResultDraft(entry.index, entry.result) : openFailureDraft(entry.failure),
-                } : undefined}
+                statementSource={{
+                  canRead: entry => entry.kind === 'current' ? canOpenResultDraft(entry.index, entry.result) : canOpenFailureDraft(entry.failure),
+                  read: entry => failureSource.current?.readRange(entry.kind === 'current' ? resultDraftRange(entry.index, entry.result) : entry.failure.sourceRange, false),
+                  open: onChooseQueryTarget ? entry => entry.kind === 'current' ? openResultDraft(entry.index, entry.result) : openFailureDraft(entry.failure) : undefined,
+                }}
                 selected={pin ? undefined : selected} pins={pinState.items} selectedPin={pin}
                 disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
               {pin && <PinnedResultRename tabId={tab.id} pin={pin} disabled={locked} isCurrent={pinNavigationCurrent} onRename={renameSelectedPin}/>}

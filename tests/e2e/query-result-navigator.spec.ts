@@ -59,6 +59,21 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
       ] });
     }, sql);
     await page.reload();
+    await page.evaluate(() => {
+      const copies: Record<string, string>[] = [];
+      // 只在测试页捕获复制事件，不触及系统剪贴板。
+      Object.defineProperty(document, 'execCommand', {configurable: true, value(command: string) {
+        if (command !== 'copy') throw Error('本例只允许捕获复制事件');
+        const clipboardData = new DataTransfer();
+        document.dispatchEvent(new ClipboardEvent('copy', {clipboardData, bubbles: true, cancelable: true}));
+        copies.push(Object.fromEntries(clipboardData.types.map(type => [type, clipboardData.getData(type)])));
+        return true;
+      }});
+      Object.assign(globalThis, { resultSourceCopies: copies });
+    });
+    const copies = () => page.evaluate(() => (globalThis as typeof globalThis & {
+      resultSourceCopies: Record<string, string>[];
+    }).resultSourceCopies);
     const tab = page.locator('.query-tab:visible'), trigger = tab.getByRole('button', { name: text.open, exact: true });
     await tab.locator('.query-execute-split').getByRole('button', { name: new RegExp(zh.query.text010) }).first().click();
     await expect(trigger).toBeEnabled();
@@ -172,6 +187,12 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await trigger.click();
     await search.fill('uniqueoutput');
     await expect(dialog.getByRole('option')).toHaveCount(1);
+    const copyOriginal = dialog.getByRole('button', {name: text.copyOriginal, exact: true});
+    await copyOriginal.click();
+    await expect(dialog.getByText(text.originalCopied, {exact: true})).toBeVisible();
+    expect(await copies()).toEqual([{'text/plain': sql.slice(sql.indexOf('SELECT 44 AS UniqueOutput'))}]);
+    await expect(grid.getByRole('gridcell', {name: '42', exact: true})).toBeVisible();
+    await expect(search).toHaveValue('uniqueoutput');
     await dialog.getByRole('option').click();
     await expect(grid.getByRole('gridcell', { name: '44', exact: true })).toBeVisible();
     await (await navigationMenuItem(tab, { name: zh.query.resultSql, exact: true })).click();
@@ -243,9 +264,12 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await trigger.click();
     await search.fill('#2');
     await expect(navigatorDraft).toBeDisabled();
+    await expect(copyOriginal).toBeDisabled();
+    expect(await copies()).toHaveLength(1);
     await search.press('Escape');
     await (await navigationMenuItem(tab, { name: zh.query.resultSql, exact: true })).click();
     await expect(sourceDialog.getByRole('button', { name: zh.query.resultSqlShowFull, exact: true })).toHaveCount(0);
+    await expect(sourceDialog.getByRole('button', {name: text.copyOriginal, exact: true})).toHaveCount(0);
     await sourceDialog.getByRole('button', { name: zh.common.close, exact: true }).click();
     expect(await history()).toEqual(originalHistory);
     expect(await tasks()).toEqual(originalTasks);

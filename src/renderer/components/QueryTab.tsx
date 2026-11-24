@@ -3147,10 +3147,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       })}</div>
       {hasResultNavigation && <QueryResultNavigator control={resultNavigator} tabId={tab.id} results={results} names={resultNames}
         statementOrdinals={resultStatementOrdinals} executionErrors={failureNavigation}
-        statementDraft={onChooseQueryTarget ? {
-          canOpen: entry => entry.kind === 'current' ? canOpenResultDraft(entry.index, entry.result) : canOpenFailureDraft(entry.failure),
-          open: entry => entry.kind === 'current' ? openResultDraft(entry.index, entry.result) : openFailureDraft(entry.failure),
-        } : undefined}
+        statementSource={{
+          canRead: entry => failureSource.current === failureLocator && (entry.kind === 'current'
+            ? canOpenResultDraft(entry.index, entry.result) : canOpenFailureDraft(entry.failure)),
+          read: entry => failureLocator?.readRange(entry.kind === 'current' ? resultDraftRange(entry.index, entry.result) : entry.failure.sourceRange, false),
+          open: onChooseQueryTarget ? entry => entry.kind === 'current' ? openResultDraft(entry.index, entry.result) : openFailureDraft(entry.failure) : undefined,
+        }}
         selected={pin ? undefined : resultIndex} pins={pins} selectedPin={pin}
         disabled={resultNavigationLocked}
         isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}

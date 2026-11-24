@@ -870,6 +870,26 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     await tab().getByRole('button', {name: resultNavText.open, exact: true}).click();
     const navigator = page.getByRole('dialog', {name: resultNavText.open, exact: true});
     await expect(navigator.getByRole('option')).toContainText(resultNavText.failedStatement(1));
+    await page.evaluate(() => {
+      const packets: Record<string, string>[] = [];
+      // 在渲染器同步捕获纯文本，不修改系统剪贴板。
+      const original = document.execCommand;
+      document.execCommand = command => {
+        if (command !== 'copy') throw Error('仅允许本例复制');
+        document.execCommand = original;
+        const clipboardData = new DataTransfer();
+        document.dispatchEvent(new ClipboardEvent('copy', {clipboardData, bubbles: true, cancelable: true}));
+        packets.push(Object.fromEntries(clipboardData.types.map(type => [type, clipboardData.getData(type)])));
+        return true;
+      };
+      Object.assign(globalThis, { failureSourcePackets: packets });
+    });
+    await navigator.getByRole('button', {name: resultNavText.copyOriginal, exact: true}).click();
+    await expect(navigator.getByText(resultNavText.originalCopied, {exact: true})).toBeVisible();
+    const copied = await page.evaluate(() => (globalThis as typeof globalThis & {failureSourcePackets: Record<string, string>[]}).failureSourcePackets);
+    expect(copied).toEqual([{'text/plain': named.slice(0, -1)}]);
+    expect(JSON.stringify(copied)).not.toContain(secret);
+    expect(await history()).toEqual(beforeDraftHistory);
     await navigator.getByRole('button', {name: queryDuplicateZh.failureStatement, exact: true}).click();
     await expect(navigator).toHaveCount(0);
     await destination.getByLabel(queryDuplicateZh.targetConnection, {exact: true}).selectOption(sourceTab.connectionId);

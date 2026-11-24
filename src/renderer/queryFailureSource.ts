@@ -167,10 +167,10 @@ export class QueryFailureSourceLease {
     } catch { return; }
   }
 
-  /** 读取与定位共用同一原模型租约，取完整正文且不移动光标。 */
-  readRange(value: unknown): string | undefined {
+  /** 读取原范围不移动光标；拥有当前模态的调用方可单独核验窗口归属。 */
+  readRange(value: unknown, checkModal = true): string | undefined {
     try {
-      if (!this.active()) return;
+      if (!this.active(checkModal)) return;
       const { start, end } = this.checkedRange(value);
       return this.full.slice(start, end);
     } catch { return; }

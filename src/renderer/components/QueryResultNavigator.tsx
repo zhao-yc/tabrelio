@@ -6,10 +6,12 @@ import { truncateQueryScriptMessage } from '../../shared/queryContinueOnError';
 import { queryPinsZh } from '../locales/queryPins.zh-CN';
 import { queryResultNavigatorZh as text } from '../locales/queryResultNavigator.zh-CN';
 import { queryDuplicateZh as draftText } from '../locales/queryDuplicate.zh-CN';
-import { appModalSelector } from '../modalSelectors';
+import { appModalSelector, gridDialogCurrent } from '../modalSelectors';
 import type { PinnedQueryResult } from '../queryPins';
 import { useWorkspace } from '../store';
-import { Modal } from './ui';
+import { ErrorBox, Modal } from './ui';
+import { errorMessage } from '../lib';
+import { copyQuerySourceSql } from '../querySourceClipboard';
 import '../openTabSearch.css';
 
 interface ExecutionErrors {
@@ -27,9 +29,10 @@ interface Props {
   names: readonly (string | undefined)[];
   statementOrdinals?: readonly (number | undefined)[];
   executionErrors: ExecutionErrors;
-  statementDraft?: {
-    canOpen(entry: CurrentEntry): boolean;
-    open(entry: CurrentEntry): void;
+  statementSource?: {
+    canRead(entry: CurrentEntry): boolean;
+    read(entry: CurrentEntry): string | undefined;
+    open?(entry: CurrentEntry): void;
   };
   selected?: number;
   pins: readonly PinnedQueryResult[];
@@ -87,7 +90,7 @@ export function QueryResultNavigator(props: Props) {
 
   function activateEntry(entry: Entry, action: 'navigate' | 'draft') {
     if (!owner || !opened || !owner.current()) return;
-    if (action === 'draft' ? entry.kind === 'pinned' || !props.statementDraft?.canOpen(entry)
+    if (action === 'draft' ? entry.kind === 'pinned' || !props.statementSource?.open || !props.statementSource.canRead(entry)
       : entry.kind === 'failure' && !executionErrors.canLocateFailure(entry.failure)) return;
     // 关闭窗口后再核对查询归属和原列表，防止旧条目切到重跑后的同序号结果。
     flushSync(() => setOwner(undefined));
@@ -97,7 +100,7 @@ export function QueryResultNavigator(props: Props) {
     if (entry.kind === 'current' && current.results[entry.index] !== entry.result ||
         entry.kind === 'failure' && owner.failures[entry.index] !== entry.failure) return;
     if (action === 'draft') {
-      if (entry.kind !== 'pinned' && current.statementDraft?.canOpen(entry)) current.statementDraft.open(entry);
+      if (entry.kind !== 'pinned' && current.statementSource?.canRead(entry)) current.statementSource.open?.(entry);
       return;
     }
     if (entry.kind === 'current') current.onSelect(entry.index);
@@ -107,17 +110,33 @@ export function QueryResultNavigator(props: Props) {
     }
   }
 
+  /** 导航窗口保持打开，读范围和写剪贴板时分别复核条目仍属于本次执行。 */
+  function copyEntry(entry: CurrentEntry, dialogCurrent: () => boolean) {
+    const current = () => {
+      const props = latest.current;
+      return dialogCurrent() && !!owner && opened && owner.current() && !props.disabled &&
+        props.results === owner.results && props.pins === owner.pins && props.executionErrors.failures === owner.failures &&
+        (entry.kind === 'current' ? props.results[entry.index] === entry.result : props.executionErrors.failures[entry.index] === entry.failure) &&
+        props.statementSource?.canRead(entry) === true;
+    };
+    if (!current()) throw Error(text.originalUnavailable);
+    const source = latest.current.statementSource?.read(entry);
+    if (source === undefined) throw Error(text.originalUnavailable);
+    copyQuerySourceSql(source, current);
+  }
+
   return <>
     <button type="button" disabled={disabled} aria-haspopup="dialog" aria-expanded={opened} onClick={() => open(false)}>{text.open}</button>
     {opened && createPortal(<ResultList results={results} names={props.names} statementOrdinals={props.statementOrdinals}
-      executionErrors={executionErrors} statementDraft={props.statementDraft} selected={props.selected} pins={pins} selectedPin={props.selectedPin}
-      startWithFailures={owner.includeFailures} onActivate={activateEntry} onClose={() => setOwner(undefined)}/>, document.body)}
+      executionErrors={executionErrors} statementSource={props.statementSource} selected={props.selected} pins={pins} selectedPin={props.selectedPin}
+      startWithFailures={owner.includeFailures} onActivate={activateEntry} onCopy={copyEntry} onClose={() => setOwner(undefined)}/>, document.body)}
   </>;
 }
 
-function ResultList({ results, names, statementOrdinals, executionErrors, statementDraft, selected, pins, selectedPin, startWithFailures, onActivate, onClose }:
-  Pick<Props, 'results' | 'names' | 'statementOrdinals' | 'executionErrors' | 'statementDraft' | 'selected' | 'pins' | 'selectedPin'> & {
-    startWithFailures: boolean; onActivate(entry: Entry, action: 'navigate' | 'draft'): void; onClose(): void;
+function ResultList({ results, names, statementOrdinals, executionErrors, statementSource, selected, pins, selectedPin, startWithFailures, onActivate, onCopy, onClose }:
+  Pick<Props, 'results' | 'names' | 'statementOrdinals' | 'executionErrors' | 'statementSource' | 'selected' | 'pins' | 'selectedPin'> & {
+    startWithFailures: boolean; onActivate(entry: Entry, action: 'navigate' | 'draft'): void;
+    onCopy(entry: CurrentEntry, current: () => boolean): void; onClose(): void;
   }) {
   const { failures } = executionErrors;
   const [query, setQuery] = useState(''), [source, setSource] = useState<Source>('all');
@@ -165,8 +184,11 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
   const page = Math.floor(current / pageSize);
   const pageCount = Math.ceil(matches.length / pageSize);
   const entry = matches[current];
+  const currentEntry = useRef(entry);
+  useLayoutEffect(() => { currentEntry.current = entry; }, [entry]);
+  const [feedback, setFeedback] = useState<{ entry: CurrentEntry; error?: string }>();
   const canLocateError = entry?.kind === 'failure' && executionErrors.canLocateFailure(entry.failure);
-  const canOpenDraft = entry && entry.kind !== 'pinned' && !!statementDraft?.canOpen(entry);
+  const canReadSource = entry && entry.kind !== 'pinned' && !!statementSource?.canRead(entry);
   const optionId = (item: Entry) => item.kind === 'pinned' ? `${listId}-pin-${item.pin.id}` : `${listId}-${item.kind}-${item.index}`;
   useEffect(() => { active.current?.scrollIntoView({ block: 'nearest' }); }, [entry]);
 
@@ -176,12 +198,21 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
     if (!composing.current && dialog && surfaces[surfaces.length - 1] === dialog) onActivate(item, action);
   }
 
-  function draftButton(item: CurrentEntry) {
-    if (!statementDraft) return null;
+  function statementButtons(item: CurrentEntry) {
+    if (!statementSource) return null;
     const available = item.kind === 'failure' ? draftText.failureStatementHint : draftText.resultStatementHint;
     const unavailable = item.kind === 'failure' ? draftText.failureStatementUnavailable : draftText.resultStatementUnavailable;
-    return <button type="button" disabled={!canOpenDraft} title={canOpenDraft ? available : unavailable} onClick={() => activate(item, 'draft')}>
-      {item.kind === 'failure' ? draftText.failureStatement : draftText.resultStatement}</button>;
+    return <>
+      {statementSource.open && <button type="button" disabled={!canReadSource} title={canReadSource ? available : unavailable} onClick={() => activate(item, 'draft')}>
+        {item.kind === 'failure' ? draftText.failureStatement : draftText.resultStatement}</button>}
+      <button type="button" disabled={!canReadSource} title={canReadSource ? undefined : text.originalUnavailable} onClick={event => {
+        const button = event.currentTarget, dialog = input.current?.closest(appModalSelector) ?? undefined;
+        try {
+          onCopy(item, () => !composing.current && currentEntry.current === item && button.isConnected && gridDialogCurrent(button, () => dialog));
+          setFeedback({entry: item});
+        } catch (reason) { setFeedback({entry: item, error: errorMessage(reason)}); }
+      }}>{text.copyOriginal}</button>
+    </>;
   }
 
   return <Modal title={text.open} onClose={onClose} initialFocus={input}>
@@ -248,15 +279,16 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
         <span>{text.page(page + 1, pageCount)}</span>
         <button type="button" disabled={page + 1 === pageCount} onClick={() => setPosition((page + 1) * pageSize)}>{text.next}</button>
       </div>}
-      {entry?.kind === 'current' && statementDraft && <div className="open-tab-search-options">{draftButton(entry)}</div>}
+      {entry?.kind === 'current' && statementSource && <div className="open-tab-search-options">{statementButtons(entry)}</div>}
       {entry?.kind === 'failure' && <section className="query-result-navigator-error" aria-label={text.errorDetail}>
         <pre>{entry.message}</pre>
         <div className="open-tab-search-options">
           <button type="button" disabled={!canLocateError} onClick={() => activate(entry)}>{text.locateError}</button>
-          {draftButton(entry)}
+          {statementButtons(entry)}
           {!canLocateError && <span className="muted small">{text.errorLocationUnavailable}</span>}
         </div>
       </section>}
+      {feedback && feedback.entry === entry && (feedback.error ? <ErrorBox message={feedback.error}/> : <p role="status">{text.originalCopied}</p>)}
     </div>
     <footer className="modal-footer"><button type="button" onClick={onClose}>{text.close}</button></footer>
   </Modal>;

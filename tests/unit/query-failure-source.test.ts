@@ -105,13 +105,14 @@ it('精确位置接受原选区内的字符和语句末尾，编辑后不能复�
   f.emit('content');
   expect(lease.canLocateError(failure)).toBe(false);
 });
-it('完整原范围超过结果预览长度时仍逐字读回，忙态或模态期间不重新取文', () => {
+it('完整原范围逐字读回，归属已核验的模态可读，忙态仍禁止读取', () => {
   const sql = "SELECT 1 /* " + 'x'.repeat(70000) + '尾部🚢 */;';
   const f = fixture(sql), lease = f.create()!, range = { start: 0, end: sql.length };
   expect(lease.readRange(range)).toBe(sql);
   f.scope.modal = true;
   expect(lease.readRange(range)).toBeUndefined();
-  f.scope.modal = false; f.scope.busy = true;
-  expect(lease.readRange(range)).toBeUndefined();
+  expect(lease.readRange(range, false)).toBe(sql);
+  f.scope.busy = true;
+  expect(lease.readRange(range, false)).toBeUndefined();
   lease.dispose();
 });

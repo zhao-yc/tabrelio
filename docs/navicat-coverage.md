@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。「查找结果集」和「结果来源 SQL」可复制已核验的完整原语句。macOS 源码 Electron 验证四种数据库的单组结果、SQLite 超长回执和改稿失效，以及 PostgreSQL 失败回执保留参数模板。复制事件在测试页捕获，查询历史、实际会话和原网格保持。Q02、Q03 继续为部分覆盖。
+
 2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的查询工具菜单新增「执行当前语句并跳到下一条」。macOS 源码 Electron 已核对四种数据库的原生菜单、单语句执行、失败留在原位及末尾不回绕，MySQL／MariaDB 另验 `DELIMITER`。PostgreSQL 已额外验证执行期间移开并还原光标后不跳转，以及取消后保持光标。Q02 继续为部分覆盖。
 
 2026-11-24 源码增量。SQLite 完整查询选择 JSON 后可勾选结果名称和列定义，将最多 200 条只读查询按顺序写入同一 `DBArk-query-results` 文件。默认仍为单查询对象数组。macOS 源码 Electron 验证方案恢复、UTF-16LE 文件读回、重名列和空结果，SQLite 子进程验证共享 WAL 快照和失败或取消时保留原目标。PostgreSQL 完整 JSON 及相关格式通过实库回归。Q05 继续为部分覆盖。
