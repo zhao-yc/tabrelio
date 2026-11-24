@@ -20,6 +20,14 @@ export function gridHeaderDataCopyActions(column: boolean, copy: (headers: boole
   ];
 }
 
+/** 数据格中的整行复制只指向命中行，与行标题菜单的批量勾选规则独立。 */
+export function gridCellRowCopyActions(copy: (headers: boolean) => void) {
+  return [
+    { label: text.copyRow, run: () => copy(false) },
+    { label: text.copyRowWithHeaders, run: () => copy(true) },
+  ];
+}
+
 /** 按原列键取显示名称，保留重复或空名称；本入口不读取选区的行值。 */
 export function copyGridRangeNames(keys: readonly string[] | undefined, columns: readonly { key: string; name: string }[],
   current: () => boolean): void {

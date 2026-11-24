@@ -41,7 +41,7 @@ import type { QueryResultRowViewKind } from './QueryResultMatchView';
 import { queryResultFindZh as rowViewText } from '../locales/queryResultFind.zh-CN';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
 import { encodeSqliteResultClipboard, sqliteCellClipboardType } from '../sqliteTableClipboard';
-import { copyGridRangeNames, copyGridRangeText, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeNames, copyGridRangeText, gridCellRowCopyActions, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { gridRangeSqliteStorage, snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill, type GridRangeFillHandle } from './GridRangeFill';
@@ -459,10 +459,18 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
       if (current() && remove.allowed(cell)) remove.run(cell);
     } });
     if ((rowJump || hasResultTools || tableCopy) && tableCopy?.enabled !== false) {
-      actions.unshift({ label: quickValueText.copyCell, disabled: !!presentCell?.(cell.row, key)?.copyError, run: () => {
+      const copyCell = { label: quickValueText.copyCell, disabled: !!presentCell?.(cell.row, key)?.copyError, run: () => {
         try { writeTableClipboardEvent(current, gridCopyData([cell.index], [key])); }
         catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
-      } });
+      } };
+      const copyRow = !rectangle && rangeTools ? gridCellRowCopyActions(headers => {
+        if (!current()) return;
+        try {
+          writeTableClipboardEvent(current, gridCopyData([cell.index], columns.map(field => field.key),
+            headers ? columns.map(field => field.name) : undefined));
+        } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
+      }) : [];
+      actions.unshift(copyCell, ...copyRow);
       if (rectangle) actions.unshift(...gridRangeCopyActions(format => {
         try {
           if (format === 'names') return copyGridRangeNames(cellRange.captureColumns(rectangle), columns, current);

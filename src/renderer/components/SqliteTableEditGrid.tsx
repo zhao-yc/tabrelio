@@ -12,7 +12,7 @@ import { gridCellEditZh } from '../locales/gridCellEdit.zh-CN';
 import { GridHeaderDetails } from './GridHeaderDetails';
 import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent, type Ref } from 'react';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
-import { copyGridRangeNames, copyGridRangeText, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeNames, copyGridRangeText, gridCellRowCopyActions, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { sqliteBinaryOriginalCell } from '../sqliteBinaryInput';
@@ -454,6 +454,14 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
           if (content) writeTableClipboardEvent(current, data => writeSqliteClipboardData(data, content));
         } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
       } },
+      ...(!rectangle ? gridCellRowCopyActions(headers => {
+        if (!current()) return;
+        try {
+          const content = encodeGridCells([row], order, headers);
+          writeTableClipboardEvent(current, data => writeSqliteClipboardData(data, content));
+          setError('');
+        } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
+      }) : []),
       ...(cellMenuFilters?.(row, index)?.actions ?? []),
       ...(!rectangle && canChooseReference(row, index) ? [{ label: referenceText.choiceEntry, run: () => {
         if (current() && canChooseReference(row, index)) chooseReference.current?.(row, index);

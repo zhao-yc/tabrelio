@@ -8,6 +8,7 @@ import { gridCsvClipboardZh as csvText } from '../../src/renderer/locales/gridCs
 import { deleteSqlCopyZh } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
 import { gridQuickValueZh } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridHeaderMenuZh } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
+import { gridRangeCopyZh } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
 import { sqliteTableFindZh } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
 import { queryResultFindZh } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
@@ -134,6 +135,14 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       if (sqlite === undefined) expect(packet[sqliteCellClipboardType]).toBeUndefined();
       else expect(JSON.parse(packet[sqliteCellClipboardType])).toMatchObject({ version: 1, rows: [[sqlite]] });
     };
+    /** 在原数据格菜单中复制整行，继续隔离系统剪贴板。 */
+    const copyHitRow = async (cell: ReturnType<typeof page.locator>, headers: boolean) => {
+      await cell.scrollIntoViewIfNeeded();
+      await cell.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await cell.click({ button: 'right' });
+      await page.getByRole('menuitem', { name: headers ? gridRangeCopyZh.copyRowWithHeaders : gridRangeCopyZh.copyRow, exact: true }).click();
+      return lastPacket();
+    };
     const open = (id: string) => page.locator('[data-workspace-tab-id="' + id + '"] .tab-select').click();
     const headerMenu = page.getByRole('menu', { name: gridHeaderMenuZh.menu, exact: true });
     const chooseHeaderAction = async (header: ReturnType<typeof page.locator>, action: string, keyboard = false, capture = false) => {
@@ -164,6 +173,13 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     await tableBCheck.check();
     const tableAmount = tableTab.getByRole('gridcell').filter({ hasText: /^(INTEGER · )?9007199254740993$/ });
     await menuCopy(tableAmount, expectedA.amount, expectedA.amount, local ? { kind: 'integer', value: expectedA.amount } : undefined);
+    await expect(tableBCheck).toBeChecked();
+    const copiedTableRow = await copyHitRow(tableAmount, true);
+    expect(copiedTableRow['text/plain']).toBe('id\tamount\tlabel\tpayload\tnullable\n1\t9007199254740993\trow A\t0x00ff\tNULL');
+    const copiedTableValues = JSON.parse(copiedTableRow[cellClipboardType]).rows;
+    expect(copiedTableValues).toHaveLength(1);
+    expect(String(copiedTableValues[0][0])).toBe('1');
+    expect(copiedTableValues[0].slice(1)).toEqual([expectedA.amount, expectedA.label, expectedA.payload, null]);
     await expect(tableBCheck).toBeChecked();
     if (local) {
       await (await navigationMenuItem(tableTab, { name: deleteSqlCopyZh.action, exact: true })).click();
@@ -344,6 +360,15 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     await menuCopy(resultB.getByRole('gridcell').last(), '', '', local ? { kind: 'text', value: '' } : undefined);
     await menuCopy(resultA.getByRole('gridcell', { name: /0x00ff|二进制|BLOB/i }), expectedA.payload, '0x00ff',
       local ? { kind: 'blob', value: '00ff' } : undefined);
+    const copiedA = await copyHitRow(rowA, true);
+    expect(copiedA['text/plain']).toBe('alias\talias\tpayload\tnullable\n9007199254740993\trow A\t0x00ff\tNULL');
+    expect(JSON.parse(copiedA[cellClipboardType])).toEqual({ version: 1, rows: [[expectedA.amount, expectedA.label, expectedA.payload, null]] });
+    if (local) expect(JSON.parse(copiedA[sqliteCellClipboardType])).toMatchObject({ version: 1, rows: [[
+      { kind: 'integer', value: expectedA.amount }, { kind: 'text', value: 'row A' }, { kind: 'blob', value: '00ff' }, { kind: 'null' },
+    ]] });
+    const copiedB = await copyHitRow(rowB, false);
+    expect(copiedB['text/plain']).toBe('9007199254740994\trow B\t0x\t');
+    expect(JSON.parse(copiedB[cellClipboardType])).toEqual({ version: 1, rows: [['9007199254740994', 'row B', { type: 'binary', base64: '' }, '']] });
     await expect(resultA.getByRole('checkbox')).toBeChecked();
     await expect(resultB.getByRole('checkbox')).toBeChecked();
     await chooseHeaderAction(aliases.nth(1), gridHeaderMenuZh.freeze);

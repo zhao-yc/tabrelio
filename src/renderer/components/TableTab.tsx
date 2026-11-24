@@ -24,7 +24,7 @@ import { TableRecordBatchDialog } from './TableRecordBatchDialog';
 import { GridRowSelectionActions, gridRowKeys, mergeGridMatchSelection, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { useGridCheckedRange } from './useGridCheckedRange';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
-import { copyGridRangeNames, copyGridRangeText, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeNames, copyGridRangeText, gridCellRowCopyActions, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill, type GridRangeFillHandle } from './GridRangeFill';
@@ -2426,6 +2426,12 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
         try { copyGridCellValue(ownCell(row.data, key), current); }
         catch (reason) { if (current()) setError(errorMessage(reason)); }
       } },
+      ...(!rectangle && !externalStaleRef.current ? gridCellRowCopyActions(headers => {
+        const allowed = () => current() && !externalStaleRef.current;
+        if (!allowed()) return;
+        try { copyTableCells([row], visibleColumns, headers, allowed); }
+        catch (reason) { if (allowed()) setError(errorMessage(reason)); }
+      }) : []),
       ...filters,
       ...(!rectangle ? columnSortActions(key, current) : []),
       ...(chooseReference ? [{ label: referenceZh.choose, run: () => {

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。表页和查询结果可从单个数据格复制命中的整行，支持带列名的制表符文本，并保留应用内粘贴的类型信息。macOS 源码 Electron 已核对 SQLite 临时数据库及 Server-200 上的 MySQL、MariaDB 和 PostgreSQL 独立实例，包括多行勾选、重复列名、大整数、BLOB 和 NULL。D02 继续为部分覆盖。
+
 2026-11-24 源码增量。「文件」和 SQL 编辑器右键菜单新增「另存当前语句」，按原脚本边界写入独立 UTF-8 文件。macOS 源码 Electron 已在 MySQL、MariaDB、PostgreSQL 和 SQLite 的离线草稿中核对两处菜单、文件字节、取消后重试，以及光标变化时拒绝写入。Q01 继续为部分覆盖。
 
 2026-11-24 源码增量。可排序列的单格菜单可升序、降序或移除该列排序。macOS 源码 Electron 已核对 SQLite 可编辑与只读表页分页、离线快照精确整数顺序，以及 MySQL、MariaDB、PostgreSQL 查询结果的本地降序和恢复。D01 增加单格入口。
