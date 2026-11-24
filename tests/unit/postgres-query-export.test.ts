@@ -8,7 +8,7 @@ import { postgresParameterBindings } from '../../src/engine/postgres/parameters'
 import { postgresParameterPlan, postgresQueryParameterSource } from '../../src/shared/postgresParameters';
 import { splitPostgresSql } from '../../src/shared/postgresSql';
 import { postgresCurrentQueryExportSource, postgresExportParameterNames, postgresQueryExportStatements, postgresQueryInsertColumnsForResult } from '../../src/shared/postgresQueryExport';
-import { queryStreamExportLimits } from '../../src/shared/queryStreamExport';
+import { queryExportFileFormat, queryStreamExportLimits } from '../../src/shared/queryStreamExport';
 
 const base = {connectionId: 'pg', database: 'postgres', fileToken: 'choice', taskId: 'task', format: 'csv', encoding: 'utf8'} as const;
 const queryPlan = (sql: string, offset?: number) => postgresParameterPlan(postgresQueryParameterSource(sql, true, offset));
@@ -19,7 +19,7 @@ it('导出参数名称只按词法识别，忽略 dollar 正文、注释和字�
     expect(() => postgresExportParameterNames(sql)).toThrow();
 });
 
-it.each([['xlsx', 64], ['json', queryStreamExportLimits.results]] as const)('%s 按语句校验位置编号，同编号复用且结果数有界', (format, limit) => {
+it.each([['xlsx', 64], ['json', queryStreamExportLimits.results], ['csv-zip', queryStreamExportLimits.results]] as const)('%s 按语句校验位置编号，同编号复用且结果数有界', (format, limit) => {
   expect(postgresExportParameterNames('SELECT $1, $$; $9$$; WITH d AS (SELECT $1, $2) SELECT * FROM d; SELECT 1', format).names)
     .toEqual(['p1', 'p2']);
   expect(postgresQueryExportStatements('SELECT 1;'.repeat(limit), true, format).statements).toHaveLength(limit);
@@ -43,7 +43,7 @@ it('命名模板保留原范围，重复名同序绑定，字符串、数组、�
   expect(queryPlan(full).statements).toHaveLength(3);
 });
 
-it.each(['xlsx', 'json'] as const)('%s 按首见顺序收集全局命名参数，各条语句独立排位', format => {
+it.each(['xlsx', 'json', 'csv-zip'] as const)('%s 按首见顺序收集全局命名参数，各条语句独立排位', format => {
   const source = 'SELECT [$id]::int; SELECT [$note]::text, [$id]::int, [$note]::text; SELECT 1';
   expect(postgresExportParameterNames(source, format).names).toEqual(['id', 'note']);
   const plan = postgresQueryExportStatements(source, true, format);
@@ -93,6 +93,11 @@ it('完整导出只接纳文件令牌及支持的格式，拒绝渲染进程指�
   const input = {...base, sql: 'SELECT 1', csvDelimiter: ';'};
   expect(validateCommand('postgres.query.export', input)).toEqual(input);
   expect(validateCommand('postgres.query.export', {...base, sql: input.sql, format: 'xlsx'})).toMatchObject({format: 'xlsx'});
+  const zip = {...input, format: 'csv-zip', encoding: 'utf16le'};
+  expect(validateCommand('postgres.query.export', zip)).toEqual(zip);
+  expect(queryExportFileFormat('csv-zip')).toBe('zip');
+  expect(() => validateCommand('postgres.query.export', {...zip, format: 'zip'})).toThrow();
+  expect(() => validateCommand('postgres.query.export', {...zip, csvDelimiter: '|'})).toThrow();
   for (const patch of [{filePath: '/tmp/other.csv'}, {sessionId: 'workbench'}, {format: 'sql'}, {format: 'json'}, {format: 'xlsx'}, {format: 'xlsx', csvDelimiter: undefined, encoding: 'utf16le'}]) {
     expect(() => validateCommand('postgres.query.export', {...input, ...patch})).toThrow();
   }
@@ -119,7 +124,7 @@ it.each(['SELECT 1; SELECT 2', 'DELETE FROM records', 'SELECT $1', 'SELECT [$id]
   expect(query).not.toHaveBeenCalled();
 });
 
-it.each([['xlsx', 64], ['json', queryStreamExportLimits.results]] as const)('%s 在开始事务前校验全部语句', async (format, limit) => {
+it.each([['xlsx', 64], ['json', queryStreamExportLimits.results], ['csv-zip', queryStreamExportLimits.results]] as const)('%s 在开始事务前校验全部语句', async (format, limit) => {
   const query = vi.fn();
   const connection = {query, standardStrings: true} as unknown as PostgresConnection;
   for (const sql of ['SELECT 1; SELECT $2', 'SELECT 1; DELETE FROM records', 'SELECT 1;'.repeat(limit + 1)])

@@ -5,9 +5,9 @@ import { queryParameterTypes, validateQueryParameters, type QueryParameterNames 
 import { postgresNewIdentifier } from './postgresCreateTable';
 import { currentPostgresStatement, splitPostgresParameterSql } from './postgresSql';
 import { postgresParameterPlan } from './postgresParameters';
-import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
+import { dataMarkupText } from './dataMarkupExport';
 import { EXCEL_LIMITS } from './excelTransfer';
-import { queryStreamExportLimits } from './queryStreamExport';
+import { queryExportFormats, queryStreamExportLimits } from './queryStreamExport';
 
 const parameters = z.array(z.object({name: z.string(), type: z.enum(queryParameterTypes), value: z.string().optional()}).strict())
   .max(200).superRefine((values, context) => {
@@ -32,12 +32,12 @@ export function postgresQueryInsertColumnsForResult(target: z.infer<typeof postg
 export const postgresQueryExportSchema = z.object({
   connectionId: z.string().min(1).max(200), database: z.string().min(1).max(256),
   taskId: z.string().min(1).max(200), fileToken: z.string().min(1).max(200),
-  sql: z.string().min(1).max(4 * 1024 * 1024), format: z.enum(['csv', 'json', 'xlsx', 'sql', ...dataFileFormats]),
+  sql: z.string().min(1).max(4 * 1024 * 1024), format: z.enum(queryExportFormats),
   encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(), txtOptions: txtExportOptionsSchema.optional(),
   parameters: parameters.optional(), insertTarget: postgresQueryInsertTargetSchema.optional(),
 }).strict()
   .refine(validTxtExport, txtExportZh.invalid)
-  .refine(input => input.csvDelimiter === undefined || input.format === 'csv', '分隔符仅用于 CSV 导出')
+  .refine(input => input.csvDelimiter === undefined || input.format === 'csv' || input.format === 'csv-zip', '分隔符仅用于 CSV 或 CSV ZIP 导出')
   .refine(input => input.format === 'sql' ? !!input.insertTarget : input.insertTarget === undefined, '仅 PostgreSQL INSERT SQL 导出需要明确目标')
   .superRefine((input, context) => {
     const markup = dataMarkupText(input.format);
@@ -65,10 +65,13 @@ export function postgresCurrentQueryExportSource(source: string, offset: number)
 
 /** 多结果格式按语句绑定参数，同名或同编号复用输入。 */
 export function postgresQueryExportStatements(sql: string, standardStrings: boolean, format?: PostgresQueryExportInput['format']) {
-  const limit = format === 'xlsx' ? EXCEL_LIMITS.maxSheets : format === 'json' ? queryStreamExportLimits.results : 1;
+  const limit = format === 'xlsx' ? EXCEL_LIMITS.maxSheets :
+    format === 'json' || format === 'csv-zip' ? queryStreamExportLimits.results : 1;
   const statements = splitPostgresParameterSql(sql, standardStrings);
-  if (!statements.length || statements.length > limit)
-    throw Error(limit === 1 ? '完整导出需要一条 SELECT 或 WITH 查询' : `完整 ${format === 'xlsx' ? 'Excel' : 'JSON'} 导出需要 1 至 ${limit} 条查询`);
+  if (!statements.length || statements.length > limit) {
+    const label = format === 'xlsx' ? 'Excel' : format === 'csv-zip' ? 'CSV ZIP' : 'JSON';
+    throw Error(limit === 1 ? '完整导出需要一条 SELECT 或 WITH 查询' : `完整 ${label} 导出需要 1 至 ${limit} 条查询`);
+  }
   if (statements.some(part => !['SELECT', 'WITH'].includes(part.keyword))) throw Error('完整导出只接受 SELECT 或 WITH 查询');
   return postgresParameterPlan(statements);
 }

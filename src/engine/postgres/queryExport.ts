@@ -140,7 +140,7 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
           const headers = resultExportColumns(result.columns).map((column, index) => ({
             ...column, position: index + 1, type: result.columns[index].type,
           }));
-          const title = format === 'json' ? queryResultTitle(part.statement.sql, 'postgresql') : undefined;
+          const title = format === 'json' || format === 'csv-zip' ? queryResultTitle(part.statement.sql, 'postgresql') : undefined;
           const resultOrdinal = index + 1;
           await output.write({kind: 'rows-start', resultOrdinal, statementOrdinal: resultOrdinal, rowResultOrdinal: resultOrdinal, columns: headers,
             ...(title ? {title} : {})});

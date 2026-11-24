@@ -962,9 +962,9 @@ SQLite 查询页从「更多查询操作 → 执行与分析 → 执行并导出
 
 SQLite 选择 Excel 时可导出 1 至 64 条 SELECT 或 WITH 查询。每条查询依次写入一张工作表，空结果保留标题。所有查询共用同一个主库只读快照，同名参数复用同一个值。[SQLite 多查询 Excel 工作簿](development/sqlite-query-export-20261107.md#多查询-excel-工作簿)
 
-PostgreSQL 查询页的「执行并导出完整结果」可将 SELECT／WITH 查询分批保存为 CSV、JSON 或 Excel。非空单选区优先，空光标使用全文。导出使用独立只读会话，读取目标数据库已提交的数据。选好格式、编码和文件后点击「执行查询并保存」，完成后显示行数。含命名或位置参数时，先点击「设置导出参数」填写类型和值，再采用本次参数。[完整查询导出](development/postgres-query-export-20261107.md) [参数导出](development/postgres-export-parameters-20261107.md)
+PostgreSQL 查询页的「执行并导出完整结果」可将 SELECT／WITH 查询分批保存为 CSV、CSV ZIP、JSON 或 Excel。非空单选区优先，空光标使用全文。导出使用独立只读会话，读取目标数据库已提交的数据。选好格式、编码和文件后点击「执行查询并保存」，完成后显示行数。含命名或位置参数时，先点击「设置导出参数」填写类型和值，再采用本次参数。[完整查询导出](development/postgres-query-export-20261107.md) [参数导出](development/postgres-export-parameters-20261107.md)
 
-Excel 支持 1 至 64 条查询，每条查询生成一张工作表。JSON 支持 1 至 200 条查询，按语句顺序写入 `results` 数组。两种格式均保留空结果的列标题，多条查询共用同一个可重复读快照。同名参数共用一个值。使用位置参数时，每条查询从 `$1` 连续编号，同编号共用一个值。CSV 等单结果格式接收一条查询。[多查询 Excel 工作簿](development/postgres-query-export-20261107.md#多查询-excel-工作簿) [多查询 JSON](development/postgres-query-export-20261107.md#多查询-json)
+Excel 支持 1 至 64 条查询，每条查询生成一张工作表。JSON 和 CSV ZIP 支持 1 至 200 条查询，按语句顺序写入结果数组或独立 CSV。三种格式均保留空结果的列标题，多条查询共用同一个可重复读快照。同名参数共用一个值。使用位置参数时，每条查询从 `$1` 连续编号，同编号共用一个值。普通 CSV 等单结果格式接收一条查询。[多查询 Excel 工作簿](development/postgres-query-export-20261107.md#多查询-excel-工作簿) [多查询 JSON](development/postgres-query-export-20261107.md#多查询-json) [多查询 CSV ZIP](development/postgres-query-export-20261107.md#多查询-csv-zip)
 
 完整 Excel 导出保留精确数字文本、NULL 和二进制。重名及空标题按列位置生成可区分的名称。详见 [完整查询 Excel 导出](development/full-query-xlsx-20261107.md)。
 
@@ -1324,7 +1324,7 @@ JSON 保存全部异构结果集与状态结果，文件包含 `DBArk-query-resu
 
 MySQL 和 MariaDB 的查询窗口也可选择「Excel（XLSX）：每个行结果集一张工作表」。结果按服务器返回顺序写入，空结果保留标题，执行状态显示在窗口摘要。工作簿可保存超过预览上限的行，另有 64 张工作表、500 万个单元格和 256 MiB 文件上限。至少返回一个行结果集才会保存工作簿。[完整查询 XLSX 导出](development/query-stream-xlsx-20261108.md)
 
-语句头的 `NAME:` 标题也会写入 MySQL、MariaDB 和 PostgreSQL 完整查询 JSON 的对应行结果 `label`。MySQL 和 MariaDB 的 CSV ZIP 则在 `manifest.json` 用同一字段记录名称，文件按 `results/rows-001.csv` 等序号对应。未命名结果省略 `label`，空结果仍保留原有名称、列和序号。
+语句头的 `NAME:` 标题也会写入 MySQL、MariaDB 和 PostgreSQL 完整查询 JSON 的对应行结果 `label`。三种数据库的 CSV ZIP 均在 `manifest.json` 用同一字段记录名称，文件按 `results/rows-001.csv` 等序号对应。未命名结果省略 `label`，空结果仍保留原有名称、列和序号。
 
 完整流式 CSV 和 CSV ZIP 的“CSV导出分隔符”均可选择逗号（默认）、分号或制表符（Tab）。ZIP 内所有行结果使用同一分隔符，清单记录实际选择；字段包含当前分隔符、双引号或换行时按 CSV 规则引用，NULL、空字符串、反斜线及二进制仍沿用原协议。修改分隔符会撤销原保存文件和执行确认，须重新选择文件并确认后才能执行；恢复原分隔符也不会恢复旧确认。选择文件、执行期间及完成后锁定该选项。JSON 和 SQL 没有此选项。
 
@@ -1382,7 +1382,7 @@ SELECT :id AS id, :keyword AS keyword, :id AS repeated_id;
 
 当前开发源码新增[本标签参数暂存](development/query-parameter-reuse-20261029.md)，默认关闭。明确勾选后，仅完整成功且原会话、正文及默认库确认一致时在内存保留一组；下次打开仍须明确填入并执行。可单独忘记副本，来源变化或关闭标签会清除；参数不写入工作区、历史或文件。本批已通过相关CLI检查和Windows／MySQL 8.4只读窗口专项；安装包、macOS及其他参数类型的原生矩阵另验，暂不发布。
 
-PostgreSQL 的「参数执行」支持 `[$name]` 命名参数及 `$1`、`$2` 位置参数。同一次操作使用一种写法。例如 `SELECT [$id]::bigint, [$id]::bigint + 1;` 只需为 `id` 填一次值。位置参数从 `$1` 连续编号，表单中对应 `p1`、`p2`。值通过协议绑定，结果来源和历史保留原 SQL 模板。完整查询导出也支持命名参数，多查询 Excel 和 JSON 的各查询共用同名值。
+PostgreSQL 的「参数执行」支持 `[$name]` 命名参数及 `$1`、`$2` 位置参数。同一次操作使用一种写法。例如 `SELECT [$id]::bigint, [$id]::bigint + 1;` 只需为 `id` 填一次值。位置参数从 `$1` 连续编号，表单中对应 `p1`、`p2`。值通过协议绑定，结果来源和历史保留原 SQL 模板。完整查询导出也支持命名参数，多查询 Excel、JSON 和 CSV ZIP 的各查询共用同名值。
 
 「参数执行」可运行全文或选区中的多条 PostgreSQL 语句。脚本里同名参数只填一次，各条语句从自己的 `$1` 连续绑定。首条发送前核对整组参数。若脚本改变会话字符串规则，后续语句的边界和参数仍须与已确认的模板一致。「遇错继续」沿用原事务状态和语句顺序。要单独运行光标所在语句，选择「参数执行当前语句」，表单只显示该句和它的参数。[Navicat 查询参数手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html#query-parameters)
 

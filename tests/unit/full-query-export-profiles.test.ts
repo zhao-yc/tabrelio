@@ -11,6 +11,7 @@ const wasm = createRequire(import.meta.url).resolve('sql.js/dist/sql-wasm.wasm')
 const protector = { available: () => false, encrypt: () => '', decrypt: (value: string) => value };
 const csv = { name: '日报', options: { format: 'csv', encoding: 'gb18030', delimiter: '\t' } };
 const insert = { name: '日报', options: { format: 'sql', target: { schema: '报表', table: '数据', columns: ['编号', '附注'] } } };
+const postgresZip = { name: '压缩报表', options: { format: 'csv-zip', encoding: 'utf16le', delimiter: ';' } };
 const sqlite = { dialect: 'sqlite' };
 const postgres = { dialect: 'postgresql' };
 let folder: string, file: string, store: LocalStore;
@@ -28,8 +29,9 @@ describe('完整查询导出方案', () => {
     expect(store.fullQueryExportProfiles(sqlite)).toEqual([]);
     expect(readFileSync(file)).toEqual(before);
     const sqliteList = store.mutateFullQueryExportProfiles({ ...sqlite, kind: 'add', profile: csv });
-    const postgresList = store.mutateFullQueryExportProfiles({ ...postgres, kind: 'add', profile: insert });
-    expect(sqliteList).toMatchObject([csv]); expect(postgresList).toMatchObject([insert]);
+    store.mutateFullQueryExportProfiles({ ...postgres, kind: 'add', profile: insert });
+    const postgresList = store.mutateFullQueryExportProfiles({ ...postgres, kind: 'add', profile: postgresZip });
+    expect(sqliteList).toMatchObject([csv]); expect(postgresList).toMatchObject([insert, postgresZip]);
     const recordProfile = { name: 'XML 记录', options: { format: 'xml-attributes' } };
     const sqliteWithXml = store.mutateFullQueryExportProfiles({ ...sqlite, kind: 'add', profile: recordProfile });
     expect(sqliteWithXml).toMatchObject([csv, recordProfile]);
@@ -64,9 +66,14 @@ describe('完整查询导出方案', () => {
     for (const profile of [
       { ...csv, sql: 'SELECT :secret' }, { ...csv, fileToken: '临时授权' },
       { ...csv, parameters: [{ name: 'secret', value: '参数原值' }] },
-      { ...csv, options: { format: 'xlsx', delimiter: '\t' } }, insert,
+      { ...csv, options: { format: 'xlsx', delimiter: '\t' } }, insert, postgresZip,
     ]) {
       const request = { ...sqlite, kind: 'add', profile };
+      expect(() => validateCommand('queryExportProfiles.mutate', request)).toThrow();
+      expect(() => store.mutateFullQueryExportProfiles(request)).toThrow();
+    }
+    for (const scope of [{dialect: 'mysql'}, {dialect: 'mariadb'}, {...postgres, area: 'table'}]) {
+      const request = {...scope, kind: 'add', profile: postgresZip};
       expect(() => validateCommand('queryExportProfiles.mutate', request)).toThrow();
       expect(() => store.mutateFullQueryExportProfiles(request)).toThrow();
     }

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 完整查询可导出 CSV ZIP，同一只读快照内最多 200 组结果按序写入独立 CSV，清单保留 `NAME:`、列映射及计数，导出方案可保存编码和分隔符。macOS 源码 Electron 在 PostgreSQL 18.6 已验证四组结果读回、系统解包、UTF-16LE、分号、精确值、共享快照及失败或取消时保留原文件。Q05、R01 继续为部分覆盖。
+
 2026-11-24 源码增量。PostgreSQL 完整 JSON 导出支持 1 至 200 条查询，多条查询共用独立只读会话的同一可重复读快照。macOS 源码 Electron 已在 PostgreSQL 18.6 保存并读回，核对异构结果、空结果、语句名称、参数复用和并发提交隔离。后续语句触发只读错误、字符串模式改变或用户取消时保留原文件。单查询 JSON、CSV 和工作簿通过回归。Q05、R01 继续为部分覆盖。
 
 2026-11-24 源码增量。MySQL、MariaDB 和 PostgreSQL 的完整查询 JSON 将本次语句头的 `NAME:` 作为行结果的 `label`。MySQL 和 MariaDB 的 CSV ZIP 清单保留同一字段，ZIP 成员名继续按结果序号生成。macOS 源码 Electron 已通过保存和读回，核对名称、精确数值及 MySQL／MariaDB 的空结果和无名结果。SQLite 的工作簿导出通过回归。Q05 继续为部分覆盖。

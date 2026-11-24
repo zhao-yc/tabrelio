@@ -47,6 +47,7 @@ const tableSettings = z.object({
 // 仅持久化格式参数，严格拒绝 SQL、绑定值、连接及文件授权等额外字段。
 const options = z.discriminatedUnion('format', [
   z.object({ format: z.literal('csv'), encoding, delimiter }).strict(),
+  z.object({ format: z.literal('csv-zip'), encoding, delimiter }).strict(),
   z.object({ format: z.literal('json'), encoding }).strict(),
   z.object({ format: z.literal('txt'), encoding, txtOptions: txtExportOptionsSchema }).strict(),
   z.object({ format: z.enum(['xlsx', ...dataMarkupFormats]) }).strict(),
@@ -83,6 +84,7 @@ function matchesScope({ dialect, area }: FullQueryExportProfileScope, value: Ful
   if (value.format === 'table') return false;
   if (dialect === 'mysql' || dialect === 'mariadb') return value.format === 'stream';
   if (value.format === 'stream') return false;
+  if (value.format === 'csv-zip') return dialect === 'postgresql';
   return value.format !== 'sql' || ('database' in value.target) === (dialect === 'sqlite');
 }
 

@@ -138,7 +138,7 @@ import { validateCommand } from '../shared/validation';
 import type { Command, ConnectionProfile, HistoryEntry, QueryFileEncoding, TaskEvent, TaskRecord } from '../shared/contracts';
 import { taskCancelSnapshot } from './taskCancelState';
 import { dataExportExtension, dataFileText } from '../shared/dataMarkupExport';
-import type { QueryExportProgress } from '../shared/queryStreamExport';
+import { queryExportFileFormat, type QueryExportProgress } from '../shared/queryStreamExport';
 import type { TableColumnApplyProgress } from '../shared/tableColumnPatches';
 import {queryDatabasePatch} from '../shared/queryContext';
 import{SavedQuerySearches,SavedQuerySearchCancelled}from'./savedQuerySearch';
@@ -3192,7 +3192,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       columnsMain.assertCapturedOwner(columns);
       const profile = store.resolveConnection(input.connectionId);
       if (shuttingDown || profile.dialect !== 'postgresql') throw Error('查询导出需要可用的 PostgreSQL 连接');
-      const filePath = resolveFileToken(files, input.fileToken, 'export', input.format);
+      const filePath = resolveFileToken(files, input.fileToken, 'export', queryExportFileFormat(input.format));
       files.delete(input.fileToken);
       input = { ...input, profile, filePath, connectionRevision: store.connectionRevision() };
       break;

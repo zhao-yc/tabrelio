@@ -40,6 +40,7 @@ import { postgresNoticeHiddenMessage } from '../../src/shared/postgresNotices';
 import { localRenameZh } from '../../src/renderer/locales/localRename.zh-CN';
 import { objectDefinitionZh } from '../../src/renderer/locales/objectDefinition.zh-CN';
 import { postgresSyntaxCheckZh } from '../../src/renderer/locales/sqlSyntaxCheck.zh-CN';
+import { readQueryCsvZip } from '../helpers/queryCsvZip';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -1054,10 +1055,13 @@ for (const parameterStyle of ['位置', '命名'] as const) test('PostgreSQL 完
   await quitDesktop();
 });
 
-for (const format of ['xlsx', 'json'] as const)
-test(`PostgreSQL 完整查询${format === 'xlsx' ? '工作簿' : '多结果 JSON'}共用快照、命名参数并保护目标文件`, async ({}, info) => {
+const queryFormats = {xlsx: '工作簿', json: '多结果 JSON', 'csv-zip': 'CSV ZIP'} as const;
+for (const format of ['xlsx', 'json', 'csv-zip'] as const)
+test(`PostgreSQL 完整查询${queryFormats[format]}共用快照、命名参数并保护目标文件`, async ({}, info) => {
   const workbookFormat = format === 'xlsx';
-  const outputKind = workbookFormat ? '工作簿' : '多结果 JSON';
+  const zipFormat = format === 'csv-zip';
+  const extension = zipFormat ? 'zip' : format;
+  const outputKind = queryFormats[format];
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   test.setTimeout(90_000);
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
@@ -1067,7 +1071,7 @@ test(`PostgreSQL 完整查询${format === 'xlsx' ? '工作簿' : '多结果 JSON
   const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
   await observer.connect();
   try {
-    const relation = 'public.query_export_' + format;
+    const relation = 'public.query_export_' + format.replace('-', '_');
     await observer.query(`CREATE TABLE ${relation} (id bigint PRIMARY KEY, note text);
       INSERT INTO ${relation} VALUES (9223372036854775807, '原快照');`);
     await prepare({id: '', name: '隔离 PostgreSQL 查询' + outputKind, dialect: 'postgresql', group: '', color: '#123456',
@@ -1079,23 +1083,24 @@ test(`PostgreSQL 完整查询${format === 'xlsx' ? '工作簿' : '多结果 JSON
       ...(workbookFormat ? [] : ['-- NAME: 空结果', 'SELECT 1 AS empty WHERE false;']),
     ].join('\n'));
     await mkdir(info.outputDir, {recursive: true});
-    const output = info.outputPath(`PostgreSQL 完整查询${outputKind}.${format}`);
-    await desktop.evaluate(({dialog, BrowserWindow}, {filePath, format}) => {
+    const output = info.outputPath(`PostgreSQL 完整查询${outputKind}.${extension}`);
+    await desktop.evaluate(({dialog, BrowserWindow}, {filePath, extension}) => {
       const original = dialog.showSaveDialog;
       let count = 0;
       dialog.showSaveDialog = (async (...args: unknown[]) => {
         if (++count > 4 || args[0] !== BrowserWindow.getAllWindows()[0] ||
-            !(args.at(-1) as Electron.SaveDialogOptions).filters?.some(filter => filter.extensions.includes(format)))
+            !(args.at(-1) as Electron.SaveDialogOptions).filters?.some(filter => filter.extensions.includes(extension)))
           throw Error('仅允许本例的导出文件选择器');
         return {canceled: false, filePath};
       }) as typeof original;
       Object.assign(globalThis, {restorePgQueryWorkbookPicker: () => { dialog.showSaveDialog = original; return count; }});
-    }, {filePath: output, format});
+    }, {filePath: output, extension});
     const modal = page.getByRole('dialog', {name: fullExportText.title, exact: true});
     const open = async () => {
       await tab().getByRole('button', {name: fullExportText.open, exact: true}).click();
       await modal.getByRole('combobox', {name: zh.resultExport.format, exact: true}).selectOption(format);
-      await expect(modal.getByText(workbookFormat ? fullExportText.workbookHint : fullExportText.jsonHint, {exact: true})).toBeVisible();
+      const hint = workbookFormat ? fullExportText.workbookHint : zipFormat ? fullExportText.csvZipHint : fullExportText.jsonHint;
+      await expect(modal.getByText(hint, {exact: true})).toBeVisible();
     };
     const start = async () => {
       await modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
@@ -1106,11 +1111,31 @@ test(`PostgreSQL 完整查询${format === 'xlsx' ? '工作簿' : '多结果 JSON
     const waitForCursor = () => expect.poll(async () => Number((await observer.query(`SELECT count(*) AS n FROM pg_stat_activity
       WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event='advisory'`)).rows[0].n), {timeout: 8_000}).toBe(1);
     await open();
+    if (zipFormat) {
+      const encoding = modal.getByLabel(zh.resultExport.encoding, {exact: true});
+      const delimiter = modal.getByLabel(csvExportZh.label, {exact: true});
+      await encoding.selectOption('utf16le');
+      await delimiter.selectOption(';');
+      await modal.getByText(profileText.title, {exact: true}).click();
+      await modal.getByLabel(profileText.name, {exact: true}).fill('多结果分号报表');
+      await modal.getByRole('button', {name: profileText.add, exact: true}).click();
+      await expect(modal.getByText(profileText.saved, {exact: true})).toBeVisible();
+      await close();
+      await open();
+      await modal.getByText(profileText.title, {exact: true}).click();
+      await modal.getByLabel(profileText.select, {exact: true}).selectOption('多结果分号报表');
+      await modal.getByRole('button', {name: profileText.apply, exact: true}).click();
+      await expect(encoding).toHaveValue('utf16le');
+      await expect(delimiter).toHaveValue(';');
+      await expect(modal.getByRole('button', {name: fullExportText.start, exact: true})).toBeDisabled();
+      await modal.getByText(profileText.title, {exact: true}).click();
+    }
     await modal.getByRole('button', {name: fullExportText.parameters, exact: true}).click();
     const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
     await form.getByLabel(parameterZh.type + ' id', {exact: true}).selectOption('integer');
     await form.getByLabel(parameterZh.value + ' id', {exact: true}).fill('9223372036854775807');
-    await form.getByLabel(parameterZh.value + ' last_note', {exact: true}).fill('只用于第三条查询');
+    const lastNote = zipFormat ? '含分号;"引号"\n下一行' : '只用于第三条查询';
+    await form.getByLabel(parameterZh.value + ' last_note', {exact: true}).fill(lastNote);
     await form.getByRole('button', {name: fullExportText.applyParameters, exact: true}).click();
     await observer.query('SELECT pg_advisory_lock(62308915)');
     try {
@@ -1127,6 +1152,27 @@ test(`PostgreSQL 完整查询${format === 'xlsx' ? '工作簿' : '多结果 JSON
         .toEqual(['9223372036854775807', 'value [2]', '原快照', '\\B:AP8=']);
       expect(['A1', 'A2', 'B2'].map(cell => workbook.worksheets[2].getCell(cell).text))
         .toEqual(['note', '只用于第三条查询', '9223372036854775807']);
+    } else if (zipFormat) {
+      const files = await readQueryCsvZip(output);
+      const names = ['results/rows-001.csv', 'results/rows-002.csv', 'results/rows-003.csv', 'results/rows-004.csv'];
+      expect([...files.keys()]).toEqual([...names, 'manifest.json']);
+      const manifest = JSON.parse(files.get('manifest.json')!.toString('utf8'));
+      expect(manifest).toMatchObject({format: 'DBArk-query-csv-archive', version: 1, encoding: 'utf16le', csv: {delimiter: ';'}});
+      expect(manifest.results).toHaveLength(4);
+      for (const [index, result] of manifest.results.entries()) {
+        expect(result).toMatchObject({
+          resultOrdinal: index + 1, statementOrdinal: index + 1, rowResultOrdinal: index + 1,
+          file: names[index], bytes: files.get(names[index])!.length, rowsWritten: [1, 205, 1, 0][index],
+        });
+        expect(files.get(names[index])!.subarray(0, 2)).toEqual(Buffer.from([255, 254]));
+      }
+      expect(manifest.results.map((item: {label?: string}) => item.label)).toEqual([undefined, '月报/明细', undefined, '空结果']);
+      expect(manifest.results[1].columns.map(({name, exportName}: {name: string; exportName: string}) => [name, exportName]))
+        .toEqual([['value', 'value'], ['value', 'value [2]'], ['bytes', 'bytes']]);
+      const decode = (index: number) => new TextDecoder('utf-16le').decode(files.get(names[index])!);
+      expect(decode(1)).toBe('value;value [2];bytes\r\n' + '9223372036854775807;原快照;base64:AP8=\r\n'.repeat(205));
+      expect(decode(2)).toBe('note;id\r\n"含分号;""引号""\n下一行";9223372036854775807\r\n');
+      expect(decode(3)).toBe('empty\r\n');
     } else {
       const json = JSON.parse(await readFile(output, 'utf8'));
       expect(json).toMatchObject({format: 'DBArk-query-results', version: 1});
