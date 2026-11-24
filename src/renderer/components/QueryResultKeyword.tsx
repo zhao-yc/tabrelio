@@ -1,10 +1,20 @@
-import { useMemo, useRef, useState, type FormEvent } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { QueryResult, ResultColumn } from '../../shared/contracts';
 import { queryResultKeywordZh as text } from '../locales/queryResultKeyword.zh-CN';
 import { matchQueryResultKeyword, projectQueryResultKeyword, queryResultKeywordLimits } from '../queryResultKeyword';
 import '../queryResultKeyword.css';
 
-interface Scope {
+interface ResultIdentity {
+  connectionScope: string;
+  execution: string | undefined;
+}
+
+interface SavedKeyword extends ResultIdentity {
+  columns: readonly ResultColumn[];
+  keyword: string;
+}
+
+interface Scope extends ResultIdentity {
   source: QueryResult | undefined;
   columns: readonly ResultColumn[] | undefined;
   context: readonly unknown[];
@@ -12,14 +22,34 @@ interface Scope {
   filter?: { keyword: string; matches: ReturnType<typeof matchQueryResultKeyword> };
 }
 
-/** 关键字只属于当前结果和可见列，不进入可保存的条件、整理历史或固定快照。 */
+/** 同一结果和可见列恢复已应用的关键字，命中集合按原返回行重新计算。 */
 export function useQueryResultKeyword(source: QueryResult | undefined, columns: readonly ResultColumn[] | undefined,
-  context: readonly unknown[], organized: QueryResult | undefined) {
-  const [scope, setScope] = useState<Scope>(() => ({ source, columns, context, generation: 0 }));
+  context: readonly unknown[], organized: QueryResult | undefined, connectionScope: string, execution: string | undefined) {
+  const [savedKeywords] = useState(() => new WeakMap<QueryResult, SavedKeyword>());
+  const [scope, setScope] = useState<Scope>(() => ({ source, columns, context, connectionScope, execution, generation: 0 }));
   const current = scope.source === source && scope.columns === columns &&
+    scope.connectionScope === connectionScope && scope.execution === execution &&
     scope.context.length === context.length && scope.context.every((value, index) => Object.is(value, context[index]));
-  if (!current) setScope({ source, columns, context, generation: scope.generation + 1 });
+  if (!current) {
+    const next: Scope = { source, columns, context, connectionScope, execution, generation: scope.generation + 1 };
+    const saved = source && scope.source !== source ? savedKeywords.get(source) : undefined;
+    if (source && columns && saved?.connectionScope === connectionScope && saved.execution === execution &&
+        saved.columns.length === columns.length && saved.columns.every((column, index) => column === columns[index])) {
+      try {
+        next.filter = { keyword: saved.keyword, matches: matchQueryResultKeyword(source, columns, saved.keyword) };
+      } catch {
+        // 原数据发生变化或超出预算时保留当前结果的原视图。
+      }
+    }
+    setScope(next);
+  }
   const filter = current ? scope.filter : undefined;
+  useLayoutEffect(() => {
+    if (!current || !source || !columns) return;
+    // 只保留已提交的文本。草稿与带行引用的命中集合都随当前视图释放。
+    if (filter) savedKeywords.set(source, { columns, connectionScope, execution, keyword: filter.keyword });
+    else savedKeywords.delete(source);
+  }, [savedKeywords, current, source, columns, connectionScope, execution, filter]);
   const result = useMemo(() => organized && filter ? projectQueryResultKeyword(organized, filter.matches) : organized, [organized, filter]);
   /** 试算成功才撤销当前勾选和行定位，超出预算时仍保留上一视图。 */
   function apply(keyword: string, invalidate: () => void) {

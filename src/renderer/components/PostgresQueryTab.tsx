@@ -1170,7 +1170,8 @@ export function PostgresQueryTab({
   const historyBinding = resultHistory.bind(resultSource, visibleColumns ?? [], resultContext,
     filterView && sortView ? { expression: filterView.expression, sort: sortView.rules } : undefined, filterBinding);
   const organizedResult = sortView?.result ?? filterView?.result ?? result;
-  const keywordFilter = useQueryResultKeyword(filterBinding?.source, visibleColumns, resultContext, organizedResult);
+  const keywordFilter = useQueryResultKeyword(filterBinding?.source, visibleColumns, resultContext,
+    organizedResult, organizationScope, organizationExecution);
   const matchView = useQueryResultMatchView(keywordFilter.result, visibleColumns, resultContext);
   const displayResult = matchView.result;
   const dataResult = !busy && resultSource ? displayResult : undefined;

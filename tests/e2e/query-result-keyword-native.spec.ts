@@ -11,7 +11,7 @@ import type { NetworkConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
-test('查询结果按关键字筛选、保持排序并导出显示行', async ({}, info) => {
+test('查询结果按关键字筛选、切回时恢复各组关键字和排序，并导出显示行', async ({}, info) => {
   const dialect = process.env.DBARK_QUERY_KEYWORD_DIALECT;
   test.skip(!dialect, '需要显式启用关键字筛选专项');
   const local = dialect === 'sqlite';
@@ -30,7 +30,10 @@ test('查询结果按关键字筛选、保持排序并导出显示行', async ({
     id: '', dialect: dialect as NetworkConnectionProfile['dialect'], name: dialect!, group: '', color: '#123456',
     host: '127.0.0.1', port, database, user: database, password, rememberPassword: false,
   };
-  const sql = "SELECT 1 AS id, 'target A' AS label UNION ALL SELECT 2, 'other' UNION ALL SELECT 3, 'Target C' ORDER BY id";
+  const sql = [
+    "SELECT 1 AS id, 'target A' AS label UNION ALL SELECT 2, 'other' UNION ALL SELECT 3, 'Target C' ORDER BY id;",
+    "SELECT 4 AS id, 'archive A' AS label UNION ALL SELECT 5, 'active B' ORDER BY id;",
+  ].join('\n');
   try {
     // 只接管本例隔离文件选择，SQL 执行、文件授权及导出仍经过真实客户端。
     await desktop.evaluate(({ dialog, BrowserWindow }, paths) => {
@@ -68,7 +71,7 @@ test('查询结果按关键字筛选、保持排序并导出显示行', async ({
       : query.locator('.query-execute-split button.primary').click();
     const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
     const grid = query.locator('.query-result-grid').getByRole('grid');
-    const cells = grid.getByRole('gridcell').filter({ hasText: /^(target A|other|Target C)$/ });
+    const cells = grid.getByRole('gridcell').filter({ hasText: /^(target A|other|Target C|archive A|active B)$/ });
     const search = query.getByRole('search', { name: text.input }), input = search.getByRole('searchbox', { name: text.input });
     await execute();
     await expect(cells).toHaveText(['target A', 'other', 'Target C']);
@@ -82,6 +85,27 @@ test('查询结果按关键字筛选、保持排序并导出显示行', async ({
     await input.fill('tArGeT');
     await input.press('Enter');
     await expect(search.getByRole('status')).toHaveText(text.counts(2, 3));
+    await expect(cells).toHaveText(['Target C', 'target A']);
+    await input.fill('未提交的关键字');
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(cells).toHaveText(['archive A', 'active B']);
+    await expect(input).toHaveValue('');
+    await input.fill('active');
+    await input.press('Enter');
+    await expect(cells).toHaveText(['active B']);
+    await page.keyboard.press('ControlOrMeta+Shift+PageUp');
+    await expect(input).toHaveValue('tArGeT');
+    await expect(cells).toHaveText(['Target C', 'target A']);
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(input).toHaveValue('active');
+    await expect(cells).toHaveText(['active B']);
+    await search.getByRole('button', { name: text.clear, exact: true }).click();
+    await page.keyboard.press('ControlOrMeta+Shift+PageUp');
+    await expect(cells).toHaveText(['Target C', 'target A']);
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(input).toHaveValue('');
+    await expect(cells).toHaveText(['archive A', 'active B']);
+    await page.keyboard.press('ControlOrMeta+Shift+PageUp');
     await expect(cells).toHaveText(['Target C', 'target A']);
     await page.screenshot({ path: info.outputPath('查询结果关键字.png') });
     await header.click();
@@ -114,6 +138,9 @@ test('查询结果按关键字筛选、保持排序并导出显示行', async ({
     await execute();
     await expect(input).toHaveValue('');
     await expect(cells).toHaveText(['target A', 'other', 'Target C']);
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(input).toHaveValue('');
+    await expect(cells).toHaveText(['archive A', 'active B']);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

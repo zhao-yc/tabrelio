@@ -6,6 +6,7 @@ import { queryResultNavigatorZh as text } from '../../src/renderer/locales/query
 import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { queryResultKeywordZh as keywordText } from '../../src/renderer/locales/queryResultKeyword.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { queryPinsZh as pinText } from '../../src/renderer/locales/queryPins.zh-CN';
 import { queryDuplicateZh as duplicateText } from '../../src/renderer/locales/queryDuplicate.zh-CN';
@@ -239,6 +240,11 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await columns.getByLabel(columnsText.width(1), {exact: true}).fill('208');
     await applyColumns();
     await applyFilter(3);
+    const keyword = tab.getByRole('searchbox', { name: keywordText.input, exact: true });
+    await keyword.fill('2');
+    await keyword.press('Enter');
+    await expect(tab.getByRole('search', { name: keywordText.input, exact: true }).getByRole('status'))
+      .toHaveText(keywordText.counts(1, 1));
     await trigger.click();
     await search.fill('#44');
     await search.press('Enter');
@@ -293,6 +299,7 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await expect(renamedPin).toHaveAttribute('aria-pressed', 'false');
     await renamedPin.click();
     await expect(grid.getByRole('gridcell', {name: '2', exact: true})).toBeVisible();
+    await expect(keyword).toHaveValue('2');
     await expect(grid.getByRole('columnheader', {name: /^sample/})).toHaveCSS('width', '208px');
     await openFilter();
     await expect(filter.getByLabel(`${filterText.input} 1`, {exact: true})).toHaveValue('3');

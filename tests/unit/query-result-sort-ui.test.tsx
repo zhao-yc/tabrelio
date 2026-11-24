@@ -15,6 +15,7 @@ import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/
 import { queryResultMemoryZh as memoryText } from '../../src/renderer/locales/queryResultMemory.zh-CN';
 import { queryResultSortZh as text } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { queryResultKeywordZh as keywordText } from '../../src/renderer/locales/queryResultKeyword.zh-CN';
 import { queryRowDetailsZh as detailsText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
 import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -330,6 +331,18 @@ it.each(['failed', 'no-columns'] as const)('暂存整理：后续查询%s仍显�
   await act(async () => oldDiscard()); expect(document.body.textContent).toContain(memoryText.saved);
   await click(memoryText.clear); expect(document.body.textContent).not.toContain(memoryText.saved);
 });
+it('关键字筛选：新执行复用原返回对象时也清空关键字', async () => {
+  await mount();
+  const input = () => document.querySelector(`input[aria-label="${keywordText.input}"]`)!;
+  const form = document.querySelector(`form[aria-label="${keywordText.input}"]`)!;
+  await act(async () => reactProps(input()).onChange({ target: { value: '早行' } }));
+  await act(async () => reactProps(form).onSubmit({ preventDefault() {} }));
+  expect(grid().rows).toEqual([original.rows[2]]);
+  await click(zh.query.text010);
+  expect(input().value).toBe('');
+  expect(grid().rows).toBe(original.rows);
+});
+
 it('暂存整理：新查询后显式整份应用，多列排序和筛选一次撤销/重做，旧选择不复活', async () => {
   await mountMulti(); await filterGroup(); await headerAction('group'); await headerAction('id', { ctrlKey: true });
   const expected = [...grid().rows], sorted = [...grid().sortColumns]; await act(async () => grid().onSelectedRowsChange(new Set([0])));

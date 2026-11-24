@@ -1524,7 +1524,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const historyBinding = resultHistory.bind(viewSource, visibleColumns, resultContext, filterView && sortView ? { expression: filterView.expression, sort: sortView.rules } : undefined, filterBinding);
   const displayedView=useMemo(()=>queryResultFilteredSortView(filterView,sortView),[filterView,sortView]);
   const organizedResult = displayedView?.result ?? sourceResult;
-  const keywordFilter = useQueryResultKeyword(filterBinding?.source, visibleColumns, resultContext, organizedResult);
+  const keywordFilter = useQueryResultKeyword(filterBinding?.source, visibleColumns, resultContext,
+    organizedResult, organizationScope, organizationExecution);
   const matchView = useQueryResultMatchView(keywordFilter.result, visibleColumns, resultContext);
   const result = matchView.result;
   const exportable = sourceExportable ? result : undefined;
