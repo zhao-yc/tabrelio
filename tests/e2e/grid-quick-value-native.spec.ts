@@ -193,6 +193,36 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
     await expect(rangePanel).toBeHidden();
     expect(await jobs()).toEqual(before);
 
+    // 选区空串与活动格菜单分开，撤销一步恢复两行。SQLite 同时核对物理表尚未改写。
+    const otherIndex = await other.locator('..').getAttribute('aria-rowindex');
+    const otherCell = grid.locator(`[role="row"][aria-rowindex="${otherIndex}"] > [role="gridcell"][aria-colindex="${columnIndex}"]`);
+    await cell.click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect(otherCell).toHaveClass(/grid-cell-in-range/);
+    await page.keyboard.press('Shift+F10');
+    await item(rangeText.empty).click();
+    await expect(cell).toHaveText(local ? 'TEXT ·' : '');
+    await expect(otherCell).toHaveText(local ? 'TEXT ·' : '');
+    if (local) {
+      const persisted = new DatabaseSync(file, { readOnly: true });
+      try {
+        expect(persisted.prepare('SELECT label FROM update_subject ORDER BY id').all().map(row => row.label)).toEqual(['row A', 'row B']);
+      } finally { persisted.close(); }
+    }
+    await clickAction(undo);
+    await expect(label).toBeVisible();
+    await expect(other).toBeVisible();
+    if (local) {
+      await cell.click();
+      await page.keyboard.press('Shift+ArrowRight');
+      await page.keyboard.press('Shift+F10');
+      await item(rangeText.empty).click();
+      await expect(tab.getByRole('alert')).toContainText('numeric_value');
+      await expect(label).toBeVisible();
+      await expect(other).toBeVisible();
+    }
+    expect(await jobs()).toEqual(before);
+
     await other.locator('..').getByRole('checkbox').check();
     if (local) {
       await grid.getByRole('gridcell').getByText('INTEGER · 17', { exact: true }).click();

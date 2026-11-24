@@ -8,7 +8,7 @@ import { fitGridRangePaste, type GridPasteShape } from './gridRangePaste';
 import { ownCell } from './lib';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
 import { mysqlQueryBatchEditZh as text } from './locales/mysqlQueryBatchEdit.zh-CN';
-import { batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow, prepareBatchFillSequence } from './recordBatchFill';
+import { batchFillColumns, prepareBatchFillAcross, prepareBatchFillConstant, prepareBatchFillFromRow, prepareBatchFillSequence } from './recordBatchFill';
 import { recordBatchCellBytes } from './recordDuplicateBatch';
 import type { RecordContext } from './recordViews';
 import type { PageTextPatch } from './pageFindReplace';
@@ -96,18 +96,14 @@ export function mysqlQueryBatchChanges(info: TableInfo, originals: DataRow[], co
     }
     next = pasteCells(rows, columns, rows[0].id, columns[0], matrix, new Set());
   } else {
-    const { kind, value } = operation.input;
+    const { kind } = operation.input;
     const range = { rows, keys: columns, startRow: 0 };
     if (kind === 'left' || kind === 'right') next = prepareBatchFillAcross(range, kind, rows, context);
     else if (kind === 'sequence') next = prepareBatchFillSequence(range, operation.input, rows, context);
     else if (kind === 'up' || kind === 'down') {
       const source = gridRangeFillSource(range, kind, () => false);
       next = prepareBatchFillFromRow(columns, source.source, rows, new Set(source.rows.map(row => row.id)), context);
-    } else {
-      if (kind !== 'text' && kind !== 'null') throw Error(rangeText.target);
-      next = prepareBatchFill(columns.map(column => ({ column, input: { mode: kind, text: value } })),
-        rows, new Set(rows.map(row => row.id)), context, kind === 'text' && operation.input.onlyNull);
-    }
+    } else next = prepareBatchFillConstant(columns, operation.input, rows, new Set(rows.map(row => row.id)), context);
   }
   const changes = collectChanges(next);
   if (!changes.length) throw Error(text.noChange);

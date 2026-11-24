@@ -4,7 +4,8 @@ import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import type { DraftRow } from './dataChanges';
 import { changedDraftHistoryBytes, draftHistoryLimits } from './draftHistory';
 import { ownCell, parseCell } from './lib';
-import { gridRangeFillColumns, gridRangeIntegerSequence, type GridRangeFillInput, type GridRangeFillSide } from './gridRangeFill';
+import { assertGridRangeEmptyColumns, gridRangeFillColumns, gridRangeIntegerSequence, type GridRangeFillInput, type GridRangeFillSide } from './gridRangeFill';
+import { mysqlQuickValueAllowed } from './gridQuickValue';
 import type { GridRangeTarget } from './useGridCellRange';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
 import { assertRecordBatchFields, recordBatchCellBytes, sameRecordBatchRow } from './recordDuplicateBatch';
@@ -89,6 +90,25 @@ export class BatchFillIntent {
     this.stopped = true;
     return result;
   }
+}
+
+/** 表和查询结果共用常量转换，快捷空串只写明确支持空文本的普通列。 */
+export function prepareBatchFillConstant(keys: readonly string[], input: GridRangeFillInput, rows: DraftRow[],
+  ids: ReadonlySet<string>, context: RecordContext): DraftRow[] {
+  const { kind, value } = input;
+  if (kind !== 'text' && kind !== 'null' && kind !== 'empty') throw Error(rangeText.target);
+  if (kind === 'empty') {
+    const fields = batchFillColumns(context);
+    const targets = keys.map(key => {
+      const field = fields.find(column => column.name === key);
+      if (!field) throw Error(rangeText.target);
+      return field;
+    });
+    assertGridRangeEmptyColumns(targets, column => mysqlQuickValueAllowed(column, 'empty'));
+  }
+  const mode = kind === 'null' ? 'null' : 'text';
+  return prepareBatchFill(keys.map(column => ({ column, input: { mode, text: kind === 'empty' ? '' : value } })),
+    rows, ids, context, kind === 'text' && input.onlyNull);
 }
 
 /** 为已验证的本地选区生成新行，跨页时同样只解析一次输入并共用整组选区的预算。 */

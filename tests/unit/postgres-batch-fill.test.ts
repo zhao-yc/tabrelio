@@ -3,7 +3,7 @@ import type { PostgresTableChange, PostgresTableColumn, PostgresTablePage } from
 import { capturePostgresCheckedFill, planPostgresCheckedFill } from '../../src/renderer/postgresCheckedFill';
 import { retainPostgresCheckedPages, postgresCheckedPagePins } from '../../src/renderer/postgresCheckedPages';
 import type { PostgresDraftEntry } from '../../src/shared/postgresTableDraft';
-import { postgresBatchFillChanges, postgresQueryRangeFillChanges, postgresRangeFillAcross, postgresRangeFillChanges, postgresRangeFillFromRow } from '../../src/renderer/postgresBatchFill';
+import { postgresBatchFillChanges, postgresQueryRangeFillChanges, postgresRangeFillAcross, postgresRangeFillChanges, postgresRangeFillConstant, postgresRangeFillFromRow } from '../../src/renderer/postgresBatchFill';
 
 const column = (key: string, options: Partial<PostgresTableColumn> = {}): PostgresTableColumn => ({
   key, name: key, type: 'text', primary: false, generated: false, binary: false, nullable: true, defaultValue: false, ...options,
@@ -19,6 +19,17 @@ const page: PostgresTablePage = {
 };
 
 describe('PostgreSQL 勾选记录批量填充', () => {
+  it('快捷空串按原字段类型生成常量预览，混合类型整组拒绝', () => {
+    const input = { kind: 'empty', value: '不可使用的输入' } as const;
+    expect(postgresRangeFillConstant(page, [columns[1]], 1, 1, input, () => undefined)).toEqual([
+      { kind: 'update', row: 1, fields: [{ column: 'c1', value: { mode: 'text', value: '' } }] },
+    ]);
+    expect(postgresQueryRangeFillChanges(page, [columns[1]], input)).toHaveLength(2);
+    const number = column('numeric', { type: 'integer' });
+    const mixed = { ...page, columns: [...columns, number] };
+    expect(() => postgresQueryRangeFillChanges(mixed, [columns[1], number], input)).toThrow('numeric');
+    expect(() => postgresQueryRangeFillChanges(page, [columns[1], columns[2]], input)).toThrow('c2');
+  });
   it('仅填充当前 NULL，优先判断草稿并保留 DEFAULT 与其它字段', () => {
     const mirror = column('mirror');
     const current = { ...page, columns: [...columns, mirror],

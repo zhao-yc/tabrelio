@@ -3,7 +3,7 @@ import type { GridCellRectangle, GridRangeTarget } from './useGridCellRange';
 
 export type GridRangeFillDirection = 'down' | 'up';
 export type GridRangeFillSide = 'left' | 'right';
-export type GridRangeFillKind = 'text' | 'null' | 'integer' | 'real' | 'sequence' | GridRangeFillDirection | GridRangeFillSide;
+export type GridRangeFillKind = 'text' | 'empty' | 'null' | 'integer' | 'real' | 'sequence' | GridRangeFillDirection | GridRangeFillSide;
 export interface GridRangeFillInput { kind: GridRangeFillKind; value: string; step?: string; onlyNull?: true; }
 
 /** 等差序列的极值必在端点，先检查字段范围，再按显示行号生成精确整数。 */
@@ -21,11 +21,22 @@ export function gridRangeIntegerSequence(input: GridRangeFillInput, count: numbe
 
 /** 只给当前选区提供有目标的方向，所有菜单项沿用原批量填充入口。 */
 export function gridRangeFillActions(rectangle: GridCellRectangle, apply: (kind: GridRangeFillKind) => void) {
-  const actions: { label: string; run(): void }[] = [{ label: text.clear, run: () => apply('null') }];
+  const actions: { label: string; run(): void }[] = [
+    { label: text.clear, run: () => apply('null') },
+    { label: text.empty, run: () => apply('empty') },
+  ];
   const add = (kind: GridRangeFillDirection | GridRangeFillSide) => actions.push({ label: text[kind], run: () => apply(kind) });
   if (rectangle.top < rectangle.bottom) { add('down'); add('up'); }
   if (rectangle.left < rectangle.right) { add('right'); add('left'); }
   return actions;
+}
+
+/** 快捷置空串要求每个目标列都能明确保留文本，检查早于草稿发布。 */
+export function assertGridRangeEmptyColumns<Column extends { name: string }>(
+  columns: readonly Column[], supportsEmpty: (column: Column) => boolean,
+): void {
+  const incompatible = columns.find(column => !supportsEmpty(column));
+  if (incompatible) throw Error(text.incompatible(incompatible.name));
 }
 
 /** 取显示顺序的首行或末行作为源。源行保持原引用，待删除行不能作为源或目标。 */

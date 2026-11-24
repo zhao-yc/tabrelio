@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import { gridQuickValueAssignment, mysqlQuickValueAllowed, postgresQuickValueAllowed, sqliteQuickValueAllowed } from '../../src/renderer/gridQuickValue';
+import { sqliteRangeFillConstant } from '../../src/renderer/sqliteTableFill';
 
 it('快速 NULL 只允许可空普通字段，SQLite 主键不进入快速置空', () => {
   const base = { name: 'value', nullable: true, generated: false };
@@ -26,6 +27,16 @@ it('空字符串与 NULL 独立判断，明确排除非文本类型', () => {
   expect(mysqlQuickValueAllowed({ ...mysql, type: 'json' }, 'empty')).toBe(false);
   expect(postgresQuickValueAllowed({ ...pg, type: 'integer' }, 'empty')).toBe(false);
   expect(sqliteQuickValueAllowed({ ...sqlite, declaredType: 'BLOB' }, true, 'empty')).toBe(false);
+});
+
+it('SQLite 选区空串保留 TEXT 存储类并排除不支持的列', () => {
+  const field = { name: 'label', declaredType: 'TEXT', nullable: false, generated: false, hasDefault: false };
+  const input = { kind: 'empty', value: '不可使用的输入' } as const;
+  const any = { ...field, name: 'flexible', declaredType: 'ANY' };
+  expect(sqliteRangeFillConstant(input, [field, any], true)).toEqual({ kind: 'text', value: '' });
+  expect(sqliteRangeFillConstant({ kind: 'null', value: '' }, [field], true)).toEqual({ kind: 'null' });
+  const integer = { ...field, name: 'numeric_value', declaredType: 'INTEGER' };
+  expect(() => sqliteRangeFillConstant(input, [field, integer], false)).toThrow(integer.name);
 });
 
 it('UUID 只进入原生 UUID 或容量足够的文本列，每次生成独立 v4', () => {

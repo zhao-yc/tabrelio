@@ -182,7 +182,7 @@ import { PasteInsertIntent, preparePasteInsert, readPasteInsert, type PasteInser
 import { PasteInsertDialog } from './PasteInsertDialog';
 import { GridEmptyState } from './GridEmptyState';
 import { pasteInsertZh } from '../locales/pasteInsert.zh-CN';
-import { BatchFillIntent, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow, prepareBatchFillSequence, type BatchFillAssignment } from '../recordBatchFill';
+import { BatchFillIntent, prepareBatchFillAcross, prepareBatchFillConstant, prepareBatchFillFromRow, prepareBatchFillSequence, type BatchFillAssignment } from '../recordBatchFill';
 import type { RecordInput } from '../recordViews';
 import { TableBatchFillDialog } from './TableBatchFillDialog';
 import { recordBatchFillZh } from '../locales/recordBatchFill.zh-CN';
@@ -2134,7 +2134,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   function fillGridRange(rectangle: GridCellRectangle, input: GridRangeFillInput) {
     const target = cellRange.capture(rectangle);
     if (!target || !editable) throw Error(rangeFillText.stale);
-    const { kind, value } = input;
+    const { kind } = input;
     if (kind === 'sequence') {
       const next = prepareBatchFillSequence(target, input, rows, getRecordContext());
       if (next !== rows) setRows(next);
@@ -2155,10 +2155,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       setError('');
       return;
     }
-    if ((kind !== 'text' && kind !== 'null') ||
-        target.rows.some(row => row.deleted || !row.inserted && target.keys.some(key => !Object.hasOwn(row.data, key)))) throw Error(rangeFillText.target);
-    const next = prepareBatchFill(target.keys.map(column => ({ column, input: { mode: kind, text: value } })),
-      rows, new Set(target.rows.map(row => row.id)), getRecordContext(), kind === 'text' && input.onlyNull);
+    if (target.rows.some(row => row.deleted || !row.inserted && target.keys.some(key => !Object.hasOwn(row.data, key)))) throw Error(rangeFillText.target);
+    const next = prepareBatchFillConstant(target.keys, input, rows, new Set(target.rows.map(row => row.id)), getRecordContext());
     if (next !== rows) setRows(next);
     setError('');
   }

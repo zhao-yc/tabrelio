@@ -5,7 +5,8 @@ import { postgresBatchFillZh as text } from './locales/postgresBatchFill.zh-CN';
 import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual, postgresBatchValueValid } from './postgresBatchSelection';
 import { postgresClipboardFieldValue } from './postgresGridPaste';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
-import { gridRangeFillColumns, gridRangeFillSource, gridRangeIntegerSequence, type GridRangeFillDirection, type GridRangeFillInput, type GridRangeFillSide } from './gridRangeFill';
+import { assertGridRangeEmptyColumns, gridRangeFillColumns, gridRangeFillSource, gridRangeIntegerSequence, type GridRangeFillDirection, type GridRangeFillInput, type GridRangeFillSide } from './gridRangeFill';
+import { postgresQuickValueAllowed } from './gridQuickValue';
 import type { GridRangeTarget } from './useGridCellRange';
 
 type RecordUpdate = Extract<PostgresTableChange, { kind: 'update' }>;
@@ -13,14 +14,23 @@ type RecordUpdate = Extract<PostgresTableChange, { kind: 'update' }>;
 /** 查询范围已按显示顺序回查原行，复制从该快照取值，只给变化的目标格生成草稿。 */
 export function postgresQueryRangeFillChanges(page: PostgresTablePage, columns: readonly PostgresTableColumn[],
   input: GridRangeFillInput): RecordUpdate[] {
-  const { kind, value } = input;
+  const { kind } = input;
   const range = { startRow: 0, rows: page.rows, keys: columns.map(column => column.key) };
   const noDraft = () => undefined;
-  if (kind === 'integer' || kind === 'real') throw Error(rangeText.target);
   if (kind === 'sequence') return postgresRangeFillSequence(page, columns, range, input, noDraft);
   if (kind === 'up' || kind === 'down') return postgresRangeFillFromRow(page, columns, range, kind, noDraft);
   if (kind === 'left' || kind === 'right') return postgresRangeFillAcross(page, columns, range, kind, noDraft);
-  return postgresRangeFillChanges(page, columns, 0, page.rows.length, kind === 'null' ? null : value, noDraft, kind === 'text' && input.onlyNull);
+  return postgresRangeFillConstant(page, columns, 0, page.rows.length, input, noDraft);
+}
+
+/** 与单格置空串使用同一列类型规则，整组选区在现有预览前核对。 */
+export function postgresRangeFillConstant(page: PostgresTablePage, columns: readonly PostgresTableColumn[],
+  start: number, count: number, input: GridRangeFillInput, prior: (key: string) => PostgresTableChange | undefined) {
+  const { kind, value } = input;
+  if (kind !== 'text' && kind !== 'null' && kind !== 'empty') throw Error(rangeText.target);
+  if (kind === 'empty') assertGridRangeEmptyColumns(columns, column => postgresQuickValueAllowed(column, 'empty'));
+  return postgresRangeFillChanges(page, columns, start, count, kind === 'null' ? null : kind === 'empty' ? '' : value, prior,
+    kind === 'text' && input.onlyNull);
 }
 
 const postgresIntegerBits = new Map([['smallint', 16], ['integer', 32], ['bigint', 64]]);

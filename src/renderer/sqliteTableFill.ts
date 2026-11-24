@@ -1,10 +1,21 @@
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
-import { sqliteTableEditLimits, type SqliteEditValue, type SqliteOriginalValue } from '../shared/sqliteTableEdit';
+import { sqliteEditValueSchema, sqliteTableEditLimits, type SqliteEditColumn, type SqliteEditValue, type SqliteOriginalValue } from '../shared/sqliteTableEdit';
 import type { SqliteDraftRow, SqliteTableEditor } from './sqliteTableEditor';
 import { sqliteTableEditZh as text } from './locales/sqliteTableEdit.zh-CN';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
-import { gridRangeIntegerSequence, type GridRangeFillInput } from './gridRangeFill';
+import { assertGridRangeEmptyColumns, gridRangeIntegerSequence, type GridRangeFillInput } from './gridRangeFill';
+import { sqliteQuickValueAllowed } from './gridQuickValue';
 import { sqliteColumnAcceptsTransferValue } from './sqliteRecordTransfer';
+
+/** 快捷空串与单格命令同义，SQLite 严格表和无声明类型也沿用同一检查。 */
+export function sqliteRangeFillConstant(input: GridRangeFillInput, fields: readonly SqliteEditColumn[], strict: boolean): SqliteEditValue {
+  const { kind, value } = input;
+  if (kind === 'empty') {
+    assertGridRangeEmptyColumns(fields, column => sqliteQuickValueAllowed(column, strict, 'empty'));
+    return { kind: 'text', value: '' };
+  }
+  return sqliteEditValueSchema.parse(kind === 'null' ? { kind } : { kind, value });
+}
 
 /** 按当前显示行生成原生 INTEGER，全部值和来源通过校验后才发布一步草稿。 */
 export function stageSqliteIntegerSequence(editor: SqliteTableEditor, selected: readonly SqliteDraftRow[],

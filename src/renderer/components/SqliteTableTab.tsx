@@ -102,7 +102,7 @@ import { sqliteHeaderSortFromGrid, sqliteHeaderSortToGrid, type SqliteHeaderSort
 import { parsePageJump, parseTablePageSize } from '../tableFilters';
 import { prepareSqliteDuplicate, sqliteDuplicateSourceCurrent, type SqliteDuplicateSource } from '../sqliteTableDuplicate';
 import type { SqliteCheckedRows } from '../sqliteTableSelection';
-import { prepareSqliteFill, sqliteFillSourceCurrent, stageSqliteIntegerSequence, stageSqliteNullFill, type SqliteFillSource, type SqliteFillField } from '../sqliteTableFill';
+import { prepareSqliteFill, sqliteFillSourceCurrent, sqliteRangeFillConstant, stageSqliteIntegerSequence, stageSqliteNullFill, type SqliteFillSource, type SqliteFillField } from '../sqliteTableFill';
 import { SqliteTableFillDialog } from './SqliteTableFillDialog';
 import { sqliteTableFillZh as fillText } from '../locales/sqliteTableFill.zh-CN';
 import { SqliteFilteredSelectIntent, type SqliteFilteredSelectPlan } from '../sqliteFilteredSelectUi';
@@ -1690,12 +1690,13 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       return;
     }
     const from = input.kind === 'down' || input.kind === 'up' ? gridRangeFillSource(range, input.kind, row => row.deleted) : undefined;
-    const entered = from ? undefined : input.kind === 'null' ? { kind: 'null' } : { kind: input.kind, value: input.value };
-    const fields = range.keys.map(key => {
-      const { column, field } = editableColumn(key), type = field.declaredType.toUpperCase();
+    const targets = range.keys.map(editableColumn);
+    const entered = from ? undefined : sqliteRangeFillConstant(input, targets.map(target => target.field), !!source.strict);
+    const fields = targets.map(({ column, field }) => {
+      const type = field.declaredType.toUpperCase();
       const original = from ? from.source.values[column] : entered;
       if (original === undefined) throw Error(rangeFillText.missing);
-      const value = sqliteEditValueSchema.parse(original);
+      const value = entered ?? sqliteEditValueSchema.parse(original);
       if (value.kind === 'null' && !field.nullable ||
           source.strict && value.kind !== 'null' && type !== 'ANY' &&
           (value.kind === 'text' ? type !== 'TEXT' : value.kind === 'integer' ? type !== 'INT' && type !== 'INTEGER' :
@@ -1703,7 +1704,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
         throw Error(rangeFillText.target);
       return { column, value };
     });
-    if (input.onlyNull && !from && input.kind !== 'null') stageSqliteNullFill(editor, range.rows, fields);
+    if (input.onlyNull && !from && input.kind !== 'null' && input.kind !== 'empty') stageSqliteNullFill(editor, range.rows, fields);
     else editor.fillRows((from?.rows ?? range.rows).map(row => row.id), fields);
     setValidation('');
   }

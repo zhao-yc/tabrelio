@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { BatchFillIntent, batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow, prepareBatchFillSequence, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
+import { BatchFillIntent, batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillConstant, prepareBatchFillFromRow, prepareBatchFillSequence, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
+import { mysqlQueryBatchChanges } from '../../src/renderer/mysqlQueryBatchEdit';
 import { DraftHistory } from '../../src/renderer/draftHistory';
 import { collectChanges, type DraftRow } from '../../src/renderer/dataChanges';
 import type { TableInfo, TablePage } from '../../src/shared/contracts';
@@ -19,6 +20,22 @@ function fixture() {
 }
 
 describe('当前页已有记录批量填充domain', () => {
+  it('快捷空串只填明确的文本列，表页和查询拒绝部分成功', () => {
+    const { rows, context, ids, info, page } = fixture();
+    rows[1].data.note = null;
+    const input = { kind: 'empty', value: '不可使用的输入' } as const;
+    const next = prepareBatchFillConstant(['note'], input, rows, ids, context);
+    expect(next.map(row => row.data.note)).toEqual(['', '', '原3']);
+    expect(next[2]).toBe(rows[2]);
+    const originals = page.rows.slice(0, 2);
+    expect(mysqlQueryBatchChanges(info, originals, ['note'], { kind: 'fill', input })).toEqual(originals.map(before =>
+      ({ kind: 'update', before, values: { note: '' } })));
+    for (const key of ['num', 'doc', 'bin']) {
+      expect(() => prepareBatchFillConstant(['note', key], input, rows, ids, context)).toThrow(key);
+      expect(() => mysqlQueryBatchChanges(info, originals, ['note', key], { kind: 'fill', input })).toThrow(key);
+    }
+    expect(rows.map(row => row.data.note)).toEqual(['原1', null, '原3']);
+  });
   it('仅填充当前草稿中的 NULL，保留空串和新增草稿 DEFAULT', () => {
     const { rows, context } = fixture();
     rows[0].data.note = null;

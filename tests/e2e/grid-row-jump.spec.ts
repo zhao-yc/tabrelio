@@ -1140,6 +1140,38 @@ test('SQLite JOIN 查询删除勾选主表记录在冲突或外键失败时整�
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询结果将矩形选区设为空字符串，确认后保留原生 TEXT', async () => {
+  await seed('SELECT id, name, mirror FROM subject WHERE id <= 3 ORDER BY id;',
+    "ALTER TABLE subject ADD mirror TEXT; UPDATE subject SET name=NULL, mirror='原文本' WHERE id=1;" +
+    "UPDATE subject SET name='NULL', mirror='另一个原文本' WHERE id=2; UPDATE subject SET name='', mirror='' WHERE id=3;");
+  const database = join(dataDir, 'grid-row-jump.sqlite');
+  const read = () => {
+    const db = new DatabaseSync(database, { readOnly: true });
+    try {
+      return db.prepare('SELECT id, name, mirror, typeof(name) AS storage FROM subject WHERE id <= 4 ORDER BY id').all();
+    } finally { db.close(); }
+  };
+  const baseline = read();
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  await query.getByRole('gridcell', { name: '原文本', exact: true }).click();
+  await page.keyboard.press('Shift+ArrowLeft');
+  await page.keyboard.press('Shift+ArrowDown');
+  await page.keyboard.press('Shift+ArrowDown');
+  await page.keyboard.press('Shift+F10');
+  await page.getByRole('menuitem', { name: rangeFill.empty, exact: true }).click();
+  const preview = page.getByRole('dialog', { name: sqliteEditText.previewTitle, exact: true });
+  const sql = preview.getByLabel('SQLite 修改 SQL 预览', { exact: true });
+  await expect(sql).toBeVisible();
+  expect((await sql.textContent())?.match(/UPDATE /g)).toHaveLength(2);
+  expect(read()).toEqual(baseline);
+  await preview.getByRole('checkbox', { name: sqliteEditText.confirmation, exact: true }).check();
+  await preview.getByRole('button', { name: sqliteEditText.submit, exact: true }).click();
+  await expect(preview).toBeHidden();
+  expect(read()).toEqual([...([1, 2, 3] as const).map(id => ({ id, name: '', mirror: '', storage: 'text' })), baseline[3]]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 仅填充原生 NULL，表页一步撤销且查询预览保留空串和文本 NULL', async ({}, info) => {
   await seed('SELECT id, name, mirror FROM subject WHERE id <= 3 ORDER BY id;',
     "ALTER TABLE subject ADD mirror TEXT; UPDATE subject SET name=NULL, mirror='保留' WHERE id=1;" +
