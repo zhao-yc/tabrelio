@@ -2410,6 +2410,12 @@ export function PostgresQueryTab({
       onCellEdit={canUpdateQueryRecord ? editQueryCell : undefined}
       onCellPaste={canUpdateQueryRecord ? pasteQueryCells : undefined}
       onFillRange={canUpdateQueryRecord ? fillQueryCells : undefined}
+      canFillCell={canUpdateQueryRecord ? cell => {
+        const target = cell.column;
+        if (!target || detailBinding?.rows[cell.index] !== cell.row) return false;
+        const index = result.columns.findIndex(column => column.key === target.key);
+        return index >= 0 && writableQueryColumn(index);
+      } : undefined}
       filterDialect="postgresql"
       onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
       onStageFindFilter={filterBinding && sortView && binding ? openResultFilter : undefined} findFilterSource={filterBinding?.source}

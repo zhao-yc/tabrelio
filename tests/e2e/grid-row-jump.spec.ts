@@ -1193,6 +1193,21 @@ test('SQLite 查询结果将矩形选区设为空字符串或逐格生成 UUID�
   expect(new Set(committed.slice(0, 2).flatMap(row => [row.name, row.mirror]))).toEqual(new Set(generated));
   expect(committed.map(row => row.storage)).toEqual(['text', 'text', 'text', 'text']);
   expect(committed.slice(2)).toEqual(emptied.slice(2));
+
+  await query.locator('.query-execute-split > button.primary').click();
+  await expect(first).toHaveText(String(committed[0].name));
+  await first.click({ button: 'right' });
+  for (const label of [cellCopy.null, cellCopy.empty, cellCopy.uuid])
+    await expect(page.getByRole('menuitem', { name: label, exact: true })).toBeVisible();
+  await page.getByRole('menuitem', { name: cellCopy.null, exact: true }).click();
+  await expect(sql).toBeVisible();
+  expect((await sql.textContent())?.match(/UPDATE /g)).toHaveLength(1);
+  await expect(sql).toContainText(/SET "name"\s*=\s*NULL/i);
+  expect(read()).toEqual(committed);
+  await preview.getByRole('checkbox', { name: sqliteEditText.confirmation, exact: true }).check();
+  await preview.getByRole('button', { name: sqliteEditText.submit, exact: true }).click();
+  await expect(preview).toBeHidden();
+  expect(read()).toEqual([{ ...committed[0], name: null, storage: 'null' }, ...committed.slice(1)]);
   expect(pageErrors).toEqual([]);
 });
 

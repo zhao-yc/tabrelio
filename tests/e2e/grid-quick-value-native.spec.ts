@@ -92,7 +92,7 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
           table: profile?.dialect === 'postgresql' ? '"public"."update_subject"' : 'update_subject' },
         ...(profile ? [{
           id: 'quick-fill-query', kind: 'query' as const, title: '选区填充查询', connectionId: connection.id, database,
-          sql: 'SELECT id, scope, label FROM ' + (profile.dialect === 'postgresql' ? 'public.update_subject' : 'update_subject') +
+          sql: 'SELECT id, scope, label, length(label) AS computed FROM ' + (profile.dialect === 'postgresql' ? 'public.update_subject' : 'update_subject') +
             " WHERE label <> 'child' ORDER BY id, scope;",
         }] : []),
       ] });
@@ -466,6 +466,7 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
       await expect(resultAt(3)).toHaveText('');
       await selectTwoRows(resultAt(2), resultAt(3));
       await page.keyboard.press('Shift+F10');
+      await expect(item(text.uuid)).toHaveCount(0);
       await item(rangeText.uuid).click();
       const uuidValues = queryReview.getByText(new RegExp('^' + uuidPattern.source + '$'));
       await expect(uuidValues).toHaveCount(2);
@@ -476,7 +477,43 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
       await confirmation.check();
       await submit.click();
       await expect(queryReview).toBeHidden();
-      expect(await readStoredRows(profile)).toEqual(emptied.map((row, index) => index < 2 ? { ...row, label: generated[index] } : row));
+      const withUuid = emptied.map((row, index) => index < 2 ? { ...row, label: generated[index] } : row);
+      expect(await readStoredRows(profile)).toEqual(withUuid);
+
+      await execute.click();
+      await expect(resultAt(2)).toHaveText(generated[0]);
+      const computedColumn = await resultGrid.getByRole('columnheader').filter({ hasText: /^computed/ }).getAttribute('aria-colindex');
+      const computedCell = resultGrid.locator(`[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="${computedColumn}"]`);
+      await computedCell.click({ button: 'right' });
+      await expect(menu).toBeVisible();
+      for (const label of [text.null, text.empty, text.uuid]) await expect(item(label)).toHaveCount(0);
+      await page.keyboard.press('Escape');
+
+      const singleConfirmation = queryReview.getByRole('checkbox', {
+        name: pg ? postgresResultOriginsZh.rangeConfirm(1) : mysqlQueryBatchEditZh.confirm, exact: true,
+      });
+      const previewSingle = async (action: string, value: string | RegExp) => {
+        await resultAt(2).click();
+        await page.keyboard.press('Shift+F10');
+        await expect(item(rangeText.uuid)).toHaveCount(0);
+        await item(action).click();
+        await expect(singleConfirmation).toBeVisible();
+        await expect(submit).toBeDisabled();
+        const displayed = pg ? queryReview.locator('dd') : queryReview.getByRole('row').last().getByRole('cell').last();
+        await expect(displayed).toHaveText(value);
+        expect(await readStoredRows(profile)).toEqual(withUuid);
+      };
+      await previewSingle(text.empty, gridCellValueZh.emptyValue);
+      await back.click();
+      await expect(queryReview).toBeHidden();
+      await previewSingle(text.uuid, new RegExp('^' + uuidPattern.source + '$'));
+      await back.click();
+      await expect(queryReview).toBeHidden();
+      await previewSingle(text.null, 'NULL');
+      await singleConfirmation.check();
+      await submit.click();
+      await expect(queryReview).toBeHidden();
+      expect(await readStoredRows(profile)).toEqual([{ ...withUuid[0], label: null }, ...withUuid.slice(1)]);
     }
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
