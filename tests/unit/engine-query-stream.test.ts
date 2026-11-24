@@ -30,6 +30,16 @@ beforeEach(async () => {
 });
 
 describe('同会话完整导出生命周期', () => {
+  it('Excel 页签从原模板头注释提取，照常逐条执行且普通格式不接收标题', async () => {
+    const sql = '-- NAME: First/Sheet\nSELECT 1; SELECT \'NAME: 不是标题\'; /* NAME: Last */ SELECT 3;';
+    const sent = ["-- NAME: First/Sheet\nSELECT 1", "SELECT 'NAME: 不是标题'", '/* NAME: Last */ SELECT 3'];
+    await engine.handle('query.exportStream', { ...input(), format: 'xlsx', sql });
+    expect(mocks.frames.mock.calls.map(call => call[1])).toEqual(sent);
+    expect(writer.write.mock.calls.flatMap(([frame]) => frame.kind === 'rows-start' ? [frame.title] : [])).toEqual(['First/Sheet', undefined, 'Last']);
+    writer.write.mockClear();
+    await engine.handle('query.exportStream', { ...input(), taskId: 'json-stream', sql });
+    expect(writer.write.mock.calls.some(([frame]) => Object.hasOwn(frame, 'title'))).toBe(false);
+  });
   it.each(['csv','csv-zip'].flatMap(format=>[',',';','\t'].map(csvDelimiter=>({format,csvDelimiter}))))('$format/$csvDelimiter只转交当前写入器，不增加SQL、连接或目录读取',async({format,csvDelimiter})=>{
     const before=mocks.connect.mock.calls.length;await engine.handle('query.exportStream',{...input(),format,csvDelimiter,sql:'SELECT 1;SELECT 2',resultSelection:format==='csv'?{kind:'row-result',ordinal:2}:{kind:'all'}});
     expect(options).toMatchObject({format,csvDelimiter});expect(mocks.create).toHaveBeenCalledOnce();expect(mocks.frames.mock.calls.map(call=>call[1])).toEqual(['SELECT 1','SELECT 2']);expect(new Set(mocks.frames.mock.calls.map(call=>call[0])).size).toBe(1);expect(mocks.connect).toHaveBeenCalledTimes(before);expect(mocks.execute).not.toHaveBeenCalled();expect(writer.complete).toHaveBeenCalledOnce();expect(writer.abort).toHaveBeenCalledOnce();

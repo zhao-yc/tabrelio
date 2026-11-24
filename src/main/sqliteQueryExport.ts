@@ -7,7 +7,8 @@ import { csvExportDelimiter } from '../shared/csvExport';
 import { csvCell, csvHeader } from '../engine/files';
 import { sqliteNamedParameterNames, sqliteParameterInfo, sqliteParameterPlan } from '../engine/sqlite/parameters';
 import { sqliteStatementRanges } from '../engine/sqlite/currentStatement';
-import { EXCEL_LIMITS } from '../shared/excelTransfer';
+import { EXCEL_LIMITS, excelWorksheetNames } from '../shared/excelTransfer';
+import { queryResultTitle } from '../shared/queryResultTitle';
 import { sqliteLeadingKeyword } from '../shared/sqliteStatementScanner';
 import type { QueryParameterNames } from '../shared/queryParameters';
 import { sqliteInsertRowWriter } from '../shared/sqliteInsertLiteral';
@@ -45,7 +46,9 @@ export function sqliteQueryExportPlan(input: SqliteQueryExportInput) {
   return statements.map(part => {
     const statement = workbook ? sql.slice(part.start, part.end) : sql;
     const used = workbook && statements.length > 1 ? sqliteNamedParameterNames(statement) : names;
-    return {sql: statement, namedParameters: Object.fromEntries(used.map(name => [':' + name, values.get(name)!])) as Record<string, SqliteValue>};
+    const title = workbook ? queryResultTitle(part.sql, 'sqlite') : undefined;
+    return {sql: statement, namedParameters: Object.fromEntries(used.map(name => [':' + name, values.get(name)!])) as Record<string, SqliteValue>,
+      ...(title ? {title} : {})};
   });
 }
 
@@ -53,6 +56,8 @@ export function sqliteQueryExportPlan(input: SqliteQueryExportInput) {
 export async function prepareSqliteQueryExport(driver: SqliteDriverSession, input: SqliteQueryExportRequest,
   queries: ReturnType<typeof sqliteQueryExportPlan>, file: SqliteTableExportFile, check: () => void, progress: (rows: number) => void): Promise<number> {
   const workbook = input.format === 'xlsx';
+  const sheetNames = workbook ? excelWorksheetNames(queries.map((query, index) =>
+    query.title ?? (queries.length === 1 ? '数据' : `结果 ${index + 1}`))) : [];
   const markup = dataFileWriter(input.format, input.txtOptions);
   const delimiter = csvExportDelimiter(input.format, input.csvDelimiter);
   type Workbook = Awaited<ReturnType<typeof createExcelWorkbookWriter>>;
@@ -87,7 +92,7 @@ export async function prepareSqliteQueryExport(driver: SqliteDriverSession, inpu
                 checkCancelled: check, onCommitStart: () => { throw Error('SQLite Excel 不能自行发布文件'); }});
             }
             const headers = resultExportColumns(columns.map((name, index) => ({key: String(index), name})));
-            sheet = await excel.startSheet(queries.length === 1 ? '数据' : `结果 ${index + 1}`,
+            sheet = await excel.startSheet(sheetNames[index],
               headers.map(({exportName}) => ({name: exportName, type: 'SQLITE'})));
             return;
           }

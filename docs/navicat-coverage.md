@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的完整查询 Excel 工作簿沿用本次语句头的 `NAME:` 结果名称，按 Excel 规则清理及去重。macOS 源码 Electron 已在四种数据库保存并读回，核对工作表顺序、非法字符、大小写重名、空结果列标题和精确数值。Q05 继续为部分覆盖。[Navicat 结果命名语法](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html)
+
 2026-11-24 源码增量。MySQL、MariaDB 和 PostgreSQL 查询页新增「实际分析当前语句」，可从原生菜单、查询操作或编辑器右键打开整句确认。macOS 源码 Electron 已验证部分选区、重复语句、取消零执行、确认仅执行命中语句和结果定位，MySQL／MariaDB 同验客户端分隔符。SQLite 原估算计划通过回归。Q02、Q07 继续为部分覆盖。
 
 2026-11-24 源码增量。实际执行计划及离线快照新增「行数对照」，按实测减估算的绝对差降序排列，可筛选差异并返回节点。MySQL 与 PostgreSQL 对照输出行数，MariaDB 仅对照口径明确的过滤前枚举行数。macOS 源码 Electron 已在 MySQL 8.4、MariaDB 11.4 和 PostgreSQL 18 验证对照及节点跳转，MariaDB 新版 `r_index_rows` 口径由单测验证。Q07 继续为部分覆盖。[MariaDB 行数口径](https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/analyze-and-explain-statements/analyze-interpreting-rows-and-filtered-members)

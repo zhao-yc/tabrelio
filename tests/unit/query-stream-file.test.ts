@@ -3,6 +3,7 @@ import { mkdtemp, open, readFile, readdir, rename, rm, rmdir, writeFile } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import iconv from 'iconv-lite';
+import ExcelJS from 'exceljs';
 import { parse } from 'csv-parse/sync';
 import { AtomicFile, type AtomicFileIO } from '../../src/engine/atomicFile';
 import { createQueryStreamFile, type QueryStreamFileOptions } from '../../src/engine/queryStreamFile';
@@ -20,7 +21,7 @@ async function options(extra: Partial<QueryStreamFileOptions> = {}): Promise<Que
   return { filePath, format: 'json', encoding: 'utf8', resultSelection: { kind: 'all' }, checkCancelled() {}, onCommitStart() {}, ...extra };
 }
 /** 列映射与引擎共用位置规则，测试覆盖重复、空名及数字/原型同名列。 */
-function start(ordinal: number, rowOrdinal: number, names = ['值']): QueryExportFrame {
+function start(ordinal: number, rowOrdinal: number, names = ['值']): Extract<QueryExportFrame, { kind: 'rows-start' }> {
   return { kind: 'rows-start', resultOrdinal: ordinal, statementOrdinal: ordinal, rowResultOrdinal: rowOrdinal, columns: resultExportColumns(names.map((name, index) => ({ key: `c${index}`, name }))).map((column, index) => ({ ...column, position: index + 1, type: 'VAR_STRING' })) };
 }
 /** 文件接口仍执行真实磁盘调用，仅指定故障或竞态边界被替换。 */
@@ -74,6 +75,22 @@ describe('完整多结果流式文件', () => {
     } finally { await writer.abort(); }
     expect(await readFile(input.filePath, 'utf8')).toBe('原文件');
     expect(await readdir(directories.at(-1)!)).toEqual(['result']);
+  });
+  it('XLSX 按收到的行结果分配名称，重名、状态包和空页各按原顺序处理', async () => {
+    const input = await options({ format: 'xlsx' }), writer = await createQueryStreamFile(input);
+    try {
+      await writer.write({ ...start(1, 1), title: 'Summary/Today' });
+      await writer.write({ kind: 'row', resultOrdinal: 1, values: ['9007199254740993'] });
+      await writer.write({ kind: 'rows-end', resultOrdinal: 1 });
+      await writer.write({ kind: 'status', resultOrdinal: 2, statementOrdinal: 2, affectedRows: 0, insertId: '0', warningCount: 0 });
+      await writer.write({ ...start(3, 2), title: 'SUMMARY?TODAY' });
+      await writer.write({ kind: 'rows-end', resultOrdinal: 3 });
+      await writer.write(start(4, 3)); await writer.write({ kind: 'rows-end', resultOrdinal: 4 });
+      await writer.complete();
+    } finally { await writer.abort(); }
+    const book = await new ExcelJS.Workbook().xlsx.readFile(input.filePath);
+    expect(book.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['Summary_Today', 2], ['SUMMARY_TODAY (2)', 1], ['结果 3', 1]]);
+    expect(book.worksheets[0].getCell('A2').text).toBe('9007199254740993');
   });
   it('指定结果不存在、结果串流或字段预算超限均保留原文件', async () => {
     const input = await options({ format: 'csv', resultSelection: { kind: 'row-result', ordinal: 2 } }); const writer = await createQueryStreamFile(input);

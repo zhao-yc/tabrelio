@@ -143,6 +143,7 @@ import { tableFilteredExportText } from '../shared/tableFilteredExport';
 import { queryExportFormats, queryExportSelectionMessage, queryExportSelectsRowResult, queryExportWireProtocol, queryStreamExportLimits, type QueryExportProgress, type QueryExportResultSummary, type QueryStreamExportInput, type QueryStreamExportOutput } from '../shared/queryStreamExport';
 import { buildChanges, buildDesign, buildPageSql, deserializeCell, exportLiteral, identifier, inlineParameters, qualified, serializeCell, splitSql, SqlScriptScanner, typedCellPlaceholder, type SqlSearchKey } from './sql';
 import { currentSqlStatement } from './currentStatement';
+import { queryResultTitle } from '../shared/queryResultTitle';
 import { QueryWarningCollector } from './queryWarnings';
 import type { FileImportResult, SqlFileImportReceipt } from '../shared/sqlFileImport';
 import { sqlFileImportMessage } from '../shared/sqlFileImport';
@@ -2571,6 +2572,8 @@ export class Engine {
       for await (const { statement, template, mode, ordinal } of this.queryStatements(task, input.sql, input.parameters)) {
         this.checkCancelled(task);
         const wire = queryExportWireProtocol(statement, input.protocol, mode);
+        // 页签名沿未绑定参数的本次原语句。同一语句的多行结果由工作簿逐张去重。
+        const title = input.format === 'xlsx' ? queryResultTitle(template) : undefined;
         const statementStarted = performance.now(), previewStart = preview.results.length;
         progress.phase = 'executing'; progress.sqlMayHaveExecuted = true;
         task.inFlight = true; task.generation++;
@@ -2581,7 +2584,7 @@ export class Engine {
             consume: async frame => {
               this.checkCancelled(task);
               progress.currentResultOrdinal = frame.resultOrdinal; progress.phase = 'writing';
-              await writer!.write(frame);
+              await writer!.write(frame.kind === 'rows-start' && title ? { ...frame, title } : frame);
               if (frame.kind === 'rows-start' || frame.kind === 'status') {
                 const status = frame.kind === 'status' ? { affectedRows: frame.affectedRows, insertId: frame.insertId, warningCount: frame.warningCount } : {};
                 const summary: QueryExportResultSummary = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: frame.kind === 'status' ? 'status' : 'rows', rowsWritten: 0, ...status, ...(frame.kind === 'rows-start' ? { rowResultOrdinal: frame.rowResultOrdinal } : {}) };

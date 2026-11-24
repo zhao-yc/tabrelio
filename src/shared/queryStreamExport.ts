@@ -41,7 +41,7 @@ export interface QueryStreamExportInput {
 export interface QueryExportColumn { position: number; key: string; name: string; exportName: string; type: string; }
 /** 结果序号在协议事件边界固定，异步写入不能借用后来到达的列定义。 */
 export type QueryExportFrame =
-  | { kind: 'rows-start'; resultOrdinal: number; statementOrdinal: number; rowResultOrdinal: number; columns: QueryExportColumn[] }
+  | { kind: 'rows-start'; resultOrdinal: number; statementOrdinal: number; rowResultOrdinal: number; columns: QueryExportColumn[]; title?: string }
   | { kind: 'row'; resultOrdinal: number; values: CellValue[] }
   | { kind: 'rows-end'; resultOrdinal: number; warningCount?: number }
   | { kind: 'status'; resultOrdinal: number; statementOrdinal: number; affectedRows: number; insertId: string; warningCount: number };

@@ -2,7 +2,8 @@ import { isAbsolute } from 'node:path';
 import type { CellValue, QueryResult, ResultColumn } from '../../shared/contracts';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import { resultExportColumns } from '../../shared/resultExport';
-import { EXCEL_LIMITS } from '../../shared/excelTransfer';
+import { EXCEL_LIMITS, excelWorksheetNames } from '../../shared/excelTransfer';
+import { queryResultTitle } from '../../shared/queryResultTitle';
 import { AtomicFile, nativeAtomicFileIO } from '../atomicFile';
 import { exportExcelWorkbook, type ExcelExportSheet } from '../excelFiles';
 import { queryExportSelectsRowResult, queryStreamExportLimits } from '../../shared/queryStreamExport';
@@ -78,6 +79,8 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
         throw Error('PostgreSQL 未确认只读事务');
       check();
       if (workbook) {
+        const sheetNames = excelWorksheetNames(source.statements.map((part, index) =>
+          queryResultTitle(part.statement.sql, 'postgresql') ?? (source.statements.length === 1 ? '数据' : `结果 ${index + 1}`)));
         const destination = atomic = await AtomicFile.create(filePath, 'utf8', check, publish, nativeAtomicFileIO,
           EXCEL_LIMITS.maxCompressedBytes, undefined, true);
         async function* sheets(): AsyncGenerator<ExcelExportSheet> {
@@ -89,7 +92,7 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
             if (first.done) throw Error('PostgreSQL Excel 导出缺少列描述');
             const result = first.value;
             yield {
-              name: source.statements.length === 1 ? '数据' : `结果 ${index + 1}`,
+              name: sheetNames[index],
               columns: resultExportColumns(result.columns).map(({exportName}, i) => ({name: exportName, type: result.columns[i].type})),
               async writeRows(write) {
                 for await (const row of queryExportRows(result, batches)) await write(row);

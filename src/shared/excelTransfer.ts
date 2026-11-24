@@ -87,11 +87,11 @@ export function validateExcelMapping(mapping: ExcelFieldMapping[], source: strin
   }
 }
 
-/** 从数据库对象名称生成 Excel 可接受的唯一页签，名称匹配忽略大小写。 */
-export function excelWorksheetNames(names: readonly string[]): string[] {
+/** 按工作簿顺序分配 Excel 页签名，流式导出可在列定义到达后逐张分配。 */
+export function createExcelWorksheetNamer(): (name: string) => string {
   const used = new Set<string>(['history']);
   const fit = (name: string, length: number) => name.slice(0, length).replace(/[\uD800-\uDBFF]$/, '').replace(/'+$/, '');
-  return names.map(name => {
+  return name => {
     const base = name.replace(/[\uD800-\uDFFF]/gu, '_').replace(/[\u0000-\u001f\u007f\ufffe\uffff\\/?:*\[\]]/gu, '_').trim().replace(/^'+|'+$/g, '') || '数据';
     let candidate = fit(base, 31), index = 2;
     while (used.has(candidate.toLowerCase())) {
@@ -100,5 +100,10 @@ export function excelWorksheetNames(names: readonly string[]): string[] {
     }
     used.add(candidate.toLowerCase());
     return candidate;
-  });
+  };
+}
+
+/** 从完整名称列表生成唯一页签，沿用同一顺序和不区分大小写的规则。 */
+export function excelWorksheetNames(names: readonly string[]): string[] {
+  return names.map(createExcelWorksheetNamer());
 }

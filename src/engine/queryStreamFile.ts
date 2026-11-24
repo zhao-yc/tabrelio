@@ -8,7 +8,8 @@ import { createQueryInsertFile } from './queryInsertFile';
 import { csvExportDelimiter, type CsvExportDelimiter } from '../shared/csvExport';
 import { dataFileWriter } from './dataMarkupExport';
 import { dataMarkupText, isXmlFormat } from '../shared/dataMarkupExport';
-import { EXCEL_LIMITS } from '../shared/excelTransfer';
+import { createExcelWorksheetNamer, EXCEL_LIMITS } from '../shared/excelTransfer';
+import { validQueryResultTitle } from '../shared/queryResultTitle';
 import { createExcelWorkbookWriter } from './excelFiles';
 
 export interface QueryStreamFileOptions {
@@ -49,6 +50,7 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
   const markup = dataFileWriter(input.format, input.txtOptions), markupText = dataMarkupText(input.format);
   if (markupText && input.encoding !== 'utf8') throw Error(markupText.utf8);
   const xlsx = input.format === 'xlsx';
+  const worksheetName = createExcelWorksheetNamer();
   if (xlsx && input.encoding !== 'utf8') throw Error(queryExcelEncodingMessage);
   if (input.format === 'csv-zip') await prepareQueryCsvZip(input.filePath, input.checkCancelled);
   const file = await AtomicFile.create(input.filePath, input.encoding, input.checkCancelled, input.onCommitStart, io,
@@ -79,7 +81,8 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
         const selected = input.resultSelection.kind === 'all' || input.resultSelection.ordinal === frame.rowResultOrdinal;
         active = { ordinal: frame.resultOrdinal, columns, selected, rows: 0 }; if (selected) selectedFound = true;
         if (workbook) {
-          sheet = await workbook.startSheet(`结果 ${frame.rowResultOrdinal}`, columns.map(column => ({ name: column.exportName, type: column.type })));
+          const name = worksheetName(validQueryResultTitle(frame.title) ? frame.title : `结果 ${frame.rowResultOrdinal}`);
+          sheet = await workbook.startSheet(name, columns.map(column => ({ name: column.exportName, type: column.type })));
         } else if (archive) { await archive.start(frame, columns); await archive.text(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n'); }
         else if (input.format === 'json') {
           const metadata = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: 'rows', rowResultOrdinal: frame.rowResultOrdinal, columns: columns.map(({ key: _key, ...column }) => column) };

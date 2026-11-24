@@ -1,5 +1,6 @@
 import { readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
+import ExcelJS from 'exceljs';
 import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
@@ -22,6 +23,9 @@ import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-C
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { explainZh } from '../../src/renderer/locales/explain.zh-CN';
 import { queryAnalyzeZh as analyzeText } from '../../src/renderer/locales/queryAnalyze.zh-CN';
+import { queryStreamZh } from '../../src/renderer/locales/queryStreamExport.zh-CN';
+import { postgresQueryExportZh } from '../../src/renderer/locales/postgresQueryExport.zh-CN';
+import { sqliteQueryExportZh } from '../../src/renderer/locales/sqliteQueryExport.zh-CN';
 import { parseTabularText } from '../../src/renderer/gridClipboard';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
@@ -671,6 +675,42 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       await expect(locate).toBeDisabled();
       expect(await history()).toEqual(historyAfterAnalysis);
     }
+    const xlsxPath = join(dataDir, '命名查询结果.xlsx');
+    const workbookSql = [
+      '-- NAME: Summary/Today', 'SELECT amount FROM json_subject WHERE id = 1;',
+      '/* NAME: SUMMARY?TODAY */', 'SELECT amount FROM json_subject WHERE id = 0;',
+      'SELECT label FROM json_subject WHERE id = 2;',
+    ].join('\n');
+    await write(workbookSql);
+    await desktop.evaluate(({ dialog, BrowserWindow }, path) => {
+      const original = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (parent: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
+        dialog.showSaveDialog = original;
+        if (parent !== BrowserWindow.getAllWindows()[0] || !options.filters?.[0]?.extensions.includes('xlsx'))
+          throw Error('越过本例工作簿保存范围');
+        return { canceled: false, filePath: path };
+      }) as typeof original;
+    }, xlsxPath);
+    const workbookExport = local ? sqliteQueryExportZh : postgresQueryExportZh;
+    await (await navigationMenuItem(query, { name: custom ? queryStreamZh.open : workbookExport.open, exact: true })).click();
+    const workbookDialog = page.getByRole('dialog', { name: custom ? queryStreamZh.title : workbookExport.title, exact: true });
+    await workbookDialog.getByLabel(custom ? queryStreamZh.format : zh.resultExport.format, { exact: true }).selectOption('xlsx');
+    if (custom) {
+      await workbookDialog.locator('.file-picker').click();
+      await workbookDialog.getByRole('checkbox', { name: queryStreamZh.acknowledge, exact: true }).check();
+      await workbookDialog.getByRole('button', { name: queryStreamZh.execute, exact: true }).click();
+      await expect(workbookDialog.getByText(queryStreamZh.completed, { exact: true })).toBeVisible();
+    } else {
+      await workbookDialog.getByRole('button', { name: zh.resultExport.chooseFile, exact: true }).click();
+      await workbookDialog.getByRole('button', { name: workbookExport.start, exact: true }).click();
+      await expect(workbookDialog.getByRole('status')).toHaveText(workbookExport.done(2));
+    }
+    const book = await new ExcelJS.Workbook().xlsx.readFile(xlsxPath);
+    expect(book.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['Summary_Today', 2], ['SUMMARY_TODAY (2)', 1], ['结果 3', 2]]);
+    expect(book.worksheets[0].getCell('A2').text).toBe(expectedA.amount);
+    expect(book.worksheets[1].getCell('A1').text).toBe('amount');
+    expect(book.worksheets[2].getCell('A2').text).toBe('row B');
+    await workbookDialog.getByRole('button', { name: zh.common.close, exact: true }).click();
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
