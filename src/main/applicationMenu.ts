@@ -77,7 +77,7 @@ export class ApplicationMenu {
       { label: text.tools, submenu: [
         { label: text.query, submenu: [
           item('execute', 'CmdOrCtrl+Enter'), item('execute-selection'), item('execute-current'), item('execute-all'), item('stop'), separator,
-          item('format'), item('sql-format-options'), item('sql-format-preferences'), item('compact-sql'),
+          item('format'), item('format-current-statement'), item('sql-format-options'), item('sql-format-preferences'), item('compact-sql'),
           item('select-current-statement'), item('open-current-statement-query'), item('previous-statement', 'CmdOrCtrl+Alt+PageUp'),
           item('next-statement', 'CmdOrCtrl+Alt+PageDown'), item('statement-navigation'),
           item('previous-query-error', 'Alt+Shift+F8'), item('next-query-error', 'Alt+F8'), item('find-query-receipts', 'CmdOrCtrl+Shift+F8'),

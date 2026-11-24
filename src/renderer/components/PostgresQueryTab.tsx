@@ -24,7 +24,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { flushSync } from 'react-dom';
 import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
-import { formatSqlEditor, type SqlFormattingMode } from '../sqlFormatting';
+import { formatSqlEditor, type SqlFormattingMode, type SqlFormattingRange } from '../sqlFormatting';
 import { captureQueryFormattingOptions, type QueryFormattingOptions } from '../queryFormattingOptions';
 import { QueryFormattingOptionsDialog } from './QueryFormattingOptionsDialog';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
@@ -2056,13 +2056,13 @@ export function PostgresQueryTab({
     try { editSqlBlockComment(target.instance, 'postgresql'); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
-  function formatQuery(mode: SqlFormattingMode = 'format') {
+  function formatQuery(mode: SqlFormattingMode = 'format', statement?: SqlFormattingRange) {
     const target = commandEditor();
     if (!target) return;
     try {
       const settings = useWorkspace.getState().settings;
       setError('');
-      formatSqlEditor(target.instance, { dialect: 'postgresql', tabSize: settings.editorTabSize, insertSpaces: settings.editorInsertSpaces, expressionWidth: settings.sqlExpressionWidth }, mode);
+      formatSqlEditor(target.instance, { dialect: 'postgresql', tabSize: settings.editorTabSize, insertSpaces: settings.editorInsertSpaces, expressionWidth: settings.sqlExpressionWidth }, mode, statement);
     } catch (reason) { setError(errorMessage(reason)); }
   }
   function openFormattingOptions() {
@@ -2244,7 +2244,8 @@ export function PostgresQueryTab({
       available() && !files.isBusy() && currentTab() === draft && session.current === original &&
       editor.current === target.instance && !target.instance.getRawOptions().readOnly };
   }, (instance, ranges, output) =>
-    duplicateQuery(output?.mode ?? 'statement', instance, ranges, output));
+    duplicateQuery(output?.mode ?? 'statement', instance, ranges, output),
+  (instance, range) => { if (instance === editor.current) formatQuery('format', range); });
   const standardStrings = session.current && !busy && same(session.current.scope) ? state.standardConformingStrings : undefined;
   const syntax = usePostgresSyntaxCheck(() => {
     const target = commandEditor(), draft = currentTab(), original = session.current;
@@ -2298,6 +2299,7 @@ export function PostgresQueryTab({
     analyze: { enabled: canPlan, run: () => run('analyzePreview') },
     parameters: { enabled: canRun, run: () => openParameters() },
     format: { enabled: editable, run: formatQuery },
+    'format-current-statement': { enabled: canNavigate && !resultsOnly, run: () => navigation.open('format') },
     'compact-sql': { enabled: editable, run: () => formatQuery('compact') },
     'sql-format-options': { enabled: editable, run: openFormattingOptions },
     'save-query': { enabled: editable, run: openSaveQuery },
@@ -2366,6 +2368,11 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.69,
       run: () => { if (active && canOpenStatementQuery) navigation.open('duplicate'); },
     });
+    const formatStatement = editorInstance.addAction({
+      id: `dbark-postgres-format-current-statement:${uid()}`, label: uiCommandLabels['format-current-statement'],
+      precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'modification', contextMenuOrder: 8,
+      run: () => { if (active && canNavigate && !resultsOnly) navigation.open('format'); },
+    });
     const definition = editorInstance.addAction({
       id: `dbark-postgres-object-definition:${uid()}`, label: definitionText.entry,
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.8,
@@ -2376,7 +2383,7 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly', contextMenuGroupId: 'navigation', contextMenuOrder: 1.9,
       run: () => { if (active && editor.current === editorInstance && editorInstance.getModel() === menuModel) syntax.open(); },
     });
-    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); definition.dispose(); syntaxCheck.dispose(); };
+    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); formatStatement.dispose(); definition.dispose(); syntaxCheck.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery, state.standardConformingStrings]);
   const renderResultGrid = (target?: GridFindTarget, marks?: ReadonlySet<string>) => result && displayResult ? (
     <ResultsGrid zoomable columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding} findMemory={findMemory} restoreCell={comparisonCell}
@@ -2474,6 +2481,7 @@ export function PostgresQueryTab({
             <button disabled={!editable} title={sqlFormattingZh.hint} onClick={() => formatQuery()}>
               {text.format}
             </button>
+            <button disabled={!canNavigate || resultsOnly} onClick={() => navigation.open('format')}>{uiCommandLabels['format-current-statement']}</button>
             <button disabled={!editable} title={sqlFormattingZh.compactHint} onClick={() => formatQuery('compact')}>{sqlFormattingZh.compact}</button>
             <button disabled={!editable} onClick={openFormattingOptions}>{sqlFormattingZh.options}</button>
             <button disabled={!editable} onClick={openSaveQuery}>

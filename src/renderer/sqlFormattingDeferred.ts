@@ -1,6 +1,6 @@
 import { sqliteZh } from './locales/sqlite.zh-CN';
 import type * as monaco from 'monaco-editor';
-import { formatSqlEditor, prepareSqlFormattingRoles, type FormattingPreferences } from './sqlFormatting';
+import { formatSqlEditor, prepareSqlFormattingRoles, type FormattingPreferences, type SqlFormattingRange } from './sqlFormatting';
 import { readSqlKeywordCase, sqlKeywordRoleLimits } from '../shared/sqlKeywordCase';
 import { sqlFormattingZh as text } from './locales/sqlFormatting.zh-CN';
 import { completionLimits } from '../shared/sqlCompletion';
@@ -55,19 +55,20 @@ export class DeferredUpperSqlFormatting {
     if (this.ports.editor() !== this.#editor || this.#editor.getModel() !== this.#model || this.#model.isDisposed() || this.#model.getVersionId() !== this.#version || this.#model.getValue() !== this.#sql || this.#editor.getRawOptions().readOnly || selectionKey(this.#editor) !== this.#selection) throw Error(text.unavailable);
   }
   /** 回包后先重核，再解除观察并同步执行原事务；没有角色证明时原planner仍拒绝大小写改写。 */
-  async run(preferences = this.#preferences): Promise<boolean> {
+  async run(preferences = this.#preferences, statement?: SqlFormattingRange): Promise<boolean> {
     if (this.#started) throw Error(text.unavailable); this.#started = true; let failed = false, original: unknown;
     try {
       this.#assert();
       if (!preferences) throw Error(text.unavailable);
       const chosen = { ...preferences };
+      const range = statement && { ...statement };
       if (readSqlKeywordCase(chosen.keywordCase) !== 'preserve') {
         if (chosen.dialect === 'sqlite') throw Error(sqliteZh.formatCaseUnavailable);
         if (this.#sql.length > sqlKeywordRoleLimits.sourceUnits) throw Error(text.limited);
         await (this.ports.prepare ?? prepareSqlFormattingRoles)();
         this.#assert();
       }
-      this.#release(); this.#assert(); return formatSqlEditor(this.#editor, chosen);
+      this.#release(); this.#assert(); return formatSqlEditor(this.#editor, chosen, 'format', range);
     } catch (reason) { failed = true; original = reason; throw reason; }
     finally { try { this.dispose(); } catch (cleanup) { if (failed) throw new AggregateError([original, cleanup], text.failed, { cause: original }); throw cleanup; } }
   }

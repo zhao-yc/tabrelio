@@ -15,6 +15,7 @@ export async function prepareSqlFormattingRoles(): Promise<void> { preparedRoles
 
 export interface FormattingPreferences { tabSize?: unknown; insertSpaces?: unknown; keywordCase?: unknown; expressionWidth?: unknown; dialect?: 'mysql' | 'sqlite' | 'postgresql'; }
 export type SqlFormattingMode = 'format' | 'compact';
+export interface SqlFormattingRange { start: number; end: number; }
 type FormatterToken = Parameters<NonNullable<typeof mysql.tokenizerOptions.postProcess>>[0][number];
 // 只列正式词法类型，不维护关键字单词表；函数/数据类型/变量/参数/标识符均不在其中。
 const keywordTypes = new Set<string>(['RESERVED_KEYWORD', 'RESERVED_KEYWORD_PHRASE', 'RESERVED_SET_OPERATION', 'RESERVED_CLAUSE', 'RESERVED_SELECT', 'RESERVED_JOIN', 'CASE', 'END', 'WHEN', 'ELSE', 'THEN', 'LIMIT', 'BETWEEN', 'AND', 'OR', 'XOR']);
@@ -206,15 +207,24 @@ export function planSqlFormatting(source: string, start: number, end: number, eo
 }
 
 /** 只用Monaco编辑事务改当前模型；两侧undo stop使一次撤销/重做与前后键入分离。 */
-export function formatSqlEditor(editor: monaco.editor.IStandaloneCodeEditor, indentation: FormattingPreferences = {}, mode: SqlFormattingMode = 'format'): boolean {
+export function formatSqlEditor(editor: monaco.editor.IStandaloneCodeEditor, indentation: FormattingPreferences = {},
+  mode: SqlFormattingMode = 'format', statement?: SqlFormattingRange): boolean {
   const model = editor.getModel(), selections = editor.getSelections();
   if (!model || model.isDisposed() || editor.getRawOptions().readOnly) throw new Error(text.unavailable);
   if (model.getValueLength() > completionLimits.sourceUnits) throw new Error(text.limited);
   if (!selections || selections.length !== 1) throw new Error(text.selection);
-  const selection = selections[0], range = selection.isEmpty() ? model.getFullModelRange() : selection, version = model.getVersionId();
-  const plan = planSqlFormatting(model.getValue(), model.getOffsetAt(range.getStartPosition()), model.getOffsetAt(range.getEndPosition()), model.getEOL(), indentation, mode);
+  const selection = selections[0], defaultRange = selection.isEmpty() ? model.getFullModelRange() : selection, version = model.getVersionId();
+  // 显式范围来自已核准的语句目录。全文仍参与词法校验，原选区不必先改为语句范围。
+  const start = statement?.start ?? model.getOffsetAt(defaultRange.getStartPosition());
+  const end = statement?.end ?? model.getOffsetAt(defaultRange.getEndPosition());
+  const plan = planSqlFormatting(model.getValue(), start, end, model.getEOL(), indentation, mode);
   if (!plan) return false;
   if (editor.getModel() !== model || model.isDisposed() || model.getVersionId() !== version) throw new Error(text.unavailable);
+  let range: monaco.IRange = defaultRange;
+  if (statement) {
+    const from = model.getPositionAt(start), to = model.getPositionAt(end);
+    range = {startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column};
+  }
   editor.pushUndoStop();
   const changed = editor.executeEdits(mode === 'compact' ? 'dbark-sql-compact' : 'dbark-sql-format', [{ range, text: plan.text, forceMoveMarkers: true }], inverse => inverse.map(({ range }) => {
     if (!selection.isEmpty()) return selection.setStartPosition(range.startLineNumber, range.startColumn).setEndPosition(range.endLineNumber, range.endColumn);

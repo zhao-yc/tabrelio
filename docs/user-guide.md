@@ -1054,6 +1054,8 @@ PostgreSQL 的 `JOIN USING` 和 `NATURAL JOIN` 合并键在结果里只建议一
 
 在 PostgreSQL 查询中，点击「格式化 PostgreSQL SQL」或按 Alt＋Shift＋F（macOS 为 Option＋Shift＋F）。有选区时仅排版该范围，光标未选中文字时排版全文。排版采用当前编辑器缩进，保留关键字原有大小写，可一步撤销或重做。[PostgreSQL 选区格式化](development/postgres-query-format-selection-20261108.md)
 
+在 MySQL、MariaDB、SQLite 或 PostgreSQL 查询中，将光标放在一条语句内，从「工具 → 查询」或编辑器右键菜单选择「格式化当前语句」。按光标所在语句排版，无需选中整句。排版与全文格式化沿用同一词法校验，无法确认边界或原文安全时会保留草稿。成功后可用一次撤销。
+
 #### 压缩 SQL
 
 从「工具 → 查询 → 压缩 SQL」或查询工具栏发起。MySQL、MariaDB、PostgreSQL 和 SQLite 均支持。有选区时只压缩选区，否则压缩当前脚本。压缩减少多余空白，保留关键字大小写、字符串、注释以及行注释和跨行字符串所需的换行。可一步撤销。遇到无法确认的语法、客户端分隔指令或截断的选区，原文保持。

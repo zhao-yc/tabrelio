@@ -79,7 +79,7 @@ import { QueryCloseDialog } from './QueryCloseDialog';
 import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseIntent';
 import { queryCloseZh } from '../locales/queryClose.zh-CN';
 import type * as monaco from 'monaco-editor';
-import { formatSqlEditor, type SqlFormattingMode } from '../sqlFormatting';
+import { formatSqlEditor, type SqlFormattingMode, type SqlFormattingRange } from '../sqlFormatting';
 import { DeferredUpperSqlFormatting } from '../sqlFormattingDeferred';
 import { captureQueryFormattingOptions, type QueryFormattingOptions } from '../queryFormattingOptions';
 import { QueryFormattingOptionsDialog } from './QueryFormattingOptionsDialog';
@@ -605,8 +605,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 新执行或新来源释放旧定位；旧按钮回调只能持有已失效的租约。 */
   function clearFailureSource(): void { failureSource.current?.dispose(); failureSource.current = undefined; }
   /** 格式化是当前草稿的普通编辑，不建连、投递SQL或改写会话/来源绑定。 */
-  function formatQuery(mode: SqlFormattingMode = 'format') {
+  function formatQuery(mode: SqlFormattingMode = 'format', statement?: SqlFormattingRange) {
     if (busyRef.current || document.querySelector(appDialogSelector)) return;
+    if (statement && (formatting.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy())) return;
     try {
       const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), instance = editor.current;
       const model = instance?.getModel(), eol = model?.getEOL();
@@ -619,7 +620,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         formatSqlEditor(instance, preferences, mode);
         return;
       }
-      if (preferences.dialect === 'sqlite' || readSqlKeywordCase(preferences.keywordCase) === 'preserve') { formatting.current?.dispose(); formatting.current = null; formatSqlEditor(instance, preferences); return; }
+      if (preferences.dialect === 'sqlite' || readSqlKeywordCase(preferences.keywordCase) === 'preserve') { formatting.current?.dispose(); formatting.current = null; formatSqlEditor(instance, preferences, 'format', statement); return; }
       if (formatting.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy()) throw Error(sqlFormattingZh.unavailable);
       const owner = current, profile = workspace.connections.find(item => item.id === owner.connectionId), version = workspace.connectionVersions[owner.connectionId] ?? 0, session = sessionRef.current;
       let operation: DeferredUpperSqlFormatting | undefined, observer: MutationObserver | undefined, modalSeen = false;
@@ -639,7 +640,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         },
       }, preferences);
       formatting.current = operation; const captured = operation;
-      return captured.run().catch(reason => { if (alive.current && formatting.current === captured && useWorkspace.getState().settings.tabs.find(item => item.id === tab.id) === owner) setError(errorMessage(reason)); }).finally(() => { if (formatting.current === captured) formatting.current = null; });
+      return captured.run(undefined, statement).catch(reason => { if (alive.current && formatting.current === captured && useWorkspace.getState().settings.tabs.find(item => item.id === tab.id) === owner) setError(errorMessage(reason)); }).finally(() => { if (formatting.current === captured) formatting.current = null; });
     } catch (reason) { setError(errorMessage(reason)); }
   }
   function openFormattingOptions() {
@@ -2451,7 +2452,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       && !closeRequestRef.current;
   }
   /** 目录、选中和相邻跳转共用原分段规则，均不创建连接、会话或查询任务。 */
-  function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' | 'duplicate' = 'panel'): void {
+  function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' | 'duplicate' | 'format' = 'panel'): void {
     if (!queryMenuCurrent() || !connection || connection.dialect === 'postgresql' || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || navigationIntent.current?.controller.busy) return;
     const model = instance.getModel(); if (!model || model.isDisposed() || instance.getRawOptions().readOnly) return;
     const oneShot = action !== 'panel', direction = action === 'previous' ? -1 : action === 'next' ? 1 : undefined;
@@ -2501,6 +2502,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           ? direction ? adjacentNavigableStatement(binding.source, result.statements, offset, direction) : result.statements[currentNavigableStatement(binding.source, result.statements, offset)] : undefined;
         closeStatementNavigation();
         if (range && action === 'duplicate') void duplicateQuery('statement', binding.instance, [range]);
+        else if (range && action === 'format') void formatQuery('format', range);
         else if (range) applyStatementRange(binding, range, action === 'select');
         else if (result.status === 'ready') useWorkspace.getState().notify(noTarget);
         else if (result.reason !== 'stale') useWorkspace.getState().notify(navigationText.reasons[result.reason] ?? navigationText.unavailable, true);
@@ -2761,11 +2763,15 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.69,
       run: () => { if (active) openStatementNavigation(searchEditor, 'duplicate'); },
     });
+    const format = searchEditor.addAction({ id: 'dbark-format-current-statement:' + uid(), label: uiCommandLabels['format-current-statement'],
+      precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'modification', contextMenuOrder: 8,
+      run: () => { if (active) openStatementNavigation(searchEditor, 'format'); },
+    });
     const adjacent = (['previous', 'next'] as const).map((direction, index) => searchEditor.addAction({
       id: `dbark-${direction}-statement:${uid()}`, label: uiCommandLabels[`${direction}-statement`], precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.66 + index / 100,
       run: () => { if (active) openStatementNavigation(searchEditor, direction); },
     }));
-    return () => { active = false; action.dispose(); positions.forEach(item => item.dispose()); select.dispose(); duplicate.dispose(); adjacent.forEach(item => item.dispose()); };
+    return () => { active = false; action.dispose(); positions.forEach(item => item.dispose()); select.dispose(); duplicate.dispose(); format.dispose(); adjacent.forEach(item => item.dispose()); };
   }, [searchEditor, queryMenuKey, connection, navigationView?.busy, tab.sql, resultsOnly]);
   const menuResult = useRef<{ result?: QueryResult; revision: number }>({ revision: 0 });
   if (menuResult.current.result !== sourceResult) menuResult.current = { result: sourceResult, revision: menuResult.current.revision + 1 };
@@ -2871,6 +2877,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'execute-all': { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void execute('all'); } },
     stop: { enabled: queryRunning, run: () => { void cancelCurrentQuery().catch(reason => setError(errorMessage(reason))); } },
     format: { enabled: !busy && !closeRequest && !fileSource.busy, run: async () => { await formatQuery(); } },
+    'format-current-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'format') },
     'compact-sql': { enabled: canCompactSql, run: () => { formatQuery('compact'); } },
     'sql-format-options': { enabled: canCompactSql, run: openFormattingOptions },
     parameters: { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => openParameters() },
@@ -3002,6 +3009,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         {onCreateView && <button disabled={busy || !connection || !searchEditor || resultsOnly || fileSource.busy || !!closeRequest || (connection.dialect === 'sqlite' && connection.sqlite.readOnly)}
           title={queryViewText.hint} onClick={openViewDesign}>{queryViewText.entry}</button>}
         <button disabled={!canCompactSql} onClick={openFormattingOptions}>{sqlFormattingZh.options}</button>
+        <button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'format')}>{uiCommandLabels['format-current-statement']}</button>
         <button disabled={!canCompactSql} title={sqlFormattingZh.compactHint} onClick={() => formatQuery('compact')}>{sqlFormattingZh.compact}</button>
         <ActionMenuSection label={navigationText.group}><button disabled={busy || !connection || !searchEditor || navigationView?.busy} onClick={() => openStatementNavigation()}>{navigationText.entry}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'previous')}>{uiCommandLabels['previous-statement']}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'next')}>{uiCommandLabels['next-statement']}</button></ActionMenuSection><ActionMenuSection label={sqlite ? sqliteSyntaxCheckZh.title : syntaxText.title}><button disabled={busy || !connection || !searchEditor || syntaxView?.busy} onClick={() => openSyntaxCheck()}>{syntaxText.entry}</button></ActionMenuSection><ActionMenuSection label={objectDefinitionZh.title}><button disabled={busy || !connection || !searchEditor} onClick={() => openObjectStructure()}>{objectDefinitionZh.entry}</button></ActionMenuSection>
         <ActionMenuSection label={menuText.execution}>{sqlite && <>

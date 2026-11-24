@@ -1,6 +1,7 @@
 import { test as baseTest, expect } from '@playwright/test';
 import { isDeepStrictEqual } from 'node:util';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
+import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 
 // 列表阶段先短路，不加载桌面夹具、认证、系统剪贴板或私网帮助器。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -25,19 +26,20 @@ async function observe(desktop: Desktop) {
   });
 }
 /** 只建本例离线连接和保存查询；正文由正式打开入口进入编辑器，不建立数据库会话。 */
-async function openSource(sql: string, dialect: 'mysql' | 'postgresql' = 'mysql') {
+async function openSource(sql: string, dialect: 'mysql' | 'mariadb' | 'postgresql' = 'mysql', keywordCase?: 'upper') {
   // Playwright转译为CJS后，动态import命名空间可能固化上一例的page；读取同一夹具当前导出。
   const desktop = require('./desktop-fixture') as Desktop, { page } = desktop;
   await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
-  await page.evaluate(async ({ sql, dialect }) => {
+  await page.evaluate(async ({ sql, dialect, keywordCase }) => {
     const database = dialect === 'postgresql' ? 'postgres' : undefined;
     const connection = await window.dbark.invoke('connections.save', { id: '', name: '格式化离线连接', group: '', color: '#51bda5', dialect, host: '127.0.0.1', port: 1, user: 'offline', database });
     await window.dbark.invoke('queries.create', { name: '格式化来源', connectionId: connection.id, context: { state: 'known', database: database ?? null }, sql });
-    if (dialect === 'postgresql') {
+    if (dialect === 'postgresql' || keywordCase) {
       const settings = await window.dbark.invoke('settings.get', {});
-      await window.dbark.invoke('settings.save', { ...settings, editorTabSize: 4, editorInsertSpaces: false });
+      await window.dbark.invoke('settings.save', { ...settings,
+        ...(dialect === 'postgresql' ? {editorTabSize: 4, editorInsertSpaces: false} : {sqlKeywordCase: keywordCase}) });
     }
-  }, { sql, dialect });
+  }, { sql, dialect, keywordCase });
   await page.reload(); await expect(page.locator('.app-statusbar')).toBeVisible();
   await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '执行历史', exact: true })).click();
   const dialog = page.getByRole('dialog', { name: '历史与保存的查询', exact: true }); await (await navigationMenuItem(dialog, { name: '保存的查询', exact: true })).click();
@@ -73,6 +75,42 @@ const formatCases = {
     button: postgresZh.format,
   },
 } as const;
+
+for (const dialect of ['mysql', 'mariadb', 'postgresql'] as const) test(dialect + ' 格式化当前语句只修改光标所在正文，保留分隔符与相邻原文', async () => {
+  const prefix = "select  '首段🚢  ;'  as head;\n", suffix = "\nselect  '尾段'   as tail;";
+  const source = prefix + 'select  7, 8 from items where id=2;' + suffix;
+  const keywordCase = dialect === 'mysql' ? 'upper' : undefined;
+  const desktop = await openSource(source, dialect, keywordCase), {page} = desktop;
+  const initial = await observe(desktop);
+  const indent = dialect === 'postgresql' ? '\t' : '  ';
+  const formatted = [keywordCase ? 'SELECT' : 'select', indent + '7,', indent + '8', keywordCase ? 'FROM' : 'from', indent + 'items',
+    keywordCase ? 'WHERE' : 'where', indent + 'id = 2;'].join('\n');
+  const expected = (prefix + formatted + suffix).replaceAll('\n', initial.eol);
+  const box = page.locator('.query-tab:visible .monaco-editor').getByRole('textbox');
+  const moveToSecond = async () => {
+    await box.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
+    await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowRight');
+    const offset = prefix.replaceAll('\n', initial.eol).length + 1;
+    expect((await observe(desktop)).selections).toEqual([{start: offset, end: offset}]);
+  };
+  const before = await sideEffects(desktop), command = 'format-current-statement';
+  await moveToSecond();
+  await expect.poll(() => desktop.desktop.evaluate(({Menu}, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.enabled === true, command)).toBe(true);
+  await desktop.desktop.evaluate(({Menu, BrowserWindow}, id) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById(id), windows = BrowserWindow.getAllWindows();
+    if (!item?.enabled || windows.length !== 1) throw Error('原生格式化命令或所属窗口已变化');
+    item.click(item, windows[0], {} as Electron.KeyboardEvent);
+  }, command);
+  await exactSql(desktop, expected);
+  expect((await observe(desktop)).focused).toBe(true);
+  await page.keyboard.press(`${modifier}+z`); await exactSql(desktop, initial.value);
+  await moveToSecond();
+  await (await navigationMenuItem(page.locator('.query-tab:visible'), {name: uiCommandLabels[command], exact: true})).click();
+  await exactSql(desktop, expected);
+  await page.keyboard.press(`${modifier}+z`); await exactSql(desktop, initial.value);
+  expect(await sideEffects(desktop)).toEqual(before);
+  expect(desktop.pageErrors).toEqual([]);
+});
 
 for (const dialect of ['mysql', 'postgresql'] as const) for (const selected of [true, false]) test(dialect + (selected ? ' 真实选区格式化保持外部原文、Unicode注释字符串，单次撤销重做且零执行' : ' 无选区格式化全文，单次撤销重做且来源会话任务历史不变'), async ({}, info) => {
   const prefix = "select '🚢外面' as 前; -- 头部保持\n", suffix = "\nselect '尾部' as 后;";

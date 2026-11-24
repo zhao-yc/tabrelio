@@ -241,6 +241,20 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     await step(() => expect(diagnostic).toHaveCount(0));
     await step(() => syntaxPanel.getByRole('button', {name: syntaxText.close, exact: true}).click());
 
+    stage = '格式化光标内语句保留相邻正文与原事务';
+    const formattingSource = "SELECT  '前置🚢';\r\nselect  2,3;\r\nSELECT  '尾部';";
+    const formattedCurrent = "SELECT  '前置🚢';\r\nselect\r\n  2,\r\n  3;\r\nSELECT  '尾部';";
+    await write(formattingSource, formattingSource.indexOf('select') + 1);
+    const beforeFormatting = await step(audit);
+    await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(query(),
+      {name: '格式化当前语句', exact: true}, check)).click());
+    await step(() => expect.poll(async () => (await model()).source).toBe(formattedCurrent));
+    await step(() => page.keyboard.press(`${modifier}+z`));
+    await step(() => expect.poll(async () => (await model()).source).toBe(formattingSource));
+    expect((await step(audit)).operations.filter(entry => entry.command !== 'query.completionState')).toEqual(
+      beforeFormatting.operations.filter(entry => entry.command !== 'query.completionState'));
+    expect(await history()).toEqual([]);
+
     stage = '菜单中句INSERT不运行前后哨兵'; const inserted = await run(insert), actualInsertSql = await insertHeader(inserted.fact); expect(inserted.fact?.request.sessionId).toBe(checked[0].request.sessionId); expect(result(inserted.fact?.reply)).toMatchObject({ results: [{ affectedRows: 1, statement: actualInsertSql }] }); const afterInsert = { ...baseline, subject: [{ id: '10', note: "中间;?'中文🚢" }] }; expect(disk()).toEqual(afterInsert); await assertHistory([actualInsertSql]);
     stage = 'CtrlMetaShiftEnter中句SELECT精度及中文引号'; const selected = await run(select, true); expect(result(selected.fact?.reply)).toMatchObject({ results: [{ statement: select.selected, rows: [{ c0: '9223372036854775807', c1: "🧭当前;?'中文", c2: '1' }] }] }); await step(() => expect(query().getByRole('grid').getByText('9223372036854775807', { exact: true })).toBeVisible()); expect(disk()).toEqual(afterInsert); expect(emittedSql(await step(audit), selected.fact?.request.taskId)).toEqual([select.selected]);
     stage = '当前结果 SQL 预览绑定已执行语句，编辑草稿后也不重新执行';
