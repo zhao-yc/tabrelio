@@ -208,9 +208,9 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       previous?.scope === loaded.scope && previous.result === displayed && previous.index === index ? previous :
       { scope: loaded.scope, result: displayed, index });
   }
-  function openRowDetail(trigger: HTMLButtonElement): void {
-    if (!loaded || detailIndex === undefined || !editable()) return;
-    try { openOverlay({ kind: 'row-detail', source: loaded, view: rowDetails.open(detailBinding, detailIndex) }, trigger); }
+  function openRowDetail(trigger: HTMLElement, index = detailIndex): void {
+    if (!loaded || index === undefined || !editable()) return;
+    try { openOverlay({ kind: 'row-detail', source: loaded, view: rowDetails.open(detailBinding, index) }, trigger); }
     catch (reason) { setError(errorMessage(reason)); }
   }
   /** 翻行只更换本窗口的行租约，保留字段搜索和查看模式。 */
@@ -526,6 +526,9 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
           onExportRange={binding ? openRangeExport : undefined}
           onHistoryTravel={historyBinding ? travelHistory : undefined}
           onActiveCellChange={selectDetailRow}
+          onOpenRowDetail={detailBinding ? (cell, trigger) => {
+            if (detailBinding.rows[cell.index] === cell.row && gridCurrent(loaded, interaction, false)) openRowDetail(trigger, cell.index);
+          } : undefined}
           sqliteSource={displayed.sqliteStorage ? displayed : undefined} onShowRows={changeMatchView}
           isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity}
           binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/>

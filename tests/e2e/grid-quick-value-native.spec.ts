@@ -11,6 +11,7 @@ import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../
 import { gridQuickValueZh as text } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridCellEditZh } from '../../src/renderer/locales/gridCellEdit.zh-CN';
 import { gridCellValueZh } from '../../src/renderer/locales/gridCellValue.zh-CN';
+import { queryRowDetailsZh as rowDetailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
 import { gridRangeFillZh as rangeText } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
 import { sqliteTableEditZh as sqliteText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
@@ -446,6 +447,15 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
       await execute.click();
       const firstResult = query.getByRole('gridcell', { name: 'row A', exact: true });
       const secondResult = query.getByRole('gridcell', { name: 'row B', exact: true });
+      await firstResult.click();
+      const beforeDetail = await jobs();
+      await secondResult.click({ button: 'right' });
+      await item(rowDetailText.open).click();
+      const detail = query.getByRole('region', { name: rowDetailText.region, exact: true });
+      await expect(detail.getByLabel(rowDetailText.row, { exact: true })).toHaveValue('2');
+      await expect(detail.getByText('row B', { exact: true })).toBeVisible();
+      await detail.getByRole('button', { name: rowDetailText.close, exact: true }).click();
+      expect(await jobs()).toEqual(beforeDetail);
       async function selectTwoRows(first = firstResult, last = secondResult) {
         await first.click();
         await page.keyboard.press('Shift+ArrowDown');

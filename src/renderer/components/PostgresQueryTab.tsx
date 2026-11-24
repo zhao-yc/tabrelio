@@ -1448,10 +1448,12 @@ export function PostgresQueryTab({
       old?.binding === detailBinding && old.index === index ? old : { binding: detailBinding, index });
   }
 
-  /** 打开准确活动行，保留完整原值。 */
-  function openRowDetail() {
-    if (!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailCurrent(detailBinding)) return;
-    try { setRowDetail(rowDetails.open(detailBinding, activeDetailRow.index)); }
+  /** 菜单使用命中行，工具栏使用活动行，均核对当前显示结果。 */
+  function openRowDetail(cell?: QueryResultCopyCell) {
+    if (!detailBinding || !rowDetailCurrent(detailBinding)) return;
+    const index = cell?.index ?? activeDetailRow?.index;
+    if (index === undefined || (cell ? detailBinding.rows[index] !== cell.row : activeDetailRow?.binding !== detailBinding)) return;
+    try { setRowDetail(rowDetails.open(detailBinding, index)); }
     catch (reason) { setError(errorMessage(reason)); }
   }
 
@@ -2413,6 +2415,7 @@ export function PostgresQueryTab({
         setExportView({ result, selected: false, scope: 'rectangle' });
       } : undefined}
       onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
+      onOpenRowDetail={detailBinding ? openRowDetail : undefined}
       onCellEdit={canUpdateQueryRecord ? editQueryCell : undefined}
       onCellPaste={canUpdateQueryRecord ? pasteQueryCells : undefined}
       onFillRange={canUpdateQueryRecord ? fillQueryCells : undefined}
@@ -2635,7 +2638,7 @@ export function PostgresQueryTab({
                 <button disabled={locked || !binding} onClick={openResultColumns}>{columnText.open}</button>
                 {origins && <button disabled={locked} onClick={() => void openOrigins()}>{originsText.open}</button>}
                 <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
-                  title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
+                  title={detailText.choose} onClick={() => openRowDetail()}>{detailText.open}</button>
                 {canBrowseQueryReference && <>
                   <button disabled={locked || !selectedDetailRow} title={referenceText.queryChoose}
                     onClick={() => browseQueryReference('parent')}>{referenceText.browse}</button>

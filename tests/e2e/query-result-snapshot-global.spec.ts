@@ -100,9 +100,11 @@ function register(): void {
       } else expect(actual.pid).toBe(launcherPid);
       if (mode === 'save') {
         firstPid = actual.pid; firstProfile = profileDirectory;
-        output = await step(() => mkdtemp(join(tmpdir(), 'dbark-result-snapshot-global-'))); sourcePath = join(output, '合成输入.dbark-result.json'); savedPath = join(output, '真实保存.dbark-result.json'); rightPath = join(output, '第二份输入.dbark-result.json'); shownPath = join(output, '当前显示.dbark-result.json');
+        // macOS 的系统临时目录可从 /var 或 /private/var 到达，创建前固定真实父目录。
+        const tempRoot = await step(() => realpath(tmpdir()));
+        output = await step(() => mkdtemp(join(tempRoot, 'dbark-result-snapshot-global-'))); sourcePath = join(output, '合成输入.dbark-result.json'); savedPath = join(output, '真实保存.dbark-result.json'); rightPath = join(output, '第二份输入.dbark-result.json'); shownPath = join(output, '当前显示.dbark-result.json');
         alignedPath = join(output, '同名异序.dbark-result.json');
-        expect(dirname(resolve(output))).toBe(resolve(tmpdir())); expect(basename(output)).toMatch(/^dbark-result-snapshot-global-/);
+        expect(dirname(resolve(output))).toBe(tempRoot); expect(basename(output)).toMatch(/^dbark-result-snapshot-global-/);
         const stat = await step(() => lstat(output)); expect(stat.isDirectory() && !stat.isSymbolicLink()).toBe(true); outputIdentity = { dev: stat.dev, ino: stat.ino };
         await step(() => info.attach('结果快照原临时文件归属', { body: JSON.stringify({ kind: 'dbark.result-snapshot-files', output, sourcePath, savedPath, shownPath, alignedPath, outputIdentity }), contentType: 'application/json' }));
         await step(() => writeFile(sourcePath, wire, { flag: 'wx', mode: 0o600 }));
@@ -224,9 +226,16 @@ function register(): void {
 
       const detailButton = viewer.getByRole('button', { name: detailText.open, exact: true });
       const detail = page.getByRole('dialog', { name: detailText.open, exact: true });
+      const detailCell = grid.getByRole('gridcell', { name: '构造键安全', exact: true });
       await step(() => expect(detailButton).toBeDisabled());
-      await step(() => grid.getByRole('gridcell', { name: '构造键安全', exact: true }).click());
-      await step(() => detailButton.click());
+      if (mode === 'reopen') {
+        await step(() => grid.getByRole('gridcell', { name: '不同内容', exact: true }).click());
+        await step(() => detailCell.click({ button: 'right' }));
+        await step(() => page.getByRole('menuitem', { name: detailText.open, exact: true }).click());
+      } else {
+        await step(() => detailCell.click());
+        await step(() => detailButton.click());
+      }
       await step(() => expect(detail.getByLabel(detailText.row, { exact: true })).toHaveValue('2'));
       await step(() => detail.getByRole('searchbox', { name: detailText.fieldSearch, exact: true }).fill('重复列'));
       await step(() => expect(detail.getByRole('heading', { name: /重复列/ })).toHaveCount(2));
@@ -247,7 +256,7 @@ function register(): void {
       ]));
       await step(() => page.keyboard.press('Escape'));
       await step(() => expect(detail).toBeHidden());
-      await step(() => expect(detailButton).toBeFocused());
+      await step(() => expect(mode === 'reopen' ? detailCell : detailButton).toBeFocused());
 
       const checked = grid.getByRole('row').filter({ hasText: '另一行' }).getByRole('checkbox');
       const rowJump = viewer.getByRole('textbox', { name: rowJumpText.row, exact: true });

@@ -78,6 +78,24 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
   const settings = () => step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})));
   const tasks = () => step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})));
   const history = () => step(() => page.evaluate(() => window.dbark.invoke('history.list', {})));
+  /** 先等滚动完成再打开结果菜单，键盘聚焦不会让工具栏再次滚动。 */
+  async function openResultAction(sectionName: string, actionName: string): Promise<void> {
+    const more = query().getByRole('button', { name: menuText.resultMore, exact: true });
+    await step(() => more.scrollIntoViewIfNeeded());
+    await step(async () => {
+      await more.evaluate(async (button: HTMLButtonElement) => {
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        button.focus({ preventScroll: true });
+      });
+      await page.keyboard.press('Enter');
+    });
+    const resultSection = page.getByRole('menuitem', { name: sectionName, exact: true });
+    await step(() => resultSection.evaluate((button: HTMLButtonElement) => button.focus({ preventScroll: true })));
+    await step(() => page.keyboard.press('ArrowRight'));
+    const entry = page.getByRole('menuitem', { name: actionName, exact: true });
+    await step(() => entry.evaluate((button: HTMLButtonElement) => button.focus({ preventScroll: true })));
+    await step(() => page.keyboard.press('Enter'));
+  }
   /** 键盘是编辑器唯一写入方式，settings只读确认400ms持久化，不调用Monaco模型修改API。 */
   const write = async (sql: string) => {
     const box = query().locator('.monaco-editor').getByRole('textbox'); await step(() => box.focus());
@@ -99,26 +117,17 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     try { return db.prepare('SELECT id,note FROM subject ORDER BY id').all().map(row => ({ id: row.id, note: row.note })); } finally { db.close(); check(); }
   };
   /** 从原网格打开当前查询及磁盘固定快照，核实际类型和零额外SQL，不修改输入或原数据。 */
-  async function inspectRecord(label: string): Promise<void> {
+  async function inspectRecord(label: string, fromCell = false): Promise<void> {
     const before = await step(audit), originalDisk = disk();
     const region = () => query().getByRole('region', { name: detailText.region, exact: true });
-    await step(() => query().getByRole('grid').getByText('9223372036854775807', { exact: true }).click());
-    const more = query().getByRole('button', { name: menuText.resultMore, exact: true });
-    await step(() => more.scrollIntoViewIfNeeded());
-    await step(async () => {
-      // 右侧布局中的工具栏可滚动。让原滚动先落定，键盘聚焦菜单项时保持背景位置。
-      await more.evaluate(async (button: HTMLButtonElement) => {
-        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-        button.focus({ preventScroll: true });
-      });
-      await page.keyboard.press('Enter');
-    });
-    const resultSection = page.getByRole('menuitem', { name: menuText.resultView, exact: true });
-    await step(() => resultSection.evaluate((button: HTMLButtonElement) => button.focus({ preventScroll: true })));
-    await step(() => page.keyboard.press('ArrowRight'));
-    const detailEntry = page.getByRole('menuitem', { name: detailText.open, exact: true });
-    await step(() => detailEntry.evaluate((button: HTMLButtonElement) => button.focus({ preventScroll: true })));
-    await step(() => page.keyboard.press('Enter'));
+    const cell = query().getByRole('grid').getByText('9223372036854775807', { exact: true });
+    if (fromCell) {
+      await step(() => cell.click({ button: 'right' }));
+      await step(() => page.getByRole('menuitem', { name: detailText.open, exact: true }).click());
+    } else {
+      await step(() => cell.click());
+      await openResultAction(menuText.resultView, detailText.open);
+    }
     await step(() => expect(region()).toBeVisible());
     await step(() => region().getByRole('button', { name: recordText.tree, exact: true }).click());
     await step(() => region().getByRole('button', { name: recordText.parse('note'), exact: true }).click());
@@ -642,9 +651,9 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => expect(query().getByText(snapshotText.opened, { exact: true })).toBeVisible());
     await step(() => expect(query().getByRole('grid').getByText('9223372036854775807', { exact: true })).toBeVisible());
     expect((require('node:fs') as typeof import('node:fs')).readFileSync(snapshotPath, 'utf8')).toBe(JSON.stringify(savedSnapshot) + '\n');
-    stage = '磁盘重开固定快照只读记录树与完整JSON'; await inspectRecord('磁盘快照');
+    stage = '磁盘重开固定快照只读记录树与完整JSON'; await inspectRecord('磁盘快照', true);
     stage = '新owner从本机持久化方案应用到原类型快照，随后准确删除本例方案';
-    await step(async () => (await navigationMenuItem(query(), { name: presetText.open, exact: true }, check)).click());
+    await openResultAction(menuText.resultHistory, presetText.open);
     const restoredPresets = page.getByRole('dialog', { name: presetText.title, exact: true });
     await step(() => expect(restoredPresets.getByLabel(presetText.choose, { exact: true })).toBeEnabled());
     await step(() => restoredPresets.getByLabel(presetText.choose, { exact: true }).selectOption(savedPresetId));
@@ -653,7 +662,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => expect(restoredPresets).toHaveCount(0));
     await step(() => expect(query().getByRole('grid').getByText('-9223372036854775808', { exact: true })).toBeVisible());
     await step(() => expect(query().getByRole('grid').getByText('9223372036854775807', { exact: true })).toHaveCount(0));
-    await step(async () => (await navigationMenuItem(query(), { name: presetText.open, exact: true }, check)).click());
+    await openResultAction(menuText.resultHistory, presetText.open);
     await step(() => expect(restoredPresets.getByLabel(presetText.choose, { exact: true })).toBeEnabled());
     await step(() => restoredPresets.getByLabel(presetText.choose, { exact: true }).selectOption(savedPresetId));
     await step(() => restoredPresets.getByRole('button', { name: presetText.remove, exact: true }).click());

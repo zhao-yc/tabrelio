@@ -578,6 +578,8 @@ PostgreSQL 的 `UUID`、`INET` 和 `CIDR` 支持结果及离线快照的排序�
 
 在 PostgreSQL 结果网格点选一个数据单元格，再点「行详情」，可按当前筛选和排序后的顺序翻行。侧栏可搜索原字段，切换字段列表、记录树和整行只读 JSON。完整记录包含隐藏列和同名列。详见[PostgreSQL 查询结果行详情](development/postgres-query-row-details-20261105.md)。
 
+在查询结果、固定结果或离线快照中，也可右键单个数据格，或聚焦该格后按 `Shift+F10`，选择「行详情」。打开的是菜单命中的那行，保留原有行勾选，并可查看隐藏字段。
+
 在 PostgreSQL 查询结果中，点「列统计」可查看当前列的计数、极值、合计、平均值和常见值分布。可以切换可见列以及当前筛选后的全部行或勾选行。分布中的「按此值筛选」将原值填入草稿，确认后才应用。详见[PostgreSQL 查询结果列统计](development/postgres-query-result-statistics-20261105.md)。
 
 在 PostgreSQL 查询结果中，可用「撤销结果整理」「重做结果整理」恢复当前结果的筛选和排序。网格聚焦时也可按 `Ctrl/⌘+Z` 撤销、`Ctrl/⌘+Shift+Z` 重做。详见[PostgreSQL 查询结果整理历史](development/postgres-query-result-history-20261105.md)。
