@@ -1539,12 +1539,14 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     if (row.index === undefined) setSelectedRow(undefined);
     setValidation('');
   }
-  /** 单格还原使用菜单原行；旧页、预览和尚未完成的输入继续由表页守卫拒绝。 */
-  function cellDraftAction(row: SqliteDraftRow, column: number) {
+  /** 还原沿用菜单命中的行和列，旧页、预览及未完成的输入由表页守卫拒绝。 */
+  function cellDraftAction(row: SqliteDraftRow, column: number, range?: GridRangeTarget<SqliteDraftRow>) {
     const editor = renderedEditor;
-    if (!editor || !workspaceCheckedCurrent() || !editor.canDiscardCell(row, column)) return;
-    return { label: draftHistoryZh.discardCell, run: () => {
-      if (workspaceCheckedCurrent() && editor.discardCell(row, column)) setValidation('');
+    if (!editor || !workspaceCheckedCurrent() || !editView?.dirty) return;
+    const rows = range?.rows ?? [row], columns = range ? range.keys.map(key => Number(key.slice(1))) : [column];
+    if (!editor.canDiscardCells(rows, columns)) return;
+    return { label: range ? draftHistoryZh.discardRange : draftHistoryZh.discardCell, run: () => {
+      if (workspaceCheckedCurrent() && editor.discardCells(rows, columns)) setValidation('');
     } };
   }
   function undoEdit(): void { if (editActionCurrent() && available()) renderedEditor!.undo(); }

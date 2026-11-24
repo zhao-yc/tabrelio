@@ -10,19 +10,36 @@ export function draftRowChanged(row: DraftRow | undefined): boolean {
   return !!row && (row.inserted || !!row.original && (row.deleted || !rowEqual(row.original, row.data)));
 }
 
-/** 仅比较已有记录的准确字段值，保持 NULL、空字符串与字节的区别。 */
-export function draftCellChanged(row: DraftRow, key: string): boolean {
-  if (row.inserted || row.deleted || !row.original) return false;
+/** 只返回有实际差异的原值，保留 NULL、空字符串与字节的区别。 */
+function draftCellBaseline(row: DraftRow, key: string) {
+  if (row.inserted || row.deleted || !row.original) return;
   const original = ownCell(row.original, key);
-  return original !== undefined && JSON.stringify(original) !== JSON.stringify(ownCell(row.data, key));
+  const value = ownCell(row.data, key);
+  if (original !== undefined && !Object.is(original, value) && JSON.stringify(original) !== JSON.stringify(value)) return original;
 }
 
-/** 单格恢复只替换准确行的指定字段，可用原草稿账本撤销。 */
-export function discardDraftCell(rows: DraftRow[], row: DraftRow, key: string): DraftRow[] {
-  if (!rows.includes(row) || !draftCellChanged(row, key)) return rows;
-  const original = row.original && ownCell(row.original, key);
-  if (original === undefined) return rows;
-  return rows.map(item => item === row ? { ...row, data: { ...row.data, [key]: structuredClone(original) } } : item);
+export function draftCellsChanged(rows: readonly DraftRow[], keys: readonly string[]): boolean {
+  return rows.some(row => keys.some(key => draftCellBaseline(row, key) !== undefined));
+}
+
+/** 整块恢复只替换仍准确匹配的字段；有旧行时整块拒绝。 */
+export function discardDraftCells(rows: DraftRow[], selected: readonly DraftRow[], keys: readonly string[]): DraftRow[] {
+  const originalRows = new Set(rows);
+  if (selected.some(row => !originalRows.has(row))) return rows;
+  const replacements = new Map<DraftRow, DraftRow>();
+  for (const row of selected) {
+    let data: DataRow | undefined;
+    for (const key of keys) {
+      const original = draftCellBaseline(row, key);
+      if (original !== undefined) {
+        // 目录允许与对象原型同名的字段，按自有字段恢复。
+        data ??= { ...row.data };
+        Object.defineProperty(data, key, { value: structuredClone(original), enumerable: true, writable: true, configurable: true });
+      }
+    }
+    if (data) replacements.set(row, { ...row, data });
+  }
+  return replacements.size ? rows.map(row => replacements.get(row) ?? row) : rows;
 }
 
 /** 按原行对象定位。新增只移除本地行，已有行恢复读取时的完整原值及删除状态。 */

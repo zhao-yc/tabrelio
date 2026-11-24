@@ -383,19 +383,34 @@ export class SqliteTableEditor {
     if (!changed) return;
     return { count: changed, changes, check: current, stage: () => this.replaceRows(next), publish: () => this.emit() };
   }
-  /** 单格恢复仅接纳准确的未删除原行，读取数据库返回的原生类型。 */
-  canDiscardCell(row: SqliteDraftRow, column: number): boolean {
-    if (row.index === undefined || row.deleted || !this.rows.includes(row) || this.page.edit?.kind !== 'editable') return false;
+  /** 原值取自未删除记录的读页快照，保留 SQLite 存储类。 */
+  private discardCellBaseline(row: SqliteDraftRow, column: number) {
+    if (row.index === undefined || row.deleted || this.page.edit?.kind !== 'editable') return;
     const original = this.page.edit.rows[row.index]?.[column];
-    return original !== undefined && !sameDraftValue(original, row.values[column]);
+    if (original !== undefined && !sameDraftValue(original, row.values[column])) return original;
   }
 
-  discardCell(row: SqliteDraftRow, column: number): boolean {
-    if (!this.canEdit() || this.input || this.previewValue || !this.canDiscardCell(row, column)) return false;
-    if (row.index === undefined || this.page.edit?.kind !== 'editable') return false;
-    const values = [...row.values];
-    values[column] = structuredClone(this.page.edit.rows[row.index][column]);
-    this.replace(this.rows.map(item => item === row ? { ...row, values } : item));
+  canDiscardCells(rows: readonly SqliteDraftRow[], columns: readonly number[]): boolean {
+    const source = new Set(this.rows);
+    return rows.every(row => source.has(row)) && rows.some(row => columns.some(column => this.discardCellBaseline(row, column) !== undefined));
+  }
+
+  /** 使用一个草稿事务还原整个选区，保持其它字段和新增记录。 */
+  discardCells(rows: readonly SqliteDraftRow[], columns: readonly number[]): boolean {
+    if (!this.canEdit() || this.input || this.previewValue || !this.canDiscardCells(rows, columns)) return false;
+    const replacements = new Map<SqliteDraftRow, SqliteDraftRow>();
+    for (const row of rows) {
+      let values: SqliteDraftRow['values'] | undefined;
+      for (const column of columns) {
+        const original = this.discardCellBaseline(row, column);
+        if (original !== undefined) {
+          values ??= [...row.values];
+          values[column] = structuredClone(original);
+        }
+      }
+      if (values) replacements.set(row, { ...row, values });
+    }
+    this.replace(this.rows.map(row => replacements.get(row) ?? row));
     return true;
   }
 

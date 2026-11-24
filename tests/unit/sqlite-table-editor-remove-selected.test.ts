@@ -32,16 +32,20 @@ function unchanged(f: ReturnType<typeof fixture>, before: ReturnType<typeof capt
 }
 
 describe('SQLite 放弃当前记录草稿', () => {
-  it('还原单格的原生文本，保留同行其它草稿并可一步撤销', () => {
+  it('还原选区两行的原生文本，保留其它字段及新增草稿并可一步撤销', () => {
     const f = fixture();
     f.editor.save('original-0', [{ kind: 'null' }, cell('仍需保留')]);
+    f.save(1, '本地修改');
+    f.editor.appendRows([[cell('新增'), undefined]]);
     const before = f.editor.view.rows;
-    expect(f.editor.discardCell(before[0], 0)).toBe(true);
+    expect(f.editor.discardCells(before, [0])).toBe(true);
     const after = f.editor.view.rows;
     expect(after[0].values).toEqual([cell('原0:0'), cell('仍需保留')]);
-    expect(after[1]).toBe(before[1]);
-    expect(f.editor.discardCell(before[0], 1)).toBe(false);
-    expect(f.editor.discardCell(after[0], 0)).toBe(false);
+    expect(after[1].values[0]).toEqual(cell('原1:0'));
+    expect(after[2]).toBe(before[2]);
+    expect(after.at(-1)).toBe(before.at(-1));
+    expect(f.editor.discardCells([after[0], before[1]], [1])).toBe(false);
+    expect(f.editor.discardCells(after, [0])).toBe(false);
     f.editor.undo();
     expect(f.editor.view.rows).toBe(before);
     expect(f.preview).not.toHaveBeenCalled();
@@ -75,13 +79,13 @@ describe('SQLite 放弃当前记录草稿', () => {
     await f.ready();
     const before = capture(f);
     expect(f.editor.discardRow(before.rows[0])).toBe(false);
-    expect(f.editor.discardCell(before.rows[0], 0)).toBe(false);
+    expect(f.editor.discardCells([before.rows[0]], [0])).toBe(false);
     unchanged(f, before);
     f.editor.closePreview();
     f.editor.inputOpen(true);
     const input = capture(f);
     expect(f.editor.discardRow(input.rows[0])).toBe(false);
-    expect(f.editor.discardCell(input.rows[0], 0)).toBe(false);
+    expect(f.editor.discardCells([input.rows[0]], [0])).toBe(false);
     unchanged(f, input);
   });
 });

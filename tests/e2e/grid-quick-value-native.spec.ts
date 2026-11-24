@@ -106,6 +106,11 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
     const rowIndex = await label.locator('..').getAttribute('aria-rowindex');
     const columnIndex = await label.getAttribute('aria-colindex');
     const cell = grid.locator(`[role="row"][aria-rowindex="${rowIndex}"] > [role="gridcell"][aria-colindex="${columnIndex}"]`);
+    const namedCell = async (name: string) => {
+      const index = await grid.getByRole('columnheader').filter({ hasText: new RegExp('^' + name) }).getAttribute('aria-colindex');
+      if (!index) throw Error('验收列位置缺失');
+      return grid.locator(`[role="row"][aria-rowindex="${rowIndex}"] > [role="gridcell"][aria-colindex="${index}"]`);
+    };
     const action = (name: string): Promise<Locator> => navigationMenuItem(tab, { name, exact: true });
     const clickAction = async (name: string) => (await action(name)).click();
     const undo = local ? sqliteText.undo : draftHistoryZh.undo;
@@ -216,9 +221,14 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
     await expect(rangePanel).toBeHidden();
     expect(await jobs()).toEqual(before);
 
-    // 选区空串与活动格菜单分开，撤销一步恢复两行。SQLite 同时核对物理表尚未改写。
+    // 选区还原恢复两条记录，同行另一格的 UUID 保留。SQLite 同时核对物理表未改写。
     const otherIndex = await other.locator('..').getAttribute('aria-rowindex');
     const otherCell = grid.locator(`[role="row"][aria-rowindex="${otherIndex}"] > [role="gridcell"][aria-colindex="${columnIndex}"]`);
+    const outsideRange = await namedCell('uuid_value');
+    await outsideRange.click();
+    await clickAction(text.uuid);
+    const outsideValue = (await outsideRange.textContent())!;
+    expect(outsideValue).toMatch(uuidPattern);
     await cell.click();
     await page.keyboard.press('Shift+ArrowDown');
     await expect(otherCell).toHaveClass(/grid-cell-in-range/);
@@ -232,7 +242,27 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
         expect(persisted.prepare('SELECT label FROM update_subject ORDER BY id').all().map(row => row.label)).toEqual(['row A', 'row B']);
       } finally { persisted.close(); }
     }
+    await cell.click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+F10');
+    await expect(item(draftHistoryZh.discardCell)).toHaveCount(0);
+    await expect(item(draftHistoryZh.discardRange)).toBeVisible();
+    await page.screenshot({ path: info.outputPath('还原选区原值菜单.png') });
+    await item(draftHistoryZh.discardRange).click();
+    await expect(label).toBeVisible();
+    await expect(other).toBeVisible();
+    await expect(outsideRange).toHaveText(outsideValue);
     await clickAction(undo);
+    await expect(cell).toHaveText(local ? 'TEXT ·' : '');
+    await expect(otherCell).toHaveText(local ? 'TEXT ·' : '');
+    await expect(outsideRange).toHaveText(outsideValue);
+    await clickAction(local ? sqliteText.redo : draftHistoryZh.redo);
+    await expect(label).toBeVisible();
+    await expect(other).toBeVisible();
+    await clickAction(undo);
+    await clickAction(undo);
+    await clickAction(undo);
+    await expect(outsideRange).toHaveText('NULL');
     await expect(label).toBeVisible();
     await expect(other).toBeVisible();
     if (local) {
@@ -300,11 +330,6 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
     await clickAction(undo);
     await expect(cell).toHaveText(local ? 'TEXT · row A' : 'row A');
 
-    const namedCell = async (name: string) => {
-      const index = await grid.getByRole('columnheader').filter({ hasText: new RegExp('^' + name) }).getAttribute('aria-colindex');
-      if (!index) throw Error('验收列位置缺失');
-      return grid.locator(`[role="row"][aria-rowindex="${rowIndex}"] > [role="gridcell"][aria-colindex="${index}"]`);
-    };
     const generated = await namedCell('derived');
     await generated.click({ button: 'right' });
     await expect(menu).toBeVisible();

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。可编辑表页可一次还原矩形选区中的已改字段。macOS 源码 Electron 已核对 MySQL、MariaDB、PostgreSQL 和 SQLite 的两行选区还原、撤销、重做及选区外草稿保留。D02 继续为部分覆盖。
+
 2026-11-24 源码增量。四种关系型数据库表页的单格菜单可还原当前字段的原值。macOS 源码 Electron 已核对 MySQL、MariaDB、PostgreSQL 和 SQLite 的单格还原、撤销及重做，同一行其他字段及其他行草稿保留，集中提交后回读核对了目标字段原值。D02 继续为部分覆盖。
 
 2026-11-24 源码增量。四种关系型数据库的可写查询结果可直接对单格使用置 NULL、置空字符串及生成 UUID，复用原行回查和预览事务。macOS 源码 Electron 已核对四种数据库预览前后只有命中格写入 SQL NULL，并在 MySQL、MariaDB 和 PostgreSQL 验证空字符串及 UUID 预览和计算列的菜单门禁。D02 继续为部分覆盖。

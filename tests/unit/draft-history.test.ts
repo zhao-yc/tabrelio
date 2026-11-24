@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DraftHistory, draftHistoryKey, draftHistoryLimits } from '../../src/renderer/draftHistory';
-import { collectChanges, discardDraftCell, newDraftRow, type DraftRow } from '../../src/renderer/dataChanges';
+import { collectChanges, discardDraftCells, newDraftRow, type DraftRow } from '../../src/renderer/dataChanges';
 import { assertRecordDraftCurrent, beginRecordDraft, type RecordContext } from '../../src/renderer/recordViews';
 
 /** 合成不可变页；没有IPC、连接或真实用户数据。 */
@@ -8,15 +8,20 @@ function row(id = '一', note = '原值'): DraftRow { const data = { id, note };
 function edit(rows: DraftRow[], value: string) { return rows.map((row, index) => index ? row : { ...row, data: { ...row.data, note: value } }); }
 
 describe('本页稀疏草稿编辑历史', () => {
-  it('只恢复命中字段的原字节，保留同一行其它修改及未命中行', () => {
+  it('选区恢复两行原字节，保留其它字段、删除及新增，旧行使整次命令失效', () => {
     const bytes = { type: 'binary' as const, base64: 'AP8=' };
-    const before = [{ ...row(), original: { id: '一', note: '', bytes }, data: { id: '一', note: null, bytes: { ...bytes, base64: '' } } }, row('二')];
-    const after = discardDraftCell(before, before[0], 'bytes');
+    const before = [{ ...row(), original: { id: '一', note: '', bytes }, data: { id: '一', note: null, bytes: { ...bytes, base64: '' } } },
+      { ...row('二'), original: { id: '二', bytes: null }, data: { id: '二', bytes } },
+      { ...row('三'), deleted: true }, newDraftRow('四', { bytes })];
+    const after = discardDraftCells(before, before, ['bytes']);
     expect(after[0].data).toEqual({ id: '一', note: null, bytes });
     expect(after[0].data.bytes).not.toBe(bytes);
-    expect(after[1]).toBe(before[1]);
-    expect(collectChanges(after)).toEqual([{ kind: 'update', before: before[0].original, values: { note: null } }]);
-    expect(discardDraftCell(after, before[0], 'note')).toBe(after);
+    expect(after[1].data).toEqual({ id: '二', bytes: null });
+    expect(after[2]).toBe(before[2]);
+    expect(after[3]).toBe(before[3]);
+    expect(collectChanges(after)).toEqual([{ kind: 'update', before: before[0].original, values: { note: null } },
+      { kind: 'delete', before: before[2].original }, { kind: 'insert', values: before[3].data }]);
+    expect(discardDraftCells(after, [after[0], before[1]], ['note'])).toBe(after);
     const history = new DraftHistory();
     history.record(before, after);
     expect(history.move(after, 'undo')).toEqual(before);
