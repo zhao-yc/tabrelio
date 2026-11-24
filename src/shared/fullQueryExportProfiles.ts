@@ -84,7 +84,6 @@ function matchesScope({ dialect, area }: FullQueryExportProfileScope, value: Ful
   if (value.format === 'table') return false;
   if (dialect === 'mysql' || dialect === 'mariadb') return value.format === 'stream';
   if (value.format === 'stream') return false;
-  if (value.format === 'csv-zip') return dialect === 'postgresql';
   return value.format !== 'sql' || ('database' in value.target) === (dialect === 'sqlite');
 }
 

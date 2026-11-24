@@ -77,7 +77,6 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   /** 应用方案只更新导出选项，文件授权必须在新选项下重新获取。 */
   function applyProfile(options: FullQueryExportOptions): boolean {
     if (options.format === 'stream' || options.format === 'table' || picking.current || task.current || !current()) return false;
-    if (sqlite && options.format === 'csv-zip') return false;
     setFormat(options.format);
     if (options.format === 'csv' || options.format === 'csv-zip') setDelimiter(options.delimiter);
     if (options.format === 'txt') setTxtOptions(options.txtOptions);
@@ -107,7 +106,6 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
 
   async function run() {
     if (!file || picking.current || task.current || !current() || invalidTarget || !validTxt) return;
-    if (sqlite && format === 'csv-zip') return;
     const taskId = uid();
     task.current = taskId;
     let job: ReturnType<typeof acquireWorkspaceBusy> | undefined;
@@ -118,7 +116,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       const input = {connectionId: source.connectionId, sql: source.sql, taskId, fileToken: file.token,
         encoding: fixedEncoding ? 'utf8' as const : encoding, ...csvExportOptions(csvZip ? 'csv' : format, delimiter), ...txtExportOptions(format, txtOptions),
         ...(parameterGroup ? {parameters: parameterGroup.values} : {})};
-      const result = sqlite && format !== 'csv-zip'
+      const result = sqlite
         ? await invoke('sqlite.queryExport', {...input, format, ...(sqliteTarget?.success ? {insertTarget: sqliteTarget.data} : {}),
           ...(parameterGroup?.sqliteNavicatParameters ? {sqliteNavicatParameters: true as const} : {})})
         : await invoke('postgres.query.export', {...input, format, database: source.database,
@@ -142,7 +140,8 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
     initialParameters={parameterGroup?.values} submitLabel={text.applyParameters}
     allowSqliteNavicat={sqlite} initialSqliteNavicatParameters={parameterGroup?.sqliteNavicatParameters}
     loadNames={sqliteNavicatParameters => sqlite ? invoke('sqlite.queryExportParameterNames', {sql: source.sql,
-      ...(workbook ? {workbook: true as const} : {}), ...(sqliteNavicatParameters ? {sqliteNavicatParameters} : {})})
+      ...(workbook ? {workbook: true as const} : csvZip ? {csvZip: true as const} : {}),
+      ...(sqliteNavicatParameters ? {sqliteNavicatParameters} : {})})
       : Promise.resolve(postgresExportParameterNames(source.sql, format))}
     onClose={() => setEditingParameters(false)} onExecute={(values, sqliteNavicatParameters) => {
       if (!current()) throw Error(text.changed);
@@ -152,19 +151,19 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
 
   return <Modal title={text.title} wide onClose={() => { if (!picking.current && !task.current) onClose(); }}>
     <div className="modal-content">
-      <p>{source.database} · {workbook ? text.workbookScope : (postgresJson || csvZip) ? postgresQueryExportZh.multiResultScope : text.scope}</p>
+      <p>{source.database} · {workbook ? text.workbookScope : (postgresJson || csvZip) ? text.multiResultScope : text.scope}</p>
       {source.fromCurrentStatement && <p className="muted small">{text.currentSource}</p>}
       <pre className="result-sql-preview" aria-label={text.source}>{source.sql.slice(0, 4000)}</pre>
       {source.sql.length > 4000 && <p>{text.sourcePrefix}</p>}
       <button disabled={!!pending || stale} onClick={() => setEditingParameters(true)}>{text.parameters}</button>
       {parameterGroup && <p>{text.parameterCount(parameterGroup.values.length)}</p>}
       <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={!!pending}
-        onChange={event => { const value = event.target.value as typeof format; if (queryExportFormats.includes(value) && !(sqlite && value === 'csv-zip')) setFormat(value); setFile(null); setRows(undefined); }}>
-        <option value="csv">CSV</option>{!sqlite && <option value="csv-zip">{postgresQueryExportZh.csvZipFormat}</option>}<option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option>{dataFileFormats.map(value => <option key={value} value={value}>{dataFileText(value)?.format}</option>)}
+        onChange={event => { const value = event.target.value as typeof format; if (queryExportFormats.includes(value)) setFormat(value); setFile(null); setRows(undefined); }}>
+        <option value="csv">CSV</option><option value="csv-zip">{text.csvZipFormat}</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option>{dataFileFormats.map(value => <option key={value} value={value}>{dataFileText(value)?.format}</option>)}
       </select></Field>
       {sqlite && format === 'json' && <p>{sqliteQueryExportZh.formatHint}</p>}
       {postgresJson && <p>{postgresQueryExportZh.jsonHint}</p>}
-      {csvZip && <p>{postgresQueryExportZh.csvZipHint}</p>}
+      {csvZip && <p>{text.csvZipHint}</p>}
       {workbook && <p>{text.workbookHint}</p>}
       {dataFileText(format) && <p>{dataFileText(format)?.hint}</p>}
       <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={fixedEncoding ? 'utf8' : encoding} disabled={!!pending || fixedEncoding}

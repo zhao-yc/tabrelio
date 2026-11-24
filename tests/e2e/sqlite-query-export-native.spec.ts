@@ -14,6 +14,8 @@ import { resultSqlZh } from '../../src/shared/resultSql.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { sidebarMenuItem } from './sidebar-menu';
+import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
+import { readQueryCsvZip } from '../helpers/queryCsvZip';
 
 type Desktop = typeof import('./desktop-fixture');
 const enabled = !process.argv.includes('--list') && process.env.DBARK_SQLITE_QUERY_EXPORT_NATIVE_TEST === '1';
@@ -30,12 +32,15 @@ test.skip(!enabled, '仅在显式启用的独占 SQLite 测试环境运行');
 test.use({trace: 'off', screenshot: 'off', video: 'off', ...(enabled ? {preserveOnUnconfirmedExit: true} : {})});
 test.describe.configure({timeout: 120000, retries: 0});
 
-test('SQLite 多条查询按顺序写入同一本 Excel', async ({}, info) => {
+for (const format of ['xlsx', 'csv-zip'] as const)
+test(`SQLite 多条查询按顺序写入${format === 'xlsx' ? '同一本 Excel' : '一个 CSV ZIP'}`, async ({}, info) => {
+  const zip = format === 'csv-zip';
+  const extension = zip ? 'zip' : 'xlsx';
   const runtime = require('./desktop-fixture') as Desktop;
   const {DatabaseSync} = require('node:sqlite') as typeof import('node:sqlite');
   const {application, page} = runtime.ownedDesktopResources(info);
   const originalProcess = application.process();
-  const database = join(runtime.dataDir, '查询工作簿源.sqlite'), output = join(runtime.dataDir, 'SQLite 完整查询工作簿.xlsx');
+  const database = join(runtime.dataDir, '多查询导出源.sqlite'), output = join(runtime.dataDir, 'SQLite 完整查询结果.' + extension);
   const db = new DatabaseSync(database);
   try { db.exec("CREATE TABLE workbook_source(id INTEGER PRIMARY KEY, payload BLOB); INSERT INTO workbook_source VALUES(9223372036854775807,X'00ff');"); }
   finally { db.close(); }
@@ -52,15 +57,17 @@ test('SQLite 多条查询按顺序写入同一本 Excel', async ({}, info) => {
       }) as typeof open;
       dialog.showSaveDialog = (async (...args: unknown[]) => {
         if (++saves !== 1 || args[0] !== BrowserWindow.getAllWindows()[0] ||
-            !(args.at(-1) as Electron.SaveDialogOptions).filters?.[0]?.extensions.includes('xlsx'))
-          throw Error('仅允许选择本例 XLSX 文件');
+            !(args.at(-1) as Electron.SaveDialogOptions).filters?.[0]?.extensions.includes(paths.extension))
+          throw Error('仅允许选择本例导出文件');
         return {canceled: false, filePath: paths.output};
       }) as typeof save;
       Object.assign(globalThis, {restoreSqliteQueryWorkbook() { dialog.showOpenDialog = open; dialog.showSaveDialog = save; return [opens, saves]; }});
-    }, {database, output});
+    }, {database, output, extension});
     const sql = [
+      ...(zip ? ['-- NAME: 编号/摘要'] : []),
       "SELECT [$key] AS value, ';' AS value;",
       'WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<205) SELECT i,id,payload FROM n CROSS JOIN workbook_source WHERE id=:key ORDER BY i;',
+      ...(zip ? ['-- NAME: 空结果'] : []),
       'SELECT [$unused] AS header WHERE 0;',
     ].join('\n');
     await page.evaluate(async ({id, sql}) => {
@@ -78,8 +85,12 @@ test('SQLite 多条查询按顺序写入同一本 Excel', async ({}, info) => {
     await expect(query.locator('.monaco-editor').getByRole('textbox')).toBeVisible();
     await (await navigationMenuItem(query.locator('.query-primary-toolbar'), {name: text.open, exact: true})).click();
     const modal = page.getByRole('dialog', {name: text.title, exact: true});
-    await modal.getByLabel(zh.resultExport.format, {exact: true}).selectOption('xlsx');
-    await expect(modal.getByText(text.workbookHint, {exact: true})).toBeVisible();
+    await modal.getByLabel(zh.resultExport.format, {exact: true}).selectOption(format);
+    await expect(modal.getByText(zip ? text.csvZipHint : text.workbookHint, {exact: true})).toBeVisible();
+    if (zip) {
+      await modal.getByLabel(zh.resultExport.encoding, {exact: true}).selectOption('utf16le');
+      await modal.getByLabel(csvExportZh.label, {exact: true}).selectOption(';');
+    }
     await modal.getByRole('button', {name: text.parameters, exact: true}).click();
     const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
     const mode = form.getByRole('checkbox', {name: parameterZh.sqliteNavicatMode, exact: true});
@@ -100,18 +111,36 @@ test('SQLite 多条查询按顺序写入同一本 Excel', async ({}, info) => {
     await modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
     await modal.getByRole('button', {name: text.start, exact: true}).click();
     await expect(modal.getByRole('status')).toHaveText(text.done(206));
-    const book = new ExcelJS.Workbook();
-    await book.xlsx.readFile(output);
-    expect(book.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['结果 1', 2], ['结果 2', 206], ['结果 3', 1]]);
-    expect(['A1', 'B1', 'A2', 'B2'].map(cell => book.worksheets[0].getCell(cell).text)).toEqual(['value', 'value [2]', '9223372036854775807', ';']);
-    expect(['A206', 'B206', 'C206'].map(cell => book.worksheets[1].getCell(cell).text)).toEqual(['205', '9223372036854775807', '\\B:AP8=']);
-    expect(book.worksheets[2].getCell('A1').text).toBe('header');
+    if (zip) {
+      const files = await readQueryCsvZip(output);
+      const names = ['results/rows-001.csv', 'results/rows-002.csv', 'results/rows-003.csv'];
+      expect([...files.keys()]).toEqual([...names, 'manifest.json']);
+      const manifest = JSON.parse(files.get('manifest.json')!.toString('utf8'));
+      expect(manifest).toMatchObject({format: 'DBArk-query-csv-archive', version: 1, encoding: 'utf16le', csv: {delimiter: ';'}});
+      expect(manifest.results.map((item: {label?: string; rowsWritten: number}) => [item.label, item.rowsWritten]))
+        .toEqual([['编号/摘要', 1], [undefined, 205], ['空结果', 0]]);
+      const csv = names.map(name => {
+        const bytes = files.get(name)!;
+        expect(bytes.subarray(0, 2)).toEqual(Buffer.from([255, 254]));
+        return new TextDecoder('utf-16le').decode(bytes);
+      });
+      expect(csv[0]).toBe('value;value [2]\r\n9223372036854775807;";"\r\n');
+      expect(csv[1]).toBe('i;id;payload\r\n' + Array.from({length: 205}, (_, index) => `${index + 1};9223372036854775807;base64:AP8=\r\n`).join(''));
+      expect(csv[2]).toBe('header\r\n');
+    } else {
+      const book = new ExcelJS.Workbook();
+      await book.xlsx.readFile(output);
+      expect(book.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['结果 1', 2], ['结果 2', 206], ['结果 3', 1]]);
+      expect(['A1', 'B1', 'A2', 'B2'].map(cell => book.worksheets[0].getCell(cell).text)).toEqual(['value', 'value [2]', '9223372036854775807', ';']);
+      expect(['A206', 'B206', 'C206'].map(cell => book.worksheets[1].getCell(cell).text)).toEqual(['205', '9223372036854775807', '\\B:AP8=']);
+      expect(book.worksheets[2].getCell('A1').text).toBe('header');
+    }
     expect(readFileSync(database)).toEqual(original);
     expect(readdirSync(runtime.dataDir).filter(path => path.endsWith('.partial'))).toEqual([]);
     expect(await application.evaluate(() => (globalThis as typeof globalThis & {restoreSqliteQueryWorkbook(): number[]})
       .restoreSqliteQueryWorkbook())).toEqual([1, 1]);
     mkdirSync(info.outputDir, {recursive: true});
-    await modal.screenshot({path: info.outputPath('SQLite 完整查询工作簿.png')});
+    await modal.screenshot({path: info.outputPath(`SQLite 完整查询导出 ${format}.png`)});
     copyFileSync(output, info.outputPath(basename(output)));
     await runtime.confirmOwnedDesktopExit(info);
     expect(originalProcess.exitCode).toBe(0);

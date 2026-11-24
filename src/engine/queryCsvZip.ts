@@ -1,5 +1,5 @@
 import iconv from 'iconv-lite';
-import { assertRegularExportTarget, AtomicFile } from './atomicFile';
+import { assertRegularExportTarget, type AtomicFile } from './atomicFile';
 import { encodingName } from './files';
 import { queryCsvResultFile, queryStreamExportLimits as limits, type QueryExportColumn, type QueryExportFrame } from '../shared/queryStreamExport';
 import type { QueryFileEncoding } from '../shared/contracts';
@@ -10,6 +10,7 @@ const crcTable = Uint32Array.from({ length: 256 }, (_, index) => { let value = i
 /** CRC按当前片段递增，既不读回临时包，也不保留已经消费的CSV行。 */
 function crc32(previous: number, bytes: Uint8Array): number { let value = previous ^ 0xffffffff; for (const byte of bytes) value = crcTable[(value ^ byte) & 255] ^ (value >>> 8); return (value ^ 0xffffffff) >>> 0; }
 interface ZipEntry { name: string; offset: number; bytes: number; crc: number; }
+type ZipOutput = Pick<AtomicFile, 'writeBytes'>;
 
 /** ZIP64目录保留64位大小及偏移；小文件也使用同一标准格式，跨4GiB不改变流协议。 */
 export function queryZipDirectory(entry: Readonly<ZipEntry>): Buffer {
@@ -40,7 +41,7 @@ class QueryZipWriter {
   private offset = 0;
   private active?: ZipEntry;
   private readonly entries: ZipEntry[] = [];
-  constructor(private readonly file: AtomicFile, private readonly checkCancelled: () => void) {}
+  constructor(private readonly file: ZipOutput, private readonly checkCancelled: () => void) {}
   /** 所有结构与数据都经同一原子文件的短写、取消和10GiB预算路径。 */
   private async emit(bytes: Uint8Array): Promise<void> { this.checkCancelled(); await this.file.writeBytes(bytes); this.offset += bytes.length; }
   /** 本地头使用STORE、UTF-8名称和数据描述符；未知大小先放ZIP64占位，结尾再给实际值。 */
@@ -70,7 +71,7 @@ export class QueryCsvArchive {
   private readonly results: (RowManifest | StatusFrame)[] = [];
   private active?: RowManifest;
   private metadataBytes = 1024;
-  constructor(file: AtomicFile, private readonly encoding: QueryFileEncoding, private readonly checkCancelled: () => void, private readonly delimiter: CsvExportDelimiter = ',', private readonly scope?: 'returned') { encodingName(encoding); csvExportDelimiter('csv', delimiter); this.zip = new QueryZipWriter(file, checkCancelled); }
+  constructor(file: ZipOutput, private readonly encoding: QueryFileEncoding, private readonly checkCancelled: () => void, private readonly delimiter: CsvExportDelimiter = ',', private readonly scope?: 'returned') { encodingName(encoding); csvExportDelimiter('csv', delimiter); this.zip = new QueryZipWriter(file, checkCancelled); }
   /** 每个CSV独立编码，UTF-16LE逐文件写BOM；包本身与清单不受CSV编码影响。 */
   async text(text: string): Promise<void> {
     this.checkCancelled(); const bytes = iconv.encode(text, this.encoding);

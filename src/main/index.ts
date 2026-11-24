@@ -1378,7 +1378,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if ((command === 'query.parameterNames' || command === 'query.executeParameterized') &&
       input.sqliteNavicatParameters !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('此 Navicat 参数模式只用于原 SQLite 查询会话');
-  if (command === 'sqlite.queryExportParameterNames') return sqliteQueryExportParameterNames(input.sql, input.workbook, input.sqliteNavicatParameters);
+  if (command === 'sqlite.queryExportParameterNames') return sqliteQueryExportParameterNames(input);
   if (command === 'postgres.explain' || command.startsWith('postgres.analyze') || command.startsWith('postgres.transactionSettings.') || command.startsWith('postgres.searchPath.') || command.startsWith('postgres.queryTimeouts.')) {
     const session = sessions.get(input.sessionId);
     // 会话能力保留原事务和临时对象来源，仅允许创建该会话的真实文档发起。
@@ -2859,7 +2859,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const profile = store.connections().find(profile => profile.id === input.connectionId);
       if (profile?.dialect !== 'sqlite') throw Error('SQLite完整导出需要当前已保存的SQLite文件连接');
       // 原生保存对话框令牌只解析格式相符的目标；私有检查不跨公共IPC传递。
-      input = { ...input, filePath: resolveFileToken(files, input.fileToken, 'export', input.format), assertCurrent: assertTableFilteredExportCurrent,
+      const fileFormat = command === 'sqlite.queryExport' ? queryExportFileFormat(input.format) : input.format;
+      input = { ...input, filePath: resolveFileToken(files, input.fileToken, 'export', fileFormat), assertCurrent: assertTableFilteredExportCurrent,
         validateDestination: () => assertSqliteExportDestination(input.filePath, store.connections()),
         // 文件清理未确认时，跨引擎的Main目标占用也保留至原资源真实恢复。
         retainDestinationUntil: (recovered: Promise<void>) => { sqliteDestinationRecovery = sqliteDestinationRecovery ? Promise.all([sqliteDestinationRecovery, recovered]).then(() => {}) : recovered; void sqliteDestinationRecovery.catch(() => {}); } };

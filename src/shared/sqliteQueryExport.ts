@@ -6,7 +6,8 @@ import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { sqliteTableExportSchema } from './sqliteTableExport';
 import { sqliteInsertIdentifier, sqliteInsertIdentifierKey } from './resultSql';
 import { locateSqliteStatement, sqliteLeadingKeyword } from './sqliteStatementScanner';
-import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
+import { dataMarkupText } from './dataMarkupExport';
+import { queryExportFormats } from './queryStreamExport';
 
 /** 只截取光标所在的原文。真正执行仍由独立只读进程验证语句边界及权限。 */
 export function sqliteCurrentQueryExportSource(source: string, offset: number): string {
@@ -20,7 +21,9 @@ export function sqliteCurrentQueryExportSource(source: string, offset: number): 
 
 const sql = z.string().min(1).max(queryParameterLimits.sqlBytes);
 const sqliteNavicatParameters = z.literal(true).optional();
-export const sqliteQueryExportSourceSchema = z.object({ sql, workbook: z.literal(true).optional(), sqliteNavicatParameters }).strict();
+export const sqliteQueryExportSourceSchema = z.object({
+  sql, workbook: z.literal(true).optional(), csvZip: z.literal(true).optional(), sqliteNavicatParameters,
+}).strict().refine(input => !(input.workbook && input.csvZip), 'SQLite 参数识别只接受一种导出格式');
 export type SqliteQueryExportSource = z.infer<typeof sqliteQueryExportSourceSchema>;
 const parameters = z.array(z.object({
   name: z.string().max(64), type: z.enum(queryParameterTypes), value: z.string().max(queryParameterLimits.valueBytes).optional(),
@@ -45,11 +48,11 @@ export function sqliteQueryInsertColumnsForResult(target: z.infer<typeof sqliteQ
 export const sqliteQueryExportSchema = z.object({
   connectionId: sqliteTableExportSchema.shape.connectionId, taskId: sqliteTableExportSchema.shape.taskId,
   fileToken: sqliteTableExportSchema.shape.fileToken, encoding: sqliteTableExportSchema.shape.encoding,
-  sql, format: z.enum(['csv', 'json', 'xlsx', 'sql', ...dataFileFormats]), csvDelimiter: z.enum(csvExportDelimiters).optional(), txtOptions: txtExportOptionsSchema.optional(),
+  sql, format: z.enum(queryExportFormats), csvDelimiter: z.enum(csvExportDelimiters).optional(), txtOptions: txtExportOptionsSchema.optional(),
   parameters: parameters.optional(), sqliteNavicatParameters, insertTarget: sqliteQueryInsertTargetSchema.optional(),
 }).strict()
   .refine(validTxtExport, txtExportZh.invalid)
-  .refine(input => input.csvDelimiter === undefined || input.format === 'csv', '分隔符仅用于 CSV 导出')
+  .refine(input => input.csvDelimiter === undefined || input.format === 'csv' || input.format === 'csv-zip', '分隔符仅用于 CSV 或 CSV ZIP 导出')
   .refine(input => input.format === 'sql' ? !!input.insertTarget : input.insertTarget === undefined, '仅 SQLite INSERT SQL 导出需要明确目标')
   .superRefine((input, context) => {
     const markup = dataMarkupText(input.format);
