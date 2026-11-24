@@ -57,6 +57,26 @@ function props(node: Node) { return (node as any)[Object.keys(node).find(key => 
 async function key(node: Node, value: string) { await act(async () => node.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: value }))); }
 function selected() { return document.querySelectorAll('[role="treeitem"]').find(node => node.getAttribute('aria-selected') === 'true'); }
 
+it('离线实际分析按原文复制，复制时没有额外 IPC', async () => {
+  const outcome = fixture();
+  bridge.mockResolvedValueOnce({ name: '实际分析.dbark-plan.json', snapshot: actualDocument(outcome) });
+  await mount(<Dialog onClose={vi.fn()}/>);
+  await click(text.choose);
+  const packet: Record<string, string> = {};
+  (document as any).execCommand = (command: string) => {
+    if (command !== 'copy') throw Error('仅允许本例计划复制');
+    document.dispatchEvent(Object.assign(new MemoryEvent('copy'), {
+      stopImmediatePropagation(this: MemoryEvent) { this.stopPropagation(); },
+      clipboardData: { setData: (type: string, value: string) => { packet[type] = value; } },
+    }));
+    return true;
+  };
+  await click(explainText.copyOutput);
+  expect(packet).toEqual({ 'text/plain': outcome.analysis!.raw });
+  expect(document.body.textContent).toContain(explainText.copiedOutput);
+  expect(bridge.mock.calls).toEqual([['explainFiles.open', {}]]);
+});
+
 it('实际计划显式保存原精度和计划条件，不主动保存原SQL字段，忙碌及回执不重置阅读', async () => {
   const outcome = fixture(), pending = deferred<{ name: string } | null>(), onBusy = vi.fn();
   await mount(<View plan={outcome.analysis!} outcome={outcome} fileActions onFileBusyChange={onBusy}/>); expect(bridge).not.toHaveBeenCalled();

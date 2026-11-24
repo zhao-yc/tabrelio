@@ -5,6 +5,7 @@ import { sqliteExplainLimits, type SqliteExplainNode } from '../../shared/sqlite
 import { explainZh as findText } from '../locales/explain.zh-CN';
 import { sqliteExplainZh as text } from '../locales/sqliteExplain.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
+import { PlanOutputCopyButton } from './PlanOutputCopyButton';
 import { ExplainSnapshotSaveButton } from './ExplainSnapshotSaveButton';
 import { LivePlanFileActions } from './LivePlanFileActions';
 import '../explain.css';
@@ -89,6 +90,7 @@ function OwnedSqliteExplain({ outcome, busy, isCurrent, fileActions, fileSnapsho
   return <section className="explain-view sqlite-explain-view" aria-label={text.title} data-sqlite-explain-view>
     <div className="explain-toolbar" role="group" aria-label={text.title}>
       {(['tree', 'table', 'raw'] as const).map(mode => <button key={mode} aria-label={text[mode + 'Label' as 'treeLabel' | 'tableLabel' | 'rawLabel']} aria-pressed={view === mode} onClick={() => { if (current()) setView(mode); }}>{text[mode]}</button>)}
+      <PlanOutputCopyButton table={result} busy={busy} truncated={!!result?.truncated} isCurrent={current}/>
       {fileActions && (fileSnapshot ? <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={busy} saveAs isCurrent={current} onFileBusyChange={onFileBusyChange}/> :
         <LivePlanFileActions outcome={outcome} complete={!!nodes.length && !!result && !result.truncated} busy={busy} isCurrent={current}/>)}
       <span>{text.source} · {plan.version}</span>

@@ -12,6 +12,7 @@ import { resolveQueryDatabase, queryDatabaseFromSession } from '../../src/shared
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
 import { queryContextZh } from '../../src/renderer/locales/queryContext.zh-CN';
 import { ExplainPlanView } from '../../src/renderer/components/ExplainPlanView';
+import { explainZh } from '../../src/renderer/locales/explain.zh-CN';
 import { ResultsGrid } from '../../src/renderer/components/ResultsGrid';
 import { queryResultSelectionFixture } from '../fixtures/query-result-selection';
 import { QueryRowDetails } from '../../src/renderer/queryRowDetails';
@@ -119,9 +120,14 @@ describe('非SQL忙碌期间的计划查看器身份', () => {
     expect(f.invoke).toHaveBeenCalledWith('query.execute', expect.objectContaining({ sessionId: 'original-session', sql: 'SELECT 2', taskId: 'new-query-task' }));
   });
 
-  it('真实计划组件繁忙时仅禁用重新读取入口，已有树和指标保持呈现', () => {
+  it('真实计划组件繁忙时禁用重新读取和复制，已有树和指标保持呈现', () => {
     const outcome = { explain: plan, results: [], elapsedMs: 1 }, onText = vi.fn();
     const idle = renderToStaticMarkup(<ExplainPlanView outcome={outcome} busy={false} onText={onText}/>), busy = renderToStaticMarkup(<ExplainPlanView outcome={outcome} busy={true} onText={onText}/>);
-    expect(busy.replace(' disabled=""', '')).toBe(idle); expect(busy).toContain('subject'); expect(busy).toContain('role="tree"'); expect(onText).not.toHaveBeenCalled();
+    const textButton = `<button disabled="">${explainZh.text}</button>`;
+    const copyButton = `<button type="button" disabled="">${explainZh.copyOutput}</button>`;
+    expect(busy).toContain(textButton);
+    expect(busy).toContain(copyButton);
+    expect(busy.replace(textButton, textButton.replace(' disabled=""', '')).replace(copyButton, copyButton.replace(' disabled=""', ''))).toBe(idle);
+    expect(busy).toContain('subject'); expect(busy).toContain('role="tree"'); expect(onText).not.toHaveBeenCalled();
   });
 });

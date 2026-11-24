@@ -20,6 +20,8 @@ import { resultSqlZh } from '../../src/shared/resultSql.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
+import { explainZh } from '../../src/renderer/locales/explain.zh-CN';
+import { parseTabularText } from '../../src/renderer/gridClipboard';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -542,6 +544,22 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     }, { id: command, label: uiCommandLabels[command] });
     await expect(query.getByRole('treeitem').filter({ hasText: 'json_subject' }).first()).toBeVisible();
     await expect(query.locator('.error-box')).toHaveCount(0);
+    const planCopy = async () => {
+      await (await navigationMenuItem(query, { name: explainZh.copyOutput, exact: true })).click();
+      const output = await lastPacket();
+      expect(Object.keys(output)).toEqual(['text/plain']);
+      return output['text/plain'];
+    };
+    if (local) {
+      const [headers, ...rows] = parseTabularText(await planCopy());
+      expect(headers).toEqual(['id', 'parent', 'notused', 'detail']);
+      expect(rows.some(row => row[3]?.includes('json_subject'))).toBe(true);
+    } else {
+      await (await navigationMenuItem(query, { name: explainZh.raw, exact: true })).click();
+      const originalOutput = await query.getByLabel(explainZh.raw, { exact: true }).textContent();
+      expect(originalOutput).toContain('json_subject');
+      expect(await planCopy()).toBe(originalOutput);
+    }
     const locate = query.getByRole('button', { name: '定位计划原语句', exact: true });
     const selection = () => editor.evaluate(element => {
       const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
@@ -566,6 +584,9 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     };
     if (custom) {
       await textPlan();
+      const [headers, ...rows] = parseTabularText(await planCopy());
+      expect(headers).toContain('table');
+      expect(rows.some(row => row[headers.indexOf('table')] === 'json_subject')).toBe(true);
       await locateAndCheck();
     }
     if (!local) {

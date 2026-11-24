@@ -5,6 +5,7 @@ import type { ExplainSnapshotDocument } from '../../shared/explainSnapshot';
 import { explainLimits, explainNodeDetail, explainQueryArrayKinds, type ExplainNode } from '../../shared/explain';
 import { explainZh as t } from '../locales/explain.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
+import { PlanOutputCopyButton } from './PlanOutputCopyButton';
 import { ExplainSnapshotSaveButton } from './ExplainSnapshotSaveButton';
 import { LivePlanFileActions } from './LivePlanFileActions';
 import '../explain.css';
@@ -111,6 +112,8 @@ function OwnedExplainPlan({ outcome, onText, sourceLocation, busy, fileBusy, fil
       {sourceLocation && <button disabled={busy || !sourceLocation.available}
         title={sourceLocation.available ? undefined : t.locateUnavailable}
         onClick={() => { if (alive.current && !busy && sourceLocation.available) sourceLocation.locate(); }}>{t.locate}</button>}
+      <PlanOutputCopyButton raw={raw} table={plan.format === 'text' ? result : undefined} busy={busy || !!fileBusy}
+        truncated={plan.rawTruncated || !!result?.truncated} isCurrent={() => alive.current && (isFileCurrent?.() ?? true)}/>
       {fileActions && (plan.format === 'json' && !fileSnapshot && !saveAs ?
         <LivePlanFileActions outcome={outcome} complete={!!plan.nodes.length && !plan.rawTruncated && !!result && !result.truncated}
           busy={fileBusy ?? busy} isCurrent={() => alive.current && (isFileCurrent?.() ?? true)} onFileBusyChange={onFileBusyChange}/> :

@@ -42,6 +42,52 @@ async function key(node: Node, value: string, shiftKey = false) { const event = 
 /** 仅用于保存真实旧回调后跨结果触发，验证闭包失效；不另造查找逻辑。 */
 function props(node: Node) { return (node as any)[Object.keys(node).find(key => key.startsWith('__reactProps$'))!]; }
 
+/** 仅截获这个测试文档的复制事件，不打开系统剪贴板。 */
+function clipboard() {
+  const writes: Record<string, string>[] = [];
+  (document as any).execCommand = vi.fn((command: string) => {
+    if (command !== 'copy') throw Error('仅允许计划复制事件');
+    const packet: Record<string, string> = {};
+    document.dispatchEvent(Object.assign(new MemoryEvent('copy'), {
+      stopImmediatePropagation(this: MemoryEvent) { this.stopPropagation(); },
+      clipboardData: { setData: (type: string, value: string) => { packet[type] = value; } },
+    }));
+    writes.push(packet);
+    return true;
+  });
+  return writes;
+}
+
+it('复制按原始 JSON 字符串保留精度，换代和不完整输出不再写剪贴板', async () => {
+  const output = fixture();
+  output.explain!.raw = '{\n  "rows": 9007199254740993, "table": "船🚢"\n}';
+  const f = await mount(output);
+  const writes = clipboard(), old = props(button(text.copyOutput)).onClick;
+  await click(text.copyOutput);
+  expect(writes).toEqual([{ 'text/plain': output.explain!.raw }]);
+  expect(document.body.textContent).toContain(text.copiedOutput);
+  const incomplete = { ...output, explain: { ...output.explain!, rawTruncated: true } };
+  await f.render(incomplete, false);
+  expect(button(text.copyOutput).disabled).toBe(true);
+  await act(async () => old());
+  expect(writes).toHaveLength(1);
+  expect(f.invoke).not.toHaveBeenCalled();
+});
+
+it('没有原始字符串的文本计划按实际列顺序复制标题和原始值', async () => {
+  const output = fixture();
+  output.explain = { ...output.explain!, format: 'text', raw: '', nodes: [] };
+  output.results = [{
+    columns: [{ name: '字段', key: 'field', type: 'TEXT' }, { name: '行数', key: 'rows', type: 'BIGINT' }],
+    rows: [{ rows: '9007199254740993', field: '表\t甲' }], elapsedMs: 0, truncated: false, statement: '',
+  }];
+  const f = await mount(output);
+  const writes = clipboard();
+  await click(text.copyOutput);
+  expect(writes).toEqual([{ 'text/plain': '字段\t行数\n"表\t甲"\t9007199254740993' }]);
+  expect(f.invoke).not.toHaveBeenCalled();
+});
+
 it('搜索完整节点集，收起命中后仅展开祖先并选中、聚焦、请求滚动', async () => {
   const f = await mount(); await click(text.collapse); expect(tree()).toHaveLength(1); await search('用户条件甲'); expect(count()).toBe(text.matches(0, 1)); await click(text.next);
   expect(tree()).toHaveLength(4); expect(selected()!.textContent).toContain('匹配甲'); expect(document.activeElement).toBe(selected()); expect(scroll).toHaveBeenLastCalledWith({ block: 'nearest', inline: 'nearest' }); expect(count()).toBe(text.matches(1, 1)); expect(f.onText).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled();

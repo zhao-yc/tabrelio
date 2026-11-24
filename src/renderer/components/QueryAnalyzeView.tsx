@@ -7,6 +7,7 @@ import { explainSnapshotZh as snapshotText } from '../../shared/explainSnapshot.
 import { queryAnalyzeZh as t } from '../locales/queryAnalyze.zh-CN';
 import { ExplainSnapshotSaveButton } from './ExplainSnapshotSaveButton';
 import { LivePlanFileActions } from './LivePlanFileActions';
+import { PlanOutputCopyButton } from './PlanOutputCopyButton';
 import '../queryAnalyze.css';
 import '../explainSnapshot.css';
 
@@ -79,6 +80,8 @@ function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, fileActions = fals
   return <section className="query-analyze-view" aria-label={t.view}>
     <div className="query-analyze-toolbar" role="group" aria-label={t.view}>
       <button aria-pressed={view === 'tree'} onClick={() => { if (alive.current) setView('tree'); }}>{t.tree}</button><button aria-pressed={view === 'raw'} onClick={() => { if (alive.current) setView('raw'); }}>{t.raw}</button>
+      <PlanOutputCopyButton raw={plan.raw} busy={busy} truncated={plan.rawTruncated || !!result?.truncated}
+        isCurrent={() => alive.current && (isFileCurrent?.() ?? true)}/>
       {fileActions && (outcome && outcome.analysis === plan ? (!fileSnapshot && !saveAs ?
         <LivePlanFileActions outcome={outcome} complete={!!plan.nodes.length && !plan.rawTruncated && !!result && !result.truncated}
           busy={busy} isCurrent={() => alive.current && (isFileCurrent?.() ?? true)} onFileBusyChange={onFileBusyChange}/> :
