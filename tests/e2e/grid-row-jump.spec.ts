@@ -3201,12 +3201,44 @@ test('语句目录按原序保存三种编码，取消、失效和 SQLite 源文
   expect(pageErrors).toEqual([]);
 });
 
-test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', async () => {
+test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', async ({}, info) => {
   await seed();
   const menu = page.getByRole('menuitem', { name: rangeExport.action, exact: true });
   const modal = page.getByRole('dialog', { name: rangeExport.action, exact: true });
   const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
   const database = join(dataDir, 'grid-row-jump.sqlite'), before = readFileSync(database);
+  async function savePng(name: string, expected: string[]) {
+    const output = join(dataDir, name);
+    await desktop.evaluate(({ dialog, BrowserWindow }, output) => {
+      const original = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        dialog.showSaveDialog = original;
+        const options = args.at(-1) as Electron.SaveDialogOptions;
+        if (args[0] !== BrowserWindow.getAllWindows()[0] || options.title !== '保存选区 PNG' ||
+            options.filters?.[0]?.extensions.join(',') !== 'png') throw Error('仅允许本例选区 PNG 保存选择');
+        return { canceled: false, filePath: output };
+      }) as typeof original;
+    }, output);
+    const capture = await page.evaluateHandle(() => {
+      const prototype = CanvasRenderingContext2D.prototype, original = prototype.fillText, values: string[] = [];
+      prototype.fillText = function(value, ...position) {
+        if (this.canvas.width === 402 && this.canvas.height === 170) values.push(value);
+        return original.call(this, value, ...position);
+      };
+      return { values, restore: () => { prototype.fillText = original; } };
+    });
+    try {
+      await modal.getByRole('button', { name: rangeExport.png, exact: true }).click();
+      await expect(modal.getByRole('status')).toHaveText(rangeExport.pngSaved(name));
+      expect(await capture.evaluate(port => port.values)).toEqual(expected);
+      const image = await desktop.evaluate(({ nativeImage }, path) => {
+        const preview = nativeImage.createFromPath(path);
+        return { size: preview.getSize(), empty: preview.isEmpty() };
+      }, output);
+      expect(image).toEqual({ size: { width: 402, height: 170 }, empty: false });
+      await info.attach(name, { body: readFileSync(output), contentType: 'image/png' });
+    } finally { await capture.evaluate(port => port.restore()); await capture.dispose(); }
+  }
   async function exportJson(name: string) {
     await expect(modal.getByText(rangeExport.summary(2, 1), { exact: true })).toBeVisible();
     const format = modal.getByLabel(zh.resultExport.format, { exact: true });
@@ -3239,6 +3271,8 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
   await menu.click();
   await expect(modal).toBeVisible();
   expect(await tasks()).toEqual(beforeQuery);
+  await savePng('矩形查询.png', ['name', '记录 180', '记录 179']);
+  expect(await tasks()).toEqual(beforeQuery);
   expect(await exportJson('矩形查询.json')).toEqual([{ name: '记录 180' }, { name: '记录 179' }]);
 
   await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
@@ -3260,6 +3294,9 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
   expect(draftJson.sqlite).toBe('');
   await draftStart.click({ button: 'right' });
   await menu.click();
+  const beforeDraft = await tasks();
+  await savePng('矩形草稿.png', ['name', '待提交', '待提交']);
+  expect(await tasks()).toEqual(beforeDraft);
   await modal.getByLabel(zh.resultExport.format, { exact: true }).selectOption('sql');
   await modal.getByLabel(sqlText.sqliteDatabase, { exact: true }).fill('main');
   await modal.getByLabel(sqlText.table, { exact: true }).fill('copied');

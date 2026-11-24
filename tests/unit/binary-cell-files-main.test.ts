@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { runInContext } from 'node:vm';
 import ts from 'typescript';
 import { mainColumnsHarness, deferred } from './main-columns-owner-harness';
 import { readBinaryCellFile, writeBinaryCellFile, writeTextCellFile } from '../../src/main/binaryCellFiles';
 import { binaryCellFileText, textCellFileTitle } from '../../src/shared/binaryCellFiles';
+import { gridRangePngText } from '../../src/shared/gridRangePng';
 import { ExportReservations } from '../../src/main/exportReservations';
 import { assertSqliteExportDestination } from '../../src/main/sqliteExportDestination';
 
@@ -22,7 +23,7 @@ beforeEach(async () => {
   const declaration = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'queryFileOperation');
   if (!declaration) throw Error('未找到真实退出文件等待函数');
   Object.assign(main.context.store, { connections: () => [] });
-  Object.assign(main.context, { queryFileOperations: new Set(), binaryCellFileActive: false, binaryCellFileText, textCellFileTitle, readBinaryCellFile, writeBinaryCellFile, writeTextCellFile, assertSqliteExportDestination, exportReservations: new ExportReservations(), dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() } });
+  Object.assign(main.context, { queryFileOperations: new Set(), binaryCellFileActive: false, binaryCellFileText, textCellFileTitle, gridRangePngText, extname, readBinaryCellFile, writeBinaryCellFile, writeTextCellFile, assertSqliteExportDestination, exportReservations: new ExportReservations(), dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() } });
   runInContext(ts.transpileModule(declaration.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, main.context);
   main.request.mockImplementation(async () => { throw Error('二进制文件禁止调用Engine'); });
 });
@@ -32,6 +33,24 @@ const openDialog = () => main.context.dialog.showOpenDialog as ReturnType<typeof
 const saveDialog = () => main.context.dialog.showSaveDialog as ReturnType<typeof vi.fn>;
 
 describe('二进制单元格真实Main入口', () => {
+  it('选区 PNG 拒绝非图片和非 PNG 路径，确认后沿原字节写入', async () => {
+    const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=';
+    expect((await main.invoke('gridRange.savePng', { base64: bytes.toString('base64') })).ok).toBe(false);
+    expect(saveDialog()).not.toHaveBeenCalled();
+    const guard = join(directory, '原值.txt');
+    await writeFile(guard, bytes);
+    saveDialog().mockResolvedValueOnce({ canceled: false, filePath: guard });
+    expect((await main.invoke('gridRange.savePng', { base64 })).ok).toBe(false);
+    expect(await readFile(guard)).toEqual(bytes);
+    const output = join(directory, '选区.png');
+    const png = Buffer.from(base64, 'base64');
+    saveDialog().mockResolvedValueOnce({ canceled: false, filePath: output });
+    expect(await main.run('gridRange.savePng', { base64 })).toEqual({ bytes: png.length, name: '选区.png' });
+    expect(saveDialog()).toHaveBeenLastCalledWith(expect.anything(), { title: gridRangePngText.title, defaultPath: gridRangePngText.name,
+      filters: [{ name: gridRangePngText.filter, extensions: ['png'] }] });
+    expect(await readFile(output)).toEqual(png);
+    expect(main.request).not.toHaveBeenCalled();
+  });
   it('精确载入BOM/NUL/FF及零字节，回执只有basename和完整字节', async () => {
     const path = join(directory, '完整.bin'); await writeFile(path, bytes);
     openDialog().mockResolvedValue({ canceled: false, filePaths: [path] });

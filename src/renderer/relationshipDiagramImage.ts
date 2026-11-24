@@ -1,4 +1,4 @@
-import { binaryCellFileLimits } from '../shared/binaryCellFiles';
+import { canvasPngBase64, fitCanvasText } from './canvasPng';
 import { relationshipDiagramPngScale, relationshipDiagramPngText } from '../shared/relationshipDiagramPng';
 import { relationshipDiagramZh as text } from './locales/relationshipDiagram.zh-CN';
 import { sqliteRelationshipsZh } from './locales/sqliteRelationships.zh-CN';
@@ -47,7 +47,7 @@ export async function relationshipDiagramPng(graph: RelationshipDiagram, viewpor
   const label = (value: string, x: number, y: number, width: number, color: string, size: number, weight = '400') => {
     context.font = `${weight} ${size}px ${css.fontFamily}`;
     context.fillStyle = color;
-    context.fillText(fitDiagramLabel(value, width, context), x, y);
+    context.fillText(fitCanvasText(value.replace(/[\t\r\n]/g, ' '), width, context), x, y);
   };
   for (const node of graph.nodes) {
     const { x, y, width, height } = node;
@@ -81,33 +81,5 @@ export async function relationshipDiagramPng(graph: RelationshipDiagram, viewpor
     context.stroke(outline);
     context.setLineDash([]);
   }
-  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
-  canvas.width = 0;
-  canvas.height = 0;
-  if (!blob || blob.type !== 'image/png') throw Error(text.exportFailed);
-  if (blob.size > binaryCellFileLimits.saveBytes) throw Error(relationshipDiagramPngText.tooLarge);
-  const prefix = 'data:image/png;base64,';
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string' && reader.result.startsWith(prefix)) resolve(reader.result.slice(prefix.length));
-      else reject(Error(text.exportFailed));
-    };
-    reader.onerror = () => reject(Error(text.exportFailed));
-    reader.readAsDataURL(blob);
-  });
-}
-
-/** 与图中单行标题一致。按码点截断，避免拆开 Unicode 代理对。 */
-function fitDiagramLabel(value: string, width: number, context: CanvasRenderingContext2D) {
-  const line = value.replace(/[\t\r\n]/g, ' ');
-  if (context.measureText(line).width <= width) return line;
-  const points = [...line];
-  let low = 0, high = points.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (context.measureText(points.slice(0, middle).join('') + '…').width <= width) low = middle;
-    else high = middle - 1;
-  }
-  return points.slice(0, low).join('') + '…';
+  return canvasPngBase64(canvas, text.exportFailed, relationshipDiagramPngText.tooLarge);
 }

@@ -167,6 +167,7 @@ export const publicCommands: Record<Command, true> = {
   'table.filteredUpdate.preview': true, 'table.filteredUpdate.apply': true, 'table.filteredUpdate.release': true,
   'binaryCellFiles.open': true, 'binaryCellFiles.save': true,
   'relationshipDiagram.savePng': true,
+  'gridRange.savePng': true,
   'cellFiles.saveText': true,
   'files.importPresets.list': true, 'files.importPresets.save': true, 'files.importPresets.delete': true,
   'result.insertPreview': true, 'result.insertApply': true, 'result.insertRelease': true,

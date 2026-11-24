@@ -15,6 +15,7 @@ import { dataExportExtension, dataFileFormats, dataFileText, dataMarkupText, isX
 import { zh, formatText } from '../locales/zh-CN';
 import { invoke, errorMessage, uid } from '../lib';
 import { resultExportData } from '../resultExport';
+import { gridRangePng } from '../gridRangeImage';
 import { writeTableClipboardEvent } from '../gridClipboard';
 import { useWorkspace } from '../store';
 import { ResultsGrid } from './ResultsGrid';
@@ -29,8 +30,8 @@ import { queryResultSnapshotViewerZh as snapshotText } from '../locales/queryRes
 export function ResultExportDialog({ result, tabId, selected = false, scope = 'query', allowSql = scope !== 'rectangle' && scope !== 'snapshot', sqlDialect, onClose }: { result: ResultExportData & Pick<QueryResult, 'sqliteStorage'>; tabId?: string; selected?: boolean; scope?: 'query' | 'table' | 'collected' | 'rectangle' | 'snapshot'; allowSql?: boolean; sqlDialect?: 'postgresql' | 'sqlite'; onClose(): void }) {
   const fixedDialect = useRef(sqlDialect);
   const postgres = sqlDialect === 'postgresql', sqlite = sqlDialect === 'sqlite', utf8Sql = postgres || sqlite;
-  const fixed = useRef(result), alive = useRef(true), invalid = useRef(false), revision = useRef(0);
-  if (result !== fixed.current || sqlDialect !== fixedDialect.current) invalid.current = true;
+  const fixed = useRef(result), fixedScope = useRef(scope), alive = useRef(true), invalid = useRef(false), revision = useRef(0);
+  if (result !== fixed.current || sqlDialect !== fixedDialect.current || scope !== fixedScope.current) invalid.current = true;
   const data = useMemo(() => resultExportData(fixed.current), []), columns = useMemo(() => resultExportColumns(data.columns), [data]);
   const sqliteStorage = sqlite ? fixed.current.sqliteStorage : undefined;
   const storageFields = sqliteStorage ? {sqliteStorage} : {};
@@ -50,6 +51,7 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
   const [file, setFile] = useState<FileChoice | null>(null), fileRef = useRef<FileChoice | null>(null), [error, setError] = useState('');
   const [busy, setBusy] = useState(false), busyRef = useRef(false), [preparing, setPreparing] = useState(false), prepareRef = useRef(false), [picking, setPicking] = useState(false), pickRef = useRef(false);
   const [done, setDone] = useState<number>(), consumed = useRef(false), [taskId, setTaskId] = useState(''), activeTask = useRef('');
+  const [savingPng, setSavingPng] = useState(false), [pngNotice, setPngNotice] = useState('');
   const task = useWorkspace(state => state.tasks.find(item => item.id === taskId));
   const releases = useRef(new Set<string>()), pending = useRef(new Map<string, Promise<void>>());
   const renderedRevision = revision.current;
@@ -153,6 +155,21 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
       if (current(ticket)) report(reason);
     } finally { busyRef.current = false; if (alive.current) setBusy(false); if (tabId !== undefined) useWorkspace.getState().setBusy(tabId, false); }
   }
+  /** 仅从当前选区快照生成图片，编码完成后仍须核对原窗口和活动标签。 */
+  async function savePng(ticket: number) {
+    const epoch = clipboardEpoch.current;
+    const sourceCurrent = () => current(ticket) && (tabId === undefined ||
+      clipboardEpoch.current === epoch && useWorkspace.getState().settings.activeTabId === tabId);
+    if (scope !== 'rectangle' || !sourceCurrent() || busyRef.current || pickRef.current || prepareRef.current) return;
+    busyRef.current = true; setBusy(true); setSavingPng(true); setError(''); setPngNotice('');
+    try {
+      const base64 = await gridRangePng(data);
+      if (!sourceCurrent()) return;
+      const saved = await invoke('gridRange.savePng', { base64 });
+      if (saved && sourceCurrent()) setPngNotice(rangeExportText.pngSaved(saved.name));
+    } catch (reason) { if (sourceCurrent()) report(reason); }
+    finally { busyRef.current = false; if (alive.current) { setBusy(false); setSavingPng(false); } }
+  }
   /** 写入与原子替换等待期间不关闭；其余关闭先完成精确能力释放。 */
   async function close() { if (busyRef.current) return; revision.current++; if (previewRef.current) releases.current.add(previewRef.current.previewId); previewRef.current = null; fileRef.current = null; setPreview(null); setFile(null); try { await drain(); if (alive.current) onClose(); } catch (reason) { report(reason); } }
   const sqlReady = format !== 'sql' || allowSql && !!preview && validPreview() && confirmation === `${target.database}.${target.table}` && acknowledged;
@@ -177,8 +194,13 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
     </>}
     <h3>{zh.resultExport.preview}</h3><div className="sample-grid"><ResultsGrid columns={columns.map(column => ({ key: column.key, name: isXmlFormat(format) ? column.name : column.exportName, type: '' }))} rows={sample}/></div>
     {task && <div className="transfer-progress"><div><span>{task.message}</span><strong>{Math.round(task.progress)}%</strong></div><progress max="100" value={task.progress}/></div>}
-    {done !== undefined && <div className="success-box"><CheckCircle2 size={16}/>{formatText(zh.resultExport.completed, done)}</div>}<ErrorBox message={invalid.current ? sqlText.changed : excelError || error}/>
-  </div><footer className="modal-footer"><button disabled={busy} onClick={() => void close()}>{done === undefined ? zh.common.close : zh.common.done}</button><span className="grow"/>{busy ? <button onClick={() => void invoke('query.cancel', { taskId }).catch(report)}><Square size={13}/>{zh.resultExport.cancel}</button> : clipboard
+    {done !== undefined && <div className="success-box"><CheckCircle2 size={16}/>{formatText(zh.resultExport.completed, done)}</div>}
+    {pngNotice && <div className="success-box" role="status"><CheckCircle2 size={16}/>{pngNotice}</div>}
+    <ErrorBox message={invalid.current ? sqlText.changed : error || excelError}/>
+  </div><footer className="modal-footer"><button disabled={busy} onClick={() => void close()}>{done === undefined ? zh.common.close : zh.common.done}</button>
+    {scope === 'rectangle' && <button disabled={busy || picking || preparing || invalid.current} title={rangeExportText.pngHint}
+      onClick={() => void savePng(renderedRevision)}>{savingPng ? rangeExportText.pngSaving : rangeExportText.png}</button>}
+    <span className="grow"/>{busy ? !savingPng && <button onClick={() => void invoke('query.cancel', { taskId }).catch(report)}><Square size={13}/>{zh.resultExport.cancel}</button> : clipboard
     ? <button className="primary" disabled={preparing || invalid.current} onClick={() => copySql(renderedRevision)}>{sqlText.clipboardCopy}</button>
     : <button className="primary" disabled={!file || done !== undefined || !sqlReady || invalid.current || !!excelError || picking || preparing} onClick={() => void execute(renderedRevision)}>{zh.resultExport.start}<ArrowRight size={14}/></button>}</footer></Modal>;
 }

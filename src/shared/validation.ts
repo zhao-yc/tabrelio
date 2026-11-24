@@ -98,6 +98,7 @@ import { uiMenuStateSchema, objectCategories, assertObjectBrowserTabs } from './
 import { tableFilteredDeletePreviewInputSchema, tableFilteredDeleteApplyInputSchema, tableFilteredDeleteReleaseInputSchema } from './tableFilteredDelete';
 import { binaryCellFileOpenSchema, binaryCellFileSaveSchema, textCellFileSaveSchema } from './binaryCellFiles';
 import { relationshipDiagramPngSchema } from './relationshipDiagramPng';
+import { gridRangePngSchema } from './gridRangePng';
 import { tableFilteredUpdatePreviewInputSchema, tableFilteredUpdateApplyInputSchema, tableFilteredUpdateReleaseInputSchema } from './tableFilteredUpdate';
 import { fileImportTransactionMode, fileImportTransactionModeSchema } from './fileImportTransaction';
 import { importFileInspectInputSchema, importFileSourceSchema, importSourceColumn } from './importNewTable';
@@ -833,6 +834,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'table.filteredUpdate.release': tableFilteredUpdateReleaseInputSchema,
   'binaryCellFiles.save': binaryCellFileSaveSchema,
   'relationshipDiagram.savePng': relationshipDiagramPngSchema,
+  'gridRange.savePng': gridRangePngSchema,
   'cellFiles.saveText': textCellFileSaveSchema,
   'schema.databaseDrop.get': z.object({ connectionId: id, database: databaseDropName, taskId: id }).strict(),
   'schema.databaseDrop.preview': z.object({ snapshotId: id, taskId: id }).strict(),

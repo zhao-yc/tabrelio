@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。「导出选区」可保存带列名的 PNG。macOS 源码 Electron 已核对 SQLite 查询结果和表页草稿的实际图片、列名与数据顺序，并确认导出期间无新增数据库任务。D02、Q05 继续为部分覆盖。[Navicat 数据编辑器说明](https://www.navicat.com/en/products/data-editor-for-rdbms?product=navicat-for-oracle)
+
 2026-11-24 源码增量。应用编辑菜单和 SQL 编辑器右键菜单新增「复制当前语句」。沿用各方言的语句边界，MySQL 和 MariaDB 保留必要的客户端分隔符。macOS 源码 Electron 已在 MySQL、MariaDB、PostgreSQL 和 SQLite 离线草稿中核对菜单、文本、确认及失效拒绝。Q01 继续为部分覆盖。
 
 2026-11-24 源码增量。可编辑表页可一次还原矩形选区中的已改字段。macOS 源码 Electron 已核对 MySQL、MariaDB、PostgreSQL 和 SQLite 的两行选区还原、撤销、重做及选区外草稿保留。D02 继续为部分覆盖。

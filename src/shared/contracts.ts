@@ -191,6 +191,7 @@ export interface CommandMap {
   'binaryCellFiles.open': { input: import('./binaryCellFiles').BinaryCellFileOpenInput; output: import('./binaryCellFiles').BinaryCellFileOpenOutput };
   'binaryCellFiles.save': { input: import('./binaryCellFiles').BinaryCellFileSaveInput; output: import('./binaryCellFiles').BinaryCellFileSaveOutput };
   'relationshipDiagram.savePng': { input: import('./relationshipDiagramPng').RelationshipDiagramPngInput; output: import('./binaryCellFiles').BinaryCellFileSaveOutput };
+  'gridRange.savePng': { input: import('./pngFile').PngFileInput; output: import('./binaryCellFiles').BinaryCellFileSaveOutput };
   'cellFiles.saveText': { input: import('./binaryCellFiles').TextCellFileSaveInput; output: import('./binaryCellFiles').BinaryCellFileSaveOutput };
   'files.importPresets.list': { input: Record<string, never>; output: import('./importPresets').ImportPresetSnapshot };
   'files.importPresets.save': { input: import('./importPresets').ImportPresetSaveInput; output: import('./importPresets').ImportPresetSnapshot };
