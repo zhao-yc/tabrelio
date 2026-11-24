@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BatchFillIntent, batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillConstant, prepareBatchFillFromRow, prepareBatchFillSequence, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
+import { BatchFillIntent, batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillConstant, prepareBatchFillFromRow, prepareBatchFillSequence, prepareBatchFillUuid, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
 import { mysqlQueryBatchChanges } from '../../src/renderer/mysqlQueryBatchEdit';
 import { DraftHistory } from '../../src/renderer/draftHistory';
 import { collectChanges, type DraftRow } from '../../src/renderer/dataChanges';
@@ -20,6 +20,20 @@ function fixture() {
 }
 
 describe('当前页已有记录批量填充domain', () => {
+  it('逐格生成 UUID，范围内各不相同且过短字段拒绝整批', () => {
+    const { rows, info, context } = fixture();
+    info.columns.push({ ...info.columns[1], name: 'mirror', type: 'char(36)' });
+    for (const row of rows) row.data.mirror = '原值';
+    const range = { startRow: 0, rows: rows.slice(0, 2), keys: ['note', 'mirror'] };
+    const next = prepareBatchFillUuid(range, rows, context);
+    const values = next.slice(0, 2).flatMap(row => [row.data.note, row.data.mirror]);
+    expect(new Set(values).size).toBe(4);
+    expect(values).toEqual(Array(4).fill(expect.stringMatching(/^[0-9a-f-]{14}4[0-9a-f-]{21}$/)));
+    expect(next[2]).toBe(rows[2]);
+    info.columns.at(-1)!.type = 'varchar(35)';
+    expect(() => prepareBatchFillUuid(range, rows, context)).toThrow('mirror');
+    expect(rows.map(row => row.data.note)).toEqual(['原1', '原2', '原3']);
+  });
   it('快捷空串只填明确的文本列，表页和查询拒绝部分成功', () => {
     const { rows, context, ids, info, page } = fixture();
     rows[1].data.note = null;

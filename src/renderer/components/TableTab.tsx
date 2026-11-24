@@ -182,7 +182,7 @@ import { PasteInsertIntent, preparePasteInsert, readPasteInsert, type PasteInser
 import { PasteInsertDialog } from './PasteInsertDialog';
 import { GridEmptyState } from './GridEmptyState';
 import { pasteInsertZh } from '../locales/pasteInsert.zh-CN';
-import { BatchFillIntent, prepareBatchFillAcross, prepareBatchFillConstant, prepareBatchFillFromRow, prepareBatchFillSequence, type BatchFillAssignment } from '../recordBatchFill';
+import { BatchFillIntent, prepareBatchFillAcross, prepareBatchFillConstant, prepareBatchFillFromRow, prepareBatchFillSequence, prepareBatchFillUuid, type BatchFillAssignment } from '../recordBatchFill';
 import type { RecordInput } from '../recordViews';
 import { TableBatchFillDialog } from './TableBatchFillDialog';
 import { recordBatchFillZh } from '../locales/recordBatchFill.zh-CN';
@@ -2135,8 +2135,9 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     const target = cellRange.capture(rectangle);
     if (!target || !editable) throw Error(rangeFillText.stale);
     const { kind } = input;
-    if (kind === 'sequence') {
-      const next = prepareBatchFillSequence(target, input, rows, getRecordContext());
+    if (kind === 'sequence' || kind === 'uuid') {
+      const next = kind === 'uuid' ? prepareBatchFillUuid(target, rows, getRecordContext())
+        : prepareBatchFillSequence(target, input, rows, getRecordContext());
       if (next !== rows) setRows(next);
       setError('');
       return;

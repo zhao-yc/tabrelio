@@ -1140,7 +1140,7 @@ test('SQLite JOIN 查询删除勾选主表记录在冲突或外键失败时整�
   expect(pageErrors).toEqual([]);
 });
 
-test('SQLite 查询结果将矩形选区设为空字符串，确认后保留原生 TEXT', async () => {
+test('SQLite 查询结果将矩形选区设为空字符串或逐格生成 UUID，确认后保留原生 TEXT', async () => {
   await seed('SELECT id, name, mirror FROM subject WHERE id <= 3 ORDER BY id;',
     "ALTER TABLE subject ADD mirror TEXT; UPDATE subject SET name=NULL, mirror='原文本' WHERE id=1;" +
     "UPDATE subject SET name='NULL', mirror='另一个原文本' WHERE id=2; UPDATE subject SET name='', mirror='' WHERE id=3;");
@@ -1168,7 +1168,31 @@ test('SQLite 查询结果将矩形选区设为空字符串，确认后保留原�
   await preview.getByRole('checkbox', { name: sqliteEditText.confirmation, exact: true }).check();
   await preview.getByRole('button', { name: sqliteEditText.submit, exact: true }).click();
   await expect(preview).toBeHidden();
-  expect(read()).toEqual([...([1, 2, 3] as const).map(id => ({ id, name: '', mirror: '', storage: 'text' })), baseline[3]]);
+  const emptied = [...[1, 2, 3].map(id => ({ id, name: '', mirror: '', storage: 'text' })), baseline[3]];
+  expect(read()).toEqual(emptied);
+
+  await query.locator('.query-execute-split > button.primary').click();
+  const grid = query.locator('.query-result-grid').getByRole('grid');
+  const name = await grid.getByRole('columnheader').filter({ hasText: /^name/ }).getAttribute('aria-colindex');
+  const first = grid.locator(`[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="${name}"]`);
+  await expect(first).toHaveText('');
+  await first.click();
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.keyboard.press('Shift+ArrowDown');
+  await page.keyboard.press('Shift+F10');
+  await page.getByRole('menuitem', { name: rangeFill.uuid, exact: true }).click();
+  await expect(sql).toBeVisible();
+  const generated = (await sql.textContent())?.match(/[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/g) ?? [];
+  expect(generated).toHaveLength(4);
+  expect(new Set(generated).size).toBe(4);
+  expect(read()).toEqual(emptied);
+  await preview.getByRole('checkbox', { name: sqliteEditText.confirmation, exact: true }).check();
+  await preview.getByRole('button', { name: sqliteEditText.submit, exact: true }).click();
+  await expect(preview).toBeHidden();
+  const committed = read();
+  expect(new Set(committed.slice(0, 2).flatMap(row => [row.name, row.mirror]))).toEqual(new Set(generated));
+  expect(committed.map(row => row.storage)).toEqual(['text', 'text', 'text', 'text']);
+  expect(committed.slice(2)).toEqual(emptied.slice(2));
   expect(pageErrors).toEqual([]);
 });
 

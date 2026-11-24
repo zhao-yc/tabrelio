@@ -109,6 +109,7 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
     const action = (name: string): Promise<Locator> => navigationMenuItem(tab, { name, exact: true });
     const clickAction = async (name: string) => (await action(name)).click();
     const undo = local ? sqliteText.undo : draftHistoryZh.undo;
+    const uuidPattern = /[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/;
     const jobs = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id).sort());
     const menu = page.getByRole('menu', { name: /^(单元格操作|单元格筛选)$/ });
     const item = (name: string) => menu.getByRole('menuitem', { name, exact: true });
@@ -245,6 +246,19 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
     }
     expect(await jobs()).toEqual(before);
 
+    await cell.click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect(otherCell).toHaveClass(/grid-cell-in-range/);
+    await page.keyboard.press('Shift+F10');
+    await item(rangeText.uuid).click();
+    await expect(cell).toHaveText(uuidPattern);
+    await expect(otherCell).toHaveText(uuidPattern);
+    expect((await cell.textContent())?.match(uuidPattern)?.[0]).not.toBe((await otherCell.textContent())?.match(uuidPattern)?.[0]);
+    await clickAction(undo);
+    await expect(label).toBeVisible();
+    await expect(other).toBeVisible();
+    expect(await jobs()).toEqual(before);
+
     await other.locator('..').getByRole('checkbox').check();
     if (local) {
       await grid.getByRole('gridcell').getByText('INTEGER · 17', { exact: true }).click();
@@ -335,7 +349,6 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
     await expect(inserted).toBeVisible();
 
     const uuidCell = await namedCell('uuid_value');
-    const uuidPattern = /[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/;
     const generate = async () => {
       await uuidCell.click();
       await clickAction(text.uuid);
@@ -386,10 +399,10 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
       await execute.click();
       const firstResult = query.getByRole('gridcell', { name: 'row A', exact: true });
       const secondResult = query.getByRole('gridcell', { name: 'row B', exact: true });
-      async function selectTwoRows() {
-        await firstResult.click();
+      async function selectTwoRows(first = firstResult, last = secondResult) {
+        await first.click();
         await page.keyboard.press('Shift+ArrowDown');
-        await expect(secondResult).toHaveClass(/grid-cell-in-range/);
+        await expect(last).toHaveClass(/grid-cell-in-range/);
       }
       await selectTwoRows();
       await page.keyboard.press('F2');
@@ -441,7 +454,29 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
       await confirmation.check();
       await submit.click();
       await expect(queryReview).toBeHidden();
-      expect(await readStoredRows(profile)).toEqual(original.map((row, index) => index < 2 ? { ...row, label: '' } : row));
+      const emptied = original.map((row, index) => index < 2 ? { ...row, label: '' } : row);
+      expect(await readStoredRows(profile)).toEqual(emptied);
+
+      await execute.click();
+      const resultGrid = query.locator('.query-result-grid').getByRole('grid');
+      const resultColumn = await resultGrid.getByRole('columnheader').filter({ hasText: /^label/ }).getAttribute('aria-colindex');
+      expect(resultColumn).toBeTruthy();
+      const resultAt = (row: number) => resultGrid.locator(`[role="row"][aria-rowindex="${row}"] [role="gridcell"][aria-colindex="${resultColumn}"]`);
+      await expect(resultAt(2)).toHaveText('');
+      await expect(resultAt(3)).toHaveText('');
+      await selectTwoRows(resultAt(2), resultAt(3));
+      await page.keyboard.press('Shift+F10');
+      await item(rangeText.uuid).click();
+      const uuidValues = queryReview.getByText(new RegExp('^' + uuidPattern.source + '$'));
+      await expect(uuidValues).toHaveCount(2);
+      const generated = await uuidValues.allTextContents();
+      expect(new Set(generated).size).toBe(2);
+      await expect(confirmation).toBeVisible();
+      expect(await readStoredRows(profile)).toEqual(emptied);
+      await confirmation.check();
+      await submit.click();
+      await expect(queryReview).toBeHidden();
+      expect(await readStoredRows(profile)).toEqual(emptied.map((row, index) => index < 2 ? { ...row, label: generated[index] } : row));
     }
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

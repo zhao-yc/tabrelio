@@ -4,7 +4,7 @@ import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import type { DraftRow } from './dataChanges';
 import { changedDraftHistoryBytes, draftHistoryLimits } from './draftHistory';
 import { ownCell, parseCell } from './lib';
-import { assertGridRangeEmptyColumns, gridRangeFillColumns, gridRangeIntegerSequence, type GridRangeFillInput, type GridRangeFillSide } from './gridRangeFill';
+import { assertGridRangeColumnTypes, gridRangeFillColumns, gridRangeIntegerSequence, gridRangeUuidGenerator, type GridRangeFillInput, type GridRangeFillSide } from './gridRangeFill';
 import { mysqlQuickValueAllowed } from './gridQuickValue';
 import type { GridRangeTarget } from './useGridCellRange';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
@@ -97,18 +97,35 @@ export function prepareBatchFillConstant(keys: readonly string[], input: GridRan
   ids: ReadonlySet<string>, context: RecordContext): DraftRow[] {
   const { kind, value } = input;
   if (kind !== 'text' && kind !== 'null' && kind !== 'empty') throw Error(rangeText.target);
-  if (kind === 'empty') {
-    const fields = batchFillColumns(context);
-    const targets = keys.map(key => {
-      const field = fields.find(column => column.name === key);
-      if (!field) throw Error(rangeText.target);
-      return field;
-    });
-    assertGridRangeEmptyColumns(targets, column => mysqlQuickValueAllowed(column, 'empty'));
-  }
+  if (kind === 'empty') assertGridRangeColumnTypes(batchFillTargetColumns(keys, context), column => mysqlQuickValueAllowed(column, 'empty'));
   const mode = kind === 'null' ? 'null' : 'text';
   return prepareBatchFill(keys.map(column => ({ column, input: { mode, text: kind === 'empty' ? '' : value } })),
     rows, ids, context, kind === 'text' && input.onlyNull);
+}
+
+function batchFillTargetColumns(keys: readonly string[], context: RecordContext): ColumnInfo[] {
+  if (!keys.length || keys.length > limits.columns || new Set(keys).size !== keys.length) throw Error(rangeText.target);
+  const fields = new Map(batchFillColumns(context).map(column => [column.name, column]));
+  return keys.map(key => {
+    const field = fields.get(key);
+    if (!field) throw Error(rangeText.target);
+    return field;
+  });
+}
+
+/** 在原行和全部列校验后逐格生成，沿用字节预算及一次性撤销。 */
+export function prepareBatchFillUuid(range: GridRangeTarget<DraftRow>, rows: DraftRow[], context: RecordContext): DraftRow[] {
+  const { keys } = range;
+  const fields = batchFillTargetColumns(keys, context);
+  const count = range.rows.length, valueBytes = bytes('00000000-0000-0000-0000-000000000000');
+  const rowBytes = keys.reduce((total, key) => total + bytes(key) + valueBytes + 4, 0);
+  if (count > limits.rows || count * keys.length > limits.cells || count * rowBytes + 2 > limits.inputBytes) throw Error(rangeText.limit);
+  if (!count || range.rows.some((row, index) => rows[range.startRow + index] !== row || row.deleted ||
+      !row.inserted && keys.some(key => ownCell(row.data, key) === undefined))) throw Error(rangeText.target);
+  assertGridRangeColumnTypes(fields, column => mysqlQuickValueAllowed(column, 'uuid'));
+  const selected = new Set(range.rows);
+  const generate = gridRangeUuidGenerator();
+  return applyBatchRowPatches(rows, row => selected.has(row) ? Object.fromEntries(keys.map(key => [key, generate()])) : undefined);
 }
 
 /** 为已验证的本地选区生成新行，跨页时同样只解析一次输入并共用整组选区的预算。 */

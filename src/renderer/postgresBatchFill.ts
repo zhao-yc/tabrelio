@@ -5,7 +5,7 @@ import { postgresBatchFillZh as text } from './locales/postgresBatchFill.zh-CN';
 import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual, postgresBatchValueValid } from './postgresBatchSelection';
 import { postgresClipboardFieldValue } from './postgresGridPaste';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
-import { assertGridRangeEmptyColumns, gridRangeFillColumns, gridRangeFillSource, gridRangeIntegerSequence, type GridRangeFillDirection, type GridRangeFillInput, type GridRangeFillSide } from './gridRangeFill';
+import { assertGridRangeColumnTypes, gridRangeFillColumns, gridRangeFillSource, gridRangeIntegerSequence, gridRangeUuidGenerator, type GridRangeFillDirection, type GridRangeFillInput, type GridRangeFillSide } from './gridRangeFill';
 import { postgresQuickValueAllowed } from './gridQuickValue';
 import type { GridRangeTarget } from './useGridCellRange';
 
@@ -17,6 +17,7 @@ export function postgresQueryRangeFillChanges(page: PostgresTablePage, columns: 
   const { kind } = input;
   const range = { startRow: 0, rows: page.rows, keys: columns.map(column => column.key) };
   const noDraft = () => undefined;
+  if (kind === 'uuid') return postgresRangeFillUuid(page, columns, 0, page.rows.length, noDraft);
   if (kind === 'sequence') return postgresRangeFillSequence(page, columns, range, input, noDraft);
   if (kind === 'up' || kind === 'down') return postgresRangeFillFromRow(page, columns, range, kind, noDraft);
   if (kind === 'left' || kind === 'right') return postgresRangeFillAcross(page, columns, range, kind, noDraft);
@@ -28,9 +29,32 @@ export function postgresRangeFillConstant(page: PostgresTablePage, columns: read
   start: number, count: number, input: GridRangeFillInput, prior: (key: string) => PostgresTableChange | undefined) {
   const { kind, value } = input;
   if (kind !== 'text' && kind !== 'null' && kind !== 'empty') throw Error(rangeText.target);
-  if (kind === 'empty') assertGridRangeEmptyColumns(columns, column => postgresQuickValueAllowed(column, 'empty'));
+  if (kind === 'empty') assertGridRangeColumnTypes(columns, column => postgresQuickValueAllowed(column, 'empty'));
   return postgresRangeFillChanges(page, columns, start, count, kind === 'null' ? null : kind === 'empty' ? '' : value, prior,
     kind === 'text' && input.onlyNull);
+}
+
+/** 为每格生成本地 UUID，保持既有行版本及同一行未选字段的草稿。 */
+export function postgresRangeFillUuid(page: PostgresTablePage, columns: readonly PostgresTableColumn[],
+  start: number, count: number, prior: (key: string) => PostgresTableChange | undefined): RecordUpdate[] {
+  if (!page.capabilities.update || !columns.length || columns.length > postgresTableLimits.fields ||
+      new Set(columns.map(column => column.key)).size !== columns.length ||
+      columns.some(column => !page.columns.includes(column) || !postgresBatchEditableColumn(column)))
+    throw Error(rangeText.target);
+  assertGridRangeColumnTypes(columns, column => postgresQuickValueAllowed(column, 'uuid'));
+  const rows = postgresBatchRows(page, postgresRangeRows(page, start, count), prior);
+  const generate = gridRangeUuidGenerator();
+  return rows.flatMap(({ index: row, original, previous }) => {
+    const targets = columns.map(({ key: column }): PostgresTableField => ({ column, value: { mode: 'text', value: generate() } }));
+    const fields = postgresFilledFields(original, targets, previous);
+    return fields ? [{ kind: 'update', row, fields }] : [];
+  });
+}
+
+function postgresRangeRows(page: PostgresTablePage, start: number, count: number): ReadonlySet<number> {
+  if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 1 || start + count > page.rows.length ||
+      count > postgresTableLimits.changes) throw Error(rangeText.target);
+  return new Set(Array.from({ length: count }, (_, index) => start + index));
 }
 
 const postgresIntegerBits = new Map([['smallint', 16], ['integer', 32], ['bigint', 64]]);
@@ -54,13 +78,11 @@ export function postgresRangeFillSequence(page: PostgresTablePage, columns: read
 /** 矩形只转换一次统一值，再交给既有的原行账本和批量字段校验。 */
 export function postgresRangeFillChanges(page: PostgresTablePage, columns: readonly PostgresTableColumn[],
   start: number, count: number, value: string | null, prior: (key: string) => PostgresTableChange | undefined, onlyNull = false) {
-  if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 1 || start + count > page.rows.length ||
-      count > postgresTableLimits.changes) throw Error(rangeText.target);
+  const selected = postgresRangeRows(page, start, count);
   const fields = columns.map(column => {
     if (column.binary && value !== null) throw Error(rangeText.target);
     return { column: column.key, value: postgresClipboardFieldValue(value, column) };
   });
-  const selected = new Set(Array.from({ length: count }, (_, index) => start + index));
   return postgresBatchFillChanges(page, columns, selected, fields, prior, onlyNull);
 }
 

@@ -1,9 +1,10 @@
 import { gridRangeFillZh as text } from './locales/gridRangeFill.zh-CN';
+import { uid } from './lib';
 import type { GridCellRectangle, GridRangeTarget } from './useGridCellRange';
 
 export type GridRangeFillDirection = 'down' | 'up';
 export type GridRangeFillSide = 'left' | 'right';
-export type GridRangeFillKind = 'text' | 'empty' | 'null' | 'integer' | 'real' | 'sequence' | GridRangeFillDirection | GridRangeFillSide;
+export type GridRangeFillKind = 'text' | 'empty' | 'uuid' | 'null' | 'integer' | 'real' | 'sequence' | GridRangeFillDirection | GridRangeFillSide;
 export interface GridRangeFillInput { kind: GridRangeFillKind; value: string; step?: string; onlyNull?: true; }
 
 /** 等差序列的极值必在端点，先检查字段范围，再按显示行号生成精确整数。 */
@@ -24,6 +25,7 @@ export function gridRangeFillActions(rectangle: GridCellRectangle, apply: (kind:
   const actions: { label: string; run(): void }[] = [
     { label: text.clear, run: () => apply('null') },
     { label: text.empty, run: () => apply('empty') },
+    { label: text.uuid, run: () => apply('uuid') },
   ];
   const add = (kind: GridRangeFillDirection | GridRangeFillSide) => actions.push({ label: text[kind], run: () => apply(kind) });
   if (rectangle.top < rectangle.bottom) { add('down'); add('up'); }
@@ -31,12 +33,23 @@ export function gridRangeFillActions(rectangle: GridCellRectangle, apply: (kind:
   return actions;
 }
 
-/** 快捷置空串要求每个目标列都能明确保留文本，检查早于草稿发布。 */
-export function assertGridRangeEmptyColumns<Column extends { name: string }>(
-  columns: readonly Column[], supportsEmpty: (column: Column) => boolean,
+/** 快捷赋值先核对全部目标列，再发布草稿。 */
+export function assertGridRangeColumnTypes<Column extends { name: string }>(
+  columns: readonly Column[], supportsValue: (column: Column) => boolean,
 ): void {
-  const incompatible = columns.find(column => !supportsEmpty(column));
+  const incompatible = columns.find(column => !supportsValue(column));
   if (incompatible) throw Error(text.incompatible(incompatible.name));
+}
+
+/** 每批独立生成，发现随机源重复时拒绝整批。 */
+export function gridRangeUuidGenerator() {
+  const seen = new Set<string>();
+  return (): string => {
+    const value = uid();
+    if (seen.has(value)) throw Error(text.uuidRepeated);
+    seen.add(value);
+    return value;
+  };
 }
 
 /** 取显示顺序的首行或末行作为源。源行保持原引用，待删除行不能作为源或目标。 */

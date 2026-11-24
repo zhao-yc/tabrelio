@@ -19,6 +19,18 @@ const page: PostgresTablePage = {
 };
 
 describe('PostgreSQL 勾选记录批量填充', () => {
+  it('选区 UUID 支持原生 UUID 和文本，保护主键和非文本字段', () => {
+    const native = column('code', { type: 'uuid' });
+    const source = { ...page, columns: [...columns, native], rows: page.rows.map(row => ({ ...row, code: null })) };
+    const input = { kind: 'uuid', value: '' } as const;
+    const changes = postgresQueryRangeFillChanges(source, [native, columns[1]], input);
+    expect(changes.map(({ row, fields }) => [row, fields.map(field => field.column)])).toEqual([[0, ['code', 'c1']], [1, ['code', 'c1']]]);
+    const values = changes.flatMap(change => change.fields.map(field => field.value.mode === 'text' && field.value.value));
+    expect(new Set(values).size).toBe(4);
+    expect(values).toEqual(Array(4).fill(expect.stringMatching(/^[0-9a-f-]{14}4[0-9a-f-]{21}$/)));
+    for (const column of [columns[0], columns[2], columns[3]])
+      expect(() => postgresQueryRangeFillChanges(source, [native, column], input)).toThrow();
+  });
   it('快捷空串按原字段类型生成常量预览，混合类型整组拒绝', () => {
     const input = { kind: 'empty', value: '不可使用的输入' } as const;
     expect(postgresRangeFillConstant(page, [columns[1]], 1, 1, input, () => undefined)).toEqual([

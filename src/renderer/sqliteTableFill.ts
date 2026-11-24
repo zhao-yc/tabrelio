@@ -3,7 +3,7 @@ import { sqliteEditValueSchema, sqliteTableEditLimits, type SqliteEditColumn, ty
 import type { SqliteDraftRow, SqliteTableEditor } from './sqliteTableEditor';
 import { sqliteTableEditZh as text } from './locales/sqliteTableEdit.zh-CN';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
-import { assertGridRangeEmptyColumns, gridRangeIntegerSequence, type GridRangeFillInput } from './gridRangeFill';
+import { assertGridRangeColumnTypes, gridRangeIntegerSequence, gridRangeUuidGenerator, type GridRangeFillInput } from './gridRangeFill';
 import { sqliteQuickValueAllowed } from './gridQuickValue';
 import { sqliteColumnAcceptsTransferValue } from './sqliteRecordTransfer';
 
@@ -11,10 +11,30 @@ import { sqliteColumnAcceptsTransferValue } from './sqliteRecordTransfer';
 export function sqliteRangeFillConstant(input: GridRangeFillInput, fields: readonly SqliteEditColumn[], strict: boolean): SqliteEditValue {
   const { kind, value } = input;
   if (kind === 'empty') {
-    assertGridRangeEmptyColumns(fields, column => sqliteQuickValueAllowed(column, strict, 'empty'));
+    assertGridRangeColumnTypes(fields, column => sqliteQuickValueAllowed(column, strict, 'empty'));
     return { kind: 'text', value: '' };
   }
   return sqliteEditValueSchema.parse(kind === 'null' ? { kind } : { kind, value });
+}
+
+/** 为已核实的原行和普通列生成独立 TEXT 值，并一次暂存整个矩形。 */
+export function stageSqliteUuidFill(editor: SqliteTableEditor, selected: readonly SqliteDraftRow[], columns: readonly number[]): number {
+  const page = editor.page, edit = page.edit;
+  if (edit?.kind !== 'editable' || !edit.locator) throw Error(rangeText.stale);
+  if (!columns.length || selected.length > sqliteTableEditLimits.changes ||
+      selected.length * columns.length > sqliteTableEditLimits.cells) throw Error(rangeText.limit);
+  if (new Set(columns).size !== columns.length) throw Error(rangeText.target);
+  const keyColumns = edit.locator.columns;
+  const fields = columns.map(index => {
+    const field = edit.columns[index];
+    if (!field || field.primary || keyColumns.includes(field.name)) throw Error(rangeText.target);
+    return field;
+  });
+  assertGridRangeColumnTypes(fields, column => sqliteQuickValueAllowed(column, !!edit.strict, 'uuid'));
+  const source = prepareSqliteFill(page, editor.view.rows, selected), generate = gridRangeUuidGenerator();
+  return editor.editRecords(source, selected.map(({ id: rowId }) => ({
+    rowId, fields: columns.map(column => ({ column, value: { kind: 'text', value: generate() } })),
+  })));
 }
 
 /** 按当前显示行生成原生 INTEGER，全部值和来源通过校验后才发布一步草稿。 */
