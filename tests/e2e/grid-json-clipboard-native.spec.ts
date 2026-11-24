@@ -9,6 +9,7 @@ import { deleteSqlCopyZh } from '../../src/renderer/locales/deleteSqlCopy.zh-CN'
 import { gridQuickValueZh } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridHeaderMenuZh } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { gridRangeCopyZh } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
+import { gridRangeExportZh } from '../../src/renderer/locales/gridRangeExport.zh-CN';
 import { sqliteTableFindZh } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
 import { queryResultFindZh } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
@@ -180,6 +181,26 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     expect(copiedTableValues).toHaveLength(1);
     expect(String(copiedTableValues[0][0])).toBe('1');
     expect(copiedTableValues[0].slice(1)).toEqual([expectedA.amount, expectedA.label, expectedA.payload, null]);
+    await expect(tableBCheck).toBeChecked();
+    const txt = join(dataDir, '表页选区.txt');
+    await desktop.evaluate(({ dialog, BrowserWindow }, input) => {
+      const original = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (parent: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
+        dialog.showSaveDialog = original;
+        if (parent !== BrowserWindow.getAllWindows()[0] || options.defaultPath !== input.name ||
+            options.filters?.[0]?.extensions.join() !== 'txt') throw Error('越过本例 TXT 保存范围');
+        return { canceled: false, filePath: input.txt };
+      }) as typeof original;
+    }, { txt, name: gridRangeExportZh.txtFilename });
+    await tableAmount.click();
+    await page.keyboard.press('Shift+ArrowDown');
+    for (let index = 0; index < 3; index++) await page.keyboard.press('Shift+ArrowRight');
+    await tableAmount.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: gridRangeExportZh.txt, exact: true }).click();
+    await expect(page.getByText(gridRangeExportZh.txtSaved('表页选区.txt', 2), { exact: true })).toBeVisible();
+    expect((await readFile(txt, 'utf8')).replace(/^\uFEFF/, '')).toBe(
+      'amount\tlabel\tpayload\tnullable\r\n9007199254740993\trow A\tbase64:AP8=\t\\N\r\n9007199254740994\trow B\tbase64:\t""\r\n');
+    await tableAmount.click();
     await expect(tableBCheck).toBeChecked();
     if (local) {
       await (await navigationMenuItem(tableTab, { name: deleteSqlCopyZh.action, exact: true })).click();

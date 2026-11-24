@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。矩形选区的右键菜单可直接打开 TXT 保存对话框，按可见列顺序写入 UTF-8 制表符文本和列名。macOS 源码 Electron 已核对 SQLite 查询结果和草稿、MySQL／MariaDB／PostgreSQL 表页及零连接离线快照，涵盖精确值、BLOB、NULL、空文本及选择目标期间原选区改变时拒绝写盘。D02、Q05 继续为部分覆盖。[Navicat 数据编辑器说明](https://www.navicat.com/en/products/data-editor-for-rdbms?product=navicat-premium)
+
 2026-11-24 源码增量。「文件」和 SQL 编辑器右键菜单新增「另存 SQL 选区」，按单一连续选区原文导出独立 UTF-8 文件。macOS 源码 Electron 已在 MySQL、MariaDB、PostgreSQL 和 SQLite 离线草稿中核对反向跨行选区、文件字节、空选区与多选区门禁，以及选区改变或切换标签后的拒绝写入。Q03 继续为部分覆盖。
 
 2026-11-24 源码增量。表页和查询结果可从单个数据格复制命中的整行，支持带列名的制表符文本，并保留应用内粘贴的类型信息。macOS 源码 Electron 已核对 SQLite 临时数据库及 Server-200 上的 MySQL、MariaDB 和 PostgreSQL 独立实例，包括多行勾选、重复列名、大整数、BLOB 和 NULL。D02 继续为部分覆盖。

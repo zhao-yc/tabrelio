@@ -43,6 +43,7 @@ import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type Grid
 import { encodeSqliteResultClipboard, sqliteCellClipboardType } from '../sqliteTableClipboard';
 import { copyGridRangeNames, copyGridRangeText, gridCellRowCopyActions, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { gridRangeSqliteStorage, snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
+import { gridRangeExportActions } from '../gridRangeExportActions';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill, type GridRangeFillHandle } from './GridRangeFill';
 import { GridEmptyState } from './GridEmptyState';
@@ -511,15 +512,12 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     if (rectangle && onFillRange) actions.push(...gridRangeFillActions(rectangle, kind => applyGridRangeFill(rectangle, kind)));
     if (rectangle && onFilterTableRange) actions.push(...tableRangeFilterActions(rectangle,
       () => cellRange.capture(rectangle, null), current, onFilterTableRange));
-    if (rectangle && onExportRange) actions.push({ label: rangeExportText.action, run: () => {
-      try {
-        const range = cellRange.capture(rectangle, null);
-        if (!range) throw Error(rangeExportText.stale);
-        const result = snapshotGridRangeExport(range, columns, copyValue, skipRowInInversion,
-          gridRangeSqliteStorage(sqliteSource, rows));
-        if (current()) onExportRange(result);
-      } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
-    } });
+    if (rectangle && onExportRange) actions.push(...gridRangeExportActions(withStorage => {
+      const range = cellRange.capture(rectangle, null);
+      if (!range) throw Error(rangeExportText.stale);
+      return snapshotGridRangeExport(range, columns, copyValue, skipRowInInversion,
+        withStorage ? gridRangeSqliteStorage(sqliteSource, rows) : undefined);
+    }, current, onExportRange, reason => useWorkspace.getState().notify(errorMessage(reason), true)));
     if (onFilterCell) try {
       const capture = captureQueryResultCellFilter(columns, rows, cell, sqliteSource, filterDialect);
       const apply = (operator: CellFilterOperator) => {

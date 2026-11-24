@@ -14,6 +14,7 @@ import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useSt
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
 import { copyGridRangeNames, copyGridRangeText, gridCellRowCopyActions, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
+import { gridRangeExportActions } from '../gridRangeExportActions';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { sqliteBinaryOriginalCell } from '../sqliteBinaryInput';
 import { GridRangeFill, type GridRangeFillHandle } from './GridRangeFill';
@@ -430,21 +431,18 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
         } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
       }) : []),
       ...sqliteRowSqlActions(row, current, rectangle),
-      ...(rectangle && onExportRange ? [{ label: rangeExportText.action, run: () => {
-        try {
-          const range = cellRange.capture(rectangle, null);
-          if (!range) throw Error(rangeExportText.stale);
-          const result = snapshotGridRangeExport(range, page.result.columns, (item, key) => {
-            const value = item.values[Number(key.slice(1))];
-            if (value?.kind === 'blob') return sqliteBinaryOriginalCell(value.value);
-            return value?.kind === 'null' ? null : value?.value;
-          }, item => item.deleted, (item, key) => {
-            const kind = item.values[Number(key.slice(1))]?.kind;
-            return kind && { null: 'n', integer: 'i', real: 'r', text: 't', blob: 'b' }[kind];
-          });
-          if (current()) onExportRange(result);
-        } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : rangeExportText.stale); }
-      } }] : []),
+      ...(rectangle && onExportRange ? gridRangeExportActions(withStorage => {
+        const range = cellRange.capture(rectangle, null);
+        if (!range) throw Error(rangeExportText.stale);
+        return snapshotGridRangeExport(range, page.result.columns, (item, key) => {
+          const value = item.values[Number(key.slice(1))];
+          if (value?.kind === 'blob') return sqliteBinaryOriginalCell(value.value);
+          return value?.kind === 'null' ? null : value?.value;
+        }, item => item.deleted, withStorage ? (item, key) => {
+          const kind = item.values[Number(key.slice(1))]?.kind;
+          return kind && { null: 'n', integer: 'i', real: 'r', text: 't', blob: 'b' }[kind];
+        } : undefined);
+      }, current, onExportRange, reason => setError(reason instanceof Error ? reason.message : rangeExportText.stale)) : []),
       ...(rectangle && onFillRange ? gridRangeFillActions(rectangle, kind => applyGridRangeFill(rectangle, kind)) : []),
       ...(rectangle && onFilterTableRange ? tableRangeFilterActions(rectangle,
         () => cellRange.capture(rectangle, null), current, onFilterTableRange) : []),

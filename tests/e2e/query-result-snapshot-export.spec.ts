@@ -23,6 +23,7 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
   const source = join(dataDir, '离线源.dbark-result.json');
   const csv = join(dataDir, '匹配行.csv'), json = join(dataDir, '勾选行.json');
   const rectangle = join(dataDir, '选区.json');
+  const quickTxt = join(dataDir, '离线选区.txt');
   const right = join(dataDir, '对比输入.dbark-result.json'), report = join(dataDir, '对比报告.json');
   const wire = JSON.stringify({
     kind: 'dbark.query-result-snapshot', version: 1, result: {
@@ -52,14 +53,14 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     const handlers = (ipcMain as any)._invokeHandlers, original = handlers.get('dbark:request');
     if (!contents || extra || typeof original !== 'function') throw Error('测试窗口归属无效');
     const frame = contents.mainFrame;
-    const state = { dialogs: [] as string[], engine: [] as string[], requests: [] as string[], denied: [] as string[] };
+    const state = { dialogs: [] as string[], engine: [] as string[], requests: [] as string[], denied: [] as string[], quickSaves: 0 };
     const reject = (command: string): never => { state.denied.push(command); throw Error('离线导出收到未授权请求 ' + command); };
     const allowed = new Set(['settings.get', 'settings.save', 'connections.list', 'tasks.list', 'history.list', 'app.info',
       'app.runtimeInfo', 'app.setDirty', 'app.menuState', 'workbench.get', 'workbench.save', 'workbench.protocolReady', 'workbench.protocolTake',
       'workbench.protocolFinish', 'resultSnapshotFiles.open', 'files.choose', 'files.exportResult']);
     handlers.set('dbark:request', (event: Electron.IpcMainInvokeEvent, payload: { command: string; input: any }) => {
       if (event.sender !== contents || event.senderFrame !== frame || !allowed.has(payload.command)) reject(payload.command);
-      if (payload.command === 'files.choose' && (payload.input.purpose !== 'export' || !['csv', 'json'].includes(payload.input.format))) reject(payload.command);
+      if (payload.command === 'files.choose' && (payload.input.purpose !== 'export' || !['csv', 'json', 'txt'].includes(payload.input.format))) reject(payload.command);
       state.requests.push(payload.command);
       return original(event, payload);
     });
@@ -70,6 +71,12 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
       return { canceled: false, filePaths: [compare ? paths.right : paths.source] };
     }) as typeof dialog.showOpenDialog;
     dialog.showSaveDialog = (async (parent: Electron.BrowserWindow, options: Electron.SaveDialogOptions) => {
+      if (options.defaultPath === paths.txtName) {
+        if (parent !== window || options.title !== '导出文件' || options.filters?.[0]?.extensions.join() !== 'txt' || state.quickSaves)
+          reject('showSaveDialog.txt');
+        state.quickSaves++;
+        return { canceled: false, filePath: paths.quickTxt };
+      }
       const slot = state.dialogs.length;
       const target = slot === 1 ? 'csv' : slot === 2 ? 'rectangle' : slot === 3 ? 'json' : 'report';
       const extension = target === 'csv' ? '.csv' : '.json';
@@ -85,14 +92,15 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
       const post = child.postMessage.bind(child);
       child.postMessage = ((message: { command: string; input: { connectionId?: string; sessionId?: string; filePath?: string } }) => {
         if (message.command !== '__shutdown' && (message.command !== 'files.exportResult' || message.input.connectionId ||
-            message.input.sessionId || ![paths.csv, paths.json, paths.rectangle, paths.report].includes(message.input.filePath ?? ''))) reject(message.command);
+            message.input.sessionId || ![paths.csv, paths.json, paths.rectangle, paths.report, paths.quickTxt].includes(message.input.filePath ?? ''))) reject(message.command);
         state.engine.push(message.command);
         post(message);
       }) as typeof child.postMessage;
       return child;
     }) as typeof utilityProcess.fork;
     return state;
-  }, { source, csv, json, rectangle, right, report, openTitle: filesText.choose, reportName: comparisonText.reportName });
+  }, { source, csv, json, rectangle, right, report, quickTxt, txtName: rangeText.txtFilename,
+    openTitle: filesText.choose, reportName: comparisonText.reportName });
 
   try {
     const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
@@ -232,6 +240,11 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     await page.keyboard.press('Shift+ArrowDown');
     await page.keyboard.press('Shift+ArrowRight');
     await page.keyboard.press('Shift+F10');
+    await viewer.getByRole('menuitem', { name: rangeText.txt, exact: true }).click();
+    await expect(page.getByText(rangeText.txtSaved('离线选区.txt', 2), { exact: true })).toBeVisible();
+    expect((await readFile(quickTxt, 'utf8')).replace(/^\uFEFF/, '')).toBe(
+      '内容\t金额\r\n匹配丙\t9007199254740993.0002\r\n匹配甲\t9007199254740993.0002\r\n');
+    await page.keyboard.press('Shift+F10');
     await viewer.getByRole('menuitem', { name: rangeText.action, exact: true }).click();
     const rectangleDialog = page.getByRole('dialog', { name: rangeText.action, exact: true });
     await expect(rectangleDialog.getByText(rangeText.summary(2, 2), { exact: true })).toBeVisible();
@@ -328,8 +341,9 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     const audit = await observer.jsonValue();
     expect(audit.denied).toEqual([]);
     expect(audit.dialogs).toEqual(['open', 'csv', 'rectangle', 'json', 'compare', 'report', 'compare']);
-    expect(audit.engine).toEqual(Array(4).fill('files.exportResult'));
-    expect(audit.requests.filter(command => command === 'files.exportResult')).toHaveLength(4);
+    expect(audit.quickSaves).toBe(1);
+    expect(audit.engine).toEqual(Array(5).fill('files.exportResult'));
+    expect(audit.requests.filter(command => command === 'files.exportResult')).toHaveLength(5);
   } finally {
     await observer.dispose();
   }

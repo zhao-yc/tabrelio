@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { gridRangeFillZh as rangeFill } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { DatabaseSync } from 'node:sqlite';
 import type { Locator } from '@playwright/test';
@@ -3207,6 +3207,28 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
   const modal = page.getByRole('dialog', { name: rangeExport.action, exact: true });
   const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
   const database = join(dataDir, 'grid-row-jump.sqlite'), before = readFileSync(database);
+  const quickText = page.getByRole('menuitem', { name: rangeExport.txt, exact: true });
+  async function chooseText(output: string, delayed = false) {
+    await desktop.evaluate(({ dialog, BrowserWindow }, input) => {
+      const original = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (window: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
+        dialog.showSaveDialog = original;
+        if (window !== BrowserWindow.getAllWindows()[0] || options.defaultPath !== input.name ||
+            options.filters?.[0]?.extensions.join(',') !== 'txt') throw Error('仅允许本例选区 TXT 保存选择');
+        if (input.delayed) await new Promise<void>(resolve => { Object.assign(globalThis, { releaseRangeTxt: resolve }); });
+        return { canceled: false, filePath: input.output };
+      }) as typeof original;
+    }, { output, delayed, name: rangeExport.txtFilename });
+  }
+  async function saveTxt(anchor: Locator, name: string, expected: string) {
+    const output = join(dataDir, name);
+    await chooseText(output);
+    await anchor.click({ button: 'right' });
+    await quickText.click();
+    await expect(page.getByText(rangeExport.txtSaved(name, 2), { exact: true })).toBeVisible();
+    await expect(modal).toHaveCount(0);
+    expect(readFileSync(output, 'utf8').replace(/^\uFEFF/, '')).toBe(expected);
+  }
   async function savePng(name: string, expected: string[]) {
     const output = join(dataDir, name);
     await desktop.evaluate(({ dialog, BrowserWindow }, output) => {
@@ -3274,6 +3296,24 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
   await savePng('矩形查询.png', ['name', '记录 180', '记录 179']);
   expect(await tasks()).toEqual(beforeQuery);
   expect(await exportJson('矩形查询.json')).toEqual([{ name: '记录 180' }, { name: '记录 179' }]);
+  await queryStart.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await saveTxt(queryStart, '矩形查询.txt', 'name\r\n记录 180\r\n记录 179\r\n');
+  const outdated = join(dataDir, '原选区目标.txt');
+  writeFileSync(outdated, '本例保留目标', { flag: 'wx' });
+  const beforeStale = await tasks();
+  await chooseText(outdated, true);
+  await queryStart.click({ button: 'right' });
+  await quickText.click();
+  await expect.poll(() => desktop.evaluate(() => typeof Reflect.get(globalThis, 'releaseRangeTxt') === 'function')).toBe(true);
+  await queryStart.click();
+  await desktop.evaluate(() => {
+    Reflect.get(globalThis, 'releaseRangeTxt')();
+    Reflect.deleteProperty(globalThis, 'releaseRangeTxt');
+  });
+  await expect(page.getByText(rangeExport.stale, { exact: true })).toBeVisible();
+  expect(readFileSync(outdated, 'utf8')).toBe('本例保留目标');
+  expect(await tasks()).toEqual(beforeStale);
 
   await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
   const table = page.locator('.sqlite-table-tab:visible');
@@ -3292,6 +3332,7 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
   expect(JSON.parse(draftJson.text)).toEqual([{ name: '待提交' }, { name: '待提交' }]);
   expect(draftJson.typed).toBe('');
   expect(draftJson.sqlite).toBe('');
+  await saveTxt(draftStart, '矩形草稿.txt', 'name\r\n待提交\r\n待提交\r\n');
   await draftStart.click({ button: 'right' });
   await menu.click();
   const beforeDraft = await tasks();

@@ -26,6 +26,7 @@ import { useGridCheckedRange } from './useGridCheckedRange';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
 import { copyGridRangeNames, copyGridRangeText, gridCellRowCopyActions, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport } from '../gridRangeExport';
+import { gridRangeExportActions } from '../gridRangeExportActions';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill, type GridRangeFillHandle } from './GridRangeFill';
 import { gridRangeFillActions, gridRangeFillSource, type GridRangeFillInput, type GridRangeFillKind } from '../gridRangeFill';
@@ -2404,18 +2405,15 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
         } catch (reason) { if (current()) setError(errorMessage(reason)); }
       }) : []),
       ...sqlActions,
-      ...(rectangle ? [{ label: rangeExportText.action, run: () => {
-        if (pageExportRef.current) return;
-        try {
-          const range = cellRange.capture(rectangle, null);
-          if (!range) throw Error(rangeExportText.stale);
-          const data = snapshotGridRangeExport(range, visibleColumns, (item, key) => ownCell(item.data, key), item => item.deleted);
-          if (!current()) return;
-          const lease = { data, selected: false, scope: 'rectangle' as const };
-          pageExportRef.current = lease;
-          setPageExport(lease);
-        } catch (reason) { if (current()) setError(errorMessage(reason)); }
-      } }] : []),
+      ...(rectangle ? gridRangeExportActions(() => {
+        const range = cellRange.capture(rectangle, null);
+        if (!range) throw Error(rangeExportText.stale);
+        return snapshotGridRangeExport(range, visibleColumns, (item, key) => ownCell(item.data, key), item => item.deleted);
+      }, () => current() && !pageExportRef.current, data => {
+        const lease = { data, selected: false, scope: 'rectangle' as const };
+        pageExportRef.current = lease;
+        setPageExport(lease);
+      }, reason => setError(errorMessage(reason))) : []),
       ...(rectangle && editable ? gridRangeFillActions(rectangle, kind => applyGridRangeFill(rectangle, kind)) : []),
       ...(rectangle && selectedFilterReady ? tableRangeFilterActions(rectangle, () => cellRange.capture(rectangle, null),
         current, {
