@@ -1,6 +1,7 @@
 import { appModalSelector } from '../modalSelectors';
 import { createPostgresCompletionProvider, type PostgresCompletionScope } from '../postgresCompletionProvider';
 import type { ConnectionProfile } from '../../shared/contracts';
+import { queryFileSourceLimits } from '../../shared/queryFileSources';
 import { editorWordWrapOptions, readEditorWordWrap } from '../../shared/editorWordWrap';
 import { editorFontOptions, readEditorFontSize } from '../../shared/editorFont';
 import { editorIndentationOptions, readEditorInsertSpaces, readEditorTabSize } from '../../shared/editorIndentation';
@@ -9,10 +10,12 @@ import { zh } from '../locales/zh-CN';
 import { captureSqlClipboardSelection, sqlClipboardStack, sqlClipboardStackAction } from '../sqlClipboardStack';
 import { sqlClipboardStackZh as clipboardText } from '../locales/sqlClipboardStack.zh-CN';
 import { sqlQuotedCopyZh as quotedText } from '../locales/sqlQuotedCopy.zh-CN';
+import { queryFilesZh } from '../locales/queryFiles.zh-CN';
 import { bindSqlStatementCopy, quoteSqlForCode, sqlQuotedCopyAction, sqlQuotedCopyMaxUnits, sqlQuotedStatementText, sqlQuoteFormats,
   type SqlQuoteFormat, type SqlQuotedStatementSource } from '../sqlQuotedCopy';
 import { writeTableClipboardEvent } from '../gridClipboard';
 import { statementDraftSql } from '../queryDuplicateIntent';
+import { saveSqlFragment } from '../statementNavigationExtract';
 import { ErrorBox, Modal } from './ui';
 import { SqlSelectionFindDialog, sqlSelectionFindLimit } from './SqlSelectionFindDialog';
 import { sqlSelectionFindZh } from '../locales/sqlSelectionFind.zh-CN';
@@ -134,6 +137,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   type ClipboardRequest = { intent: NonNullable<ReturnType<typeof captureSqlClipboardSelection>>; unsubscribe(): void } &
     ({ kind: 'paste'; entries: readonly string[] } | { kind: 'plain' | 'quoted'; sql: string; currentStatement: boolean });
   const clipboardRequest = useRef<ClipboardRequest | null>(null), clipboardHost = useRef<HTMLDivElement>(null);
+  const selectionSave = useRef<ReturnType<typeof captureSqlClipboardSelection>>(undefined);
   const [clipboardDialog, setClipboardDialog] = useState<ClipboardRequest>(), [clipboardIndex, setClipboardIndex] = useState(0);
   const [selectionFind, setSelectionFind] = useState<{
     mode: typeof sqlSelectionFindCommandIds[number];
@@ -159,9 +163,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     request?.intent.dispose();
   }
   function closeClipboard(): void { disposeClipboard(); setClipboardDialog(undefined); }
-  /** 绑定打开时的标签、连接配置和编辑器，等待选择时不得切换目标。 */
-  function openClipboard(editor: monaco.editor.IStandaloneCodeEditor, kind: ClipboardRequest['kind'] = 'paste', statement?: SqlQuotedStatementSource): void {
-    if (clipboardRequest.current || document.querySelector(appModalSelector) || (kind === 'plain' && !statement)) return;
+  /** 捕获异步编辑器动作的原标签和连接配置，切换或重新打开后旧动作不能继续。 */
+  function captureEditorActionScope(editor: monaco.editor.IStandaloneCodeEditor) {
     const workspace = useWorkspace.getState(), tab = workspace.settings.tabs.find(item => item.id === propsRef.current.queryTabId);
     if (!tab) return;
     const profile = workspace.connections.find(item => item.id === tab.connectionId), version = workspace.connectionVersions[tab.connectionId];
@@ -173,6 +176,39 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         current.settings.tabs.includes(tab) && current.connections.includes(profile) &&
         current.connectionVersions[tab.connectionId] === version && !current.activeJobs[tab.id] && !current.queryFileOpenings?.[tab.id];
     };
+    return { workspace, profile, allowed };
+  }
+
+  /** 以本次单选区原文另存。应用内标签切走再切回也不能恢复旧文件确认资格。 */
+  async function saveSelection(editor: monaco.editor.IStandaloneCodeEditor): Promise<void> {
+    if (selectionSave.current || document.querySelector(appModalSelector)) return;
+    const scope = captureEditorActionScope(editor);
+    if (!scope) return;
+    const target = captureSqlClipboardSelection(editor, () => scope.allowed() && !document.querySelector(appModalSelector));
+    if (!target) return;
+    selectionSave.current = target;
+    const release = useWorkspace.subscribe(() => { target.current(); });
+    try {
+      let sql: string | undefined;
+      try { sql = target.selectedText(queryFileSourceLimits.sqlUnits); }
+      catch { scope.workspace.notify(queryFilesZh.saveSelection.tooLarge, true); return; }
+      if (sql !== undefined) {
+        const selected = sql;
+        await saveSqlFragment(() => selected, 'utf8', target.current, queryFilesZh.saveSelection);
+      }
+    } finally {
+      release();
+      target.dispose();
+      selectionSave.current = undefined;
+    }
+  }
+
+  /** 绑定打开时的标签、连接配置和编辑器，等待选择时不得切换目标。 */
+  function openClipboard(editor: monaco.editor.IStandaloneCodeEditor, kind: ClipboardRequest['kind'] = 'paste', statement?: SqlQuotedStatementSource): void {
+    if (clipboardRequest.current || document.querySelector(appModalSelector) || (kind === 'plain' && !statement)) return;
+    const scope = captureEditorActionScope(editor);
+    if (!scope) return;
+    const { workspace, profile, allowed } = scope;
     if (!allowed()) return;
     editor.focus();
     if (statement && editor.getModel()?.getValue() !== statement.source) { workspace.notify(quotedText.stale, true); return; }
@@ -253,7 +289,12 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   // options引用稳定；库即使迟到应用初始options，也读取同一份最新readonly，不能重新开放失效实例。
   const optionsRef = useRef<monaco.editor.IStandaloneEditorConstructionOptions>({ readOnly: true, wordBasedSuggestions:'off',quickSuggestions:{other:true,comments:false,strings:false},fontFamily: 'Cascadia Code, SFMono-Regular, Consolas, monospace', ...editorFontOptions(fontSize), minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, padding: { top: 18, bottom: 12 }, ...editorIndentationOptions(tabSize, insertSpaces), ...editorWordWrapOptions(wordWrap), lineNumbers, matchBrackets, renderLineHighlight: 'line', smoothScrolling: true, fixedOverflowWidgets: true, contextmenu: true });
   // 只发布已提交的props；并发渲染被取消时不能把未提交回调交给旧模型。
-  useLayoutEffect(() => { propsRef.current = { value, onChange, onReady, readOnly, onFormat, queryTabId, clipboardDisabled }; syncFormatAction(); clipboardRequest.current?.intent.current(); });
+  useLayoutEffect(() => {
+    propsRef.current = { value, onChange, onReady, readOnly, onFormat, queryTabId, clipboardDisabled };
+    syncFormatAction();
+    clipboardRequest.current?.intent.current();
+    selectionSave.current?.current();
+  });
   /** 外部value只能走桥接的受控编辑范围；库不再另行更新value或订阅onChange。 */
   useLayoutEffect(() => { contentRef.current?.sync(); }, [value, readOnly]);
   useLayoutEffect(() => {
@@ -263,7 +304,14 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const widget = widgetRef.current;
     if (widget?.alive) { attachContent(widget.editor); syncFormatAction(); }
     else if (widget) { optionsRef.current.readOnly = true; setContentReady(false); }
-    return () => { aliveRef.current = false; disposeClipboard(); contentRef.current?.dispose(); contentRef.current = null; editorRef.current = null; };
+    return () => {
+      aliveRef.current = false;
+      disposeClipboard();
+      selectionSave.current?.current();
+      contentRef.current?.dispose();
+      contentRef.current = null;
+      editorRef.current = null;
+    };
   }, []);
   /** 仅热更新字号/行高；不触及model、正文、撤销栈、选择、readonly或补全生命周期。 */
   useLayoutEffect(() => {
@@ -680,6 +728,12 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       run: () => openClipboard(editor, 'quoted'),
     });
     if (propsRef.current.queryTabId) {
+      editor.addAction({
+        id: 'save-sql-selection', label: uiCommandLabels['save-sql-selection'],
+        precondition: 'editorHasSelection && !editorHasMultipleSelections && !editorReadonly',
+        contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 6.1,
+        run: () => saveSelection(editor),
+      });
       sqlSelectionFindCommandIds.forEach((id, index) => editor.addAction({
         id, label: uiCommandLabels[id], precondition: 'editorHasSelection && !editorHasMultipleSelections && !editorReadonly',
         contextMenuGroupId: '8_sql_find', contextMenuOrder: index,

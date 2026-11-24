@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { existsSync, realpathSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { LocalStore } from '../../src/main/storage';
@@ -8,6 +8,7 @@ import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { sqlBlockCommentZh as messages } from '../../src/renderer/locales/sqlBlockComment.zh-CN';
 import { sqlQuotedCopyZh as quotedText } from '../../src/renderer/locales/sqlQuotedCopy.zh-CN';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
+import { queryFilesZh } from '../../src/renderer/locales/queryFiles.zh-CN';
 import { editorIndentationZh as indentationText } from '../../src/renderer/locales/editorIndentation.zh-CN';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
@@ -28,6 +29,48 @@ async function nativeQueryCommand(id: string, selection: boolean) {
     if (!item?.enabled || !window || menu?.getMenuItemById('execute-selection')?.enabled !== selection) throw Error('原生命令所属的查询或选区不可用');
     item.click(item, window, {} as Electron.KeyboardEvent);
   }, { id, selection });
+}
+
+/** 只替换系统选择器的返回时机，保留正式 IPC 和主进程的原子写入。 */
+async function deferSqlExportPicker(expectedName: string) {
+  await desktop.evaluate(({ dialog, BrowserWindow }, expectedName) => {
+    const original = dialog.showSaveDialog;
+    const picker = {
+      count: 0,
+      finish: undefined as ((result: Electron.SaveDialogReturnValue) => void) | undefined,
+      restore: () => { dialog.showSaveDialog = original; },
+    };
+    Object.assign(globalThis, { testSqlExportPicker: picker });
+    dialog.showSaveDialog = (async (window: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
+      if (window !== BrowserWindow.getAllWindows()[0] || options.defaultPath !== expectedName ||
+          options.filters?.[0]?.extensions.join() !== 'sql' || picker.finish)
+        throw Error('SQL 保存选择器收到意外输入');
+      picker.count += 1;
+      return new Promise<Electron.SaveDialogReturnValue>(resolve => { picker.finish = resolve; });
+    }) as typeof dialog.showSaveDialog;
+  }, expectedName);
+  const wait = (count: number) =>
+    expect.poll(() => desktop.evaluate(() => Reflect.get(globalThis, 'testSqlExportPicker').count)).toBe(count);
+  return {
+    wait,
+    async finish(count: number, path?: string) {
+      await wait(count);
+      await desktop.evaluate((_electron, filePath) => {
+        const picker = Reflect.get(globalThis, 'testSqlExportPicker');
+        const finish = picker.finish;
+        picker.finish = undefined;
+        finish({canceled: !filePath, filePath: filePath ?? ''});
+      }, path);
+    },
+    async restore() {
+      await desktop.evaluate(() => {
+        const picker = Reflect.get(globalThis, 'testSqlExportPicker');
+        picker.finish?.({canceled: true, filePath: ''});
+        picker.restore();
+        Reflect.deleteProperty(globalThis, 'testSqlExportPicker');
+      });
+    },
+  };
 }
 
 /** 用正式存储准备离线查询和本例专用的 SQLite 文件，实际操作经过原生窗口。 */
@@ -729,37 +772,13 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     expect(await model()).toMatchObject({sql: initial.sql, line, empty: true});
 
     const firstFile = join(dataDir, '菜单导出.sql'), secondFile = join(dataDir, '右键导出.sql'), staleFile = join(dataDir, '过期光标.sql');
-    // 替换本轮系统选择器的返回时机，保留正式 IPC 和主进程原子写入。
-    await desktop.evaluate(({ dialog }) => {
-      const original = dialog.showSaveDialog;
-      const picker = {
-        count: 0,
-        finish: undefined as ((result: Electron.SaveDialogReturnValue) => void) | undefined,
-        restore: () => { dialog.showSaveDialog = original; },
-      };
-      Object.assign(globalThis, { currentStatementPicker: picker });
-      dialog.showSaveDialog = (async (_window: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
-        if (options.defaultPath !== '当前语句.sql' || options.filters?.[0]?.extensions.join() !== 'sql' || picker.finish)
-          throw Error('当前语句保存选择器收到意外输入');
-        picker.count += 1;
-        return new Promise<Electron.SaveDialogReturnValue>(resolve => { picker.finish = resolve; });
-      }) as typeof dialog.showSaveDialog;
-    });
-    const finishPicker = async (count: number, path?: string) => {
-      await expect.poll(() => desktop.evaluate(() => Reflect.get(globalThis, 'currentStatementPicker').count)).toBe(count);
-      await desktop.evaluate((_electron, filePath) => {
-        const picker = Reflect.get(globalThis, 'currentStatementPicker');
-        const finish = picker.finish;
-        picker.finish = undefined;
-        finish({canceled: !filePath, filePath: filePath ?? ''});
-      }, path);
-    };
+    const picker = await deferSqlExportPicker(navigationText.saveCurrent.fileName);
     try {
       const save = 'save-current-statement';
       await box.focus();
       await model(line);
       await nativeQueryCommand(save, false);
-      await finishPicker(1, firstFile);
+      await picker.finish(1, firstFile);
       await expect.poll(() => readFile(firstFile).catch(() => undefined)).toEqual(Buffer.from(script, 'utf8'));
       await expect(page.getByText(navigationText.saveCurrent.saved('菜单导出.sql'), {exact: true})).toBeVisible();
       expect(await model()).toMatchObject({sql: initial.sql, line, column: 4, empty: true});
@@ -768,35 +787,114 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
       const savePoint = await model(line);
       await page.mouse.click(savePoint.x, savePoint.y, {button: 'right'});
       await page.locator('.monaco-menu-container:visible').getByRole('menuitem', {name: uiCommandLabels[save], exact: true}).click({delay: 120});
-      await finishPicker(2, secondFile);
+      await picker.finish(2, secondFile);
       await expect.poll(() => readFile(secondFile).catch(() => undefined)).toEqual(Buffer.from(script, 'utf8'));
       await expect(page.getByText(navigationText.saveCurrent.saved('右键导出.sql'), {exact: true})).toBeVisible();
 
       await box.focus();
       await model(line);
       await nativeQueryCommand(save, false);
-      await expect.poll(() => desktop.evaluate(() => Reflect.get(globalThis, 'currentStatementPicker').count)).toBe(3);
+      await picker.wait(3);
       await model(1);
-      await finishPicker(3, staleFile);
+      await picker.finish(3, staleFile);
       await expect(page.getByText(navigationText.saveCurrent.stale, {exact: true})).toBeVisible();
       expect(existsSync(staleFile)).toBe(false);
       expect(await model()).toMatchObject({sql: initial.sql, line: 1, column: 4, empty: true});
 
       await nativeQueryCommand(save, false);
-      await finishPicker(4);
+      await picker.finish(4);
       await nativeQueryCommand(save, false);
-      await finishPicker(5, staleFile);
+      await picker.finish(5, staleFile);
       await expect.poll(() => readFile(staleFile, 'utf8').catch(() => undefined)).toBe("SELECT '前置';");
     } finally {
-      await desktop.evaluate(() => {
-        const picker = Reflect.get(globalThis, 'currentStatementPicker');
-        picker.finish?.({canceled: true, filePath: ''});
-        picker.restore();
-        Reflect.deleteProperty(globalThis, 'currentStatementPicker');
-      });
+      await picker.restore();
     }
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+}
+
+for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
+  test(`${dialect} 另存 SQL 选区保留原始文本并拒绝过期确认`, async () => {
+    const editorLines = ["SELECT \t'船🚢';  ", '  -- 原始注释', 'SELECT 20;'];
+    const sql = editorLines.join(dialect === 'sqlite' ? '\r\n' : '\n');
+    await seed(dialect, sql, 'SELECT 99;');
+    const save = 'save-sql-selection', text = queryFilesZh.saveSelection;
+    const picker = await deferSqlExportPicker(text.fileName);
+    const normal = join(dataDir, '选区菜单.sql'), context = join(dataDir, '选区右键.sql');
+    const stale = join(dataDir, '原目标.sql'), switched = join(dataDir, '标签切换.sql');
+    await writeFile(stale, '原目标内容', 'utf8');
+    const model = (mode?: 'reverse' | 'caret' | 'multi') => activeEditor().evaluate((element, mode) => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const editor = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+      const source = editor?.getModel();
+      if (!api || !editor || !source) throw Error('缺少原查询编辑器');
+      if (mode === 'reverse') editor.setSelection(new api.Selection(3, 9, 1, 8));
+      if (mode === 'caret') editor.setPosition({lineNumber: 1, column: 1});
+      if (mode === 'multi') editor.setSelections([new api.Selection(1, 1, 1, 7), new api.Selection(3, 1, 3, 7)]);
+      const selection = editor.getSelection(), point = editor.getScrolledVisiblePosition({lineNumber: 2, column: 6});
+      if (!selection || !point) throw Error('缺少原选区坐标');
+      const bounds = editor.getDomNode()!.getBoundingClientRect();
+      return {sql: source.getValue(), eol: source.getEOL(), text: source.getValueInRange(selection),
+        anchor: selection.selectionStartLineNumber, cursor: selection.positionLineNumber,
+        x: bounds.x + point.left, y: bounds.y + point.top + point.height / 2};
+    }, mode);
+    const enabled = () => desktop.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.enabled, save);
+    try {
+      await activeEditor().getByRole('textbox').focus();
+      await model('caret');
+      await expect.poll(enabled).toBe(false);
+      await model('multi');
+      await expect.poll(enabled).toBe(false);
+      const original = await model('reverse');
+      const expected = ["\t'船🚢';  ", '  -- 原始注释', 'SELECT 2'].join(original.eol);
+      expect(original.text).toBe(expected);
+      await nativeQueryCommand(save, true);
+      await picker.finish(1, normal);
+      await expect(page.getByText(text.saved('选区菜单.sql'), {exact: true})).toBeVisible();
+      expect(await readFile(normal)).toEqual(Buffer.from(expected));
+      expect(await model()).toMatchObject({sql: original.sql, text: expected, anchor: 3, cursor: 1});
+
+      const point = await model('reverse');
+      await page.mouse.click(point.x, point.y, {button: 'right'});
+      await page.locator('.monaco-menu-container:visible').getByRole('menuitem', {name: uiCommandLabels[save], exact: true}).click({delay: 120});
+      await picker.finish(2, context);
+      await expect(page.getByText(text.saved('选区右键.sql'), {exact: true})).toBeVisible();
+      expect(await readFile(context)).toEqual(Buffer.from(expected));
+
+      await nativeQueryCommand(save, true);
+      await picker.wait(3);
+      await model('caret');
+      await model('reverse');
+      await picker.finish(3, stale);
+      await expect(page.getByText(text.stale, {exact: true})).toBeVisible();
+      expect(await readFile(stale, 'utf8')).toBe('原目标内容');
+
+      await nativeQueryCommand(save, true);
+      await picker.finish(4, normal);
+      await expect(page.getByText(text.saved('选区菜单.sql'), {exact: true})).toBeVisible();
+      await nativeQueryCommand(save, true);
+      await picker.wait(5);
+      const tab = (id: string) => page.locator(`[data-workspace-tab-id="${id}"] .tab-select`);
+      await tab('zoom-other').click();
+      await expect.poll(async () => (await model()).sql).toBe('SELECT 99;');
+      await tab('block-comment-offline').click();
+      await expect.poll(async () => (await model()).sql).toBe(original.sql);
+      await model('reverse');
+      await picker.finish(5, switched);
+      await expect(page.getByText(text.stale, {exact: true})).toBeVisible();
+      expect(existsSync(switched)).toBe(false);
+      expect(await model()).toMatchObject({sql: original.sql, text: expected, anchor: 3, cursor: 1});
+    } finally {
+      await picker.restore();
+    }
+    const results = await page.evaluate(async () => ({
+      history: await window.dbark.invoke('history.list', {}),
+      tasks: await window.dbark.invoke('tasks.list', {}),
+      binding: (await window.dbark.invoke('settings.get', {})).tabs.find(tab => tab.id === 'block-comment-offline')?.fileSourceBinding,
+    }));
+    expect(results).toEqual({history: [], tasks: [], binding: undefined});
     expect(pageErrors).toEqual([]);
   });
 }

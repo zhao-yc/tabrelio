@@ -11,6 +11,12 @@ export const queryFilesZh = {
   revealRequested: '已请求系统定位 SQL 文件。',
   handoffUnavailable: '未能确认系统文件操作结果，草稿继续保留。',
   saveAs: '另存 SQL 文件',
+  saveSelection: {
+    fileName: 'SQL 选区.sql',
+    saved: (name: string) => `已另存 SQL 选区到 ${name}`,
+    stale: '原查询或选区已变化，请重新选择要保存的 SQL。',
+    tooLarge: 'SQL 选区超过 2000 万字符，请缩小选区。',
+  },
   encoding: '文件编码',
   utf8: 'UTF-8',
   utf16le: 'UTF-16LE',

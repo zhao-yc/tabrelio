@@ -2972,6 +2972,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction(sqlQuotedCopyAction)?.run(); } },
     'sql-copy-current-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'copy') },
     'save-current-statement': { enabled: canNavigateFromCursor && !navigationSaving, run: () => openStatementNavigation(editor.current, 'save') },
+    'save-sql-selection': { enabled: canNavigateFromCursor && hasSingleSelection,
+      run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction('save-sql-selection')?.run(); } },
     'sql-copy-current-statement-quoted': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'quote') },
     'sql-clipboard-stack': { enabled: !!searchEditor && !resultsOnly && !busy && !closeRequest && !fileSource.busy,
       run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction(sqlClipboardStackAction)?.run(); } },

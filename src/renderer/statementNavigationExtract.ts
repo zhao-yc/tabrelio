@@ -20,8 +20,9 @@ export function extractStatementSelection(controller: StatementNavigationControl
   const result = controller.extract(ranges, (source, dialect, current) => {
     if (destination === 'query' || destination === 'separate') return open({ mode: destination === 'query' ? 'statements' : 'split-statements', current });
     if (typeof destination === 'object' && 'libraryName' in destination) return open({ mode: 'save-statements', current, ...destination });
-    if (typeof destination === 'object') return saveStatements(
-      () => statementDraftSql(source, ranges, dialect), destination.encoding, current);
+    if (typeof destination === 'object') return saveSqlFragment(
+      () => statementDraftSql(source, ranges, dialect), destination.encoding, current,
+      { fileName: text.scriptFile, stale: text.reasons.stale, saved: text.saved });
     try {
       const sql = statementDraftSql(source, ranges, dialect);
       writeTableClipboardEvent(current, data => data.setData('text/plain', sql));
@@ -38,7 +39,7 @@ export { openQueryTabBatch as openStatementDraftBatch } from './store';
 /** 只保存光标所在的已签发语句，沿用目录导出的分隔符和文件写入规则。 */
 export function saveCurrentStatement(controller: StatementNavigationController, range: NavigableStatement): Promise<void> | undefined {
   return controller.extract([range], (source, dialect, current) =>
-    saveStatements(() => statementDraftSql(source, [range], dialect), 'utf8', current, text.saveCurrent));
+    saveSqlFragment(() => statementDraftSql(source, [range], dialect), 'utf8', current, text.saveCurrent));
 }
 
 /** 只新建查询库条目，不接管或修改原编辑器的文件与查询来源。 */
@@ -48,9 +49,9 @@ export async function saveStatementQuery(candidate: Omit<WorkspaceTab, 'id'>, na
   useWorkspace.getState().notify(text.librarySaved(saved.name));
 }
 
-/** 原生选择器返回后仍需核对原目录。文件授权与写入沿用主进程的 SQL 保存边界。 */
-async function saveStatements(read: () => string, encoding: QueryFileEncoding, current: () => boolean,
-  file: { fileName: string; stale: string; saved(name: string): string } = { fileName: text.scriptFile, stale: text.reasons.stale, saved: text.saved }): Promise<void> {
+/** 原生选择器返回后复核原始选区或目录，再以本次授权目标原子保存。 */
+export async function saveSqlFragment(read: () => string, encoding: QueryFileEncoding, current: () => boolean,
+  file: { fileName: string; stale: string; saved(name: string): string }): Promise<void> {
   try {
     const sql = read();
     const selected = await invoke('files.choose', { purpose: 'export', format: 'sql', suggestedName: file.fileName });

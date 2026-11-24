@@ -2310,6 +2310,7 @@ export function PostgresQueryTab({
     'sql-copy-quoted': { enabled: editable && !resultsOnly && editorSelection.single, run: () => editorAction(sqlQuotedCopyAction) },
     'sql-copy-current-statement': { enabled: canNavigate && !resultsOnly, run: () => navigation.open('copy') },
     'save-current-statement': { enabled: canNavigate && !resultsOnly, run: () => navigation.open('save') },
+    'save-sql-selection': { enabled: editable && !resultsOnly && editorSelection.single, run: () => editorAction('save-sql-selection') },
     'sql-copy-current-statement-quoted': { enabled: canNavigate && !resultsOnly, run: () => navigation.open('quote') },
     'sql-clipboard-stack': { enabled: editable && !resultsOnly, run: () => editorAction(sqlClipboardStackAction) },
     'sql-selection-to-snippet': { enabled: editable && editorSelection.single, run: () => openSnippets(true) },

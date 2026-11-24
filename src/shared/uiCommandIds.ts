@@ -8,7 +8,7 @@ export const sqlSelectionFindCommandIds = ['sql-find-selection', 'sql-replace-se
 
 /** 沙箱预加载只依赖纯白名单，不引入校验器、文件系统或数据库运行时。 */
 export const uiCommandIds = [
-  'new-connection', 'new-query', 'open-sql-file', 'recent-sql-file', 'save-query', 'save-sql-file', 'save-current-statement',
+  'new-connection', 'new-query', 'open-sql-file', 'recent-sql-file', 'save-query', 'save-sql-file', 'save-current-statement', 'save-sql-selection',
   'open-bound-sql-external', 'reveal-bound-sql-file', 'edit-bound-sql-external', 'external-sql-editor-preferences',
   'connections-transfer', 'connections-organize', 'find', 'replace', 'sql-goto-line', 'sql-goto-bracket', 'sql-select-bracket', 'sql-toggle-comment', 'sql-toggle-block-comment', 'sql-uppercase', 'sql-lowercase', 'toggle-theme', 'focus-mode',
   'focus-query-pane', 'object-information',

@@ -15,6 +15,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'new-connection': '新建连接', 'new-query': '新建查询', 'open-sql-file': '打开 SQL 文件',
   'recent-sql-file': '最近 SQL 文件', 'save-query': '保存查询', 'save-sql-file': '另存 SQL 文件',
   'save-current-statement': '另存当前语句',
+  'save-sql-selection': '另存 SQL 选区',
   'open-bound-sql-external': '用默认应用打开磁盘文件', 'reveal-bound-sql-file': '定位 SQL 文件',
   'edit-bound-sql-external': '用外部编辑器打开', 'external-sql-editor-preferences': '外部 SQL 编辑器',
   'connections-transfer': '连接导入导出', 'connections-organize': '整理连接', 'find': '查找', 'replace': '替换',
