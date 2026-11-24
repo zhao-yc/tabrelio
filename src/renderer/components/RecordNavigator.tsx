@@ -1,22 +1,27 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { recordNavigatorZh as text } from '../locales/recordNavigator.zh-CN';
+import { tableCellKeyIsComposing } from '../tableCellKeyboard';
 import '../recordNavigator.css';
 
 type SummaryColumn = { key: string; name: string };
 const groupSize = 25;
+const searchBatchSize = 512;
+interface SearchResult { source: object; fields: string; needle: string; indices: number[]; }
 
 export function useRecordNavigator() {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [fields, setFields] = useState<readonly string[]>();
-  return { id, open, setOpen, fields, setFields };
+  const [search, setSearch] = useState('');
+  const [matches, setMatches] = useState<SearchResult>();
+  return { id, open, setOpen, fields, setFields, search, setSearch, matches, setMatches };
 }
 
 type NavigatorState = ReturnType<typeof useRecordNavigator>;
 
-export function RecordNavigatorToggle({ state }: { state: NavigatorState }) {
+export function RecordNavigatorToggle({ state, title = text.title }: { state: NavigatorState; title?: string }) {
   return <button type="button" aria-controls={state.id} aria-expanded={state.open}
-    onClick={() => state.setOpen(!state.open)}>{text.title}</button>;
+    onClick={() => state.setOpen(!state.open)}>{title}</button>;
 }
 
 /** 直接定位已加载记录，选中动作仍交给原表单的来源与暂存守卫。 */
@@ -33,6 +38,8 @@ export function RecordBoundaryButton({ label, index, active, disabled, onSelect 
 
 interface Props {
   state: NavigatorState;
+  source: object;
+  title?: string;
   columns: readonly SummaryColumn[];
   count: number;
   active: number;
@@ -45,18 +52,42 @@ interface Props {
 }
 
 /** 列表只展开已加载页的一个小分组，记录身份和切换授权由原表单复核。 */
-export function RecordNavigator({ state, columns, count, active, value, canSelect, disabled, stage, showToggle = true, onSelect }: Props) {
-  const [group, setGroup] = useState<{ active: number; index: number }>();
-  const last = Math.max(0, Math.ceil(count / groupSize) - 1);
-  const index = group?.active === active ? Math.min(group.index, last) : Math.min(last, Math.max(0, Math.floor(active / groupSize)));
-  const start = index * groupSize, end = Math.min(start + groupSize, count);
+export function RecordNavigator({ state, source, title = text.title, columns, count, active, value, canSelect, disabled, stage, showToggle = true, onSelect }: Props) {
+  const [group, setGroup] = useState<{ source: object; needle: string; active: number; index: number }>();
   const byKey = new Map(columns.map(column => [column.key, column]));
   const available = state.fields?.filter(key => byKey.has(key));
   const keys = available?.length ? available : columns.slice(0, 2).map(column => column.key);
+  const needle = state.search.trim().toLowerCase(), fields = JSON.stringify(keys);
+  const matches = state.matches?.source === source && state.matches.needle === needle && state.matches.fields === fields ? state.matches.indices : undefined;
+
+  // 大查询结果分片检查摘要，换源、修改筛选或收起后取消原轮次。
+  useEffect(() => {
+    if (!state.open || !needle || matches) return;
+    let start = 0;
+    const indices: number[] = [];
+    const scan = () => {
+      const end = Math.min(start + searchBatchSize, count);
+      for (; start < end; start++) {
+        if (canSelect?.(start) !== false && keys.some(key => (value(start, key) || text.empty).toLowerCase().includes(needle))) indices.push(start);
+      }
+      if (start < count) timer = window.setTimeout(scan, 0);
+      else state.setMatches({ source, fields, needle, indices });
+    };
+    let timer = window.setTimeout(scan, 0);
+    return () => window.clearTimeout(timer);
+  }, [state.open, source, count, fields, needle, matches]);
+
+  const total = needle ? matches?.length ?? 0 : count;
+  const last = Math.max(0, Math.ceil(total / groupSize) - 1);
+  const activeIndex = matches ? matches.indexOf(active) : active;
+  const index = group?.source === source && group.needle === needle && group.active === active ? Math.min(group.index, last) :
+    Math.min(last, Math.max(0, Math.floor(activeIndex / groupSize)));
+  const start = index * groupSize, end = Math.min(start + groupSize, total);
+  function changeSearch(next: string) { setGroup(undefined); state.setSearch(next); }
   if (!count) return null;
   return <div className="record-navigator" hidden={!showToggle && !state.open}>
-    {showToggle && <RecordNavigatorToggle state={state}/>}
-    <section id={state.id} aria-label={text.title} hidden={!state.open}>
+    {showToggle && <RecordNavigatorToggle state={state} title={title}/>}
+    <section id={state.id} aria-label={title} hidden={!state.open}>
       {state.open && <>
         <details>
           <summary>{text.columns}</summary>
@@ -72,11 +103,21 @@ export function RecordNavigator({ state, columns, count, active, value, canSelec
                 disabled={keys.some((other, position) => position !== slot && other === column.key)}>{column.name || text.unnamed}</option>)}
             </select>)}</div>
         </details>
+        <input className="record-navigator-search" type="search" aria-label={text.search} placeholder={text.search}
+          maxLength={256} value={state.search} disabled={!keys.length} onChange={event => changeSearch(event.target.value)}
+          onKeyDown={event => {
+            if (tableCellKeyIsComposing(event.nativeEvent)) return;
+            if (event.key === 'Enter' || event.key === 'Escape' && state.search) {
+              event.preventDefault(); event.stopPropagation();
+              if (event.key === 'Escape') changeSearch('');
+            }
+          }}/>
+        {needle && !total && <p role="status">{matches ? text.noMatches : text.searching}</p>}
         <ol start={start + 1}>{Array.from({ length: end - start }, (_, offset) => {
-          const row = start + offset;
+          const position = start + offset, row = matches?.[position] ?? position;
           const unavailable = canSelect?.(row) === false;
           return <li key={row}><button type="button" aria-current={active === row ? 'true' : undefined}
-            disabled={disabled || unavailable} onClick={() => { if (row !== active) onSelect(row); }}>
+            disabled={disabled || unavailable} onClick={() => { if (row !== active && !disabled && !unavailable) onSelect(row); }}>
             <strong>{stage && row !== active ? text.stageRow(row) : text.row(row)}</strong>
             {unavailable ? <span>{text.unavailable}</span> : keys.map(key => <span key={key}>
               {byKey.get(key)?.name || text.unnamed} · {value(row, key) || text.empty}
@@ -84,9 +125,9 @@ export function RecordNavigator({ state, columns, count, active, value, canSelec
           </button></li>;
         })}</ol>
         {last > 0 && <div className="record-navigator-paging">
-          <button type="button" disabled={index === 0} onClick={() => setGroup({ active, index: index - 1 })}>{text.previous}</button>
-          <span>{text.range(start + 1, end, count)}</span>
-          <button type="button" disabled={index === last} onClick={() => setGroup({ active, index: index + 1 })}>{text.next}</button>
+          <button type="button" disabled={index === 0} onClick={() => setGroup({ source, needle, active, index: index - 1 })}>{text.previous}</button>
+          <span>{text.range(start + 1, end, total)}</span>
+          <button type="button" disabled={index === last} onClick={() => setGroup({ source, needle, active, index: index + 1 })}>{text.next}</button>
         </div>}
       </>}
     </section>

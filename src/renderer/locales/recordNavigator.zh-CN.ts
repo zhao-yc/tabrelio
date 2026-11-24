@@ -1,8 +1,12 @@
 export const recordNavigatorZh = {
   title: '本页记录导航',
+  resultTitle: '本次结果导航',
   columns: '导航摘要字段',
   column: (index: number) => `摘要字段 ${index + 1}`,
   none: '不显示',
+  search: '搜索记录摘要',
+  searching: '正在搜索已载入的记录…',
+  noMatches: '没有匹配的记录。',
   unnamed: '（未命名字段）',
   previous: '上一组记录',
   next: '下一组记录',

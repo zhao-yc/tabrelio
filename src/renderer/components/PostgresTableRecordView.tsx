@@ -173,7 +173,7 @@ export function PostgresTableRecordView({ page, row, offset, visible, draft, edi
       {mode !== 'json' && <input type="search" aria-label={text.search} placeholder={text.search} value={query} onChange={event => setQuery(event.target.value)}/>}
     </div>
     {row === null || !page.rows[row] ? <Empty title={tableText.noSelection}/> : <div className="pg-record-body">
-      <RecordNavigator state={navigator} columns={page.columns} count={page.rows.length} active={row} disabled={!canSelectRecord} showToggle={false}
+      <RecordNavigator state={navigator} source={page} columns={page.columns} count={page.rows.length} active={row} disabled={!canSelectRecord} showToggle={false}
         value={(index, key) => recordValueSummary(ownCell(page.rows[index], key))} onSelect={onSelectRecord}/>
       {mode === 'form' && showNavigation && <nav aria-label={text.fields}>{columns.map(column => <button type="button" key={column.key} onClick={() => {
         const heading = fieldArea.current?.querySelector<HTMLElement>(`[data-record-column="${column.key}"] > strong`);

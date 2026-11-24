@@ -2,6 +2,7 @@ import { queryReadonlyRecordZh as recordText } from '../../src/renderer/locales/
 import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
 import { recordNavigatorZh as recordNav } from '../../src/renderer/locales/recordNavigator.zh-CN';
 import { actionMenuZh as menuText } from '../../src/renderer/locales/actionMenu.zh-CN';
+import { readNavigationMenuObservation } from './navigation-menu-diagnostics';
 import { recordJsonNodeInputZh as nodeText } from '../../src/renderer/locales/recordJsonNodeInput.zh-CN';
 import { recordJsonStructureInputZh as structureText } from '../../src/renderer/locales/recordJsonStructureInput.zh-CN';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
@@ -104,9 +105,20 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => query().getByRole('grid').getByText('9223372036854775807', { exact: true }).click());
     const more = query().getByRole('button', { name: menuText.resultMore, exact: true });
     await step(() => more.scrollIntoViewIfNeeded());
-    await step(() => more.press('Enter'));
-    await step(() => page.getByRole('menuitem', { name: menuText.resultView, exact: true }).press('ArrowRight'));
-    await step(() => page.getByRole('menuitem', { name: detailText.open, exact: true }).press('Enter'));
+    await step(async () => {
+      // 右侧布局中的工具栏可滚动。让原滚动先落定，键盘聚焦菜单项时保持背景位置。
+      await more.evaluate(async (button: HTMLButtonElement) => {
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        button.focus({ preventScroll: true });
+      });
+      await page.keyboard.press('Enter');
+    });
+    const resultSection = page.getByRole('menuitem', { name: menuText.resultView, exact: true });
+    await step(() => resultSection.evaluate((button: HTMLButtonElement) => button.focus({ preventScroll: true })));
+    await step(() => page.keyboard.press('ArrowRight'));
+    const detailEntry = page.getByRole('menuitem', { name: detailText.open, exact: true });
+    await step(() => detailEntry.evaluate((button: HTMLButtonElement) => button.focus({ preventScroll: true })));
+    await step(() => page.keyboard.press('Enter'));
     await step(() => expect(region()).toBeVisible());
     await step(() => region().getByRole('button', { name: recordText.tree, exact: true }).click());
     await step(() => region().getByRole('button', { name: recordText.parse('note'), exact: true }).click());
@@ -133,6 +145,21 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     expect(second.fields[0].value).toEqual({ kind: 'integer', value: '-9223372036854775808' });
     expect(second.fields[4].value).toEqual({ kind: 'text', value: '2' });
     await step(() => expect(region().getByRole('button', { name: recordNav.lastResult, exact: true })).toBeDisabled());
+    await step(() => region().getByRole('button', { name: recordNav.firstResult, exact: true }).click());
+    expect(JSON.parse(await step(() => box().inputValue()))).toEqual(first);
+    await step(() => region().getByRole('button', { name: recordNav.resultTitle, exact: true }).click());
+    const navigator = () => region().getByRole('region', { name: recordNav.resultTitle, exact: true });
+    const search = () => navigator().getByRole('searchbox', { name: recordNav.search, exact: true });
+    await step(() => search().fill('-9223372036854775808'));
+    await step(() => expect(navigator().getByRole('listitem')).toHaveCount(1));
+    await step(() => navigator().getByRole('button', { name: /^第 2 条/ }).click());
+    expect(JSON.parse(await step(() => box().inputValue()))).toEqual(second);
+    await step(() => expect(search()).toHaveValue('-9223372036854775808'));
+    await step(() => search().fill('未命中的记录摘要'));
+    await step(() => expect(navigator().getByRole('status')).toHaveText(recordNav.noMatches));
+    expect(JSON.parse(await step(() => box().inputValue()))).toEqual(second);
+    await step(() => search().press('Escape'));
+    await step(() => expect(navigator().getByRole('listitem')).toHaveCount(2));
     await step(() => region().getByRole('button', { name: recordNav.firstResult, exact: true }).click());
     expect(JSON.parse(await step(() => box().inputValue()))).toEqual(first);
     await info.attach(label + '查询完整记录JSON', { body: JSON.stringify({ first, second }), contentType: 'application/json' });
@@ -645,6 +672,9 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
   } catch (reason) {
     runtime.retainOwnedDesktopResources(info);
     try { await info.attach('SQLite原生失败保留现场', { body: JSON.stringify({ stage, directory, database, pid: originalProcess.pid, exitCode: originalProcess.exitCode, closed, armed, automaticRetry: false, automaticRestart: false, automaticForceStop: false, directoryRemoved: false, firstError: reason instanceof Error ? reason.message : String(reason) }), contentType: 'application/json' }); } catch { /* 附件异常不能覆盖首因或解除原owner保留。 */ }
+    if (!page.isClosed()) try {
+      await info.attach('SQLite原生菜单事件', { body: JSON.stringify(await readNavigationMenuObservation(page)), contentType: 'application/json' });
+    } catch { /* 已失效窗口的诊断不能覆盖原失败。 */ }
     throw reason;
   }
 });

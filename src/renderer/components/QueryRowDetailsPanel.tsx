@@ -67,9 +67,10 @@ function RowDetailsContent({ controller, view, isCurrent, onMove, onClose, sqlit
   return <section role="region" aria-label={sqlitePage ? text.sqlitePage : text.region} className="query-row-details">
     <header><strong>{text.open} · {view.index + 1} / {view.binding.rows.length}</strong><button onClick={() => { if (current()) onClose(view); }}>{text.close}</button></header>
     <p title={pageNavigation ? text.sqlitePageNavigation : text.readonly}>{text.scope}</p>{pageNavigation && <p>{text.sqlitePageNavigation}</p>}{view.binding.truncated && <p className="warning-text">{text.truncated}</p>}
-    {pageNavigation && <RecordNavigator state={navigator} columns={columns} count={view.binding.rows.length} active={view.index}
+    <RecordNavigator state={navigator} source={view.binding} title={sqlitePage ? navigatorText.title : navigatorText.resultTitle}
+      columns={columns} count={view.binding.rows.length} active={view.index}
       value={(index, key) => recordValueSummary(ownCell(view.binding.rows[index], key))}
-      onSelect={selectIndex}/>}
+      onSelect={selectIndex}/>
     <div className="query-row-details-actions">
       <RecordBoundaryButton label={sqlitePage ? navigatorText.firstRecord : navigatorText.firstResult} index={0}
         active={view.index} onSelect={selectIndex}/>

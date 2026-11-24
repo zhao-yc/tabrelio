@@ -109,10 +109,15 @@ test('SQLite真实表单连续跨页、输入与整页草稿保护、停止空�
     await step(() => recordList().getByRole('button', { name: /第 2 条.*原记录5/ }).click());
     await currentId(5);
     await step(() => expect(input().getByRole('button', { name: recordNav.lastRecord, exact: true })).toBeDisabled());
+    const searchRecords = () => recordList().getByRole('searchbox', { name: recordNav.search, exact: true });
+    await step(() => searchRecords().fill('原记录6'));
+    await step(() => expect(recordList().getByRole('listitem')).toHaveCount(1));
     await step(() => field('payload').fill('非法十六进制'));
-    await step(() => input().getByRole('button', { name: recordNav.stageFirstRecord, exact: true }).click());
+    await step(() => recordList().getByRole('button', { name: /^暂存并查看第 1 条/ }).click());
     await currentId(5);
     await step(() => expect(field('payload')).toHaveValue('非法十六进制'));
+    await step(() => searchRecords().fill(''));
+    await step(() => expect(recordList().getByRole('listitem')).toHaveCount(2));
     await step(() => field('payload').fill('00ae'));
     await step(() => input().getByRole('button', { name: recordNav.stageFirstRecord, exact: true }).click());
     await currentId(6);

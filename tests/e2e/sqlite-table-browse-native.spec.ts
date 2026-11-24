@@ -223,6 +223,12 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await step(() => expect(recordList().getByRole('listitem')).toHaveCount(9));
     await step(() => recordList().getByRole('button', { name: /^第 26 条/ }).click());
     await step(() => expect(details().getByLabel(detailText.sqliteRow, { exact: true })).toHaveValue('26'));
+    const recordSearch = () => recordList().getByRole('searchbox', { name: recordNav.search, exact: true });
+    await step(() => recordSearch().fill('34'));
+    await step(() => expect(recordList().getByRole('listitem')).toHaveCount(1));
+    await step(() => recordList().getByRole('button', { name: /^第 34 条/ }).click());
+    await step(() => expect(details().getByLabel(detailText.sqliteRow, { exact: true })).toHaveValue('34'));
+    await step(() => expect(recordSearch()).toHaveValue('34'));
     await step(() => details().getByRole('button', { name: detailText.close, exact: true }).click());
     expect((await step(audit)).pages).toEqual([firstPage]);
     await controls(true); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('5'));

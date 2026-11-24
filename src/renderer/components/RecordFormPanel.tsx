@@ -72,7 +72,7 @@ export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect, 
         disabled={recordSelectionBlocked} onSelect={selectIndex}/>}
     </nav>
     {pageNavigation?.message && <p role="note" aria-label={text.pageNavigation} aria-live="polite">{pageNavigation.message}</p>}
-    {!batch && <RecordNavigator state={navigator} columns={context.info?.columns.map(column => ({ key: column.name, name: column.name })) ?? []}
+    {!batch && <RecordNavigator state={navigator} source={rows} columns={context.info?.columns.map(column => ({ key: column.name, name: column.name })) ?? []}
       count={rows.length} active={activeRecord} disabled={recordSelectionBlocked}
       value={(index, key) => recordValueSummary(ownCell(rows[index].data, key))}
       onSelect={selectIndex}/>}

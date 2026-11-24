@@ -152,7 +152,7 @@ export function SqliteTableValueDialog({ ticket, page, row, column, initialFocus
   return <Modal title={owner.batch ? batchText.title : owner.duplicate ? text.duplicateTitle : row.index === undefined ? text.add : column === undefined ? text.editRow : text.editCell} onClose={close} wide><div ref={content} className="modal-content dialog-body" data-sqlite-duplicate-input={owner.duplicate ? owner.duplicateOwner : undefined} data-sqlite-record-input={owner.navigation?.ownerId} data-sqlite-fill-owner={owner.batch?.ownerId}><p>{text.inputHint}</p>{owner.batch && <><p role="status">{batchText.position(owner.batch.position, owner.batch.count)}</p><p>{owner.batch.groups ? batchText.workspaceHint : batchText.hint}</p>
     {owner.batch.groups && <ul>{owner.batch.groups.map(group => <li key={group.index}>{workspaceText.fillGroup(group.index, group.count)}</li>)}</ul>}
     {owner.batch.sourcePage !== undefined && <p role="status">{batchText.sourcePage(owner.batch.sourcePage)}</p>}</>}{owner.duplicate && <p>{text.duplicateHint}</p>}{owner.duplicatePosition && <p role="status">{owner.duplicatePosition}</p>}{owner.navigation && !owner.batch && <p>{text.recordNavigation}</p>}
-    {records && <RecordNavigator state={records.state} count={records.rows.length}
+    {records && <RecordNavigator state={records.state} source={records.rows} count={records.rows.length}
       columns={columns.map(column => ({ key: column.name, name: column.name }))}
       active={activeRecord} disabled={treePending} stage={changed}
       canSelect={index => existingRecord(records.rows[index])}
