@@ -1,6 +1,7 @@
 import { isCivilDate } from './civilDate';
 import type { SqliteValue } from '../engine/sqlite/protocol';
 import { queryParameterLimits, type QueryParameter } from './queryParameters';
+import { QueryParameterFieldError } from './queryParameterFieldError';
 
 const encoder = new TextEncoder(), base64Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 /** 只读取普通自有数据字段，拒绝访问器、symbol 和隐藏扩展，不触发用户输入中的 getter。 */
@@ -62,13 +63,22 @@ export function validateSqliteQueryParameters(parameters: readonly QueryParamete
   for (let index = 0; index < length.value; index++) {
     const descriptor = Object.getOwnPropertyDescriptor(parameters, String(index)); if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) throw Error('SQLite查询参数数组形状无效');
     const parameter = parameterData(descriptor.value), name = parameter.name, value = parameter.value;
-    if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name)) throw Error('SQLite参数名须为1～64位ASCII字母数字或下划线，不能以数字开头');
-    if (values.has(name)) throw Error('SQLite查询参数名称重复');
+    if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name))
+      throw new QueryParameterFieldError(index, 'name', 'SQLite参数名须为1～64位ASCII字母数字或下划线，不能以数字开头');
+    if (values.has(name)) throw new QueryParameterFieldError(index, 'name', 'SQLite查询参数名称重复');
     if (typeof value === 'string') {
-      if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)) throw Error('SQLite参数包含无效Unicode');
-      const size = encoder.encode(value).length; if (size > queryParameterLimits.valueBytes) throw Error('SQLite单个参数不能超过64 KiB'); bytes += size; if (bytes > queryParameterLimits.totalBytes) throw Error('SQLite参数值合计不能超过1 MiB');
+      if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value))
+        throw new QueryParameterFieldError(index, 'value', 'SQLite参数包含无效Unicode');
+      const size = encoder.encode(value).length;
+      if (size > queryParameterLimits.valueBytes) throw new QueryParameterFieldError(index, 'value', 'SQLite单个参数不能超过64 KiB');
+      bytes += size;
+      if (bytes > queryParameterLimits.totalBytes) throw Error('SQLite参数值合计不能超过1 MiB');
     }
-    values.set(name, nativeValue(parameter.type, value));
+    try { values.set(name, nativeValue(parameter.type, value)); }
+    catch (reason) {
+      if (!(reason instanceof Error)) throw reason;
+      throw new QueryParameterFieldError(index, 'value', reason.message);
+    }
   }
   return values;
 }

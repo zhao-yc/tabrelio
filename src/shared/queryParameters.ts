@@ -2,6 +2,7 @@ import { isCivilDate } from './civilDate';
 import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { navicatParameterNameAt } from './navicatParameter';
 import { queryParameterLimits } from './queryParameterLimits';
+import { QueryParameterFieldError } from './queryParameterFieldError';
 
 export { queryParameterLimits } from './queryParameterLimits';
 
@@ -65,13 +66,19 @@ export function queryParameterLiteral(parameter: QueryParameter, maxDecimalScale
 /** 首条 SQL 发送前校验整组值、重名及内存预算；错误不回显用户输入值。 */
 export function validateQueryParameters(parameters: QueryParameter[], maxDecimalScale: 30 | 38 = 30, allowTimeEndpointFraction = false): Map<string, string> {
   if (!Array.isArray(parameters) || parameters.length > queryParameterLimits.names) throw new Error('查询参数不能超过 200 个');
-  const values = new Map<string, string>(); let bytes = 0;
+  const values = new Map<string, string>(); let bytes = 0, index = 0;
   for (const parameter of parameters) {
-    if (!parameter || typeof parameter.name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(parameter.name)) throw new Error('参数名须为 1～64 位 ASCII 字母、数字或下划线，且不能以数字开头');
-    if (values.has(parameter.name)) throw new Error('查询参数名称重复');
-    values.set(parameter.name, queryParameterLiteral(parameter, maxDecimalScale, allowTimeEndpointFraction));
+    if (!parameter || typeof parameter.name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(parameter.name))
+      throw new QueryParameterFieldError(index, 'name', '参数名须为 1～64 位 ASCII 字母、数字或下划线，且不能以数字开头');
+    if (values.has(parameter.name)) throw new QueryParameterFieldError(index, 'name', '查询参数名称重复');
+    try { values.set(parameter.name, queryParameterLiteral(parameter, maxDecimalScale, allowTimeEndpointFraction)); }
+    catch (reason) {
+      if (!(reason instanceof Error)) throw reason;
+      throw new QueryParameterFieldError(index, 'value', reason.message);
+    }
     bytes += encoder.encode(parameter.value ?? '').length;
     if (bytes > queryParameterLimits.totalBytes) throw new Error('参数值合计不能超过 1 MiB');
+    index++;
   }
   return values;
 }

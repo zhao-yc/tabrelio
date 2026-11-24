@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Plus, Play, Trash2 } from 'lucide-react';
 import type { ConnectionProfile } from '../../shared/contracts';
 import { queryParameterTypes, validateQueryParametersForInfo, type QueryParameter, type QueryParameterNames, type QueryParameterType } from '../../shared/queryParameters';
+import { QueryParameterFieldError } from '../../shared/queryParameterFieldError';
 import { queryParameterInfo } from '../queryParameterReuse';
 import { errorMessage } from '../lib';
 import { zh } from '../locales/zh-CN';
@@ -13,6 +14,7 @@ import type { QueryParameterReusePort } from '../queryParameterReusePort';
 import { queryParameterReuseZh as reuseText } from '../locales/queryParameterReuse.zh-CN';
 
 interface ParameterRow { id: number; parameter: QueryParameter; manual: boolean; }
+interface ParameterFieldIssue { rowId: number; field: QueryParameterFieldError['field']; message: string; }
 
 /** 仅识别和填写参数；真正执行由拥有固定会话的查询标签统一管理。 */
 export function QueryParametersDialog({ source, previewSql, previewDialect, loadNames, onExecute, onClose, submitLabel, syntaxHint, initialParameters = [], reuse, ownerId,
@@ -29,6 +31,12 @@ export function QueryParametersDialog({ source, previewSql, previewDialect, load
   const [navicat, setNavicat] = useState(allowSqliteNavicat && initialSqliteNavicatParameters === true);
   const [info, setInfo] = useState<QueryParameterNames | null>(null); const [error, setError] = useState('');
   const [preview, setPreview] = useState<string>();
+  const [nameFilter, setNameFilter] = useState(''), [editingName, setEditingName] = useState<number>();
+  const [fieldIssue, setFieldIssue] = useState<ParameterFieldIssue>();
+  const list = useRef<HTMLDivElement>(null), issueId = useId();
+  const nameNeedle = nameFilter.trim().toLowerCase();
+  const matchesFilter = (row: ParameterRow) => row.parameter.name.toLowerCase().includes(nameNeedle);
+  const visibleRows = rows.filter(row => row.id === editingName || matchesFilter(row));
   const sequence = useRef(0); const ready = useRef(false); const alive = useRef(true); const loader = useRef(loadNames); loader.current = loadNames;
   const original = useRef({ source, reuse }), invalid = useRef(false), live = useRef<object | undefined>(undefined), ticket = {};
   const loadGeneration = useRef(0), infoRef = useRef<QueryParameterNames | null>(null), rememberRef = useRef(false), closing = useRef(false);
@@ -36,6 +44,11 @@ export function QueryParametersDialog({ source, previewSql, previewDialect, load
   const [remember, setRemember] = useState(false), [reusable, setReusable] = useState(false), [notice, setNotice] = useState('');
   if (source !== original.current.source || reuse !== original.current.reuse) { invalid.current = true; ready.current = false; }
   useLayoutEffect(() => { live.current = ticket; return () => { if (live.current === ticket) live.current = undefined; }; });
+  useLayoutEffect(() => {
+    if (!fieldIssue) return;
+    const selector = `[data-parameter-row="${fieldIssue.rowId}"] [data-parameter-field="${fieldIssue.field}"]`;
+    list.current?.querySelector<HTMLElement>(selector)?.focus();
+  }, [fieldIssue]);
   /** 旧渲染、已卸载或变更过的来源不能借后来恢复的表单再次提交。 */
   function frame(): boolean { return alive.current && !closing.current && !invalid.current && live.current === ticket; }
   /** 外部能力通知可能同步重入；先撤当前事件票据，下一次提交必须来自新的已提交渲染。 */
@@ -79,7 +92,7 @@ export function QueryParametersDialog({ source, previewSql, previewDialect, load
   async function reload(useNavicat = navicat) {
     if (!frame() || loadingRef.current) return;
     const generation = ++loadGeneration.current, action = revokeFrame();
-    loadingRef.current = true; setLoading(true); setError(''); setInfo(null); infoRef.current = null; ready.current = false;
+    loadingRef.current = true; setLoading(true); setError(''); setFieldIssue(undefined); setInfo(null); infoRef.current = null; ready.current = false;
     try {
       const raw = await (useNavicat ? loader.current(true) : loader.current());
       if (loadGeneration.current !== generation || !actionCurrent(action)) return;
@@ -112,6 +125,8 @@ export function QueryParametersDialog({ source, previewSql, previewDialect, load
   /** 每个输入值是普通文字；NULL 不携带值，整组预算与类型在本地先验证一次。 */
   function execute() {
     if (!frame() || loadingRef.current || !ready.current) return;
+    setFieldIssue(undefined);
+    setError('');
     let handedOff = false, action: object | undefined;
     try {
       const parameters = rows.map(row => row.parameter.type === 'null' ? { name: row.parameter.name, type: 'null' as const } : { ...row.parameter });
@@ -130,12 +145,33 @@ export function QueryParametersDialog({ source, previewSql, previewDialect, load
       else onExecute(parameters);
     } catch (reason) {
       const current = action ? actionCurrent(action) : frame();
-      if (current) { if (!handedOff) ready.current = true; setError(errorMessage(reason)); }
+      if (!current) return;
+      if (!handedOff) ready.current = true;
+      const row = !action && reason instanceof QueryParameterFieldError ? rows[reason.index] : undefined;
+      if (row && reason instanceof QueryParameterFieldError) {
+        // 筛选只影响展示；失败时按原提交行号找到字段，必要时先恢复列表。
+        if (!matchesFilter(row)) setNameFilter('');
+        setFieldIssue({rowId: row.id, field: reason.field, message: reason.message});
+      } else setError(errorMessage(reason));
     }
   }
 
   /** 使用稳定行编号更新，手动重命名不会串改同名行或覆盖另一个参数。 */
-  function update(id: number, patch: Partial<QueryParameter>) { if (frame() && !loadingRef.current) setRows(previous => previous.map(row => row.id === id ? { ...row, parameter: { ...row.parameter, ...patch } } : row)); }
+  function update(id: number, patch: Partial<QueryParameter>) {
+    if (!frame() || loadingRef.current) return;
+    setFieldIssue(current => current?.rowId === id ? undefined : current);
+    setRows(previous => previous.map(row => row.id === id ? { ...row, parameter: { ...row.parameter, ...patch } } : row));
+  }
+  function addParameter() {
+    if (!frame() || loadingRef.current || rows.length >= 200) return;
+    setNameFilter('');
+    setRows(previous => previous.length >= 200 ? previous : [...previous, { id: ++sequence.current, parameter: { name: '', type: 'text', value: '' }, manual: true }]);
+  }
+  function removeParameter(id: number) {
+    if (!frame() || loadingRef.current) return;
+    setFieldIssue(current => current?.rowId === id ? undefined : current);
+    setRows(previous => previous.filter(item => item.id !== id));
+  }
   /** 只在明确点击时填入完整副本；不识别参数、不投递SQL，不截取手动参数。 */
   function fillPrevious(): void {
     if (!frame() || loadingRef.current || !ready.current || !reuse || !info) return;
@@ -147,7 +183,7 @@ export function QueryParametersDialog({ source, previewSql, previewDialect, load
       validateQueryParametersForInfo(values, info);
       const next = values.map(parameter => ({ id: ++sequence.current, parameter: { ...parameter }, manual: !info.names.includes(parameter.name) }));
       if (!actionCurrent(action, true)) return;
-      setRows(next); setError(''); setNotice(reuseText.filled);
+      setRows(next); setError(''); setFieldIssue(undefined); setNotice(reuseText.filled);
     } catch { if (actionCurrent(action)) setError(reuseText.missing); }
   }
   /** 撤销勾选会立即忘记旧组；当前输入不进入持久化或自动执行路径。 */
@@ -184,14 +220,39 @@ export function QueryParametersDialog({ source, previewSql, previewDialect, load
       {allowSqliteNavicat && <div><label><input type="checkbox" checked={navicat} disabled={loading} onChange={event => changeNavicat(event.target.checked)}/>{text.sqliteNavicatMode}</label><p className="muted small">{text.sqliteNavicatHint}</p></div>}
       {reuse && <section aria-label={reuseText.title}><p>{reuseText.overwrite}</p><label><input type="checkbox" checked={remember} disabled={loading || !info} onChange={event => changeRemember(event.target.checked)}/>{reuseText.remember}</label><div className="parameter-actions"><button type="button" disabled={loading || !info || !reusable} onClick={fillPrevious}>{reuseText.fill}</button><button type="button" disabled={loading || !info || !reusable && !remember} onClick={forgetPrevious}>{reuseText.forget}</button></div>{notice && <p role="status">{notice}</p>}</section>}
       <h3>{text.source}</h3>{previewSource.length > 65536 && <p className="warning-text">{text.sourceTruncated}</p>}<SqlEditor value={previewSource.slice(0, 65536)} dialect={previewDialect ?? info?.dialect} readOnly height={160}/>
-      <div className="parameter-actions">{loading ? <Spinner text={text.namesLoading}/> : !rows.length && (allowManualParameters || info) && <span className="muted small">{info?.dialect === 'sqlite' ? text.sqliteNoParameters : allowManualParameters ? text.noParameters : text.currentNoParameters}</span>}<span className="grow"/><button disabled={loading} onClick={() => void reload()}>{text.retry}</button>{allowManualParameters && <button disabled={loading || rows.length >= 200} onClick={() => { if (frame() && !loadingRef.current) setRows(previous => previous.length >= 200 ? previous : [...previous, { id: ++sequence.current, parameter: { name: '', type: 'text', value: '' }, manual: true }]); }}><Plus size={13}/>{text.add}</button>}</div>
+      <div className="parameter-actions">{loading ? <Spinner text={text.namesLoading}/> : !rows.length && (allowManualParameters || info) && <span className="muted small">{info?.dialect === 'sqlite' ? text.sqliteNoParameters : allowManualParameters ? text.noParameters : text.currentNoParameters}</span>}<span className="grow"/><button disabled={loading} onClick={() => void reload()}>{text.retry}</button>{allowManualParameters && <button disabled={loading || rows.length >= 200} onClick={addParameter}><Plus size={13}/>{text.add}</button>}</div>
       {!!info?.warnings?.length && <div className="info-strip">{text.namesDynamic}<ul>{info.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div>}
-      <div className="parameter-list">{rows.map(row => <div className="parameter-row" key={row.id}>
-        <Field label={`${text.name} ${row.id}`}><input aria-label={`${text.name} ${row.id}`} readOnly={!row.manual} disabled={loading} maxLength={64} value={row.parameter.name} onChange={event => update(row.id, { name: event.target.value })}/></Field>
-        <Field label={`${text.type} ${row.parameter.name || row.id}`}><select aria-label={`${text.type} ${row.parameter.name || row.id}`} disabled={loading} value={row.parameter.type} onChange={event => update(row.id, { type: event.target.value as QueryParameterType, value: event.target.value === 'null' ? undefined : row.parameter.value ?? '' })}>{queryParameterTypes.map(type => <option value={type} key={type}>{text[type]}</option>)}</select></Field>
-        <Field label={`${text.value} ${row.parameter.name || row.id}`}><textarea aria-label={`${text.value} ${row.parameter.name || row.id}`} disabled={loading || row.parameter.type === 'null'} value={row.parameter.value ?? ''} maxLength={65536} rows={2} placeholder={row.parameter.type === 'null' ? 'NULL' : hint(row.parameter.type)} onChange={event => update(row.id, { value: event.target.value })}/></Field>
-        {row.manual && <button className="icon-button" disabled={loading} aria-label={`${text.remove} ${row.id}`} onClick={() => { if (frame() && !loadingRef.current) setRows(previous => previous.filter(item => item.id !== row.id)); }}><Trash2 size={13}/></button>}
-      </div>)}</div><ErrorBox message={error}/>
+      {(rows.length > 1 || nameFilter) && <div className="parameter-actions parameter-name-filter">
+        <input type="search" aria-label={text.findName} placeholder={text.findName} disabled={loading} maxLength={64} value={nameFilter} onChange={event => setNameFilter(event.target.value)}/>
+        {!!nameFilter && <button type="button" onClick={() => setNameFilter('')}>{text.clearNameFilter}</button>}
+        {!!nameNeedle && <span role="status" className="muted small">{text.filtered(visibleRows.length, rows.length)}</span>}
+      </div>}
+      {!!nameNeedle && !visibleRows.length && <p className="muted small">{text.noMatchingNames}</p>}
+      <div className="parameter-list" ref={list}>{visibleRows.map(row => {
+        const issue = fieldIssue?.rowId === row.id ? fieldIssue : undefined;
+        return <div className="parameter-row" key={row.id} data-parameter-row={row.id}>
+          <Field label={`${text.name} ${row.id}`}>
+            <input aria-label={`${text.name} ${row.id}`} readOnly={!row.manual} disabled={loading} maxLength={64} value={row.parameter.name}
+              data-parameter-field="name" aria-invalid={issue?.field === 'name' || undefined} aria-describedby={issue?.field === 'name' ? issueId : undefined}
+              onFocus={() => { if (row.manual) setEditingName(row.id); }} onBlur={() => { if (row.manual) setEditingName(undefined); }}
+              onChange={event => update(row.id, { name: event.target.value })}/>
+          </Field>
+          <Field label={`${text.type} ${row.parameter.name || row.id}`}>
+            <select aria-label={`${text.type} ${row.parameter.name || row.id}`} disabled={loading} value={row.parameter.type}
+              onChange={event => update(row.id, { type: event.target.value as QueryParameterType, value: event.target.value === 'null' ? undefined : row.parameter.value ?? '' })}>
+              {queryParameterTypes.map(type => <option value={type} key={type}>{text[type]}</option>)}
+            </select>
+          </Field>
+          <Field label={`${text.value} ${row.parameter.name || row.id}`}>
+            <textarea aria-label={`${text.value} ${row.parameter.name || row.id}`} disabled={loading || row.parameter.type === 'null'}
+              value={row.parameter.value ?? ''} maxLength={65536} rows={2} placeholder={row.parameter.type === 'null' ? 'NULL' : hint(row.parameter.type)}
+              data-parameter-field="value" aria-invalid={issue?.field === 'value' || undefined} aria-describedby={issue?.field === 'value' ? issueId : undefined}
+              onChange={event => update(row.id, { value: event.target.value })}/>
+          </Field>
+          {row.manual && <button className="icon-button" disabled={loading} aria-label={`${text.remove} ${row.id}`} onClick={() => removeParameter(row.id)}><Trash2 size={13}/></button>}
+          {issue && <div className="parameter-row-issue" id={issueId}><ErrorBox message={issue.message}/></div>}
+        </div>;
+      })}</div><ErrorBox message={error}/>
     </div><footer className="modal-footer"><button onClick={close}>{zh.common.cancel}</button><span className="grow"/><button className="primary" disabled={loading || !info || !ready.current || invalid.current || closing.current} onClick={execute}><Play size={14}/>{submitLabel ?? text.execute}</button></footer>
   </Modal>;
 }
