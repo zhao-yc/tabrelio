@@ -27,8 +27,9 @@ import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
 import { QueryResultComparisonDialog } from './QueryResultComparisonDialog';
-import type { QueryResultComparisonSource } from '../queryResultComparison';
+import type { QueryResultComparisonLocation, QueryResultComparisonSource } from '../queryResultComparison';
 import { QueryResultComparisonSettingsMemory } from '../queryResultComparisonSettings';
+import { useQueryResultRowLocation } from '../useQueryResultRowLocation';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
@@ -51,7 +52,7 @@ type FileMode = 'open' | 'save' | 'saveShown' | 'compare';
 interface Operation { mode: FileMode; epoch: number; source: Loaded | undefined; }
 type SnapshotSort = { kind: 'sort'; binding: QueryResultSortBinding; initial: QueryResultSortView };
 type SnapshotFilter = { kind: 'filter'; binding: QueryResultFilterBinding; initial: QueryResultFilterView; seed?: QueryResultFilterGroup };
-type SnapshotComparison = { kind: 'compare'; owner: string; source: Loaded; files: readonly QueryResultComparisonSource[]; dialect?: SortDialect };
+type SnapshotComparison = { kind: 'compare'; owner: string; source: Loaded; other: Loaded; files: readonly QueryResultComparisonSource[]; dialect?: SortDialect };
 type SnapshotStatistics = { kind: 'statistics'; owner: string; source: Loaded; result: QueryResult; column: ResultColumn; indices: ReadonlySet<number> };
 type SnapshotRowDetail = { kind: 'row-detail'; source: Loaded; view: QueryRowDetailsView };
 type SnapshotColumns = { kind: 'columns'; owner: string; binding: ResultSelectionBinding; initial: QueryResultColumnLayout };
@@ -90,6 +91,8 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   const matches = useQueryResultMatchView(sortView?.result ?? filterView?.result ?? sourceResult, sourceResult?.columns, [loaded?.scope]);
   const displayed = matches.result;
   const visibleColumns = columnLayout?.columns ?? displayed?.columns;
+  const [comparisonCell, requestComparisonLocation] = useQueryResultRowLocation(sourceResult, displayed, visibleColumns,
+    !busy && !overlay, setError);
   const frozenKeys = useMemo(() => displayed && columnLayout ? frozenQueryResultKeys(displayed.columns, columnLayout.layout) : undefined,
     [displayed, columnLayout]);
   const detailBinding = rowDetails.bind(displayed, [loaded?.scope]);
@@ -413,6 +416,22 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     const comparison = document.querySelector(`[data-query-result-comparison-owner="${view.owner}"]`)?.querySelector(appModalSelector);
     return !!viewer && Array.from(document.querySelectorAll(appModalSelector)).every(dialog => dialog === viewer || dialog === comparison);
   }
+  /** 打开文件或切到对比的另一份原快照时，共用新文件的视图清理。 */
+  function showLoadedSnapshot(next: Loaded): void {
+    loadedRef.current = next;
+    history.invalidate();
+    setLoaded(next); setOrganization(undefined); setColumnLayout(undefined); setShowSql(false); setMessage('');
+  }
+  function locateComparisonRow(view: SnapshotComparison, location: QueryResultComparisonLocation): boolean {
+    if (!comparisonCurrent(view)) return false;
+    const target = [view.source, view.other].find(item => item.snapshot.result === location.source);
+    if (!target) return false;
+    returnFocus.current = null;
+    closeOverlay(view);
+    if (target !== view.source) showLoadedSnapshot(target);
+    requestComparisonLocation(location);
+    return true;
+  }
   /** 只有准确原操作能更新显示；失效保存仍报告已写可能性或原Main错误。 */
   async function file(mode: FileMode, trigger?: HTMLButtonElement): Promise<void> {
     if (!editable() || mode !== 'open' && (!loaded || loadedRef.current !== loaded) ||
@@ -432,14 +451,13 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
           const source = active.source!;
           if (source.snapshot.version !== snapshot.version || !snapshot.result.columns.length) throw Error(text.comparisonFormat);
           // 比较固定两份文件的原结果，第二次选择不替换当前文件，也不继承任何筛选投影。
-          openOverlay({ kind: 'compare', owner: uid(), source, dialect, files: [
+          const other = { name: selected.name, snapshot, scope: {} };
+          openOverlay({ kind: 'compare', owner: uid(), source, other, dialect, files: [
             { id: 'current', label: text.comparisonCurrent(source.name), result: source.snapshot.result },
             { id: 'other', label: text.comparisonOther(selected.name), result: snapshot.result },
           ] }, trigger!);
         } else {
-          const next = { name: selected.name, snapshot, scope: {} }; loadedRef.current = next;
-          history.invalidate();
-          setLoaded(next); setOrganization(undefined); setColumnLayout(undefined); setShowSql(false); setMessage('');
+          showLoadedSnapshot({ name: selected.name, snapshot, scope: {} });
         }
       } else {
         const original = active.source!.snapshot;
@@ -495,6 +513,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       {matches.active && <QueryResultMatchView active={matches.active} disabled={!!busy} onClear={() => changeMatchView()}/>}
       <div className="query-result-snapshot-viewer-grid">
         <ResultsGrid zoomable rowJump columns={visibleColumns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
+          restoreCell={comparisonCell}
           frozenKeys={frozenKeys} freezeColumns={{ current: columnVisibility.current, apply: (key, mode) =>
             changeHeaderColumnLayout(layout => mode === 'append' && key !== undefined ? freezeQueryResultColumn(layout, key) : setQueryResultFrozenThrough(layout, key)),
           }} columnVisibility={columnVisibility} onColumnReorder={reorderResultColumns} columnWidths={columnLayout?.layout.widths} rowHeight={columnLayout?.layout.rowHeight}
@@ -526,6 +545,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     </Modal>}
     {overlay?.kind === 'compare' && <QueryResultComparisonDialog offline owner={overlay.owner} inputs={overlay.files} dialect={overlay.dialect}
       settings={{ memory: comparisonSettings, scope: 'offline' }}
+      onLocate={location => locateComparisonRow(overlay, location)}
       isCurrent={() => comparisonCurrent(overlay)} onClose={() => closeOverlay(overlay)}/>}
     {overlay?.kind === 'columns' && <QueryResultColumnsDialog binding={overlay.binding} initial={overlay.initial} owner={overlay.owner}
       isCurrent={() => columnsCurrent(overlay)} onApply={layout => applyColumns(overlay, layout)} onClose={() => closeOverlay(overlay)}/>}

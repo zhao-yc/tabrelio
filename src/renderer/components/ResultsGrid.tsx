@@ -151,7 +151,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
   }, [findTarget, navigateTo, columns, rows]);
   /** 原位输入关闭后用原行及可见列定位，虚拟网格可重新创建原 DOM 节点。 */
   useLayoutEffect(() => {
-    if (!restoreCell || !actionCurrent() || document.querySelector(appModalSelector)) return;
+    if (!restoreCell || !actionCurrent() || Array.from(document.querySelectorAll(appModalSelector)).some(dialog => dialog !== ownDialog?.())) return;
     const row = rows.indexOf(restoreCell.row), column = columns.findIndex(item => item.key === restoreCell.key);
     if (row >= 0 && column >= 0) focusGridColumn(gridRef.current, column + (onActiveRowChange ? 0 : 1), row);
   }, [restoreCell]);

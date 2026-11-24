@@ -95,7 +95,8 @@ import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
 import { QueryResultPresetsDialog } from './QueryResultPresetsDialog';
 import { QueryResultComparisonDialog } from './QueryResultComparisonDialog';
-import { returnedQueryResultComparison, type QueryResultComparisonDraft } from '../queryResultComparison';
+import { returnedQueryResultComparison, type QueryResultComparisonDraft, type QueryResultComparisonLocation } from '../queryResultComparison';
+import { useQueryResultRowLocation } from '../useQueryResultRowLocation';
 import { QueryResultComparisonSettingsMemory } from '../queryResultComparisonSettings';
 import { QueryResultSnapshotActions, type QueryResultSnapshotOperation } from './QueryResultSnapshotActions';
 import { ExplainPlanView } from './ExplainPlanView';
@@ -1186,6 +1187,8 @@ export function PostgresQueryTab({
     resultOrganizationCache.readConfiguration(source, organizationScope, organizationExecution), keywordFilter.readKeyword, 'postgresql');
   const matchView = useQueryResultMatchView(keywordFilter.result, visibleColumns, resultContext);
   const displayResult = matchView.result;
+  const [comparisonCell, requestComparisonLocation] = useQueryResultRowLocation(resultSource, displayResult, visibleColumns,
+    workspace.settings.activeTabId === tab.id && !busy, message => useWorkspace.getState().notify(message));
   const dataResult = !busy && resultSource ? displayResult : undefined;
   const binding = resultSelection.bind(workspace.settings.activeTabId === tab.id ? dataResult : undefined,
     resultContext, visibleColumns);
@@ -1306,7 +1309,11 @@ export function PostgresQueryTab({
 
   /** 来源切换后，新网格从原返回顺序开始整理。 */
   function selectPinnedResult(next?: PinnedQueryResult) {
-    if (!pinNavigationCurrent() || next && !pinState.items.includes(next) || pin === next) return;
+    if (!pinNavigationCurrent()) return;
+    showPinnedResult(next);
+  }
+  function showPinnedResult(next?: PinnedQueryResult) {
+    if (next && !pinState.items.includes(next) || pin === next) return;
     resetResultView();
     publishPinState({ ...pinState, selected: next?.id });
   }
@@ -1321,7 +1328,10 @@ export function PostgresQueryTab({
 
   /** 离开快照只切换显示来源，快照仍保留在当前查询中。 */
   function selectCurrentResult(index: number): boolean {
-    if (!pinNavigationCurrent() || !results[index]) return false;
+    return pinNavigationCurrent() && showCurrentResult(index);
+  }
+  function showCurrentResult(index: number): boolean {
+    if (!results[index]) return false;
     if (pin || selected !== index) {
       resetResultView();
       if (pin) publishPinState({ ...pinState, selected: undefined });
@@ -1402,6 +1412,18 @@ export function PostgresQueryTab({
     if (comparisonDraftRef.current !== draft) return;
     comparisonDraftRef.current = undefined;
     setComparisonDraft(undefined);
+  }
+  /** 对比期间的切换使用对比租约，关闭窗口后只定位已接受的原行。 */
+  function locateComparisonRow(draft: ComparisonDraft, location: QueryResultComparisonLocation): boolean {
+    if (!comparisonCurrent(draft)) return false;
+    const pinned = pinState.items.find(item => item.result === location.source);
+    const index = results.indexOf(location.source);
+    if (!pinned && index < 0) return false;
+    closeResultComparison(draft);
+    if (pinned) showPinnedResult(pinned);
+    else showCurrentResult(index);
+    requestComparisonLocation(location);
+    return true;
   }
 
   /** 行详情沿用当前网格的来源校验，另排除遮挡网格的模态窗口。 */
@@ -2336,7 +2358,7 @@ export function PostgresQueryTab({
     return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); definition.dispose(); syntaxCheck.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery, state.standardConformingStrings]);
   const renderResultGrid = (target?: GridFindTarget, marks?: ReadonlySet<string>) => result && displayResult ? (
-    <ResultsGrid zoomable columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding} findMemory={findMemory}
+    <ResultsGrid zoomable columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding} findMemory={findMemory} restoreCell={comparisonCell}
       insertSql={rowSql?.insert} updateSql={rowSql?.update} deleteSql={rowSql?.delete} primaryKeySql={rowSql?.select}
       onOpenRowSql={rowSql ? (kind, sql) => {
         if (resultCurrent() && !document.querySelector(appModalSelector))
@@ -2678,6 +2700,7 @@ export function PostgresQueryTab({
       {comparisonDraft && <QueryResultComparisonDialog key={comparisonDraft.owner} owner={comparisonDraft.owner}
         inputs={comparisonDraft.inputs} returned={comparisonDraft.returned} dialect="postgresql" isCurrent={() => comparisonCurrent(comparisonDraft)}
         settings={{ memory: comparisonSettings, scope: organizationScope }}
+        onLocate={location => locateComparisonRow(comparisonDraft, location)}
         onClose={() => closeResultComparison(comparisonDraft)} />}
       {filterDraft && <Modal title={filterText.title} wide onClose={() => closeResultFilter(filterDraft)} onEscape={event => {
         // 先交给内层条件草稿或值选择处理，候选面板的 Esc 不关闭外层窗口。

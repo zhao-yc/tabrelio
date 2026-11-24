@@ -3,7 +3,7 @@ import type { CellValue, QueryResult, ResultColumn } from '../../shared/contract
 import { assertResultExcelData } from '../../shared/resultExcel';
 import { resultExcelZh } from '../../shared/resultExcel.zh-CN';
 import { pinLimits } from '../queryPins';
-import { alignQueryResultComparisonColumns, captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonValues, sameQueryResultComparisonColumnType, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonBaseline, type QueryResultComparisonCapture, type QueryResultComparisonColumnPair, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonSource, type QueryResultComparisonValue } from '../queryResultComparison';
+import { alignQueryResultComparisonColumns, captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonLocation, queryResultComparisonValues, sameQueryResultComparisonColumnType, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonBaseline, type QueryResultComparisonCapture, type QueryResultComparisonColumnPair, type QueryResultComparisonLocation, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonSource, type QueryResultComparisonValue } from '../queryResultComparison';
 import { queryResultComparisonZh as text } from '../locales/queryResultComparison.zh-CN';
 import { sameQueryResultComparisonSettings, type QueryResultComparisonSettings, type QueryResultComparisonSettingsMemory } from '../queryResultComparisonSettings';
 import type { SortDialect } from '../queryResultSort';
@@ -18,6 +18,7 @@ interface Props {
   returned?: { preferredId: string; baseline?: QueryResultComparisonBaseline };
   settings?: { memory: QueryResultComparisonSettingsMemory; scope: string };
   isCurrent(): boolean;
+  onLocate?(location: QueryResultComparisonLocation): boolean;
   onClose(): void;
 }
 type Draft = QueryResultComparisonSettings & { left: string; right: string };
@@ -100,7 +101,7 @@ function ComparisonKeySearch({ query, disabled, onApply }: { query: string; disa
 }
 
 /** 对比原返回数据。选择来源和匹配键后，由同一套扫描器计算结果和差异报告。 */
-export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = false, returned, settings, isCurrent, onClose }: Props) {
+export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = false, returned, settings, isCurrent, onLocate, onClose }: Props) {
   const baseline = returned?.baseline;
   const ownerIdentity = { inputs, baselineInputs: baseline?.inputs, owner, dialect, memory: settings?.memory, scope: settings?.scope };
   const origin = useRef(ownerIdentity).current;
@@ -131,6 +132,7 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
   const [keySearchError, setKeySearchError] = useState('');
   const active = useRef<Run | undefined>(undefined), last = useRef<Run | undefined>(undefined), alive = useRef(true), invalid = useRef(false), closed = useRef(false);
   const report = useRef<{ taskId: string; writing: boolean } | undefined>(undefined);
+  const locating = useRef(false);
   const [reportFormat, setReportFormat] = useState<ReportFormat>('json');
   const [reportPhase, setReportPhase] = useState<'choosing' | 'writing'>(), [reportStatus, setReportStatus] = useState(''), [reportError, setReportError] = useState('');
   const committed = useRef<object | undefined>(undefined), ticket = {};
@@ -312,13 +314,27 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
     try { setDetail({ run: view.run!, row, values: queryResultComparisonValues(view.run!.capture, row) }); }
     catch (reason) { invalid.current = true; setView({ processed: 0, total: 0, error: errorMessage(reason) }); }
   }
+  /** 当前差异与父查看器仍归本次来源时，才请求回到原结果。 */
+  function locateOriginal(side: 'left' | 'right'): void {
+    if (!onLocate || !detail || detail.run !== view.run || !resultCurrent()) return;
+    try {
+      const location = queryResultComparisonLocation(detail.run.capture, detail.row, side);
+      if (location) {
+        // 父网格接管焦点后，关闭对比窗口时不再还给原按钮。
+        locating.current = true;
+        if (!onLocate(location)) locating.current = false;
+      }
+    } catch (reason) {
+      invalid.current = true; setView({ processed: 0, total: 0, error: errorMessage(reason) }); setDetail(undefined);
+    }
+  }
   const kindLabel = (kind: QueryResultComparisonRow['kind']) => text[kind];
   const labels = offline ? { title: text.fileTitle, left: text.leftFile, right: text.rightFile, notice: text.fileNotice }
     : baseline ? { title: text.baselineTitle, left: text.baselineLeft, right: text.baselineRight, notice: text.baselineNotice }
     : returned ? { title: text.returnedTitle, left: text.leftReturned, right: text.rightReturned, notice: text.returnedNotice }
     : { title: text.title, left: text.left, right: text.right, notice: text.notice };
   const { left: leftLabel, right: rightLabel } = labels;
-  return <div data-query-result-comparison-owner={owner}><Modal title={labels.title} onClose={close} wide><div className="modal-content">
+  return <div data-query-result-comparison-owner={owner}><Modal title={labels.title} onClose={close} shouldRestoreFocus={() => !locating.current} wide><div className="modal-content">
     <p>{labels.notice}</p><UsageHelp><p>{columns.some(column => column.type === 'SQLITE') ? text.sqliteKeysHint : dialect === 'postgresql' ? text.postgresKeysHint : text.keysHint}</p><p>{text.identity}</p></UsageHelp>{(left?.truncated || right?.truncated) && <p role="note">{text.truncated}</p>}
     <div className="filter-inputs"><label>{leftLabel}<select aria-label={leftLabel} value={draft.left} disabled={!valid || !!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, left: event.target.value, keys: [], pairs: [] }); }}>{prepared.left.map(source => <option key={source.key} value={source.key}>{source.label}</option>)}</select></label>
       <label>{rightLabel}<select aria-label={rightLabel} value={draft.right} disabled={!valid || !!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, right: event.target.value, keys: [], pairs: [] }); }}>{prepared.right.map(source => <option key={source.key} value={source.key}>{source.label}</option>)}</select></label>
@@ -376,7 +392,10 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
       <ErrorBox message={keySearchError}/>
       <table aria-label={text.rows}><thead><tr><th>{text.filter}</th><th>{text.leftRow}</th><th>{text.rightRow}</th><th>{text.changedColumns}</th><th>{text.detailsTitle}</th></tr></thead><tbody>{visible.map(({ row, index }) => <tr key={index}><td>{kindLabel(row.kind)}</td><td>{row.leftIndex === undefined ? text.missing : row.leftIndex + 1}</td><td>{row.rightIndex === undefined ? text.missing : row.rightIndex + 1}</td><td>{row.changedColumns.map(key => names.get(key) ?? key).join('、')}</td><td><button disabled={!!reportPhase} onClick={() => show(row)} aria-label={text.details(index)}>{text.details(index)}</button></td></tr>)}</tbody></table>{!visible.length && <p>{text.noRows}</p>}
       <div className="filter-inputs"><button disabled={!!reportPhase || currentPage <= 1} onClick={() => { if (resultCurrent()) { setPage(currentPage - 1); setDetail(undefined); } }}>{text.previous}</button><span>{text.page(currentPage - 1, pages)}</span><button disabled={!!reportPhase || currentPage >= pages} onClick={() => { if (resultCurrent()) { setPage(currentPage + 1); setDetail(undefined); } }}>{text.next}</button></div>
-      {detail && detail.run === view.run && <section aria-label={text.detailsTitle}><h3>{text.detailsTitle}</h3><dl>{detail.values.map(value => <div key={value.column}><dt>{value.name || value.column} · {value.column}{value.rightColumn && ` ↔ ${value.rightName || value.rightColumn} · ${value.rightColumn}`}{value.changed && ` · ${text.changed}`}</dt><dd aria-label={`${text.leftValue} ${value.column}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.leftValue}：{valueText(value.left)}{value.leftType && ` · ${text.sqliteType(value.leftType)}`}</dd><dd aria-label={`${text.rightValue} ${value.column}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.rightValue}：{valueText(value.right)}{value.rightType && ` · ${text.sqliteType(value.rightType)}`}</dd></div>)}</dl></section>}
+      {detail && detail.run === view.run && <section aria-label={text.detailsTitle}><h3>{text.detailsTitle}</h3>{onLocate && <div className="filter-inputs">
+        <button type="button" disabled={!!reportPhase || detail.row.leftIndex === undefined} onClick={() => locateOriginal('left')}>{text.locateLeft}</button>
+        <button type="button" disabled={!!reportPhase || detail.row.rightIndex === undefined} onClick={() => locateOriginal('right')}>{text.locateRight}</button>
+      </div>}<dl>{detail.values.map(value => <div key={value.column}><dt>{value.name || value.column} · {value.column}{value.rightColumn && ` ↔ ${value.rightName || value.rightColumn} · ${value.rightColumn}`}{value.changed && ` · ${text.changed}`}</dt><dd aria-label={`${text.leftValue} ${value.column}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.leftValue}：{valueText(value.left)}{value.leftType && ` · ${text.sqliteType(value.leftType)}`}</dd><dd aria-label={`${text.rightValue} ${value.column}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.rightValue}：{valueText(value.right)}{value.rightType && ` · ${text.sqliteType(value.rightType)}`}</dd></div>)}</dl></section>}
     </section>}
     {reportPhase && <p role="status">{reportPhase === 'choosing' ? text.reportChoosing : text.reportWriting}</p>}
     {reportStatus && <p role="status">{reportStatus}</p>}<ErrorBox message={reportError}/>

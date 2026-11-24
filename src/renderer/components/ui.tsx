@@ -9,10 +9,11 @@ export function UsageHelp({ children, className = '' }: { children: ReactNode; c
 }
 
 /** 对话框限制键盘焦点并在关闭后还原，关闭回调通过引用保持最新状态。 */
-export function Modal({ title, children, onClose, onEscape, initialFocus, wide = false }: { title: string; children: ReactNode; onClose: () => void; onEscape?: (event: KeyboardEvent) => void; initialFocus?: RefObject<HTMLElement | null>; wide?: boolean }) {
+export function Modal({ title, children, onClose, onEscape, initialFocus, shouldRestoreFocus, wide = false }: { title: string; children: ReactNode; onClose: () => void; onEscape?: (event: KeyboardEvent) => void; initialFocus?: RefObject<HTMLElement | null>; shouldRestoreFocus?: () => boolean; wide?: boolean }) {
   const root = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose); closeRef.current = onClose;
   const escapeRef = useRef(onEscape); escapeRef.current = onEscape;
+  const restoreFocusRef = useRef(shouldRestoreFocus); restoreFocusRef.current = shouldRestoreFocus;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     (initialFocus?.current ?? root.current?.querySelector<HTMLElement>('input, select, textarea, button, summary'))?.focus();
@@ -30,7 +31,7 @@ export function Modal({ title, children, onClose, onEscape, initialFocus, wide =
       }
     };
     document.addEventListener('keydown', listener, true);
-    return () => { document.removeEventListener('keydown', listener, true); previous?.focus(); };
+    return () => { document.removeEventListener('keydown', listener, true); if (restoreFocusRef.current?.() !== false) previous?.focus(); };
   }, []);
   return <div className="modal-overlay"><div ref={root} className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button className="icon-button" aria-label={zh.dialogs.text001} onClick={onClose}><X size={18}/></button></header>{children}</div></div>;
 }

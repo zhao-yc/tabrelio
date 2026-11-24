@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CellValue, QueryResult, ResultColumn } from '../../src/shared/contracts';
-import { captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonValues, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonRow } from '../../src/renderer/queryResultComparison';
+import { captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonLocation, queryResultComparisonValues, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonRow } from '../../src/renderer/queryResultComparison';
 import { queryResultComparisonZh as text } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 
 const columns: ResultColumn[] = [{ key: 'id', name: '同名', type: 'BIGINT' }, { key: 'value', name: '同名', type: 'DECIMAL(65,20)' }, { key: 'bytes', name: '字节', type: 'BLOB' }];
@@ -146,8 +146,14 @@ describe('固定结果的明确键与稳定完整差异', () => {
     expect(report.rows[1]).toMatchObject({ columnKey: 'value', changed: true, leftValue: null, rightValue: '', rightTruncated: true });
     expect(report.rows[2].rightValue).toEqual({ type: 'binary', base64: 'AA==' });
     expect(report.rows[4]).toMatchObject({ kind: 'added', leftRow: null, rightRow: 2, rightValue: '9007199254740993.01' });
+    const added = result.rows.find(row => row.kind === 'added')!;
+    expect(queryResultComparisonLocation(capture, added, 'left')).toBeUndefined();
+    const location = queryResultComparisonLocation(capture, added, 'right')!;
+    expect(location.source).toBe(right);
+    expect(location.row).toBe(right.rows[1]);
     expect(() => snapshotQueryResultComparisonReport(capture, Array(33334).fill(result.rows[0]))).toThrow(text.reportBudget);
     scan.cancel();
+    expect(() => queryResultComparisonLocation(capture, added, 'right')).toThrow(text.stale);
     expect(() => snapshotQueryResultComparisonReport(capture, result.rows)).toThrow(text.stale);
   });
   it('左原序保留删除/变化/相同，再追加右侧新增原序，精确键不经Number', () => {

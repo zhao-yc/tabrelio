@@ -49,6 +49,8 @@ export const queryResultComparisonZh = {
   page: (index: number, total: number) => `第 ${index + 1} / ${total} 页`,
   details: (index: number) => `查看差异 ${index + 1}`, rows: '对比记录', leftRow: '左侧行', rightRow: '右侧行', changedColumns: '变化列',
   detailsTitle: '结果差异明细', column: '列', leftValue: '左侧原值', rightValue: '右侧原值',
+  locateLeft: '定位左侧原行', locateRight: '定位右侧原行',
+  rowHidden: '原行已被当前筛选隐藏。清除筛选后可在原结果中查看。',
   noRows: '当前范围没有记录', empty: '暂无对比结果', missing: '缺少整行', nullValue: 'NULL', emptyString: '空字符串', binary: '二进制 base64', bytes: '二进制 base64',
   stopped: '已停止对比，请重新开始', unavailable: '—',
   stale: '结果的行列、元数据或原值已变化，请重新打开对比。',

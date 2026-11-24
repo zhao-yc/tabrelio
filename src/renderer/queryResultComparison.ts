@@ -34,6 +34,7 @@ export interface QueryResultComparisonResult {
   readonly added: number; readonly removed: number; readonly changed: number; readonly equal: number; readonly rows: readonly QueryResultComparisonRow[];
 }
 export interface QueryResultComparisonValue { readonly column: string; readonly name: string; readonly rightColumn?: string; readonly rightName?: string; readonly left?: CellValue; readonly right?: CellValue; readonly leftType?: SqliteResultStorageCode; readonly rightType?: SqliteResultStorageCode; readonly changed: boolean; }
+export interface QueryResultComparisonLocation { source: QueryResult; row: DataRow; }
 export interface QueryResultComparisonColumnPair { readonly left: string; readonly right: string; }
 type Alignment = 'strict' | 'name' | readonly QueryResultComparisonColumnPair[];
 interface Source {
@@ -254,6 +255,16 @@ export function queryResultComparisonValues(capture: QueryResultComparisonCaptur
   const binding = bindings.get(capture);
   if (!binding || !currentQueryResultComparison(capture, binding.left.result, binding.right.result)) throw Error(text.stale);
   return comparisonRowValues(capture, binding, row);
+}
+/** 定位只接受该次发布的差异行，交给网格的是原行身份而非对比行号。 */
+export function queryResultComparisonLocation(capture: QueryResultComparisonCapture, row: QueryResultComparisonRow, side: 'left' | 'right'):
+  QueryResultComparisonLocation | undefined {
+  const binding = bindings.get(capture), owner = rowOwners.get(row);
+  if (!binding || !owner?.active || owner.capture !== capture ||
+      !currentQueryResultComparison(capture, binding.left.result, binding.right.result)) throw Error(text.stale);
+  const index = side === 'left' ? row.leftIndex : row.rightIndex;
+  const source = binding[side];
+  if (index !== undefined) return { source: source.result, row: source.rowRefs[index] };
 }
 
 /** 从已发布对比的冻结副本搜索匹配键。只在开始时完整核源，复合键逐值匹配。 */

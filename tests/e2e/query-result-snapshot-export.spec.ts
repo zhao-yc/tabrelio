@@ -310,7 +310,12 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     await expect(comparison.getByLabel(comparisonText.added, { exact: true })).toHaveCount(0);
     await comparison.getByRole('button', { name: comparisonText.start, exact: true }).click();
     await expect(comparison.getByLabel(comparisonText.added, { exact: true })).toHaveText('52');
-    await comparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click();
+    await comparison.getByRole('row').filter({ hasText: comparisonText.changed }).first()
+      .getByRole('button', { name: /^查看差异 / }).click();
+    await comparison.getByRole('button', { name: comparisonText.locateRight, exact: true }).click();
+    await expect(comparison).toBeHidden();
+    await expect(viewer.getByRole('gridcell', { name: '匹配甲', exact: true })).toBeFocused();
+    await expect(viewer.getByText(text.opened('对比输入.dbark-result.json'), { exact: true })).toBeVisible();
     expect(await readFile(right, 'utf8')).toBe(rightWire);
     expect(await readFile(source, 'utf8')).toBe(wire);
     expect(await settings()).toEqual(baseline);

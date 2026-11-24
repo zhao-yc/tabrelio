@@ -259,7 +259,20 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     const difference = comparison.getByRole('region', { name: comparisonText.detailsTitle, exact: true });
     await expect(difference).toContainText('"other"');
     await expect(difference).toContainText('"archive A"');
-    await comparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click();
+    await difference.getByRole('button', { name: comparisonText.locateLeft, exact: true }).click();
+    await expect(page.getByText(comparisonText.rowHidden, { exact: true })).toBeVisible();
+    await expect(comparison).toBeHidden();
+    await expect(cells).toHaveText(['Target C', 'target A']);
+    await (await navigationMenuItem(query, { name: comparisonText.returnedTitle, exact: true })).click();
+    await comparison.getByRole('button', { name: comparisonText.reuseSettings, exact: true }).click();
+    await comparison.getByRole('button', { name: comparisonText.start, exact: true }).click();
+    await comparison.getByRole('row').filter({ hasText: comparisonText.changed }).nth(1)
+      .getByRole('button', { name: /^查看差异 / }).click();
+    await difference.getByRole('button', { name: comparisonText.locateRight, exact: true }).click();
+    await expect(comparison).toBeHidden();
+    await expect(cells).toHaveText(['active B']);
+    await expect(grid.getByRole('gridcell', { name: '3', exact: true })).toBeFocused();
+    await page.keyboard.press('ControlOrMeta+Shift+PageUp');
     await expect(cells).toHaveText(['Target C', 'target A']);
     expect(await history()).toEqual(baseline);
 
@@ -341,8 +354,12 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     });
     expect(xlsxRows).toHaveLength(2);
     expect(xlsxRows).toMatchObject(expectedReportRows);
-    await baselineComparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click();
-    await expect(cells).toHaveText(['archive A', 'active B']);
+    await baselineComparison.getByRole('row').filter({ hasText: comparisonText.changed }).first()
+      .getByRole('button', { name: /^查看差异 / }).click();
+    await baselineComparison.getByRole('button', { name: comparisonText.locateLeft, exact: true }).click();
+    await expect(baselineComparison).toBeHidden();
+    await expect(cells).toHaveText(['target A', 'other', 'Target C']);
+    await expect(grid.getByRole('gridcell', { name: '2', exact: true })).toBeFocused();
     expect(await history()).toEqual(beforeBaselineComparison);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
