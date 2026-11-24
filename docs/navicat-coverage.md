@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。可排序列的单格菜单可升序、降序或移除该列排序。macOS 源码 Electron 已核对 SQLite 可编辑与只读表页分页、离线快照精确整数顺序，以及 MySQL、MariaDB、PostgreSQL 查询结果的本地降序和恢复。D01 增加单格入口。
+
 2026-11-24 源码增量。查询结果、固定结果和离线快照的单格菜单新增「行详情」，使用被点击的行及完整原字段。macOS 源码 Electron 已核对 MySQL、MariaDB 和 PostgreSQL 实库查询结果、SQLite 磁盘重开的固定结果，以及零连接离线快照排序后的命中行和焦点归还。D04 继续为部分覆盖。
 
 2026-11-24 源码增量。记录导航可按已选摘要字段搜索，查询结果的行详情可直接打开本次结果导航。macOS 源码 Electron 已核对 SQLite 可编辑表单的输入保护、只读页跨组搜索，以及当前查询结果和重开的固定快照。D04 继续为部分覆盖。[Navicat 记录导航说明](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)

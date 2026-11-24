@@ -486,6 +486,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
       if (selectAll) actions.unshift(selectAll);
       if (selectRow) actions.unshift(selectRow);
     }
+    if (!rectangle) actions.push(...columnSortActions(key, current));
     // 菜单始终使用命中的原行，活动格及行勾选改变不能转移查看目标。
     if (!rectangle && onOpenRowDetail) actions.push({ label: rowDetailsText.open, run: () => {
       if (current()) onOpenRowDetail(cell, located.element);
@@ -729,7 +730,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
   } })), ...(sqliteRowIds ? [sqliteRowIdColumn<DataRow>(row => sqliteRowIds[rowIndexes.get(row) ?? -1])] : [])],
     [columns, columnWidths, headerDetails, sqliteRowIds, onColumnWidthsChange, onColumnReorder, frozenCount, onActiveRowChange, canSelectRows, checkedRange.column, onSortChange, sort, sortReasons, activeHit, activeHighlights, findTarget, findMarks, cellRange.rectangle, skipRowInInversion, rowIndexes, presentCell, imagesShown, dataTypeColors, dataTypeColors ? selectedRows : null]);
   const fitHeader = onColumnResize || onColumnWidthsChange ? fitHeaderColumn : undefined;
-  const { sizeDialog, reorderColumns, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
+  const { sizeDialog, reorderColumns, columnSortActions, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
     owner: scope, grid: () => gridRef.current?.element,
     column: index => columns[index - (onActiveRowChange ? 0 : 1)],
     columnNameDialect: columnNameDialect ?? filterDialect,

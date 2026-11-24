@@ -346,7 +346,7 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
       () => current(cell.row) && !disabled && noModal());
   }
   const cellActionMenu = useGridCellActionMenu();
-  const { sizeDialog, reorderColumns, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
+  const { sizeDialog, reorderColumns, columnSortActions, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
     owner, grid: () => grid.current?.element,
     column: index => page.result.columns[order[index - 2]],
     columnNameDialect: 'sqlite', findColumn: onFindColumn, filterColumn: onFilterColumn, valueOptions: columnValueOptions, columnStatistics: onColumnStatistics,
@@ -414,6 +414,7 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
       webValue: !rectangle && raw?.kind === 'text' ? raw.value : undefined, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
       ...(selectRow ? [selectRow] : []),
       ...(selectAll ? [selectAll] : []),
+      ...(!rectangle ? columnSortActions(key, current) : []),
       ...(rectangle ? gridRangeCopyActions(format => {
         try {
           if (format === 'names') return copyGridRangeNames(cellRange.captureColumns(rectangle), page.result.columns, current);

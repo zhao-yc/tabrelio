@@ -8,6 +8,7 @@ import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sq
 import { sqliteValueOptionsZh as valuesText } from '../../src/renderer/locales/sqliteValueOptions.zh-CN';
 import { tableGridZh as layoutFields } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { gridColumnWidthBatchZh as batchText } from '../../src/renderer/locales/gridColumnWidthBatch.zh-CN';
+import { gridHeaderMenuZh as headerMenuText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
 import { recordNavigatorZh as recordNav } from '../../src/renderer/locales/recordNavigator.zh-CN';
 
@@ -167,11 +168,16 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     const db = new DatabaseSync(database, { readOnly: true }); try { return db.prepare('SELECT id FROM "浏览""航船🚢" ORDER BY ' + sort.map(rule => '"' + rule.column + '" ' + rule.direction.toUpperCase()).join(',') + ' LIMIT ? OFFSET ?').all(limit, offset).map(row => Number(row.id)); } finally { db.close(); check(); }
   };
   /** 点真实可见列头一次，只接纳一份服务端请求；Ctrl/Meta沿RDG原生多列操作。 */
-  const headerSort = async (column: HeaderSort['column'], sort: HeaderSort[], expected?: number[], multi = false) => {
+  const headerSort = async (column: HeaderSort['column'], sort: HeaderSort[], expected?: number[], multi = false, cellAction?: string) => {
     await controls(false); const grid = table().getByRole('grid'), position = ['id', 'bucket', 'rank_num', 'note', 'mixed', 'nullable', 'payload', 'exact_int'].indexOf(column);
     await step(() => (require('./sqlite-grid-navigation') as typeof import('./sqlite-grid-navigation')).revealSqliteEditColumn(page, grid, position, check));
     const header = grid.getByRole('columnheader').filter({ hasText: new RegExp('^' + column) }); await step(() => expect(header).toHaveCount(1)); const before = (await step(audit)).pages.length;
-    await step(() => header.click({ modifiers: multi ? [process.platform === 'darwin' ? 'Meta' : 'Control'] : [] }));
+    if (cellAction) {
+      const index = await step(() => header.getAttribute('aria-colindex'));
+      const cell = grid.locator(`[role="row"][aria-rowindex="2"] > [role="gridcell"][aria-colindex="${index}"]`);
+      await step(() => cell.click({ button: 'right' }));
+      await step(() => page.getByRole('menuitem', { name: cellAction, exact: true }).click());
+    } else await step(() => header.click({ modifiers: multi ? [process.platform === 'darwin' ? 'Meta' : 'Control'] : [] }));
     await step(() => expect.poll(async () => { const pages = (await audit()).pages; return pages.length === before + 1 && pages.at(-1)?.reply !== undefined; }).toBe(true));
     const fact = (await step(audit)).pages.at(-1)!; expect(fact.failure).toBeUndefined(); expect(fact.request).toMatchObject({ table: tableName, offset: 0, limit: 5, mode: 'and', filters: [] }); expect(fact.request.sort).toEqual(sort); pageRows(fact.reply); await step(() => expect(grid).toBeVisible()); if (expected) await expectIds(expected); return fact;
   };
@@ -277,8 +283,8 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     };
     expect((await crossRead(1, 5, rows[5].note)).request).toMatchObject({ limit: 5, filters: [], sort: [{ column: 'id', direction: 'asc' }] });
     await crossRead(-1, 0, rows[4].note); expect(disk()).toEqual(baseline);
-    stage = '只读真实列头即时排序、分页沿服务端全表且ASC/DESC/移除循环';
-    await headerSort('id', [{ column: 'id', direction: 'desc' }], [34, 33, 32, 31, 30]);
+    stage = '只读数据格和列头即时排序、分页沿服务端全表且ASC/DESC/移除循环';
+    await headerSort('id', [{ column: 'id', direction: 'desc' }], [34, 33, 32, 31, 30], false, headerMenuText.desc);
     await step(() => expect(details()).toHaveCount(0));
     const headerNext = (await step(audit)).pages.length; await step(() => table().getByRole('button', { name: 'SQLite 下一页', exact: true }).click()); await step(() => expect.poll(async () => { const pages = (await audit()).pages; return pages.length === headerNext + 1 && pages.at(-1)?.reply !== undefined; }).toBe(true)); await expectIds([29, 28, 27, 26, 25]); expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 5, limit: 5, sort: [{ column: 'id', direction: 'desc' }] });
     await headerSort('id', []); await headerSort('id', [{ column: 'id', direction: 'asc' }], [1, 2, 3, 4, 5]);

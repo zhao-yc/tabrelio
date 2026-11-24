@@ -192,6 +192,16 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
     } };
   }
 
+  /** 同一组菜单命令可由列标题或数据格触发，始终绑定命中列和原排序。 */
+  function columnSortActions(key: string, current: () => boolean): GridCellAction[] {
+    const sort = captureSort(key, current);
+    return sort ? [
+      { label: text.asc, disabled: sort.initial === 'ASC', run: () => sort.apply('ASC') },
+      { label: text.desc, disabled: sort.initial === 'DESC', run: () => sort.apply('DESC') },
+      { label: text.clear, disabled: sort.initial === undefined, run: () => sort.apply() },
+    ] : [];
+  }
+
   function open(target: EventTarget | null, point?: { x: number; y: number }): boolean {
     const captured = captureColumn(target, '[role="columnheader"]');
     if (!captured) return false;
@@ -199,12 +209,7 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
     const actions: GridCellAction[] = [];
     const selectColumn = source.selectColumn?.(index);
     if (selectColumn) actions.push(selectColumn);
-    const sort = captureSort(column.key, current);
-    if (sort) {
-      actions.push({ label: text.asc, disabled: sort.initial === 'ASC', run: () => sort.apply('ASC') },
-        { label: text.desc, disabled: sort.initial === 'DESC', run: () => sort.apply('DESC') },
-        { label: text.clear, disabled: sort.initial === undefined, run: () => sort.apply() });
-    }
+    actions.push(...columnSortActions(column.key, current));
     // 清除整套排序与命中列的类型无关，也涵盖当前未显示的排序列。
     const clearSort = source.sort.length ? captureSort(undefined, current) : undefined;
     if (clearSort) actions.push({ label: text.clearAllSort, run: () => clearSort.apply() });
@@ -330,6 +335,7 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
   }
 
   return {
+    columnSortActions,
     /** RDG 的落点回调必须对应同一列标题和来源的实际拖动。 */
     reorderColumns(from: string, to: string) {
       const capture = dragged.current;

@@ -11,6 +11,7 @@ import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../
 import { gridQuickValueZh as text } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridCellEditZh } from '../../src/renderer/locales/gridCellEdit.zh-CN';
 import { gridCellValueZh } from '../../src/renderer/locales/gridCellValue.zh-CN';
+import { gridHeaderMenuZh } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { queryRowDetailsZh as rowDetailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
 import { gridRangeFillZh as rangeText } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
@@ -119,6 +120,15 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
     const jobs = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id).sort());
     const menu = page.getByRole('menu', { name: /^(单元格操作|单元格筛选)$/ });
     const item = (name: string) => menu.getByRole('menuitem', { name, exact: true });
+    if (local) {
+      const labels = grid.getByRole('gridcell', { name: /^TEXT · row [AB]$/ });
+      await label.click({ button: 'right' });
+      await item(gridHeaderMenuZh.desc).click();
+      await expect(labels).toHaveText(['TEXT · row B', 'TEXT · row A']);
+      await label.click({ button: 'right' });
+      await item(gridHeaderMenuZh.clear).click();
+      await expect(labels).toHaveText(['TEXT · row A', 'TEXT · row B']);
+    }
     if (dialect !== 'postgresql') {
       const beforeFilter = await jobs();
       await other.click();
@@ -448,6 +458,15 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
       const firstResult = query.getByRole('gridcell', { name: 'row A', exact: true });
       const secondResult = query.getByRole('gridcell', { name: 'row B', exact: true });
       await firstResult.click();
+      const labels = query.getByRole('gridcell', { name: /^row [AB]$/ });
+      const beforeSort = await jobs();
+      await secondResult.click({ button: 'right' });
+      await item(gridHeaderMenuZh.desc).click();
+      await expect(labels).toHaveText(['row B', 'row A']);
+      await secondResult.click({ button: 'right' });
+      await item(gridHeaderMenuZh.clear).click();
+      await expect(labels).toHaveText(['row A', 'row B']);
+      expect(await jobs()).toEqual(beforeSort);
       const beforeDetail = await jobs();
       await secondResult.click({ button: 'right' });
       await item(rowDetailText.open).click();

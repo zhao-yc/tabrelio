@@ -220,7 +220,12 @@ function register(): void {
 
       await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));
       const big = grid.getByRole('columnheader').filter({ hasText: /^BIGINT/ });
-      await step(() => big.click());
+      if (mode === 'reopen') {
+        const precise = grid.getByRole('gridcell', { name: '18446744073709551615', exact: true });
+        await step(() => precise.click());
+        await step(() => precise.press('Shift+F10'));
+        await step(() => page.getByRole('menuitem', { name: headerText.asc, exact: true }).click());
+      } else await step(() => big.click());
       await step(() => expect(big.getByLabel(sortText.ascending)).toBeVisible());
       await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行', '原型键安全']));
 

@@ -2427,6 +2427,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
         catch (reason) { if (current()) setError(errorMessage(reason)); }
       } },
       ...filters,
+      ...(!rectangle ? columnSortActions(key, current) : []),
       ...(chooseReference ? [{ label: referenceZh.choose, run: () => {
         if (current()) openCellReference.current('choose', { row, key });
       } }] : []),
@@ -2555,7 +2556,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     try { updatePreferences(update(preferencesRef.current)); }
     catch (reason) { setPreferencesError(errorMessage(reason)); }
   }
-  const { sizeDialog, reorderColumns, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
+  const { sizeDialog, reorderColumns, columnSortActions, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
     owner: sortScope, grid: () => grid.current?.element, column: index => visibleColumns[index - 1],
     columnNameDialect: 'mysql',
     sort: gridSort, current: () => tableToolbarCurrent() && !reloadBlocked() && !activeGridEditor.current,
