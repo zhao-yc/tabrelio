@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。MySQL、MariaDB 和 PostgreSQL 的完整查询 JSON 将本次语句头的 `NAME:` 作为行结果的 `label`。MySQL 和 MariaDB 的 CSV ZIP 清单保留同一字段，ZIP 成员名继续按结果序号生成。macOS 源码 Electron 已通过保存和读回，核对名称、精确数值及 MySQL／MariaDB 的空结果和无名结果。SQLite 的工作簿导出通过回归。Q05 继续为部分覆盖。
+
 2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的完整查询 Excel 工作簿沿用本次语句头的 `NAME:` 结果名称，按 Excel 规则清理及去重。macOS 源码 Electron 已在四种数据库保存并读回，核对工作表顺序、非法字符、大小写重名、空结果列标题和精确数值。Q05 继续为部分覆盖。[Navicat 结果命名语法](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html)
 
 2026-11-24 源码增量。MySQL、MariaDB 和 PostgreSQL 查询页新增「实际分析当前语句」，可从原生菜单、查询操作或编辑器右键打开整句确认。macOS 源码 Electron 已验证部分选区、重复语句、取消零执行、确认仅执行命中语句和结果定位，MySQL／MariaDB 同验客户端分隔符。SQLite 原估算计划通过回归。Q02、Q07 继续为部分覆盖。

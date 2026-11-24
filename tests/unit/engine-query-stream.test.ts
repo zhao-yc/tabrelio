@@ -30,14 +30,15 @@ beforeEach(async () => {
 });
 
 describe('同会话完整导出生命周期', () => {
-  it('Excel 页签从原模板头注释提取，照常逐条执行且普通格式不接收标题', async () => {
+  it.each(['xlsx', 'json', 'csv-zip'] as const)('%s 从原模板头注释提取结果名称，单 CSV 沿用原帧结构', async format => {
     const sql = '-- NAME: First/Sheet\nSELECT 1; SELECT \'NAME: 不是标题\'; /* NAME: Last */ SELECT 3;';
     const sent = ["-- NAME: First/Sheet\nSELECT 1", "SELECT 'NAME: 不是标题'", '/* NAME: Last */ SELECT 3'];
-    await engine.handle('query.exportStream', { ...input(), format: 'xlsx', sql });
+    const output = await engine.handle('query.exportStream', { ...input(), format, sql });
     expect(mocks.frames.mock.calls.map(call => call[1])).toEqual(sent);
     expect(writer.write.mock.calls.flatMap(([frame]) => frame.kind === 'rows-start' ? [frame.title] : [])).toEqual(['First/Sheet', undefined, 'Last']);
+    expect(output.results.map((result: {label?: string}) => result.label)).toEqual(['First/Sheet', undefined, 'Last']);
     writer.write.mockClear();
-    await engine.handle('query.exportStream', { ...input(), taskId: 'json-stream', sql });
+    await engine.handle('query.exportStream', { ...input(), taskId: 'csv-stream', format: 'csv', sql, resultSelection: { kind: 'row-result', ordinal: 2 } });
     expect(writer.write.mock.calls.some(([frame]) => Object.hasOwn(frame, 'title'))).toBe(false);
   });
   it.each(['csv','csv-zip'].flatMap(format=>[',',';','\t'].map(csvDelimiter=>({format,csvDelimiter}))))('$format/$csvDelimiter只转交当前写入器，不增加SQL、连接或目录读取',async({format,csvDelimiter})=>{

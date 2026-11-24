@@ -47,6 +47,7 @@ export type QueryExportFrame =
   | { kind: 'status'; resultOrdinal: number; statementOrdinal: number; affectedRows: number; insertId: string; warningCount: number };
 export interface QueryExportResultSummary {
   resultOrdinal: number; statementOrdinal: number; kind: 'rows' | 'status'; rowResultOrdinal?: number;
+  label?: string;
   rowsWritten: number; affectedRows?: number; insertId?: string; warningCount?: number;
 }
 export interface QueryExportProgress {

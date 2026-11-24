@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs';
 import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
+import { readQueryCsvZip } from '../helpers/queryCsvZip';
 import { gridJsonClipboardZh as text } from '../../src/renderer/locales/gridJsonClipboard.zh-CN';
 import { gridCsvClipboardZh as csvText } from '../../src/renderer/locales/gridCsvClipboard.zh-CN';
 import { deleteSqlCopyZh } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
@@ -675,42 +676,63 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       await expect(locate).toBeDisabled();
       expect(await history()).toEqual(historyAfterAnalysis);
     }
-    const xlsxPath = join(dataDir, '命名查询结果.xlsx');
-    const workbookSql = [
-      '-- NAME: Summary/Today', 'SELECT amount FROM json_subject WHERE id = 1;',
-      '/* NAME: SUMMARY?TODAY */', 'SELECT amount FROM json_subject WHERE id = 0;',
-      'SELECT label FROM json_subject WHERE id = 2;',
-    ].join('\n');
-    await write(workbookSql);
-    await desktop.evaluate(({ dialog, BrowserWindow }, path) => {
-      const original = dialog.showSaveDialog;
-      dialog.showSaveDialog = (async (parent: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
-        dialog.showSaveDialog = original;
-        if (parent !== BrowserWindow.getAllWindows()[0] || !options.filters?.[0]?.extensions.includes('xlsx'))
-          throw Error('越过本例工作簿保存范围');
-        return { canceled: false, filePath: path };
-      }) as typeof original;
-    }, xlsxPath);
-    const workbookExport = local ? sqliteQueryExportZh : postgresQueryExportZh;
-    await (await navigationMenuItem(query, { name: custom ? queryStreamZh.open : workbookExport.open, exact: true })).click();
-    const workbookDialog = page.getByRole('dialog', { name: custom ? queryStreamZh.title : workbookExport.title, exact: true });
-    await workbookDialog.getByLabel(custom ? queryStreamZh.format : zh.resultExport.format, { exact: true }).selectOption('xlsx');
-    if (custom) {
-      await workbookDialog.locator('.file-picker').click();
-      await workbookDialog.getByRole('checkbox', { name: queryStreamZh.acknowledge, exact: true }).check();
-      await workbookDialog.getByRole('button', { name: queryStreamZh.execute, exact: true }).click();
-      await expect(workbookDialog.getByText(queryStreamZh.completed, { exact: true })).toBeVisible();
-    } else {
-      await workbookDialog.getByRole('button', { name: zh.resultExport.chooseFile, exact: true }).click();
-      await workbookDialog.getByRole('button', { name: workbookExport.start, exact: true }).click();
-      await expect(workbookDialog.getByRole('status')).toHaveText(workbookExport.done(2));
+    const namedQuery = '-- NAME: Summary/Today\nSELECT amount FROM json_subject WHERE id = 1;';
+    const workbookSql = [namedQuery, '/* NAME: SUMMARY?TODAY */',
+      'SELECT amount FROM json_subject WHERE id = 0;', 'SELECT label FROM json_subject WHERE id = 2;'].join('\n');
+    const fullExport = local ? sqliteQueryExportZh : postgresQueryExportZh;
+    async function saveQueryFile(format: 'xlsx' | 'json' | 'csv-zip', expectedRows = 2) {
+      const extension = format === 'csv-zip' ? 'zip' : format;
+      const filePath = join(dataDir, '命名查询结果.' + extension);
+      await desktop.evaluate(({ dialog, BrowserWindow }, input) => {
+        const original = dialog.showSaveDialog;
+        dialog.showSaveDialog = (async (parent: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
+          dialog.showSaveDialog = original;
+          if (parent !== BrowserWindow.getAllWindows()[0] || !options.filters?.[0]?.extensions.includes(input.extension))
+            throw Error('越过本例查询导出保存范围');
+          return { canceled: false, filePath: input.filePath };
+        }) as typeof original;
+      }, { filePath, extension });
+      await (await navigationMenuItem(query, { name: custom ? queryStreamZh.open : fullExport.open, exact: true })).click();
+      const dialog = page.getByRole('dialog', { name: custom ? queryStreamZh.title : fullExport.title, exact: true });
+      await dialog.getByLabel(custom ? queryStreamZh.format : zh.resultExport.format, { exact: true }).selectOption(format);
+      if (custom) {
+        const picker = dialog.locator('.file-picker');
+        await picker.click();
+        await expect(picker).toContainText('命名查询结果.' + extension);
+        await dialog.getByRole('checkbox', { name: queryStreamZh.acknowledge, exact: true }).check();
+        await dialog.getByRole('button', { name: queryStreamZh.execute, exact: true }).click();
+        await expect(dialog.getByText(queryStreamZh.completed, { exact: true })).toBeVisible();
+        await expect(dialog.getByRole('region', { name: queryStreamZh.summary, exact: true })).toContainText('Summary/Today');
+      } else {
+        await dialog.getByRole('button', { name: zh.resultExport.chooseFile, exact: true }).click();
+        await dialog.getByRole('button', { name: fullExport.start, exact: true }).click();
+        await expect(dialog.getByRole('status')).toHaveText(fullExport.done(expectedRows));
+      }
+      await dialog.getByRole('button', { name: zh.common.close, exact: true }).click();
+      return filePath;
     }
-    const book = await new ExcelJS.Workbook().xlsx.readFile(xlsxPath);
+    await write(workbookSql);
+    const book = await new ExcelJS.Workbook().xlsx.readFile(await saveQueryFile('xlsx'));
     expect(book.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['Summary_Today', 2], ['SUMMARY_TODAY (2)', 1], ['结果 3', 2]]);
     expect(book.worksheets[0].getCell('A2').text).toBe(expectedA.amount);
     expect(book.worksheets[1].getCell('A1').text).toBe('amount');
     expect(book.worksheets[2].getCell('A2').text).toBe('row B');
-    await workbookDialog.getByRole('button', { name: zh.common.close, exact: true }).click();
+    if (!local) {
+      if (!custom) await write(namedQuery);
+      const result = JSON.parse(await readFile(await saveQueryFile('json', custom ? 2 : 1), 'utf8'));
+      expect(result).toMatchObject({ format: 'DBArk-query-results', version: 1 });
+      expect(result.results.map((entry: { label?: string }) => entry.label)).toEqual(custom
+        ? ['Summary/Today', 'SUMMARY?TODAY', undefined] : ['Summary/Today']);
+      expect(result.results[0].rows).toEqual([{ amount: expectedA.amount }]);
+      if (custom) {
+        const files = await readQueryCsvZip(await saveQueryFile('csv-zip'));
+        expect([...files.keys()]).toEqual(['results/rows-001.csv', 'results/rows-002.csv', 'results/rows-003.csv', 'manifest.json']);
+        const manifest = JSON.parse(files.get('manifest.json')!.toString('utf8'));
+        expect(manifest.results.map((entry: { label?: string; rowsWritten: number }) => [entry.label, entry.rowsWritten]))
+          .toEqual([['Summary/Today', 1], ['SUMMARY?TODAY', 0], [undefined, 1]]);
+        expect(files.get('results/rows-001.csv')!.toString('utf8')).toBe('amount\r\n' + expectedA.amount + '\r\n');
+      }
+    }
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

@@ -131,7 +131,9 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
           const headers = resultExportColumns(result.columns).map((column, index) => ({
             ...column, position: index + 1, type: result.columns[index].type,
           }));
-          await output.write({kind: 'rows-start', resultOrdinal: 1, statementOrdinal: 1, rowResultOrdinal: 1, columns: headers});
+          const title = format === 'json' ? queryResultTitle(part.statement.sql, 'postgresql') : undefined;
+          await output.write({kind: 'rows-start', resultOrdinal: 1, statementOrdinal: 1, rowResultOrdinal: 1, columns: headers,
+            ...(title ? {title} : {})});
           for await (const values of queryExportRows(result, batches)) {
             await output.write({kind: 'row', resultOrdinal: 1, values});
             if (++rows % 256 === 0) progress(rows);

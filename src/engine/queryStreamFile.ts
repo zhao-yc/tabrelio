@@ -79,13 +79,15 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
           names.add(column.exportName); return { ...column };
         });
         const selected = input.resultSelection.kind === 'all' || input.resultSelection.ordinal === frame.rowResultOrdinal;
+        const label = validQueryResultTitle(frame.title) ? frame.title : undefined;
         active = { ordinal: frame.resultOrdinal, columns, selected, rows: 0 }; if (selected) selectedFound = true;
         if (workbook) {
-          const name = worksheetName(validQueryResultTitle(frame.title) ? frame.title : `结果 ${frame.rowResultOrdinal}`);
+          const name = worksheetName(label ?? `结果 ${frame.rowResultOrdinal}`);
           sheet = await workbook.startSheet(name, columns.map(column => ({ name: column.exportName, type: column.type })));
         } else if (archive) { await archive.start(frame, columns); await archive.text(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n'); }
         else if (input.format === 'json') {
-          const metadata = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: 'rows', rowResultOrdinal: frame.rowResultOrdinal, columns: columns.map(({ key: _key, ...column }) => column) };
+          const metadata = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: 'rows', rowResultOrdinal: frame.rowResultOrdinal,
+            ...(label ? { label } : {}), columns: columns.map(({ key: _key, ...column }) => column) };
           await file.write((resultCount > 1 ? ',\n' : '\n') + JSON.stringify(metadata).slice(0, -1) + ',"rows":[\n');
         } else if (markup) {
           if (selected) await file.write(markup.tableStart(columns.map(column => isXmlFormat(input.format) ? column.name : column.exportName), frame));

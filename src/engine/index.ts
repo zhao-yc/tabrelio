@@ -2572,8 +2572,8 @@ export class Engine {
       for await (const { statement, template, mode, ordinal } of this.queryStatements(task, input.sql, input.parameters)) {
         this.checkCancelled(task);
         const wire = queryExportWireProtocol(statement, input.protocol, mode);
-        // 页签名沿未绑定参数的本次原语句。同一语句的多行结果由工作簿逐张去重。
-        const title = input.format === 'xlsx' ? queryResultTitle(template) : undefined;
+        // 支持元数据的文件从本次未绑定参数的原语句取名，状态包没有行集名称。
+        const title = ['xlsx', 'json', 'csv-zip'].includes(input.format) ? queryResultTitle(template) : undefined;
         const statementStarted = performance.now(), previewStart = preview.results.length;
         progress.phase = 'executing'; progress.sqlMayHaveExecuted = true;
         task.inFlight = true; task.generation++;
@@ -2587,7 +2587,8 @@ export class Engine {
               await writer!.write(frame.kind === 'rows-start' && title ? { ...frame, title } : frame);
               if (frame.kind === 'rows-start' || frame.kind === 'status') {
                 const status = frame.kind === 'status' ? { affectedRows: frame.affectedRows, insertId: frame.insertId, warningCount: frame.warningCount } : {};
-                const summary: QueryExportResultSummary = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: frame.kind === 'status' ? 'status' : 'rows', rowsWritten: 0, ...status, ...(frame.kind === 'rows-start' ? { rowResultOrdinal: frame.rowResultOrdinal } : {}) };
+                const summary: QueryExportResultSummary = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: frame.kind === 'status' ? 'status' : 'rows', rowsWritten: 0, ...status,
+                  ...(frame.kind === 'rows-start' ? { rowResultOrdinal: frame.rowResultOrdinal, ...(title ? { label: title } : {}) } : {}) };
                 results.push(summary);
                 const columns = frame.kind === 'rows-start' ? frame.columns.map(({ key, name, type }) => ({ key, name, type })) : [];
                 const text = template.slice(0, 32768), bytes = Buffer.byteLength(text) + Buffer.byteLength(JSON.stringify(columns));

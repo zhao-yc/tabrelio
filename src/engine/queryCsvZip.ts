@@ -4,6 +4,7 @@ import { encodingName } from './files';
 import { queryCsvResultFile, queryStreamExportLimits as limits, type QueryExportColumn, type QueryExportFrame } from '../shared/queryStreamExport';
 import type { QueryFileEncoding } from '../shared/contracts';
 import { csvExportDelimiter, type CsvExportDelimiter } from '../shared/csvExport';
+import { validQueryResultTitle } from '../shared/queryResultTitle';
 
 const crcTable = Uint32Array.from({ length: 256 }, (_, index) => { let value = index; for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0); return value >>> 0; });
 /** CRC按当前片段递增，既不读回临时包，也不保留已经消费的CSV行。 */
@@ -80,9 +81,11 @@ export class QueryCsvArchive {
   /** 结构预算在保留列描述之前检查，行数据从不加入清单。 */
   private retain(result: RowManifest | StatusFrame): void { const size = Buffer.byteLength(JSON.stringify(result)) + 128; if (this.results.length >= limits.results || this.metadataBytes + size > limits.archiveManifestBytes) throw new Error('CSV容器清单超过8MiB或200个结果，原目标文件保持不变'); this.metadataBytes += size; this.results.push(result); }
   /** 仅使用已经验证的位置列与有界序号，开始当前CSV并独立处理BOM。 */
-  async start(frame: Pick<Extract<QueryExportFrame, { kind: 'rows-start' }>, 'resultOrdinal' | 'rowResultOrdinal'> & { statementOrdinal?: number }, columns: ArchiveColumn[], returned?: ReturnedResultMetadata): Promise<void> {
+  async start(frame: Pick<Extract<QueryExportFrame, { kind: 'rows-start' }>, 'resultOrdinal' | 'rowResultOrdinal' | 'title'> & { statementOrdinal?: number }, columns: ArchiveColumn[], returned?: ReturnedResultMetadata): Promise<void> {
     if (this.active || (this.scope === 'returned') !== !!returned) throw new Error('CSV容器结果范围或边界无效');
-    const result: RowManifest = { kind: 'rows', resultOrdinal: frame.resultOrdinal, ...(returned ?? { statementOrdinal: frame.statementOrdinal }), rowResultOrdinal: frame.rowResultOrdinal, file: queryCsvResultFile(frame.rowResultOrdinal), columns: columns.map(({ key: _key, ...column }) => column), rowsWritten: 0, bytes: 0 };
+    // 用户标题只进入清单，ZIP 成员名始终由行结果序号分配。
+    const origin = returned ?? { statementOrdinal: frame.statementOrdinal, ...(validQueryResultTitle(frame.title) ? { label: frame.title } : {}) };
+    const result: RowManifest = { kind: 'rows', resultOrdinal: frame.resultOrdinal, ...origin, rowResultOrdinal: frame.rowResultOrdinal, file: queryCsvResultFile(frame.rowResultOrdinal), columns: columns.map(({ key: _key, ...column }) => column), rowsWritten: 0, bytes: 0 };
     this.retain(result); this.active = result; await this.zip.start(result.file); if (this.encoding === 'utf16le') await this.text('\uFEFF');
   }
   /** 空集也已写入标题；最终行数、字节数及警告归属当前行集。 */

@@ -27,13 +27,15 @@ describe('一次新执行的多CSV ZIP64容器', () => {
   it.each(['utf8', 'utf16le', 'gb18030'] as const)('%s逐行集保存空集、重复列与精确位置，清单固定UTF-8且状态不占CSV序号', async encoding => {
     const input = await options({ encoding }), writer = await createQueryStreamFile(input);
     try {
-      await rows(writer, 1, 1);
+      await writer.write({ ...start(1, 1), title: '../../manifest.json 月报' });
+      await writer.write({ kind: 'rows-end', resultOrdinal: 1 });
       await writer.write({ kind: 'status', resultOrdinal: 2, statementOrdinal: 2, affectedRows: 2, insertId: '18446744073709551615', warningCount: 3 });
       const names = ['值', '值', '值 [2]', '', '__proto__', '字节', '日期', '空串', '反斜线', '../manifest.json'];
       await writer.write(start(3, 2, names)); const values = ['18446744073709551615', '0.12345678901234567890', null, '中文😊', '原型', { type: 'binary' as const, base64: 'AAH/' }, '2026-10-16 01:02:03.123456', '', '\\N', '无路径'];
       await writer.write({ kind: 'row', resultOrdinal: 3, values }); await writer.write({ kind: 'rows-end', resultOrdinal: 3, warningCount: 1 }); await writer.complete();
       const files = await readQueryCsvZip(input.filePath); expect([...files.keys()]).toEqual([queryCsvResultFile(1), queryCsvResultFile(2), 'manifest.json']);
       const manifest = JSON.parse(files.get('manifest.json')!.toString('utf8')); expect(manifest).toMatchObject({ format: 'DBArk-query-csv-archive', version: 1, encoding });
+      expect(manifest.results.map((result: { label?: string }) => result.label)).toEqual(['../../manifest.json 月报', undefined, undefined]);
       expect(manifest.results.map((result: any) => [result.kind, result.resultOrdinal, result.statementOrdinal, result.rowResultOrdinal, result.rowsWritten])).toEqual([['rows', 1, 1, 1, 0], ['status', 2, 2, undefined, undefined], ['rows', 3, 3, 2, 1]]);
       expect(manifest.results[1]).toMatchObject({ affectedRows: 2, insertId: '18446744073709551615', warningCount: 3 }); expect(manifest.results[2].warningCount).toBe(1); expect(Object.hasOwn(manifest.results[0], 'warningCount')).toBe(false);
       expect(manifest.results[2].columns.map((column: any) => column.name)).toEqual(names); expect(manifest.results[2].columns.map((column: any) => column.exportName)).toEqual(['值', '值 [3]', '值 [2]', '列 [4]', '__proto__', '字节', '日期', '空串', '反斜线', '../manifest.json']); expect(manifest.results[2].columns.every((column: any) => !Object.hasOwn(column, 'key'))).toBe(true);

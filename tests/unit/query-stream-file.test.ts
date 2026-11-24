@@ -33,13 +33,15 @@ describe('完整多结果流式文件', () => {
   it.each(['utf8', 'utf16le', 'gb18030'] as const)('JSON %s 保存异构结果、状态、空集及精确位置值', async encoding => {
     const input = await options({ encoding }); const writer = await createQueryStreamFile(input);
     try {
-      await writer.write(start(1, 1, ['值', '值', '值 [2]', '', '__proto__', 'constructor', '2', '1', '浮点', '二进制']));
+      const title = '月报/"北区"';
+      await writer.write({ ...start(1, 1, ['值', '值', '值 [2]', '', '__proto__', 'constructor', '2', '1', '浮点', '二进制']), title });
       await writer.write({ kind: 'row', resultOrdinal: 1, values: [null, '', '18446744073709551615', '0.12345678901234567890', '原型', '\uD800', '二', '一', 1.0000001192092896, { type: 'binary', base64: 'AAH/' }] });
       await writer.write({ kind: 'rows-end', resultOrdinal: 1, warningCount: 3 });
       await writer.write({ kind: 'status', resultOrdinal: 2, statementOrdinal: 2, affectedRows: 1, insertId: '18446744073709551615', warningCount: 0 });
       await writer.write(start(3, 2)); await writer.write({ kind: 'rows-end', resultOrdinal: 3 }); await writer.complete();
       const text = iconv.decode(await readFile(input.filePath), encoding); const document = JSON.parse(text);
       expect(document).toMatchObject({ format: 'DBArk-query-results', version: 1 }); expect(document.results).toHaveLength(3);
+      expect(document.results.map((result: {label?: string}) => result.label)).toEqual([title, undefined, undefined]);
       expect(document.results[0].warningCount).toBe(3); expect(Object.hasOwn(document.results[2], 'warningCount')).toBe(false);
       const row = document.results[0].rows[0]; expect(row['值']).toBeNull(); expect(row['值 [3]']).toBe(''); expect(row['值 [2]']).toBe('18446744073709551615'); expect(row['列 [4]']).toBe('0.12345678901234567890');
       expect(Object.hasOwn(row, '__proto__')).toBe(true); expect(row['__proto__']).toBe('原型'); expect(row.constructor).toBe('\uD800'); expect(row['浮点']).toBe(1.0000001192092896); expect(row['二进制']).toEqual({ type: 'binary', base64: 'AAH/' });
