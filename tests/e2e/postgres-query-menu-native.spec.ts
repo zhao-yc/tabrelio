@@ -597,11 +597,30 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await expect(receiptOptions).toHaveCount(5);
     await expect(receiptOptions.nth(1)).toContainText(resultNavText.failedStatement(2));
     await expect(receiptOptions.nth(3)).toContainText(resultNavText.failedStatement(4));
+    const copySummary = async () => {
+      await page.evaluate(() => {
+        const nativeCopy = document.execCommand;
+        // 只捕获这一次文本复制，避免触碰系统剪贴板。
+        document.execCommand = command => {
+          document.execCommand = nativeCopy;
+          if (command !== 'copy') throw Error('本例仅捕获回执摘要复制');
+          const clipboardData = new DataTransfer();
+          document.dispatchEvent(new ClipboardEvent('copy', {clipboardData, bubbles: true, cancelable: true}));
+          Object.assign(globalThis, {receiptSummary: Object.fromEntries(clipboardData.types.map(type => [type, clipboardData.getData(type)]))});
+          return true;
+        };
+      });
+      await resultDialog.getByRole('button', {name: resultNavText.copySummary, exact: true}).click();
+      return page.evaluate(() => (globalThis as typeof globalThis & {receiptSummary?: Record<string, string>}).receiptSummary);
+    };
     const receiptType = resultDialog.getByRole('group', {name: resultNavText.type, exact: true});
     await receiptType.getByRole('button', {name: resultNavText.types.status, exact: true}).click();
     await expect(receiptOptions).toHaveCount(3);
     await expect(receiptOptions.nth(1)).toContainText(resultNavText.statement(3));
     await expect(receiptOptions.nth(1)).toContainText('INSERT');
+    const statusSummary = await copySummary();
+    expect(statusSummary?.['text/plain'].split('\n').slice(1).map(row => row.split('\t').filter((_, index) => index !== 5))).toEqual(
+      [1, 3, 5].map((ordinal, index) => [resultNavText.sources.current, resultNavText.types.status, String(index + 1), String(ordinal), '', '', '1', resultNavText.summaryNo]));
     await receiptType.getByRole('button', {name: resultNavText.types.all, exact: true}).click();
     await expect(receiptOptions).toHaveCount(5);
     await resultDialog.getByRole('button', {name: resultNavText.orders.elapsed, exact: true}).click();
@@ -616,6 +635,10 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await resultSearch.fill('missing_column');
     await expect(receiptOptions).toHaveCount(1);
     await expect(resultDialog.getByRole('region', {name: resultNavText.errorDetail, exact: true})).toContainText('missing_column');
+    const summary = await copySummary();
+    await expect(resultDialog.getByText(resultNavText.summaryCopied(1), {exact: true})).toBeVisible();
+    expect(summary).toEqual({'text/plain': resultNavText.summaryColumns.join('\t') + '\n' +
+      [resultNavText.sources.current, resultNavText.types.failure, '', '2', '', '', '', '', ''].join('\t')});
     await resultDialog.screenshot({path: info.outputPath('按类型筛选执行错误.png')});
     await resultDialog.getByRole('button', {name: resultNavText.locateError, exact: true}).click();
     await expect.poll(inspectModel).toMatchObject({selected: 'm', position: {lineNumber: 2, column: 9}});

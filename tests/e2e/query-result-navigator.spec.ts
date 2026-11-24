@@ -81,9 +81,11 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
       }});
       Object.assign(globalThis, { resultSourceCopies: copies });
     });
-    const copies = () => page.evaluate(() => (globalThis as typeof globalThis & {
+    const clipboardWrites = () => page.evaluate(() => (globalThis as typeof globalThis & {
       resultSourceCopies: Record<string, string>[];
     }).resultSourceCopies);
+    const summaryHeader = text.summaryColumns.join('\t');
+    const copies = async () => (await clipboardWrites()).filter(item => !item['text/plain']?.startsWith(summaryHeader + '\n'));
     const tab = page.locator('.query-tab:visible'), trigger = tab.getByRole('button', { name: text.open, exact: true });
     await tab.locator('.query-execute-split').getByRole('button', { name: new RegExp(zh.query.text010) }).first().click();
     await expect(trigger).toBeEnabled();
@@ -94,6 +96,7 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     const dialog = page.getByRole('dialog', { name: text.open, exact: true });
     const search = dialog.getByRole('combobox', { name: text.input, exact: true });
     const locateOriginal = dialog.getByRole('button', {name: text.locateOriginal, exact: true});
+    const copySummary = dialog.getByRole('button', {name: text.copySummary, exact: true});
     const observeEditor = () => page.evaluate(observeQueryFailureSource);
     const receiptType = dialog.getByRole('group', {name: text.type, exact: true});
     const receiptOrder = dialog.getByRole('group', {name: text.order, exact: true});
@@ -149,6 +152,21 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     expect(sorted).toHaveLength(44);
     expect(sorted.every(Number.isFinite)).toBe(true);
     expect(sorted).toEqual(sorted.slice().sort((left, right) => right - left));
+    await copySummary.click();
+    await expect(dialog.getByText(text.summaryCopied(44), {exact: true})).toBeVisible();
+    const [receiptClipboard] = await clipboardWrites();
+    expect(Object.keys(receiptClipboard)).toEqual(['text/plain']);
+    const [header, ...summaryRows] = receiptClipboard['text/plain'].split('\n');
+    expect(header).toBe(summaryHeader);
+    expect(summaryRows).toHaveLength(44);
+    const parsed = summaryRows.map(line => line.split('\t'));
+    expect(parsed.map(row => Number(row[5]))).toEqual(sorted);
+    expect(parsed[0]).toEqual([text.sources.current, text.types.rows, '39', '39', '', String(sorted[0]), '1', '', text.summaryNo]);
+    expect(parsed.find(row => row[2] === '40')?.[6]).toBe('0');
+    expect(receiptClipboard['text/plain']).not.toMatch(/SELECT|完整原语句尾部|月度汇总/);
+    await expect(grid.getByRole('gridcell', {name: '1', exact: true})).toBeVisible();
+    await expect(dialog.getByText(text.page(2, 2), {exact: true})).toBeVisible();
+    await dialog.screenshot({path: info.outputPath('复制跨页回执摘要.png')});
     await dialog.getByRole('button', {name: text.previous, exact: true}).click();
     await dialog.screenshot({path: info.outputPath('按执行耗时排序.png')});
     await search.press('Enter');
@@ -297,6 +315,7 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await trigger.click();
     await search.fill('不存在的列');
     await expect(dialog.getByText(text.empty, { exact: true })).toBeVisible();
+    await expect(copySummary).toBeDisabled();
     await search.press('Enter');
     await expect(dialog).toBeVisible();
     await search.fill('#2');
@@ -400,6 +419,11 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await receiptType.getByRole('button', {name: text.types.rows, exact: true}).click();
     await receiptOrder.getByRole('button', {name: text.orders.elapsed, exact: true}).click();
     await expect(dialog.getByRole('option')).toHaveCount(1);
+    await copySummary.click();
+    const pinnedSummary = (await clipboardWrites()).at(-1)?.['text/plain'];
+    expect(pinnedSummary?.split('\n').at(-1)?.split('\t')).toMatchObject([
+      text.sources.pinned, text.types.rows, '', '', '1', expect.stringMatching(/^\d+(?:\.\d+)?$/), '1', '', text.summaryNo,
+    ]);
     await dialog.screenshot({ path: info.outputPath('按名称查找固定结果.png') });
     await search.press('Enter');
     await expect(grid.getByRole('gridcell', { name: '2', exact: true })).toBeVisible();

@@ -11,6 +11,7 @@ import type { PinnedQueryResult } from '../queryPins';
 import { useWorkspace } from '../store';
 import { ErrorBox, Modal } from './ui';
 import { errorMessage } from '../lib';
+import { encodeClipboard, writeTableClipboardEvent } from '../gridClipboard';
 import { copyQuerySourceSql } from '../querySourceClipboard';
 import { SaveOriginalQueryButton } from './SaveOriginalQueryButton';
 import '../openTabSearch.css';
@@ -61,6 +62,28 @@ function recordedElapsed(entry: Entry): number | undefined {
   if (entry.kind === 'failure') return undefined;
   const ms = entry.result.elapsedMs;
   return Number.isFinite(ms) && ms >= 0 ? ms : undefined;
+}
+
+/** 摘要只投影回执中的序号、计数和状态，避免把 SQL、参数、行值或错误详情放入表格。 */
+function receiptSummary(matches: readonly Entry[], pins: readonly PinnedQueryResult[]): string {
+  const rows = matches.map(item => {
+    if (item.kind === 'failure') return [text.sources.current, text.types.failure, '', item.statementOrdinal, '', '', '', '', ''];
+    const { result } = item;
+    const hasRows = result.columns.length > 0;
+    const elapsed = recordedElapsed(item);
+    return [
+      item.kind === 'pinned' ? text.sources.pinned : text.sources.current,
+      hasRows ? text.types.rows : text.types.status,
+      item.kind === 'current' ? item.index + 1 : '',
+      item.kind === 'current' ? item.statementOrdinal ?? '' : '',
+      item.kind === 'pinned' ? pins.indexOf(item.pin) + 1 : '',
+      elapsed === undefined ? '' : Number(elapsed.toFixed(2)),
+      hasRows ? result.rows.length : '',
+      result.affectedRows ?? '',
+      result.truncated ? text.summaryYes : text.summaryNo,
+    ];
+  });
+  return encodeClipboard(rows, text.summaryColumns).text;
 }
 
 /** 导航绑定打开时的结果与固定列表，选中后走查询页原有的来源切换。 */
@@ -132,12 +155,17 @@ export function QueryResultNavigator(props: Props) {
     }
   }
 
+  function receiptScopeCurrent(): boolean {
+    const props = latest.current;
+    return !!owner && opened && owner.current() && !props.disabled && props.results === owner.results &&
+      props.pins === owner.pins && props.executionErrors.failures === owner.failures;
+  }
+
   /** 导航窗口保持打开，取原文和提交输出时分别复核本次执行。 */
   function captureEntry(entry: CurrentEntry, dialogCurrent: () => boolean) {
     const current = () => {
       const props = latest.current;
-      return dialogCurrent() && !!owner && opened && owner.current() && !props.disabled &&
-        props.results === owner.results && props.pins === owner.pins && props.executionErrors.failures === owner.failures &&
+      return dialogCurrent() && receiptScopeCurrent() &&
         (entry.kind === 'current' ? props.results[entry.index] === entry.result : props.executionErrors.failures[entry.index] === entry.failure) &&
         props.statementSource?.canRead(entry) === true;
     };
@@ -151,13 +179,15 @@ export function QueryResultNavigator(props: Props) {
     <button type="button" disabled={disabled} aria-haspopup="dialog" aria-expanded={opened} onClick={() => open(false)}>{text.open}</button>
     {opened && createPortal(<ResultList results={results} names={props.names} statementOrdinals={props.statementOrdinals}
       executionErrors={executionErrors} statementSource={props.statementSource} selected={props.selected} pins={pins} selectedPin={props.selectedPin}
-      startWithFailures={owner.includeFailures} onActivate={activateEntry} capture={captureEntry} onClose={() => setOwner(undefined)}/>, document.body)}
+      startWithFailures={owner.includeFailures} onActivate={activateEntry} currentOwner={receiptScopeCurrent}
+      capture={captureEntry} onClose={() => setOwner(undefined)}/>, document.body)}
   </>;
 }
 
-function ResultList({ results, names, statementOrdinals, executionErrors, statementSource, selected, pins, selectedPin, startWithFailures, onActivate, capture, onClose }:
+function ResultList({ results, names, statementOrdinals, executionErrors, statementSource, selected, pins, selectedPin, startWithFailures, onActivate, currentOwner, capture, onClose }:
   Pick<Props, 'results' | 'names' | 'statementOrdinals' | 'executionErrors' | 'statementSource' | 'selected' | 'pins' | 'selectedPin'> & {
     startWithFailures: boolean; onActivate(entry: Entry, action: EntryAction): void;
+    currentOwner(): boolean;
     capture(entry: CurrentEntry, current: () => boolean): {sql: string; current(): boolean}; onClose(): void;
   }) {
   const { failures } = executionErrors;
@@ -217,8 +247,10 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
   const pageCount = Math.ceil(matches.length / pageSize);
   const entry = matches[current];
   const currentEntry = useRef(entry);
-  useLayoutEffect(() => { currentEntry.current = entry; }, [entry]);
+  const currentMatches = useRef(matches);
+  useLayoutEffect(() => { currentEntry.current = entry; currentMatches.current = matches; }, [entry, matches]);
   const [feedback, setFeedback] = useState<{ entry: CurrentEntry; error?: string }>();
+  const [summaryFeedback, setSummaryFeedback] = useState<{ matches: readonly Entry[]; error?: string }>();
   const canLocateError = entry?.kind === 'failure' && executionErrors.canLocateFailure(entry.failure);
   const canReadSource = entry && entry.kind !== 'pinned' && !!statementSource?.canRead(entry);
   const optionId = (item: Entry) => item.kind === 'pinned' ? `${listId}-pin-${item.pin.id}` : `${listId}-${item.kind}-${item.index}`;
@@ -339,7 +371,22 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
         </div>
       </section>}
       {feedback && feedback.entry === entry && (feedback.error ? <ErrorBox message={feedback.error}/> : <p role="status">{text.originalCopied}</p>)}
+      {summaryFeedback?.matches === matches && (summaryFeedback.error ? <ErrorBox message={summaryFeedback.error}/>
+        : <p role="status">{text.summaryCopied(matches.length)}</p>)}
     </div>
-    <footer className="modal-footer"><button type="button" onClick={onClose}>{text.close}</button></footer>
+    <footer className="modal-footer">
+      <button type="button" disabled={!matches.length} title={text.summaryHint} onClick={event => {
+        const button = event.currentTarget, dialog = button.closest(appModalSelector) ?? undefined;
+        const current = () => !composing.current && currentMatches.current === matches && button.isConnected &&
+          currentOwner() && gridDialogCurrent(button, () => dialog);
+        if (!current()) return;
+        try {
+          const summary = receiptSummary(matches, pins);
+          writeTableClipboardEvent(current, data => data.setData('text/plain', summary));
+          setSummaryFeedback({matches});
+        } catch (reason) { setSummaryFeedback({matches, error: errorMessage(reason)}); }
+      }}>{text.copySummary}</button>
+      <button type="button" onClick={onClose}>{text.close}</button>
+    </footer>
   </Modal>;
 }
