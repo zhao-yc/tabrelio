@@ -43,6 +43,8 @@ describe('原生菜单状态与原文档命令归属', () => {
     expect(windows.find('sql-toggle-comment')?.accelerator).toBe('CmdOrCtrl+/');
     expect(windows.find('sql-editor-zoom-in')).toMatchObject({ label: '放大当前 SQL 编辑器', enabled: false });
     expect(windows.find('sql-editor-zoom-in')?.accelerator).toBeUndefined();
+    expect(windows.find('sql-editor-fold-block')).toMatchObject({ label: '折叠光标所在块', enabled: false });
+    expect(fixture('darwin').find('sql-editor-unfold-all')).toMatchObject({ label: '展开当前编辑器中的全部块', enabled: false });
     const lines = edit.find(item => item.label === '行操作');
     expect(lines).toMatchObject({ enabled: false, submenu: [
       { id: 'sql-duplicate-lines', enabled: false }, { id: 'sql-move-lines-up', enabled: false },

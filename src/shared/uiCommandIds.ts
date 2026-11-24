@@ -1,6 +1,7 @@
 /** SQL 编辑器行操作在各入口使用相同的命令顺序。 */
 export const sqlLineCommandIds = ['sql-duplicate-lines', 'sql-move-lines-up', 'sql-move-lines-down', 'sql-delete-lines'] as const;
 export const sqlEditorZoomCommandIds = ['sql-editor-zoom-in', 'sql-editor-zoom-out', 'sql-editor-zoom-reset'] as const;
+export const sqlEditorFoldCommandIds = ['sql-editor-fold-block', 'sql-editor-unfold-block', 'sql-editor-fold-all', 'sql-editor-unfold-all'] as const;
 export const sqlSelectionFindCommandIds = ['sql-find-selection', 'sql-replace-selection'] as const;
 
 /** 沙箱预加载只依赖纯白名单，不引入校验器、文件系统或数据库运行时。 */
@@ -11,7 +12,7 @@ export const uiCommandIds = [
   'focus-query-pane', 'object-information',
   ...sqlLineCommandIds, 'sql-selection-to-snippet', 'sql-clipboard-stack', 'sql-copy-quoted', 'sql-copy-current-statement-quoted',
   ...sqlSelectionFindCommandIds,
-  'editor-font', ...sqlEditorZoomCommandIds, 'editor-word-wrap', 'editor-line-numbers', 'editor-match-brackets', 'editor-local-references', 'editor-sql-folding', 'editor-indent', 'favorite-toggle', 'favorites-manage', 'object-link',
+  'editor-font', ...sqlEditorZoomCommandIds, ...sqlEditorFoldCommandIds, 'editor-word-wrap', 'editor-line-numbers', 'editor-match-brackets', 'editor-local-references', 'editor-sql-folding', 'editor-indent', 'favorite-toggle', 'favorites-manage', 'object-link',
   'execute', 'execute-selection', 'execute-current', 'execute-all', 'stop', 'format', 'format-current-statement', 'compact-sql', 'sql-format-options', 'sql-format-preferences', 'parameters', 'explain', 'analyze', 'object-definition', 'syntax-check', 'statement-navigation', 'select-current-statement', 'open-current-statement-query', 'previous-statement', 'next-statement',
   'previous-query-error', 'next-query-error', 'find-query-receipts', 'previous-query-result', 'next-query-result', 'transaction-settings', 'import', 'export', 'schema-compare', 'sqlite-data-compare', 'postgres-data-compare', 'mysql-data-compare', 'structure-search', 'server-monitor', 'postgres-roles', 'backup-archive', 'postgres-table-backup', 'postgres-database-backup', 'postgres-custom-archive', 'postgres-sql-file', 'mysql-sql-file', 'mysql-database-backup',
   'explain-snapshot', 'result-snapshot', 'task-center', 'tab-search', 'rename-query-tab', 'pin-query-tab', 'close-tab', 'close-all-tabs', 'reopen-query', 'retained-query-list', 'close-other-queries',

@@ -1,6 +1,6 @@
 import type { MenuItemConstructorOptions } from 'electron';
 import { uiMenuStateSchema, type UiCommandId, type UiCommandInvocation, type UiMenuState } from '../shared/uiCommands';
-import { sqlEditorZoomCommandIds, sqlLineCommandIds } from '../shared/uiCommandIds';
+import { sqlEditorFoldCommandIds, sqlEditorZoomCommandIds, sqlLineCommandIds } from '../shared/uiCommandIds';
 import { uiCommandLabels as labels, uiMenuLabels as text } from '../shared/uiCommands.zh-CN';
 import { productName } from '../shared/productName';
 
@@ -71,7 +71,12 @@ export class ApplicationMenu {
       { label: text.view, submenu: [
         item('toggle-theme'), item('focus-mode', 'CmdOrCtrl+Shift+L'), item('focus-query-pane'), item('object-information'), separator,
         { label: text.zoomIn, role: 'zoomIn' }, { label: text.zoomOut, role: 'zoomOut' }, { label: text.resetZoom, role: 'resetZoom' }, { label: text.fullscreen, role: 'togglefullscreen' }, separator,
-        { label: text.editor, submenu: [item('editor-font'), ...sqlEditorZoomCommandIds.map(id => item(id)), separator, item('editor-word-wrap'), item('editor-line-numbers'), item('editor-match-brackets'), item('editor-local-references'), item('editor-sql-folding'), item('editor-indent')] }
+        { label: text.editor, submenu: [
+          item('editor-font'), ...sqlEditorZoomCommandIds.map(id => item(id)), separator,
+          item('editor-word-wrap'), item('editor-line-numbers'), item('editor-match-brackets'), item('editor-local-references'), item('editor-sql-folding'),
+          { label: text.sqlFolding, enabled: sqlEditorFoldCommandIds.some(id => statuses.get(id)?.enabled === true), submenu: sqlEditorFoldCommandIds.map(id => item(id)) },
+          item('editor-indent'),
+        ] }
       ] },
       { label: text.favorites, submenu: [item('favorite-toggle'), item('favorites-manage', 'CmdOrCtrl+Shift+B'), separator, item('object-link', 'CmdOrCtrl+Shift+O')] },
       { label: text.tools, submenu: [

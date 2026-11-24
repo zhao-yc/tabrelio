@@ -46,7 +46,7 @@ import { PostgresTableFindPanel, type PostgresFindRequest } from './PostgresTabl
 import type { QueryParameterNames, QueryParameter } from '../../shared/queryParameters';
 import type { SavedQueryNavigationSource } from '../../shared/savedQuerySearch';
 import type { UiCommandId } from '../../shared/uiCommands';
-import { sqlEditorZoomCommandIds, sqlLineCommandIds } from '../../shared/uiCommandIds';
+import { sqlEditorFoldCommandIds, sqlEditorZoomCommandIds, sqlLineCommandIds } from '../../shared/uiCommandIds';
 import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
 import { queryResultPresetValueSchema, type QueryResultPresetValue } from '../../shared/queryResultPresets';
 import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseIntent';
@@ -2323,7 +2323,7 @@ export function PostgresQueryTab({
   };
   for (const id of bracketCommands) commands[id] = { enabled: editable, run: () => editorAction(sqlPositionActions[id]) };
   for (const id of sqlLineCommandIds) commands[id] = { enabled: editable, run: () => editorAction(sqlTextActions[id]) };
-  for (const id of sqlEditorZoomCommandIds) commands[id] = { enabled: editable && !resultsOnly, run: () => editorAction(id) };
+  for (const id of [...sqlEditorZoomCommandIds, ...sqlEditorFoldCommandIds]) commands[id] = { enabled: editable && !resultsOnly, run: () => editorAction(id) };
   useUiCommandScope(`tab:${tab.id}`, commands, {
     active: workspace.settings.activeTabId === tab.id && !closeRequest,
     contextKey: JSON.stringify([scope.database, session.current?.id, phase.current?.taskId, state.transactionKnown, state.transactionFailed]),

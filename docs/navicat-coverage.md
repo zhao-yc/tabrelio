@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。四种关系型数据库的查询编辑器可通过原生菜单和右键按光标折叠或展开最近一层，也可折叠或展开全部块。沿用 SQL 语句范围及缩进回退。Q01 继续为部分覆盖。[Navicat 查询编辑说明](https://www.navicat.com/en/products/query-editing?product=navicat-premium)
+
 2026-11-24 源码增量。四种关系型数据库查询页可从光标位置打开单条 SQL 的带引号复制预览，支持 JavaScript／TypeScript、Python 和 Java。Q01 继续为部分覆盖。[Navicat 查询编辑说明](https://www.navicat.com/en/products/query-editing?product=navicat-premium)
 
 2026-11-24 源码增量。四种关系型数据库查询页可格式化光标所在语句，沿用原语句目录、当前排版偏好和全文词法校验，改动可一次撤销。Q01 继续为部分覆盖。

@@ -693,6 +693,54 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
   });
 }
 
+for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
+  test(`${dialect} SQL 代码折叠菜单支持光标所在块和全部块`, async () => {
+    const sql = ['SELECT 10 AS first_header', 'UNION ALL', 'SELECT 11 AS first_body;', '',
+      'SELECT 20 AS second_header', 'UNION ALL', 'SELECT 21 AS second_body;'].join('\n');
+    const other = 'SELECT 30 AS other_header\nUNION ALL\nSELECT 31 AS other_body;';
+    await seed(dialect, sql, other);
+    const lines = activeEditor().locator('.view-lines');
+    const collapsed = activeEditor().locator('.codicon-folding-collapsed');
+    const show = (marker: string) => expect(lines).toContainText(marker);
+    const hide = (marker: string) => expect(lines).not.toContainText(marker);
+    await nativeQueryCommand('editor-sql-folding', false);
+    await expect(activeEditor().locator('.codicon-folding-expanded')).toHaveCount(2);
+    const before = await activeEditor().evaluate(element => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+      const model = instance?.getModel();
+      if (!instance || !model) throw Error('缺少原 SQL 模型');
+      instance.setPosition({ lineNumber: 1, column: 4 });
+      return { text: model.getValue(), version: model.getVersionId() };
+    });
+    await nativeQueryCommand('sql-editor-fold-block', false);
+    await expect(collapsed).toHaveCount(1);
+    await show('first_header'); await hide('first_body'); await show('second_body');
+    await activeEditor().locator('.view-line').filter({ hasText: 'first_header' }).click({ button: 'right' });
+    await page.locator('.monaco-menu-container:visible').getByRole('menuitem',
+      { name: uiCommandLabels['sql-editor-unfold-block'], exact: true }).click({ delay: 120 });
+    await show('first_body'); await expect(collapsed).toHaveCount(0);
+    await nativeQueryCommand('sql-editor-fold-all', false);
+    await expect(collapsed).toHaveCount(2);
+    await show('first_header'); await show('second_header'); await hide('first_body'); await hide('second_body');
+    await nativeQueryCommand('sql-editor-unfold-all', false);
+    await show('first_body'); await show('second_body'); await expect(collapsed).toHaveCount(0);
+    expect(await activeEditor().evaluate(element => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const model = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element))?.getModel();
+      return { text: model?.getValue(), version: model?.getVersionId() };
+    })).toEqual(before);
+
+    await nativeQueryCommand('sql-editor-fold-all', false);
+    await expect(collapsed).toHaveCount(2);
+    await page.locator('.tab-strip').getByText('另一个查询', { exact: true }).click();
+    await show('other_body'); await expect(collapsed).toHaveCount(0);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+    expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+}
+
 test('SQL 编辑器缩放隔离查询标签、保留选区撤销，重启后回到全局字号', async ({}, info) => {
   const sql = "SELECT '长脚本🚢';", other = 'SELECT 42;';
   await seed('mysql', sql, other);

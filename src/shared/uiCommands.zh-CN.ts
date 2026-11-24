@@ -32,6 +32,8 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'sql-editor-zoom-in': '放大当前 SQL 编辑器',
   'sql-editor-zoom-out': '缩小当前 SQL 编辑器',
   'sql-editor-zoom-reset': '重置当前 SQL 编辑器缩放',
+  'sql-editor-fold-block': '折叠光标所在块', 'sql-editor-unfold-block': '展开光标所在块',
+  'sql-editor-fold-all': '折叠当前编辑器中的全部块', 'sql-editor-unfold-all': '展开当前编辑器中的全部块',
   'editor-word-wrap': '自动换行', 'editor-line-numbers': '显示行号', 'editor-match-brackets': '高亮匹配括号', 'editor-local-references': '高亮局部 SQL 引用', 'editor-sql-folding': '按 SQL 语句折叠', 'editor-indent': '编辑器缩进', 'favorite-toggle': '添加／取消当前对象收藏',
   'favorites-manage': '管理收藏与分组', 'object-link': '粘贴对象链接', 'execute': '执行查询',
   'execute-selection': '仅执行选区', 'execute-current': '执行当前语句', 'execute-all': '执行整个脚本', 'stop': '停止', 'format': '格式化 SQL',
@@ -66,7 +68,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
 export const uiMenuLabels = {
   file: '文件', edit: '编辑', view: '查看', favorites: '收藏夹', tools: '工具', window: '窗口', help: '帮助',
   query: '查询执行与分析', transfer: '数据导入导出', snapshots: '快照', editor: '编辑器',
-  sqlLines: '行操作', gotoPosition: '跳到行／行列',
+  sqlLines: '行操作', sqlFolding: '代码折叠', gotoPosition: '跳到行／行列',
   undo: '撤销', redo: '重做', cut: '剪切', copy: '复制', paste: '粘贴', selectAll: '全选',
   zoomIn: '放大', zoomOut: '缩小', resetZoom: '重置缩放', fullscreen: '全屏', quit: '退出',
   addFavorite: '添加当前对象收藏', removeFavorite: '取消当前对象收藏',

@@ -16,7 +16,7 @@ import { ErrorBox, Modal } from './ui';
 import { SqlSelectionFindDialog, sqlSelectionFindLimit } from './SqlSelectionFindDialog';
 import { sqlSelectionFindZh } from '../locales/sqlSelectionFind.zh-CN';
 import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
-import { sqlEditorZoomCommandIds, sqlSelectionFindCommandIds } from '../../shared/uiCommandIds';
+import { sqlEditorFoldCommandIds, sqlEditorZoomCommandIds, sqlSelectionFindCommandIds } from '../../shared/uiCommandIds';
 import { nextSqlEditorZoomOffset, sqlEditorZoomSize } from '../sqlEditorZoom';
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
@@ -72,6 +72,13 @@ import { mysqlEditorLanguage, mysqlEditorLanguages, registerMysqlEditorLanguages
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
 export type { SqlCompletionScope } from '../completionContext';
 const completionKinds:Record<SqlCompletionItem['kind'],monaco.languages.CompletionItemKind>={database:monaco.languages.CompletionItemKind.Module,table:monaco.languages.CompletionItemKind.Class,view:monaco.languages.CompletionItemKind.Interface,function:monaco.languages.CompletionItemKind.Function,procedure:monaco.languages.CompletionItemKind.Method,column:monaco.languages.CompletionItemKind.Field,alias:monaco.languages.CompletionItemKind.Variable,keyword:monaco.languages.CompletionItemKind.Keyword};
+
+const foldingActions = {
+  'sql-editor-fold-block': 'editor.fold',
+  'sql-editor-unfold-block': 'editor.unfold',
+  'sql-editor-fold-all': 'editor.foldAll',
+  'sql-editor-unfold-all': 'editor.unfoldAll',
+} satisfies Record<typeof sqlEditorFoldCommandIds[number], string>;
 
 /** Monaco 使用随安装包发布的编辑器和 worker，离线环境也可直接编辑 SQL。 */
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
@@ -694,6 +701,26 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
               props.clipboardDisabled || document.querySelector(appModalSelector)) return;
           const base = readEditorFontSize(current.settings.editorFontSize);
           setZoomOffset(offset => nextSqlEditorZoomOffset(base, offset, id));
+        },
+      }));
+      // 使用原编辑器的折叠模型，原生菜单和右键共享语句范围及缩进回退。
+      sqlEditorFoldCommandIds.forEach((id, index) => editor.addAction({
+        id, label: uiCommandLabels[id], precondition: 'foldingEnabled && !editorReadonly',
+        contextMenuGroupId: '11_sql_fold', contextMenuOrder: index,
+        run: () => {
+          const props = propsRef.current, current = useWorkspace.getState();
+          if (!aliveRef.current || widgetRef.current !== widget || !widget.alive || editorRef.current !== editor ||
+              !contentRef.current?.ready || !props.queryTabId || current.settings.activeTabId !== props.queryTabId ||
+              props.clipboardDisabled || current.activeJobs[props.queryTabId] || document.querySelector(appModalSelector)) return;
+          const action = editor.getAction(foldingActions[id]);
+          if (!action?.isSupported()) return;
+          // 反向选区以实际光标为准。限定最近一层，重复折叠时不会转向外层块。
+          const selections = editor.getSelections();
+          const block = id === 'sql-editor-fold-block' || id === 'sql-editor-unfold-block';
+          if (block && selections?.length) return action.run({
+            direction: 'up', levels: 1, selectionLines: selections.map(selection => selection.positionLineNumber - 1),
+          });
+          if (!block) return action.run();
         },
       }));
     }

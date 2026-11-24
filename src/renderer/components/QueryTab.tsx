@@ -69,7 +69,7 @@ import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN'
 import '../queryResultSort.css';
 import { zh, formatText } from '../locales/zh-CN';
 import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
-import { sqlEditorZoomCommandIds, sqlLineCommandIds } from '../../shared/uiCommandIds';
+import { sqlEditorFoldCommandIds, sqlEditorZoomCommandIds, sqlLineCommandIds } from '../../shared/uiCommandIds';
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
 import { sqlLineCommentAction } from '../sqlLineComment';
 import { editSqlBlockComment } from '../sqlBlockComment';
@@ -2926,7 +2926,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     }])),
     'sql-uppercase': { enabled: hasCaseSelection && !busy && !closeRequest && !fileSource.busy, run: () => editSqlText('sql-uppercase') },
     'sql-lowercase': { enabled: hasCaseSelection && !busy && !closeRequest && !fileSource.busy, run: () => editSqlText('sql-lowercase') },
-    ...Object.fromEntries(sqlEditorZoomCommandIds.map(id => [id, {
+    ...Object.fromEntries([...sqlEditorZoomCommandIds, ...sqlEditorFoldCommandIds].map(id => [id, {
       enabled: !!searchEditor && !resultsOnly && !busy && !closeRequest && !fileSource.busy,
       run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction(id)?.run(); },
     }])),
