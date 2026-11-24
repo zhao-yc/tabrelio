@@ -12,6 +12,8 @@ export interface HistoryInsertionTarget {
   readonly title: string;
   readonly connectionId: string;
   current(): boolean;
+  readDraft?(): string | undefined;
+  replaceDraft?(sql: string): void;
   insert(sql: string, drop?: SqlEditorDrop, applyBuiltin?: () => void): void;
   insertSnippet?(snippet: SqlSnippet, drop?: SqlEditorDrop): void;
   dispose(): void;
@@ -23,6 +25,8 @@ interface Model {
   getVersionId(): number;
   getValueLength(): number;
   getValueLengthInRange(range: monaco.IRange): number;
+  getValue?(): string;
+  getFullModelRange?(): monaco.IRange;
   onDidChangeContent(listener: () => void): monaco.IDisposable;
 }
 export interface HistoryInsertionEditor {
@@ -84,6 +88,18 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
   }
   /** 消费前解除监听，随后的一次真实编辑不能被自己的store通知误当作外部变化。 */
   const dispose = () => { if (disposed) return; disposed = true; invalidate(); for (const release of cleanup.splice(0)) release(); listeners.clear(); };
+  function applySql(destination: monaco.IRange, sql: string, source: string, failure: string, insertionCursor?: monaco.Selection) {
+    editor.pushUndoStop();
+    const edit = snippetEdit(destination, sql);
+    const accepted = insertionCursor
+      ? editor.executeEdits(source, [edit], changes => changes.map(({ range: inserted }) =>
+        insertionCursor.setEndPosition(inserted.endLineNumber, inserted.endColumn).setStartPosition(inserted.endLineNumber, inserted.endColumn)
+          .setEndPosition(inserted.endLineNumber, inserted.endColumn)))
+      : editor.executeEdits(source, [edit]);
+    editor.pushUndoStop();
+    if (!accepted) throw Error(failure);
+    if (insertionCursor) editor.focus?.();
+  }
   const target: HistoryInsertionTarget = {
     title: initial.tab.title,
     connectionId: initial.tab.connectionId,
@@ -106,19 +122,22 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
         applyBuiltin();
         return;
       }
-      editor.pushUndoStop();
-      const edit = snippetEdit(destination, sql);
       const insertionCursor = mode === 'object-identifier' || drop ? cursor : undefined;
-      const accepted = insertionCursor
-        ? editor.executeEdits('dbark-object-identifier-insertion', [edit], changes => changes.map(({ range: inserted }) =>
-          insertionCursor.setEndPosition(inserted.endLineNumber, inserted.endColumn).setStartPosition(inserted.endLineNumber, inserted.endColumn)
-            .setEndPosition(inserted.endLineNumber, inserted.endColumn)))
-        : editor.executeEdits('dbark-history-insertion', [edit]);
-      editor.pushUndoStop();
-      if (!accepted) throw Error(text.failed);
-      if (insertionCursor) editor.focus?.();
+      applySql(destination, sql, insertionCursor ? 'dbark-object-identifier-insertion' : 'dbark-history-insertion', text.failed, insertionCursor);
     },
   };
+  // 历史模态可读整份原草稿。替换仍使用同一租约，并通过普通编辑保留 Monaco 撤销栈。
+  if (!mode && model.getValue && model.getFullModelRange && !editor.getRawOptions?.().readOnly) {
+    const writable = () => current() && !editor.getRawOptions?.().readOnly;
+    target.readDraft = () => writable() ? model.getValue!() : undefined;
+    target.replaceDraft = sql => {
+      if (!writable()) throw Error(text.restoreChanged);
+      if (typeof sql !== 'string' || sql.length > 20_000_000) throw Error(text.restoreTooLarge);
+      const destination = model.getFullModelRange!();
+      dispose();
+      applySql(destination, sql, 'dbark-history-restore', text.restoreFailed);
+    };
+  }
   if (mode === 'snippet') target.insertSnippet = (snippet, drop) => {
     const builtin = prepareBuiltinSnippetInsert(editor, snippet);
     target.insert(snippet.sql, drop, builtin);

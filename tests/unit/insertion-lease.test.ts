@@ -14,6 +14,22 @@ function fixture() {
 }
 
 describe('历史和查询库子面板共用原编辑权限', () => {
+  it('整份恢复只通过当前子租约提交，已关闭子页不能再读取或替换', () => {
+    const f = fixture(), restore = vi.fn(() => f.invalidate());
+    f.source.readDraft = () => 'SELECT 1;';
+    f.source.replaceDraft = restore;
+    const old = borrowInsertion(f.source)!;
+    expect(old.readDraft?.()).toBe('SELECT 1;');
+    old.dispose();
+    expect(old.readDraft?.()).toBeUndefined();
+    expect(() => old.replaceDraft?.('SELECT 2;')).toThrow();
+    expect(restore).not.toHaveBeenCalled();
+    const current = borrowInsertion(f.source)!;
+    expect(current.readDraft?.()).toBe('SELECT 1;');
+    current.replaceDraft?.('SELECT 3;');
+    expect(restore).toHaveBeenCalledExactlyOnceWith('SELECT 3;');
+    expect(current.current()).toBe(false);
+  });
   it('切页只销旧子租约，仍能插入原目标，旧 finally 不会销新子页', () => {
     const f = fixture(), old = borrowInsertion(f.source)!;
     const notify = vi.fn(); old.subscribe(notify); expect(f.listeners.size).toBe(1);

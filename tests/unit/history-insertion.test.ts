@@ -27,6 +27,19 @@ function fixture() {
 }
 
 describe('历史正文插入原查询的单次编辑权限', () => {
+  it('读取完整草稿不消费原权限，替换沿同一模型的整份范围并仅允许一次', () => {
+    const f = fixture(), full = {startLineNumber: 1, startColumn: 1, endLineNumber: 2, endColumn: 10};
+    Object.assign(f.model, {getValue: () => 'SELECT 1;\nSELECT 2;', getFullModelRange: () => full});
+    const target = f.capture()!;
+    expect(target.readDraft?.()).toBe('SELECT 1;\nSELECT 2;');
+    expect(f.calls).toEqual([]);
+    target.replaceDraft?.('SELECT 3;');
+    expect(f.calls).toEqual(['undo-stop', 'edit', 'undo-stop']);
+    expect(f.edit).toHaveBeenCalledExactlyOnceWith('dbark-history-restore', [{range: full, text: 'SELECT 3;', forceMoveMarkers: true}]);
+    expect(target.readDraft?.()).toBeUndefined();
+    expect(() => target.replaceDraft?.('SELECT 4;')).toThrow(text.restoreChanged);
+    expect(f.listeners()).toBe(0);
+  });
   it('完整正文作为一次普通文本编辑，前后各undo stop，原上下文不变且只消费一次', () => {
     const f = fixture(), target = f.capture()!;
     const sql = 'SELECT "$0", \'引号\', {"n":9007199254740993};\r\n-- 原注释';

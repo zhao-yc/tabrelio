@@ -6,4 +6,12 @@ export const historyInsertionZh = {
   changed: '原查询、选区或编辑器已变化，本次插入已失效；请关闭历史面板后重新打开。',
   tooLarge: '插入后查询正文超过 20000000 个 UTF16 单元，未修改原查询。',
   failed: '编辑器未接受本次插入，请核对原查询；不会自动重试。',
+  compareDraft: '与当前草稿对比',
+  draftLabel: (title: string) => `当前草稿 · ${title}`,
+  restoreConfirm: '我确认用这条历史 SQL 替换当前草稿正文',
+  restoreDraft: '恢复这条历史 SQL',
+  restoreHint: '替换整份草稿正文，沿用当前编辑器的换行。恢复后可撤销一次。',
+  restoreChanged: '原草稿、选区或编辑器已变化，请重新打开历史后核对。',
+  restoreTooLarge: 'SQL 正文超过 20000000 个 UTF-16 单元。',
+  restoreFailed: '编辑器未接受恢复，请核对原草稿。',
 } as const;

@@ -25,6 +25,8 @@ export const historyPagesZh={
  compareSelected:'对比所选历史 SQL', compareHint:'勾选两条执行历史后对比，支持跨批次。',
  compareTitle:'历史 SQL 对比', compareLeft:'左侧历史', compareRight:'右侧历史',
  compareLeftFull:'左侧完整历史 SQL', compareRightFull:'右侧完整历史 SQL',
+ compareLeftDraft:'左侧当前草稿', compareRightDraft:'右侧当前草稿',
+ compareLeftDraftFull:'左侧完整草稿 SQL', compareRightDraftFull:'右侧完整草稿 SQL',
  compareSwap:'交换左右', compareClose:'关闭历史对比', compareShowFull:'查看两侧完整 SQL', compareHideFull:'收起两侧完整 SQL',
  compareSame:'两条 SQL 正文完全相同。', compareEmpty:'此侧差异区间为空',
  compareCounts:(prefix:number,suffix:number,left:number,right:number)=>`相同前缀 ${prefix}、相同后缀 ${suffix}。左侧差异区间 ${left}，右侧差异区间 ${right}。长度以 UTF-16 单元计。`,

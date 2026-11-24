@@ -1287,6 +1287,89 @@ test('历史真实IPC取消、切换、关闭和重启释放资源且筛选条�
 });
 
 test.describe('合成本地历史插入真实Monaco', () => {
+  test('历史草稿对比后确认恢复整份正文，撤销一次并拒绝失效历史', async () => {
+    const original = "SELECT '当前草稿🧭';\nSELECT 2;";
+    const restored = "SELECT '历史正文🚢';\r\nSELECT 9007199254740993;";
+    await seed(store => {
+      source(store);
+      store.saveSettings({ ...store.settings(), activeTabId: 'restore-query', tabs: [
+        {id: 'restore-query', kind: 'query', title: '原活动草稿', connectionId: 'source', databaseContext: {state: 'known', database: '原库'}, sql: original},
+      ] });
+      store.addHistory(entry({id: 'restore-history', connectionId: 'removed', sql: restored}));
+    });
+    await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
+    await page.reload();
+    const box = page.locator('.query-tab:visible .monaco-editor').getByRole('textbox');
+    await expect(box).toBeVisible();
+    const inspect = () => page.locator('.query-tab:visible .monaco-editor').evaluate(element => {
+      const editors = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco?.editor.getEditors();
+      const model = editors?.find(editor => editor.getContainerDomNode().contains(element))?.getModel();
+      if (!model) throw Error('缺少活动草稿模型');
+      return {sql: model.getValue(), eol: model.getEOL(), version: model.getVersionId(), uri: model.uri.toString()};
+    });
+    await desktop.evaluate(({ipcMain}) => {
+      const handlers = (ipcMain as unknown as {_invokeHandlers: Map<string, (...args: any[]) => unknown>})._invokeHandlers;
+      const original = handlers.get('dbark:request');
+      if (!original) throw Error('缺少历史读取 IPC');
+      const audit = {reads: [] as {id: string; digest: string}[], denied: 0};
+      Object.assign(globalThis, {__historyRestoreAudit: audit});
+      handlers.set('dbark:request', (event, payload) => {
+        const command = String(payload.command);
+        if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command)) {
+          audit.denied++;
+          throw Error('离线恢复禁止打开连接或执行 SQL');
+        }
+        if (command === 'history.readSql') audit.reads.push(payload.input);
+        return original(event, payload);
+      });
+    });
+    const audit = () => desktop.evaluate(() => (globalThis as typeof globalThis & {
+      __historyRestoreAudit: {reads: {id: string; digest: string}[]; denied: number};
+    }).__historyRestoreAudit);
+    const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+    const beforeSettings = await settings();
+    await box.focus(); await page.keyboard.press('Shift+ArrowRight');
+    const initial = await inspect();
+    const compare = dialog().getByRole('region', {name: text.compareTitle, exact: true});
+    const restore = compare.getByRole('button', {name: historyInsertionZh.restoreDraft, exact: true});
+    const confirm = compare.getByRole('checkbox', {name: historyInsertionZh.restoreConfirm, exact: true});
+    const preview = async () => {
+      await open();
+      const card = dialog().locator('[data-history-id="restore-history"]');
+      const compareButton = await (await import('./navigation-menu')).navigationMenuItem(card, {name: historyInsertionZh.compareDraft, exact: true});
+      await expect(compareButton).toBeEnabled(); await compareButton.click();
+      await expect(restore).toBeDisabled();
+    };
+    await preview();
+    await expect(compare.getByRole('region', {name: text.compareLeftDraft, exact: true}).locator('pre')).toContainText('当前草稿');
+    await compare.getByRole('button', {name: text.compareSwap, exact: true}).click();
+    await expect(compare.getByRole('region', {name: text.compareLeft, exact: true}).locator('pre')).toContainText('历史正文');
+    expect(await inspect()).toEqual(initial);
+    await confirm.check(); await restore.click();
+    await expect(dialog()).toHaveCount(0);
+    const normalized = restored.replaceAll('\r\n', initial.eol);
+    await expect.poll(inspect).toMatchObject({sql: normalized, uri: initial.uri, eol: initial.eol});
+    await expect.poll(async () => (await settings()).tabs).toEqual([{...beforeSettings.tabs[0], sql: normalized}]);
+    await box.focus(); await page.keyboard.press('ControlOrMeta+Z');
+    await expect.poll(inspect).toMatchObject({sql: initial.sql, uri: initial.uri});
+    await expect.poll(settings).toEqual(beforeSettings);
+
+    await preview();
+    const {reads} = await audit();
+    expect(reads).toEqual(Array.from({length: 3}, () => ({id: 'restore-history', digest: expect.stringMatching(/^[0-9a-f]{64}$/)})));
+    await page.evaluate(async ref => {
+      const {previewToken} = await window.dbark.invoke('history.deletePreview', {taskId: crypto.randomUUID(), scope: {kind: 'selected', records: [ref]}});
+      return window.dbark.invoke('history.deleteApply', {previewToken});
+    }, reads[2]);
+    await confirm.check(); await restore.click();
+    await expect(dialog().getByRole('alert')).toContainText('执行历史已移除');
+    await expect(compare).toBeVisible();
+    expect(await inspect()).toMatchObject({sql: initial.sql, uri: initial.uri});
+    expect(await audit()).toEqual({denied: 0, reads: [...reads, reads[2]]});
+    expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+
   test('完整历史只替换原选区且单次撤销，关闭后的真实迟到读取不编辑原查询', async () => {
     test.setTimeout(120000);
     const prefix = "-- 外部前缀🚢\n", selected = 'REPLACE_ME', suffix = "\nSELECT '外部后缀' AS 尾;";

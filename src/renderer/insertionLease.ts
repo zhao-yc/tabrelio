@@ -16,7 +16,7 @@ export function borrowInsertion(source: HistoryInsertionTarget | null | undefine
     listeners.clear();
   };
   const current = () => !disposed && source.current();
-  return {
+  const lease: HistoryInsertionTarget = {
     title: source.title,
     connectionId: source.connectionId,
     current,
@@ -35,4 +35,14 @@ export function borrowInsertion(source: HistoryInsertionTarget | null | undefine
       dispose();
     },
   };
+  // 读取不消费借用权限。整份替换与插入一样，只能由当前资料页消费一次。
+  if (source.readDraft && source.replaceDraft) {
+    lease.readDraft = () => current() ? source.readDraft?.() : undefined;
+    lease.replaceDraft = sql => {
+      if (!current() || !source.replaceDraft) throw Error(text.restoreChanged);
+      source.replaceDraft(sql);
+      dispose();
+    };
+  }
+  return lease;
 }
