@@ -30,13 +30,19 @@ export function useQueryResultKeyword(source: QueryResult | undefined, columns: 
   const current = scope.source === source && scope.columns === columns &&
     scope.connectionScope === connectionScope && scope.execution === execution &&
     scope.context.length === context.length && scope.context.every((value, index) => Object.is(value, context[index]));
+  /** 读取当前执行中对应列布局的关键字，也可用于其它已返回结果的导出。 */
+  function readKeyword(result: QueryResult, visible: readonly ResultColumn[]): string | undefined {
+    const saved = savedKeywords.get(result);
+    if (saved?.connectionScope === connectionScope && saved.execution === execution &&
+        saved.columns.length === visible.length && saved.columns.every((column, index) => column === visible[index]))
+      return saved.keyword;
+  }
   if (!current) {
     const next: Scope = { source, columns, context, connectionScope, execution, generation: scope.generation + 1 };
-    const saved = source && scope.source !== source ? savedKeywords.get(source) : undefined;
-    if (source && columns && saved?.connectionScope === connectionScope && saved.execution === execution &&
-        saved.columns.length === columns.length && saved.columns.every((column, index) => column === columns[index])) {
+    if (source && columns && scope.source !== source) {
+      const keyword = readKeyword(source, columns);
       try {
-        next.filter = { keyword: saved.keyword, matches: matchQueryResultKeyword(source, columns, saved.keyword) };
+        if (keyword) next.filter = { keyword, matches: matchQueryResultKeyword(source, columns, keyword) };
       } catch {
         // 原数据发生变化或超出预算时保留当前结果的原视图。
       }
@@ -60,7 +66,7 @@ export function useQueryResultKeyword(source: QueryResult | undefined, columns: 
     setScope({ ...scope, filter: next });
     return true;
   }
-  return { result, apply, generation: scope.generation, keyword: filter?.keyword ?? '' };
+  return { result, apply, readKeyword, generation: scope.generation, keyword: filter?.keyword ?? '' };
 }
 
 export function QueryResultKeyword({ keyword, total, matched, disabled, onApply }: {

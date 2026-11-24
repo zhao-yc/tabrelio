@@ -31,6 +31,7 @@ import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import type { DataRow, PostgresResultSource, QueryOutcome, QueryResult, ResultColumn, ResultExportData, SqlSnippet } from '../../shared/contracts';
 import { queryResultTitle } from '../../shared/queryResultTitle';
 import { ResultArchiveDialog } from './ResultArchiveDialog';
+import { prepareQueryResultArchiveView } from '../queryResultArchiveView';
 import { resultArchiveZh as archiveText } from '../locales/resultArchive.zh-CN';
 import { postgresTableLimits } from '../../shared/postgresTable';
 import { postgresClipboardInput, postgresGridPasteMatrix } from '../postgresGridPaste';
@@ -1146,7 +1147,7 @@ export function PostgresQueryTab({
   const resultContext = [pin?.result ?? outcome, pin ? undefined : selected, profile, version, scope.database];
   const snapshotIdentity = [tab, pinState, ...resultContext, resultSource];
   useLayoutEffect(() => { snapshotOperation.current?.observe(snapshotIdentity); });
-  const [currentLayout, setColumnLayout] = useQueryResultColumnLayout<ResultLayout>(resultSource, tab.connectionId, version);
+  const [currentLayout, setColumnLayout, readColumnLayout] = useQueryResultColumnLayout<ResultLayout>(resultSource, tab.connectionId, version);
   const layout = currentLayout?.layout;
   const visibleColumns = currentLayout?.columns ?? resultSource?.columns;
   const frozenKeys = useMemo(() => resultSource && layout ? frozenQueryResultKeys(resultSource.columns, layout) : undefined,
@@ -1174,6 +1175,8 @@ export function PostgresQueryTab({
   const organizedResult = sortView?.result ?? filterView?.result ?? result;
   const keywordFilter = useQueryResultKeyword(filterBinding?.source, visibleColumns, resultContext,
     organizedResult, organizationScope, organizationExecution);
+  const archiveView = (source: QueryResult) => prepareQueryResultArchiveView(source, readColumnLayout(source)?.layout,
+    resultOrganizationCache.readConfiguration(source, organizationScope, organizationExecution), keywordFilter.readKeyword, 'postgresql');
   const matchView = useQueryResultMatchView(keywordFilter.result, visibleColumns, resultContext);
   const displayResult = matchView.result;
   const dataResult = !busy && resultSource ? displayResult : undefined;
@@ -2699,6 +2702,7 @@ export function PostgresQueryTab({
             title: origin.table, table: postgresIdentifier(origin.schema) + '.' + postgresIdentifier(origin.table) });
         }}/>}
       {archiveOutcome && <ResultArchiveDialog outcome={archiveOutcome} tabId={tab.id} dialect="postgresql"
+        identity={JSON.stringify([organizationScope, organizationExecution])} organizedView={archiveView}
         isCurrent={() => archiveAvailable && archiveOutcome === outcome && !closeRef.current && same(scope)}
         onClose={() => setArchiveOutcome(undefined)} />}
       {exportView && <ResultExportDialog result={exportView.result} tabId={tab.id} selected={exportView.selected} scope={exportView.scope}

@@ -46,6 +46,12 @@ export class QueryResultOrganizationCache {
     else this.configurations.delete(source);
   }
 
+  /** 批量导出只读同一执行已经提交的规则，不必把后台结果切成当前组。 */
+  readConfiguration(source: QueryResult, scope: string, execution: string | undefined): QueryResultOrganization | undefined {
+    const saved = this.configurations.get(source);
+    if (this.scope === scope && saved && saved.execution === execution) return saved.configuration;
+  }
+
   /** 只保存查找条件，不持有查找任务、命中或勾选坐标。 */
   findMemory(source: QueryResult | undefined, scope: string, execution: string | undefined): QueryResultFindMemory | undefined {
     if (!source) return;

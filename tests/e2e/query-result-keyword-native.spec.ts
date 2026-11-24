@@ -6,10 +6,14 @@ import { navigationMenuItem } from './navigation-menu';
 import { queryResultKeywordZh as text } from '../../src/renderer/locales/queryResultKeyword.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { postgresTableFindZh as checkedText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
+import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
+import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { resultArchiveZh as archiveText } from '../../src/renderer/locales/resultArchive.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import type { NetworkConnectionProfile } from '../../src/shared/contracts';
+import { decodeQueryCsvZip } from '../helpers/queryCsvZip';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
@@ -34,7 +38,7 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
   };
   const sql = [
     "SELECT 1 AS id, 'target A' AS label UNION ALL SELECT 2, 'other' UNION ALL SELECT 3, 'Target C' ORDER BY id;",
-    "SELECT 4 AS id, 'archive A' AS label UNION ALL SELECT 5, 'active B' ORDER BY id;",
+    "SELECT 4 AS id, 'archive A' AS label, 'hide me' AS omitted UNION ALL SELECT 5, 'active B', 'hide me' ORDER BY id;",
   ].join('\n');
   try {
     // 只接管本例隔离文件选择，SQL 执行、文件授权及导出仍经过真实客户端。
@@ -163,6 +167,65 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     const exported = JSON.parse(await readFile(output, 'utf8')) as { label: string }[];
     expect(exported.map(row => row.label)).toEqual(['Target C', 'target A']);
     await dialog.getByRole('button', { name: zh.common.done, exact: true }).click();
+
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(cells).toHaveText(['archive A', 'active B']);
+    await (await navigationMenuItem(query, { name: columnsText.open, exact: true })).click();
+    const columns = page.getByRole('dialog', { name: columnsText.title, exact: true });
+    await columns.getByLabel(columnsText.visible(3), { exact: true }).uncheck();
+    await columns.getByRole('button', { name: columnsText.apply, exact: true }).click();
+    await (await navigationMenuItem(query, { name: filterText.open, exact: true })).click();
+    const filter = dialect === 'postgresql' ? page.getByRole('dialog', { name: filterText.title, exact: true })
+      : query.getByRole('region', { name: filterText.title, exact: true });
+    await filter.getByRole('button', { name: filterText.add, exact: true }).click();
+    if (local) await filter.getByLabel(filterText.sqliteType(1), { exact: true }).selectOption('integer');
+    await filter.getByLabel(`${filterText.operator} 1`, { exact: true }).selectOption('gt');
+    await filter.getByLabel(`${filterText.input} 1`, { exact: true }).fill('4');
+    await filter.getByRole('button', { name: filterText.apply, exact: true }).click();
+    await expect(cells).toHaveText(['active B']);
+    await page.keyboard.press('ControlOrMeta+Shift+PageUp');
+    await expect(cells).toHaveText(['Target C', 'target A']);
+
+    await (await navigationMenuItem(query, { name: archiveText.open, exact: true })).click();
+    const archive = page.getByRole('dialog', { name: archiveText.title, exact: true });
+    const scope = archive.getByLabel(archiveText.dataScope, { exact: true });
+    await expect(scope).toHaveValue('original');
+    await scope.selectOption('organized');
+    async function writeArchive(format: 'zip' | 'xlsx') {
+      const path = join(directory, `organized.${format}`);
+      await desktop.evaluate(({ dialog, BrowserWindow }, target) => {
+        const original = dialog.showSaveDialog;
+        dialog.showSaveDialog = (async (...args: unknown[]) => {
+          dialog.showSaveDialog = original;
+          if (args[0] !== BrowserWindow.getAllWindows()[0] || !(args.at(-1) as Electron.SaveDialogOptions).filters?.[0]?.extensions.includes(target.format))
+            throw Error('越过本例批量导出范围');
+          return { canceled: false, filePath: target.path };
+        }) as typeof original;
+      }, { path, format });
+      await archive.getByLabel(archiveText.format, { exact: true }).selectOption(format);
+      await archive.getByRole('button', { name: format === 'zip' ? archiveText.start : archiveText.startExcel, exact: true }).click();
+      await expect(archive.getByRole('status')).toHaveText(archiveText.done(2, 3));
+      return path;
+    }
+    const zip = decodeQueryCsvZip(await readFile(await writeArchive('zip')));
+    expect(zip.get('results/rows-001.csv')?.toString()).toBe('id,label\r\n3,Target C\r\n1,target A\r\n');
+    expect(zip.get('results/rows-002.csv')?.toString()).toBe('id,label\r\n5,active B\r\n');
+    expect(JSON.parse(zip.get('manifest.json')!.toString()).results).toMatchObject([
+      { sourceOrdinal: 1, rowsWritten: 2 }, { sourceOrdinal: 2, rowsWritten: 1 },
+    ]);
+    const ExcelJS = (await import('exceljs')).default;
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(await writeArchive('xlsx'));
+    expect(workbook.worksheets.slice(1).map(sheet => {
+      expect(sheet.columnCount).toBe(2);
+      const rows: string[][] = [];
+      sheet.eachRow(row => rows.push([row.getCell(1).text, row.getCell(2).text]));
+      return rows;
+    })).toEqual([
+      [['id', 'label'], ['3', 'Target C'], ['1', 'target A']],
+      [['id', 'label'], ['5', 'active B']],
+    ]);
+    await archive.getByRole('button', { name: zh.common.close, exact: true }).click();
 
     await input.fill('absent');
     await search.getByRole('button', { name: text.apply, exact: true }).click();

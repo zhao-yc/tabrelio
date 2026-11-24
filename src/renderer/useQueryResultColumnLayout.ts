@@ -3,7 +3,7 @@ import type { QueryResult } from '../shared/contracts';
 
 /** 布局绑定本标签的原结果和连接修订。结果释放后，布局缓存不会延长行数据的寿命。 */
 export function useQueryResultColumnLayout<Layout>(result: QueryResult | undefined, connectionId: string, version: number):
-  [Layout | undefined, (layout: Layout) => void] {
+  [Layout | undefined, (layout: Layout) => void, (source: QueryResult) => Layout | undefined] {
   const [layouts] = useState(() => new WeakMap<QueryResult, {
     connectionId: string;
     version: number;
@@ -11,9 +11,11 @@ export function useQueryResultColumnLayout<Layout>(result: QueryResult | undefin
     layout: Layout;
   }>());
   const [, refresh] = useState(0);
-  const saved = result && layouts.get(result);
-  const layout = saved && saved.columns === result?.columns && saved.connectionId === connectionId && saved.version === version
-    ? saved.layout : undefined;
+  function read(source: QueryResult): Layout | undefined {
+    const saved = layouts.get(source);
+    return saved && saved.columns === source.columns && saved.connectionId === connectionId && saved.version === version
+      ? saved.layout : undefined;
+  }
 
   function store(next: Layout): void {
     if (!result) return;
@@ -21,5 +23,5 @@ export function useQueryResultColumnLayout<Layout>(result: QueryResult | undefin
     refresh(value => value + 1);
   }
 
-  return [layout, store];
+  return [result && read(result), store, read];
 }

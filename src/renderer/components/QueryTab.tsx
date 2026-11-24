@@ -130,6 +130,7 @@ import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import { pinLimits, pinnedResultSnapshotName, pinnedResultTooltip, renamePinnedResult, snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
 import { queryResultTitle } from '../../shared/queryResultTitle';
 import { ResultArchiveDialog } from './ResultArchiveDialog';
+import { prepareQueryResultArchiveView } from '../queryResultArchiveView';
 import { sqliteQueryEditMaxRows, type SqliteQueryRecordInput, type SqliteTablePageInput } from '../../shared/sqliteTableBrowse';
 import { sqliteTableEditLimits } from '../../shared/sqliteTableEdit';
 import type { GridRangeTarget } from '../useGridCellRange';
@@ -1489,7 +1490,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   // 结果快照的寿命独立于模态/保存锁；只有新查询才撤销数据来源，操作权限仍走原忙态守卫。
   const viewSource = !pin && outcome?.sqliteExplain ? undefined : exportableQueryResult(queryRunning, outcome, resultIndex, pin?.result);
   const resultContext=[outcome,resultIndex,selectedPin,task.current,connectionVersion,tab.connectionId];
-  const [columnLayout, setColumnLayout] = useQueryResultColumnLayout<{layout: QueryResultColumnLayout}>(sourceResult, tab.connectionId, connectionVersion);
+  const [columnLayout, setColumnLayout, readColumnLayout] = useQueryResultColumnLayout<{layout: QueryResultColumnLayout}>(sourceResult, tab.connectionId, connectionVersion);
   const layoutMatches = !!columnLayout;
   const shownColumns=useRef<ResultColumn[]>([]);
   const visibleColumns=useMemo(()=>{
@@ -1528,6 +1529,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const organizedResult = displayedView?.result ?? sourceResult;
   const keywordFilter = useQueryResultKeyword(filterBinding?.source, visibleColumns, resultContext,
     organizedResult, organizationScope, organizationExecution);
+  const archiveView = (source: QueryResult) => prepareQueryResultArchiveView(source, readColumnLayout(source)?.layout,
+    resultOrganizationCache.readConfiguration(source, organizationScope, organizationExecution), keywordFilter.readKeyword);
   const matchView = useQueryResultMatchView(keywordFilter.result, visibleColumns, resultContext);
   const result = matchView.result;
   const exportable = sourceExportable ? result : undefined;
@@ -3163,5 +3166,5 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           if (!queryOwnerCurrent() || busyRef.current || origin?.database !== 'main') return;
           setOriginDialog(undefined);
           useWorkspace.getState().openTab({ kind: 'table', title: origin.table, connectionId: tab.connectionId, database: 'main', table: origin.table });
-        }}/>}{archiveOutcome && <ResultArchiveDialog outcome={archiveOutcome} tabId={tab.id} dialect={sqlite ? 'sqlite' : 'mysql'} isCurrent={() => archiveAvailable && archiveOutcome === outcome && queryOwnerCurrent()} onClose={() => setArchiveOutcome(undefined)}/>}{exportResult && <ResultExportDialog result={exportResult} tabId={tab.id} scope={exportResult.rectangle ? 'rectangle' : undefined} allowSql={!sqlite || !!exportResult.sqliteStorage} sqlDialect={sqlite ? 'sqlite' : undefined} selected={exportSelected} onClose={() => {invalidateResultSelection();setExportResult(null);}}/>}</div>;
+        }}/>}{archiveOutcome && <ResultArchiveDialog outcome={archiveOutcome} tabId={tab.id} dialect={sqlite ? 'sqlite' : 'mysql'} identity={JSON.stringify([organizationScope, organizationExecution])} organizedView={archiveView} isCurrent={() => archiveAvailable && archiveOutcome === outcome && queryOwnerCurrent()} onClose={() => setArchiveOutcome(undefined)}/>}{exportResult && <ResultExportDialog result={exportResult} tabId={tab.id} scope={exportResult.rectangle ? 'rectangle' : undefined} allowSql={!sqlite || !!exportResult.sqliteStorage} sqlDialect={sqlite ? 'sqlite' : undefined} selected={exportSelected} onClose={() => {invalidateResultSelection();setExportResult(null);}}/>}</div>;
 }

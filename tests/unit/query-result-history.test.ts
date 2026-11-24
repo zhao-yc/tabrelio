@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { QueryResultHistory, prepareQueryResultOrganization, queryResultHistoryLimits, type QueryResultOrganization } from '../../src/renderer/queryResultHistory';
 import { QueryResultOrganizationCache } from '../../src/renderer/queryResultOrganizationCache';
+import { prepareQueryResultArchiveView } from '../../src/renderer/queryResultArchiveView';
+import { projectQueryResultRows } from '../../src/renderer/queryResultColumns';
 import type { QueryResultFindSettings } from '../../src/renderer/queryResultFind';
 import type { QueryResult } from '../../src/shared/contracts';
 
@@ -70,6 +72,28 @@ describe('当前结果排序筛选的有界撤销历史', () => {
 });
 
 describe('每组查询结果的已应用整理配置', () => {
+  it('批量导出读取其它结果的已应用规则，保留零行标题、列顺序、原行及截断标记', () => {
+    const cache = new QueryResultOrganizationCache();
+    const { source } = fixture(), { source: current } = fixture();
+    const scope = 'connection:1', execution = 'run:1';
+    const layout = { order: ['value', 'id'], visible: ['value', 'id'] };
+    cache.restore(source, scope, execution, [], source.columns);
+    cache.remember(source, scope, execution, sorted('ASC'));
+    cache.restore(current, scope, execution, [], current.columns);
+    const rules = cache.readConfiguration(source, scope, execution);
+    const view = prepareQueryResultArchiveView(source, layout, rules, () => '9007199254740993');
+    expect(view.result.rows).toEqual([source.rows[0]]);
+    expect(view.result.rows[0]).toBe(source.rows[0]);
+    expect(view.columns.map(column => column.key)).toEqual(['value', 'id']);
+    expect(cache.readConfiguration(source, scope, 'run:2')).toBeUndefined();
+    const none = prepareQueryResultArchiveView(source, layout, rules, () => '找不到的行');
+    expect(projectQueryResultRows(none.result, none.columns)).toEqual({
+      columns: [{ key: 'value', name: '金额' }, { key: 'id', name: '编号' }], rows: [], truncated: true,
+    });
+    expect(source.columns.map(column => column.key)).toEqual(['id', 'value']);
+    expect(source.rows).toHaveLength(2);
+  });
+
   it('查找条件属于原结果和执行，本次固定快照的查找可单独清除', () => {
     const cache = new QueryResultOrganizationCache();
     const { source } = fixture(), { source: pin } = fixture();
