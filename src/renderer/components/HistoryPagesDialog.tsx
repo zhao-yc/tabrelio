@@ -24,6 +24,7 @@ import { historyDeleteZh as deletion } from '../locales/historyDelete.zh-CN';
 import type { HistoryInsertionTarget } from '../historyInsertion';
 import { historyInsertionZh as insertionText } from '../locales/historyInsertion.zh-CN';
 import { SqlTextPreview } from './SqlTextPreview';
+import { HistorySqlComparison, type HistorySqlComparisonSource } from './HistorySqlComparison';
 import { QueryBatchOpenPreview } from './QueryBatchOpenPreview';
 import { matchingPageLimit } from '../localMatchingPages';
 
@@ -31,6 +32,7 @@ type Filters=Omit<HistoryPageInput,'taskId'|'timeRange'|'durationRange'>;
 type BatchSaveDraft = { items: HistoryDeleteReference[]; revision: number; prefix: string; keepSource: boolean; group?: SavedQueryGroupTarget };
 type HistoryOpenRow = { id: string; name: string; connectionId?: string };
 type HistoryOpenBatch = { items: HistoryDeleteReference[]; revision: number; rows: HistoryOpenRow[]; targets: ReadonlyMap<string, string> };
+type HistoryComparison = { items: HistoryDeleteReference[]; revision: number; sources: [HistorySqlComparisonSource, HistorySqlComparisonSource] };
 
 /** 历史面板仅保留当前概要页，原文、错误全文和打开目标都需明确选择。 */
 export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectionId}:{onClose():void;onQueries():void;insertion?:HistoryInsertionTarget|null;initialConnectionId?:string}){
@@ -65,7 +67,9 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  const cursor=useRef<string|undefined>(undefined),active=useRef<string|undefined>(undefined),pending=useRef<Promise<unknown>|undefined>(undefined),locked=useRef(false),closed=useRef(false),filterKey=JSON.stringify({filters,timeDraft,timeZone,durationDraft});
  const [selected,setSelected]=useState<HistoryDeleteReference[]>([]),[selectionNotice,setSelectionNotice]=useState(''),[deleteIntent,setDeleteIntent]=useState<HistoryDeleteIntent>();
  const selectedRef=useRef(selected);selectedRef.current=selected;
- const selectionMetadata = useRef(new Map<string, HistoryOpenRow>());
+ const selectionMetadata = useRef(new Map<string, HistoryOpenRow & {sqlUnits: number}>());
+ const [comparison, setComparison] = useState<HistoryComparison>();
+ const compareTrigger = useRef<HTMLButtonElement>(null);
  const [openDraft, setOpenDraft] = useState<HistoryOpenBatch>();
  const openDraftRef = useRef(openDraft), openTrigger = useRef<HTMLButtonElement>(null);
  openDraftRef.current = openDraft;
@@ -78,6 +82,8 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  const insertionRef=useRef(insertion);insertionRef.current=insertion;
  const batchVisible = batchDraft?.items === selected && batchDraft.revision === generation.current && filterKey === applied ? batchDraft : undefined;
  const openVisible = openDraft?.items === selected && openDraft.revision === generation.current && filterKey === applied ? openDraft : undefined;
+ const comparisonVisible = comparison?.items === selected && comparison.revision === generation.current && filterKey === applied ? comparison : undefined;
+ useEffect(() => { if (comparison && !comparisonVisible) setComparison(undefined); }, [comparison, comparisonVisible]);
  const[insertAvailable,setInsertAvailable]=useState(()=>insertion?.current()??false);
  /** 原编辑器事件即时更新可用性；关闭或切换资料源永久撤销本modal的同一租约。 */
  useEffect(()=>{if(!insertion){setInsertAvailable(false);return;}const sync=()=>setInsertAvailable(insertion.current());const unsubscribe=insertion.subscribe(sync);sync();return unsubscribe;},[insertion]);
@@ -201,19 +207,54 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
     const summary = Array.from(item.sqlPreview.replace(/\s+/g, ' ').trim());
     const preview = summary.slice(0, 72).join('') + (summary.length > 72 || item.previewTruncated ? '…' : '');
     const time = new Date(startedAt).toLocaleString('zh-CN', timeZone ? { timeZone } : undefined);
-    selectionMetadata.current.set(id, { id, connectionId, name: `${time} · ${preview} [${id}]` });
+    selectionMetadata.current.set(id, { id, connectionId, name: `${time} · ${preview} [${id}]`, sqlUnits: item.sqlUnits });
    }
    selectedRef.current = value; setSelected(value); setSelectionNotice('');
   } catch (reason) { setError(errorMessage(reason)); }
  }
  function clearSelection(){if(locked.current||deleteRef.current)return;selectionMetadata.current.clear();selectedRef.current=[];setSelected([]);setSelectionNotice('');}
+ function closeComparison() {
+  setComparison(undefined);
+  compareTrigger.current?.focus();
+ }
+ /** 仅在用户明确对比时读取两条完整正文。两次读取都结束后才解除忙态，任一摘要失效即丢弃整组。 */
+ async function compareSelectedSql() {
+  const items = selectedRef.current, revision = generation.current;
+  const current = () => !closed.current && selectedRef.current === items && generation.current === revision &&
+   view.current.filterKey === view.current.applied;
+  if (locked.current || deleteRef.current || items.length !== 2 || !current()) return;
+  if (comparisonVisible) { closeComparison(); return; }
+  const [left, right] = items.map(item => selectionMetadata.current.get(item.id));
+  if (!left || !right) { setError(t.sqlChanged); return; }
+  locked.current = true; setBusy(true); setError('');
+  setOpenDraft(undefined); setBatchDraft(undefined); setSaveDraft(undefined); setSqlView(undefined); setErrorView(undefined);
+  try {
+   const request = Promise.allSettled(items.map(({id, digest}) => invoke('history.readSql', {id, digest})));
+   pending.current = request;
+   const [before, after] = await request;
+   if (!current()) return;
+   if (before.status === 'rejected') throw before.reason;
+   if (after.status === 'rejected') throw after.reason;
+   if (before.value.sql.length !== left.sqlUnits || after.value.sql.length !== right.sqlUnits) throw Error(t.sqlChanged);
+   setComparison({items, revision, sources: [
+    {id: left.id, label: left.name, sql: before.value.sql},
+    {id: right.id, label: right.name, sql: after.value.sql},
+   ]});
+  } catch (reason) {
+   if (current()) setError(errorMessage(reason));
+  } finally {
+   pending.current = undefined;
+   locked.current = false;
+   if (!closed.current) setBusy(false);
+  }
+ }
  /** 捕获原页、规范条件和工作台身份；任何来源变化永久撤销本次确认。 */
  function beginDelete(scope:HistoryDeletePreviewInput['scope']){
   if(locked.current||closed.current||deleteRef.current||!reply||!appliedInput.current||filterKey!==applied)return;
   const original=view.current,revision=generation.current,state=useWorkspace.getState(),settings=state.settings,tab=settings?.tabs.find(item=>item.id===settings.activeTabId),profiles=state.connections,versions=state.connectionVersions;
   let intent:HistoryDeleteIntent;
   const owns=()=>{const now=useWorkspace.getState();return !closed.current&&deleteRef.current===intent&&generation.current===revision&&view.current.reply===original.reply&&view.current.applied===original.applied&&view.current.filterKey===original.filterKey&&view.current.batch===original.batch&&now.settings?.activeTabId===settings?.activeTabId&&now.settings?.tabs.find(item=>item.id===settings?.activeTabId)===tab&&now.connections===profiles&&now.connectionVersions===versions;};
-  try{intent=new HistoryDeleteIntent(scope,owns);}catch(reason){setError(errorMessage(reason));return;}deleteRef.current=intent;setDeleteIntent(intent);
+  try{intent=new HistoryDeleteIntent(scope,owns);}catch(reason){setError(errorMessage(reason));return;}setComparison(undefined);deleteRef.current=intent;setDeleteIntent(intent);
  }
  /** 工作台订阅在变化当时撤销租约，来回切回原标签也不能复活。 */
  useEffect(()=>useWorkspace.subscribe?.(()=>{deleteRef.current?.current();}),[]);
@@ -249,7 +290,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
    const connectionId = targets.get(row.id) ?? row.connectionId;
    if (connections.some(profile => profile.id === connectionId)) batchTargets.set(row.id, connectionId!);
   }
-  setSaveDraft(undefined); setBatchDraft(undefined); setError('');
+  setComparison(undefined); setSaveDraft(undefined); setBatchDraft(undefined); setError('');
   setOpenDraft({ items, rows, targets: batchTargets, revision: generation.current });
  }
  function cancelOpenBatch() {
@@ -318,7 +359,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  async function showSql(item: HistoryPageEntry) {
   const current = captureCurrentCard(item);
   if(locked.current||!current())return;
-  locked.current=true;setBusy(true);setError('');setErrorView(undefined);
+  locked.current=true;setBusy(true);setError('');setComparison(undefined);setErrorView(undefined);
   try{
    const request=invoke('history.readSql',{id:item.entry.id,digest:item.digest});pending.current=request;
    const result=await request;if(!current())return;
@@ -433,6 +474,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   if (locked.current || closed.current || deleteRef.current || !items.length || items.length > historySaveBatchLimits.items ||
     view.current.filterKey !== view.current.applied) return;
   if (batchVisible) { closeSaveBatch(); return; }
+  setComparison(undefined);
   setOpenDraft(undefined);
   setSaveDraft(undefined);
   setBatchError('');
@@ -514,6 +556,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   if (saveDraft) { if (!locked.current) closeSaveDraft(); }
   else if (batchVisible) closeSaveBatch();
   else if (openVisible) { if (locked.current) void close(); else cancelOpenBatch(); }
+  else if (comparisonVisible) closeComparison();
   else if (sqlView) setSqlView(undefined);
   else void close();
  }}><div className="dialog-tabs"><button className="selected"><Clock3 size={14}/>{zh.activity.text004}</button><button disabled={closing} onClick={()=>void close(onQueries)}><FileCode2 size={14}/>{zh.activity.text005}</button></div><div className="modal-content saved-query-pages history-pages">
@@ -557,9 +600,12 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   <section aria-label={deletion.title}><p role="status" aria-label={deletion.selectionStatus}>{deletion.selection(selected.length)}</p>{selectionNotice&&<p role="status" aria-label={deletion.selectionNoticeStatus}>{selectionNotice}</p>}<div className="inline-field"><button disabled={busy||closing||filterKey!==applied||!reply?.items.length} onClick={()=>selectItems(reply?.items??[])}>{deletion.selectBatch}</button><button disabled={busy||closing||!selected.length} onClick={clearSelection}>{deletion.clearSelection}</button><button disabled={busy || closing || filterKey !== applied || !selected.length} title={t.sqlArchiveHint}
     onClick={() => void exportSqlArchive('selected')}>{t.sqlArchive}</button><button disabled={busy || closing || filterKey !== applied || !reply}
     title={t.sqlArchiveFilteredHint} onClick={() => void exportSqlArchive('filtered')}>{t.sqlArchiveFiltered}</button><button ref={openTrigger} disabled={busy || closing || filterKey !== applied || !selected.length || selected.length > savedQueryOpenBatchLimits.queries}
-    aria-expanded={!!openVisible} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={busy || closing || filterKey !== applied || !selected.length || selected.length > historySaveBatchLimits.items}
+    aria-expanded={!!openVisible} onClick={beginOpenBatch}>{t.openBatch}</button><button ref={compareTrigger} type="button"
+    disabled={busy || closing || filterKey !== applied || selected.length !== 2} aria-expanded={!!comparisonVisible}
+    title={t.compareHint} onClick={() => void compareSelectedSql()}>{t.compareSelected}</button><button disabled={busy || closing || filterKey !== applied || !selected.length || selected.length > historySaveBatchLimits.items}
     ref={batchTrigger} aria-expanded={!!batchVisible} onClick={beginSaveBatch}>{t.saveBatch}</button><button disabled={busy||closing||filterKey!==applied||!selected.length} onClick={()=>beginDelete({kind:'selected',records:selectedRef.current})}>{deletion.selected}</button><button disabled={busy||closing||!reply||filterKey!==applied} onClick={()=>{const source=appliedInput.current;if(source){const{onError,sort,...matching}=source;beginDelete({kind:'filtered',filters:matching});}}}>{deletion.filtered}</button></div>{archiveNotice && <p role="status">{archiveNotice}</p>}
   {selected.length > savedQueryOpenBatchLimits.queries && <p className="muted small">{t.openBatchLimit(savedQueryOpenBatchLimits.queries)}</p>}
+  {comparisonVisible && <HistorySqlComparison sources={comparisonVisible.sources} onClose={closeComparison}/>}
   {openVisible && <QueryBatchOpenPreview rows={openVisible.rows} targets={openVisible.targets} connections={connections} busy={busy || closing}
     onTarget={(id, connectionId) => {
      if (locked.current || closed.current || openDraftRef.current !== openVisible) return;

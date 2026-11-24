@@ -288,6 +288,84 @@ test('保存查询按名称和更新时间跨批次排序，保留已勾选项',
  expect(pageErrors).toEqual([]);
 });
 
+test('跨批历史 SQL 离线对比原文，交换并查找，拒绝已删除的记录', async ({}, info) => {
+ const prefix = '-- ' + '前'.repeat(66_000) + '\r\nSELECT ';
+ const leftSql = prefix + "'左🚢' AS token;", rightSql = prefix + "'右🚢' AS token;";
+ await seed(store => {
+  source(store);
+  store.saveSettings({ ...store.settings(), activeTabId: 'existing', tabs: [
+   { id: 'existing', kind: 'query', title: '保留原草稿', connectionId: 'source', sql: 'SELECT 42' },
+  ] });
+  store.addHistory(entry({id: 'compare-left', sql: leftSql, startedAt: '2026-10-16T00:00:00Z'}));
+  for (let i = 0; i < 24; i++) store.addHistory(entry({id: 'filler-' + i}));
+  store.addHistory(entry({id: 'compare-right', connectionId: 'removed', sql: rightSql, startedAt: '2026-10-14T00:00:00Z'}));
+ });
+ await desktop.evaluate(({ipcMain}) => {
+  const handlers = (ipcMain as unknown as {_invokeHandlers: Map<string, (...args: any[]) => unknown>})._invokeHandlers;
+  const original = handlers.get('dbark:request');
+  if (!original) throw Error('缺少历史 SQL 读取 IPC');
+  const audit = {reads: [] as {id: string; digest: string}[], denied: 0};
+  Object.assign(globalThis, {__historyComparison: audit});
+  handlers.set('dbark:request', (event, payload) => {
+   const command = String(payload.command);
+   if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command)) {
+    audit.denied++;
+    throw Error('离线历史对比禁止数据库请求');
+   }
+   if (command === 'history.readSql') audit.reads.push(payload.input);
+   return original(event, payload);
+  });
+ });
+ const readAudit = () => desktop.evaluate(() => (globalThis as typeof globalThis & {
+  __historyComparison: {reads: {id: string; digest: string}[]; denied: number};
+ }).__historyComparison);
+ const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+ const beforeSettings = await settings();
+ await open();
+ const button = dialog().getByRole('button', {name: text.compareSelected, exact: true});
+ const select = (id: string) => dialog().getByRole('checkbox', {name: deletionText.select(id), exact: true});
+ await expect(button).toBeDisabled();
+ await select('compare-left').check(); await expect(button).toBeDisabled();
+ await dialog().getByRole('button', {name: text.next, exact: true}).click();
+ await select('compare-right').check();
+ await button.click();
+ const compare = dialog().getByRole('region', {name: text.compareTitle, exact: true});
+ const left = compare.getByRole('region', {name: text.compareLeft, exact: true});
+ const right = compare.getByRole('region', {name: text.compareRight, exact: true});
+ await expect(compare.getByRole('heading', {name: text.compareTitle, exact: true})).toBeFocused();
+ await expect(left.locator('pre')).toHaveText('左'); await expect(right.locator('pre')).toHaveText('右');
+ await compare.getByRole('button', {name: text.compareSwap, exact: true}).click();
+ await expect(left.locator('pre')).toHaveText('右'); await expect(right.locator('pre')).toHaveText('左');
+ await compare.getByRole('button', {name: text.compareShowFull, exact: true}).click();
+ const full = left.getByRole('region', {name: text.compareLeftFull, exact: true});
+ const find = full.getByRole('textbox', {name: text.sqlFindTitle, exact: true});
+ await find.fill('右🚢'); await find.press('Enter');
+ await expect(full.locator('mark')).toHaveText('右🚢');
+ await expect(full.getByRole('status', {name: text.sqlPartStatus, exact: true})).toHaveText('第 2 / 2 段');
+ await expect(right.getByRole('status', {name: text.sqlPartStatus, exact: true})).toHaveText('第 1 / 2 段');
+ await compare.screenshot({path: info.outputPath('历史 SQL 对比与原文定位.png')});
+ await page.keyboard.press('Escape');
+ await expect(compare).toHaveCount(0); await expect(button).toBeFocused();
+ expect(await settings()).toEqual(beforeSettings);
+ const audit = await readAudit();
+ expect(audit).toEqual({denied: 0, reads: ['compare-left', 'compare-right'].map(id => ({id, digest: expect.stringMatching(/^[a-f0-9]{64}$/)}))});
+
+ // 模拟另一个窗口移除本例自建的右侧记录。原勾选仍持有旧摘要。
+ const deleted = await page.evaluate(async ref => {
+  const {previewToken} = await window.dbark.invoke('history.deletePreview', {taskId: crypto.randomUUID(), scope: {kind: 'selected', records: [ref]}});
+  return window.dbark.invoke('history.deleteApply', {previewToken});
+ }, audit.reads[1]);
+ expect(deleted.deleted).toBe(1);
+ await button.click();
+ await expect(dialog().getByRole('alert')).toContainText('执行历史已移除');
+ await expect(compare).toHaveCount(0);
+ await expect(button).toBeEnabled();
+ expect(await readAudit()).toEqual({denied: 0, reads: [...audit.reads, ...audit.reads]});
+ expect(await settings()).toEqual(beforeSettings);
+ expect(await page.evaluate(() => window.dbark.invoke('queries.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
 test('跨批次勾选执行历史，打开独立草稿并保留原标签', async ({}, info) => {
  const sql = 'UPDATE t SET n=9007199254740993;\r\n-- ' + '中'.repeat(900) + '😀尾部';
  await seed(store => {
