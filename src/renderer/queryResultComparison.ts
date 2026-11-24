@@ -255,6 +255,32 @@ export function queryResultComparisonValues(capture: QueryResultComparisonCaptur
   if (!binding || !currentQueryResultComparison(capture, binding.left.result, binding.right.result)) throw Error(text.stale);
   return comparisonRowValues(capture, binding, row);
 }
+
+/** 从已发布对比的冻结副本搜索匹配键。只在开始时完整核源，复合键逐值匹配。 */
+export function searchQueryResultComparisonKeys(capture: QueryResultComparisonCapture, rows: readonly QueryResultComparisonRow[], query: string):
+  ReadonlySet<QueryResultComparisonRow> {
+  const binding = bindings.get(capture);
+  if (!binding || !currentQueryResultComparison(capture, binding.left.result, binding.right.result)) throw Error(text.stale);
+  if (query.length > queryResultComparisonLimits.valueUnits) throw Error(text.keySearchBudget);
+  const foldedQuery = query.toLowerCase();
+  const { keyIndices } = binding;
+  const matches = new Set<QueryResultComparisonRow>();
+  function matchesKey(values: readonly CellValue[] | undefined): boolean {
+    return !!values && keyIndices.some(index => {
+      const value = values[index];
+      return value !== null && (typeof value === 'object' ? value.base64.includes(query) : String(value).toLowerCase().includes(foldedQuery));
+    });
+  }
+  for (const row of rows) {
+    const owner = rowOwners.get(row);
+    if (!owner?.active || owner.capture !== capture) throw Error(text.stale);
+    const left = row.leftIndex === undefined ? undefined : binding.left.values[row.leftIndex];
+    const right = row.rightIndex === undefined ? undefined : binding.right.values[row.rightIndex];
+    if (matchesKey(left) || matchesKey(right)) matches.add(row);
+  }
+  return matches;
+}
+
 function comparisonRowValues(capture: QueryResultComparisonCapture, binding: Binding, row: QueryResultComparisonRow): readonly QueryResultComparisonValue[] {
   const owner = rowOwners.get(row);
   if (!owner?.active || owner.capture !== capture) throw Error(text.stale);

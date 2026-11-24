@@ -192,8 +192,7 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     const scope = archive.getByLabel(archiveText.dataScope, { exact: true });
     await expect(scope).toHaveValue('original');
     await scope.selectOption('organized');
-    async function writeArchive(format: 'zip' | 'xlsx' | 'json') {
-      const path = join(directory, `organized.${format}`);
+    async function chooseExportPath(path: string, format: 'zip' | 'xlsx' | 'json') {
       await desktop.evaluate(({ dialog, BrowserWindow }, target) => {
         const original = dialog.showSaveDialog;
         dialog.showSaveDialog = (async (...args: unknown[]) => {
@@ -203,6 +202,10 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
           return { canceled: false, filePath: target.path };
         }) as typeof original;
       }, { path, format });
+    }
+    async function writeArchive(format: 'zip' | 'xlsx' | 'json') {
+      const path = join(directory, `organized.${format}`);
+      await chooseExportPath(path, format);
       await archive.getByLabel(archiveText.format, { exact: true }).selectOption(format);
       const start = { zip: archiveText.start, xlsx: archiveText.startExcel, json: archiveText.startJson }[format];
       await archive.getByRole('button', { name: start, exact: true }).click();
@@ -292,6 +295,23 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     await baselineComparison.getByRole('button', { name: comparisonText.start, exact: true }).click();
     await expect(baselineComparison.getByLabel(comparisonText.removed, { exact: true })).toHaveText('1');
     await expect(baselineComparison.getByLabel(comparisonText.changed, { exact: true })).toHaveText('2');
+    await baselineComparison.getByLabel(comparisonText.changedColumn, { exact: true }).selectOption({ index: 2 });
+    await expect(baselineComparison.getByText(comparisonText.filteredCount(2), { exact: true })).toBeVisible();
+    const keySearch = baselineComparison.getByRole('searchbox', { name: comparisonText.keySearch, exact: true });
+    await keySearch.fill('2');
+    await keySearch.press('Enter');
+    await expect(baselineComparison.getByText(comparisonText.filteredCount(1), { exact: true })).toBeVisible();
+    await expect(baselineComparison.getByLabel(comparisonText.changed, { exact: true })).toHaveText('2');
+    const reportPath = join(directory, '筛选差异.json');
+    await chooseExportPath(reportPath, 'json');
+    await baselineComparison.getByRole('button', { name: comparisonText.exportReport, exact: true }).click();
+    await expect(baselineComparison.getByText(comparisonText.reportSaved(2), { exact: true })).toBeVisible();
+    const report = JSON.parse(await readFile(reportPath, 'utf8'));
+    expect(report).toMatchObject([
+      { kind: 'changed', leftRow: 2, rightRow: 1, columnName: 'id', matchKey: true },
+      { kind: 'changed', leftRow: 2, rightRow: 1, columnName: 'label', leftValue: 'other', rightValue: 'archive A' },
+    ]);
+    expect(report).toHaveLength(2);
     await baselineComparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click();
     await expect(cells).toHaveText(['archive A', 'active B']);
     expect(await history()).toEqual(beforeBaselineComparison);

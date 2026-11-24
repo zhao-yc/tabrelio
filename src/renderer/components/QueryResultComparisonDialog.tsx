@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CellValue, QueryResult, ResultColumn } from '../../shared/contracts';
 import { pinLimits } from '../queryPins';
-import { alignQueryResultComparisonColumns, captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonValues, sameQueryResultComparisonColumnType, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonBaseline, type QueryResultComparisonCapture, type QueryResultComparisonColumnPair, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonSource, type QueryResultComparisonValue } from '../queryResultComparison';
+import { alignQueryResultComparisonColumns, captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonValues, sameQueryResultComparisonColumnType, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonBaseline, type QueryResultComparisonCapture, type QueryResultComparisonColumnPair, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonSource, type QueryResultComparisonValue } from '../queryResultComparison';
 import { queryResultComparisonZh as text } from '../locales/queryResultComparison.zh-CN';
 import type { SortDialect } from '../queryResultSort';
 import { errorMessage, invoke, uid } from '../lib';
@@ -23,6 +23,7 @@ type Source = { input: QueryResultComparisonSource; id: string; key: string; lab
 type Run = { draft: Draft; left: QueryResult; right: QueryResult; capture: QueryResultComparisonCapture; scan: QueryResultComparisonScan; timer?: ReturnType<typeof setTimeout> };
 type View = { run?: Run; processed: number; total: number; result?: QueryResultComparisonResult; error?: string };
 type Filter = 'all' | 'differences' | QueryResultComparisonRow['kind'];
+const resultFilters: readonly Filter[] = ['differences', 'all', 'added', 'removed', 'changed', 'equal'];
 
 /** 自有数据字段是唯一读取入口，来源或列字段上的访问器不能在界面渲染时执行。 */
 function own(value: unknown, key: PropertyKey): unknown {
@@ -72,6 +73,23 @@ function valueText(value: CellValue | undefined): string {
   return String(value);
 }
 
+/** 搜索词先留在输入框，明确提交后才扫描已发布差异，组词时保留输入法行为。 */
+function ComparisonKeySearch({ query, disabled, onApply }: { query: string; disabled: boolean; onApply(value: string): boolean }) {
+  const [draft, setDraft] = useState(query);
+  const composing = useRef(false);
+  return <form role="search" aria-label={text.keySearch} className="filter-inputs" onSubmit={event => {
+    event.preventDefault();
+    if (!disabled && !composing.current && draft !== query) onApply(draft);
+  }}>
+    <input type="search" aria-label={text.keySearch} aria-description={text.keySearchHint} placeholder={text.keySearch}
+      disabled={disabled} value={draft} maxLength={queryResultComparisonLimits.valueUnits} onChange={event => setDraft(event.target.value)}
+      onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
+      onKeyDown={event => { if (event.key === 'Enter' && (composing.current || event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault(); }}/>
+    <button type="submit" disabled={disabled || draft === query}>{text.applyKeySearch}</button>
+    {query && <button type="button" disabled={disabled} onClick={() => { if (onApply('')) setDraft(''); }}>{text.clearKeySearch}</button>}
+  </form>;
+}
+
 /** 对比原返回数据。选择来源和匹配键后，由同一套扫描器计算结果和差异报告。 */
 export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = false, returned, isCurrent, onClose }: Props) {
   const baseline = returned?.baseline;
@@ -98,6 +116,9 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
   const [candidate, setCandidate] = useState(emptyPair);
   const draftRef = useRef(draft), [view, setView] = useState<View>({ processed: 0, total: 0, error: prepared.error });
   const [filter, setFilter] = useState<Filter>('differences'), [page, setPage] = useState(1), [detail, setDetail] = useState<{ run: Run; row: QueryResultComparisonRow; values: readonly QueryResultComparisonValue[] }>();
+  const [changedColumn, setChangedColumn] = useState('');
+  const [keySearch, setKeySearch] = useState<{ query: string; matches: ReadonlySet<QueryResultComparisonRow> }>();
+  const [keySearchError, setKeySearchError] = useState('');
   const active = useRef<Run | undefined>(undefined), last = useRef<Run | undefined>(undefined), alive = useRef(true), invalid = useRef(false), closed = useRef(false);
   const report = useRef<{ taskId: string; writing: boolean } | undefined>(undefined);
   const [reportPhase, setReportPhase] = useState<'choosing' | 'writing'>(), [reportStatus, setReportStatus] = useState(''), [reportError, setReportError] = useState('');
@@ -133,14 +154,21 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
     if (run && !currentQueryResultComparison(run.capture, run.left, run.right)) { invalid.current = true; cancelRun(); setView({ processed: 0, total: 0, error: text.stale }); return false; }
     return true;
   }
+  function resetResultPage(): void {
+    setPage(1); setDetail(undefined); setReportStatus(''); setReportError('');
+  }
+  function resetResultFilters(): void {
+    setFilter('differences'); setChangedColumn(''); setKeySearch(undefined); setKeySearchError('');
+    resetResultPage();
+  }
   /** 切源与键编辑同步撤销旧扫描及结果，选择新源后要求重新明确勾选键。 */
   function change(next: Draft): void {
     if (report.current || committed.current !== ticket || draftRef.current !== draft || !sourceCurrent()) return;
     if (!prepared.left.some(source => source.key === next.left) || !prepared.right.some(source => source.key === next.right) || next.keys.length > 8 || new Set(next.keys).size !== next.keys.length) return;
     if (next.keys.some(key => !columns.some(column => column.key === key && !queryResultComparisonKeyReason(column, dialect)))) return;
     if (next.pairs !== draft.pairs) setCandidate(emptyPair);
-    cancelRun(); draftRef.current = next; setDraft(next); setView({ processed: 0, total: 0 }); setDetail(undefined); setFilter('differences'); setPage(1);
-    setReportStatus(''); setReportError('');
+    cancelRun(); draftRef.current = next; setDraft(next); setView({ processed: 0, total: 0 });
+    resetResultFilters();
   }
   /** 单次明确开始才捕获两份真实结果；扫描中不显示部分计数或部分差异。 */
   function start(): void {
@@ -151,8 +179,8 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
       cancelRun();
       const capture = captureQueryResultComparison(left, right, draft.keys, dialect, draft.mode === 'manual' ? draft.pairs : draft.mode);
       const run: Run = { draft, left, right, capture, scan: new QueryResultComparisonScan(capture) };
-      last.current = run; active.current = run; setView({ run, processed: 0, total: capture.leftCount + capture.rightCount }); setDetail(undefined); setPage(1); setFilter('differences');
-      setReportStatus(''); setReportError('');
+      last.current = run; active.current = run; setView({ run, processed: 0, total: capture.leftCount + capture.rightCount });
+      resetResultFilters();
       /** 最终结果的私有快照与当前来源都通过复核后，才发布四计数和完整记录。 */
       function tick(): void {
         if (active.current !== run || draftRef.current !== draft || !alive.current) return;
@@ -204,11 +232,31 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
   function updateCandidate(next: QueryResultComparisonColumnPair): void {
     if (!manualDisabled && draft.mode === 'manual' && committed.current === ticket && draftRef.current === draft) setCandidate(next);
   }
-  const indexed = useMemo(() => result?.rows.map((row, index) => ({ row, index })).filter(({ row }) => filter === 'all' || filter === 'differences' ? filter === 'all' || row.kind !== 'equal' : row.kind === filter) ?? [], [result, filter]);
+  const indexed = useMemo(() => {
+    const matches: { row: QueryResultComparisonRow; index: number }[] = [];
+    result?.rows.forEach((row, index) => {
+      const matchesKind = filter === 'all' || (filter === 'differences' ? row.kind !== 'equal' : row.kind === filter);
+      if (matchesKind && (!changedColumn || row.kind === 'changed' && row.changedColumns.includes(changedColumn)) &&
+          (!keySearch || keySearch.matches.has(row))) matches.push({ row, index });
+    });
+    return matches;
+  }, [result, filter, changedColumn, keySearch]);
   const pages = Math.max(1, Math.ceil(indexed.length / 50)), currentPage = Math.min(page, pages), visible = indexed.slice((currentPage - 1) * 50, currentPage * 50);
   /** 结果浏览同样拒绝旧渲染回调；详情只从该次捕获的安全原值快照取得。 */
   function resultCurrent(): boolean { return !report.current && committed.current === ticket && !!result && view.result === result && last.current === view.run && draftRef.current === draft && sourceCurrent(); }
-  /** 文件框打开前冻结整个分类，返回后再核原来源。写入沿用原子文件任务和取消入口。 */
+  function applyKeySearch(query: string): boolean {
+    if (!result || !view.run || !resultCurrent()) return false;
+    try {
+      setKeySearch(query ? { query, matches: searchQueryResultComparisonKeys(view.run.capture, result.rows, query) } : undefined);
+      setKeySearchError('');
+      resetResultPage();
+      return true;
+    } catch (reason) {
+      setKeySearchError(errorMessage(reason));
+      return false;
+    }
+  }
+  /** 文件框打开前冻结整个筛选范围，返回后再核原来源。 */
   async function exportReport(): Promise<void> {
     if (!indexed.length || !view.run || !resultCurrent()) return;
     const run = view.run, operation = { taskId: uid(), writing: false };
@@ -279,7 +327,25 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
     <p>{text.selectKeys}</p>{!valid && !closed.current && <ErrorBox message={text.stale}/>}<ErrorBox message={view.error}/>
     {running && valid && <p role="status">{text.scanning} {text.progress(view.processed, view.total)}</p>}
     {result && <section aria-label={text.rows}><div className="filter-inputs">{(['added', 'removed', 'changed', 'equal'] as const).map(kind => <label key={kind}>{text[kind]} <output aria-label={text[kind]}>{result[kind]}</output></label>)}</div>
-      <label>{text.filter}<select aria-label={text.filter} value={filter} disabled={!!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && resultCurrent() && ['all', 'differences', 'added', 'removed', 'changed', 'equal'].includes(event.target.value)) { setFilter(event.target.value as Filter); setPage(1); setDetail(undefined); setReportStatus(''); setReportError(''); } }}>{(['differences', 'all', 'added', 'removed', 'changed', 'equal'] as const).map(kind => <option key={kind} value={kind}>{kind === 'all' ? text.all : kind === 'differences' ? text.differences : text[kind]}</option>)}</select></label>
+      <div className="filter-inputs">
+        <label>{text.filter}<select aria-label={text.filter} value={filter} disabled={!!reportPhase} onChange={event => {
+          const value = event.target.value as Filter;
+          if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && resultFilters.includes(value) && resultCurrent()) {
+            setFilter(value); resetResultPage();
+          }
+        }}>{resultFilters.map(kind => <option key={kind} value={kind}>{kind === 'all' ? text.all : kind === 'differences' ? text.differences : text[kind]}</option>)}</select></label>
+        <label>{text.changedColumn}<select aria-label={text.changedColumn} value={changedColumn} disabled={!!reportPhase} onChange={event => {
+          const value = event.target.value;
+          if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented &&
+              (value === '' || result && view.run?.capture.columns.some(column => column.key === value)) && resultCurrent()) {
+            setChangedColumn(value); resetResultPage();
+          }
+        }}><option value="">{text.allChangedColumns}</option>
+          {view.run?.capture.columns.map(column => <option key={column.key} value={column.key}>{describeColumn(column)}</option>)}</select></label>
+      </div>
+      <ComparisonKeySearch query={keySearch?.query ?? ''} disabled={!!reportPhase} onApply={applyKeySearch}/>
+      {(keySearch || changedColumn) && <p role="status">{text.filteredCount(indexed.length)}</p>}
+      <ErrorBox message={keySearchError}/>
       <table aria-label={text.rows}><thead><tr><th>{text.filter}</th><th>{text.leftRow}</th><th>{text.rightRow}</th><th>{text.changedColumns}</th><th>{text.detailsTitle}</th></tr></thead><tbody>{visible.map(({ row, index }) => <tr key={index}><td>{kindLabel(row.kind)}</td><td>{row.leftIndex === undefined ? text.missing : row.leftIndex + 1}</td><td>{row.rightIndex === undefined ? text.missing : row.rightIndex + 1}</td><td>{row.changedColumns.map(key => names.get(key) ?? key).join('、')}</td><td><button disabled={!!reportPhase} onClick={() => show(row)} aria-label={text.details(index)}>{text.details(index)}</button></td></tr>)}</tbody></table>{!visible.length && <p>{text.noRows}</p>}
       <div className="filter-inputs"><button disabled={!!reportPhase || currentPage <= 1} onClick={() => { if (resultCurrent()) { setPage(currentPage - 1); setDetail(undefined); } }}>{text.previous}</button><span>{text.page(currentPage - 1, pages)}</span><button disabled={!!reportPhase || currentPage >= pages} onClick={() => { if (resultCurrent()) { setPage(currentPage + 1); setDetail(undefined); } }}>{text.next}</button></div>
       {detail && detail.run === view.run && <section aria-label={text.detailsTitle}><h3>{text.detailsTitle}</h3><dl>{detail.values.map(value => <div key={value.column}><dt>{value.name || value.column} · {value.column}{value.rightColumn && ` ↔ ${value.rightName || value.rightColumn} · ${value.rightColumn}`}{value.changed && ` · ${text.changed}`}</dt><dd aria-label={`${text.leftValue} ${value.column}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.leftValue}：{valueText(value.left)}{value.leftType && ` · ${text.sqliteType(value.leftType)}`}</dd><dd aria-label={`${text.rightValue} ${value.column}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.rightValue}：{valueText(value.right)}{value.rightType && ` · ${text.sqliteType(value.rightType)}`}</dd></div>)}</dl></section>}

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CellValue, QueryResult, ResultColumn } from '../../src/shared/contracts';
-import { captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonValues, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonRow } from '../../src/renderer/queryResultComparison';
+import { captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonValues, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonRow } from '../../src/renderer/queryResultComparison';
 import { queryResultComparisonZh as text } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 
 const columns: ResultColumn[] = [{ key: 'id', name: '同名', type: 'BIGINT' }, { key: 'value', name: '同名', type: 'DECIMAL(65,20)' }, { key: 'bytes', name: '字节', type: 'BLOB' }];
@@ -41,8 +41,12 @@ describe('PostgreSQL 固定结果匹配键', () => {
     const metadata = [{ key: 'moment', name: '日期', type: 'TIMESTAMPTZ' }];
     const left = source([['2026-11-01 01:00:00.000001-04'], ['2026-11-01 01:00:00.000002-04']], metadata);
     const right = source([['2026-11-01 05:00:00.000002+00'], ['2026-11-01 05:00:00.000001+00']], metadata);
-    const result = finish(new QueryResultComparisonScan(captureQueryResultComparison(left, right, ['moment'], 'postgresql')));
+    const capture = captureQueryResultComparison(left, right, ['moment'], 'postgresql');
+    const result = finish(new QueryResultComparisonScan(capture));
     expect(result).toMatchObject({ equal: 2, rows: [{ kind: 'equal', rightIndex: 1 }, { kind: 'equal', rightIndex: 0 }] });
+    expect([...searchQueryResultComparisonKeys(capture, result.rows, '05:00:00.000002+00')]).toEqual([result.rows[1]]);
+    expect([...searchQueryResultComparisonKeys(capture, result.rows, '01:00:00.000001-04')]).toEqual([result.rows[0]]);
+    expect(() => searchQueryResultComparisonKeys(capture, [{ ...result.rows[0] }], '05:')).toThrow(text.stale);
   });
 
   it('INTERVAL 匹配键识别跨格式等值并区分相邻微秒', () => {

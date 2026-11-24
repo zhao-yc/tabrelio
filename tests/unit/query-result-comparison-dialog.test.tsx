@@ -94,6 +94,34 @@ function many(count: number) {
 }
 
 describe('两份固定查询结果的真实只读对话框', () => {
+  it('匹配键与变化列取交集，差异报告包含超过一页的全部命中', async () => {
+    const pins = many(200);
+    pins[2].result.rows = pins[2].result.rows.map((row, index) =>
+      index % 2 ? row : { ...row, nullable: '旧', amount: '2.00000000000000000001' });
+    await mount(pins);
+    await compare();
+    const invoke = vi.fn(async (command: string, input: { result?: { rows: DataRow[] } }) => {
+      if (command === 'files.choose') return { token: 'ram', name: '差异.json' };
+      if (command === 'files.exportResult') return { rows: input.result!.rows.length };
+      throw Error('测试只允许报告选择和导出');
+    });
+    (window as any).dbark = { invoke };
+    const textbox = document.querySelector(`input[aria-label="${text.keySearch}"]`)!;
+    const form = document.querySelector(`form[aria-label="${text.keySearch}"]`)!;
+    await act(async () => reactProps(textbox).onChange({ target: { value: '1' } }));
+    await act(async () => reactProps(form).onSubmit({ preventDefault() {} }));
+    await choose(text.changedColumn, 'nullable');
+    const matched = Array.from({ length: 200 }, (_, id) => id).filter(id => id % 2 && String(id).includes('1'));
+    expect(matched.length).toBeGreaterThan(50);
+    expect(document.body.textContent).toContain(text.filteredCount(matched.length));
+    expect(counts()).toEqual(['0', '0', '200', '0']);
+    expect(document.querySelectorAll('tbody')[0].querySelectorAll('tr')).toHaveLength(50);
+    await click(text.exportReport);
+    const payload = invoke.mock.calls.find(([command]) => command === 'files.exportResult')?.[1].result;
+    expect(payload?.rows).toHaveLength(matched.length * pins[0].result.columns.length);
+    expect([...new Set(payload?.rows.map(row => row.leftRow))]).toEqual(matched.map(id => id + 1));
+  });
+
   it('一份固定基准可与一组本次结果对比，来源编号重复也各归所属侧', async () => {
     const pins = fixture();
     const baselines = [pins[0]], inputs = [{ ...pins[2], id: pins[0].id, label: '本次结果' }];
