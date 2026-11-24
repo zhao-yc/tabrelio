@@ -10,6 +10,7 @@ import { gridQuickValueZh } from '../../src/renderer/locales/gridQuickValue.zh-C
 import { gridHeaderMenuZh } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { gridRangeCopyZh } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
 import { gridRangeExportZh } from '../../src/renderer/locales/gridRangeExport.zh-CN';
+import { gridRangePngText } from '../../src/shared/gridRangePng';
 import { sqliteTableFindZh } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
 import { queryResultFindZh } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
@@ -200,6 +201,21 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     await expect(page.getByText(gridRangeExportZh.txtSaved('表页选区.txt', 2), { exact: true })).toBeVisible();
     expect((await readFile(txt, 'utf8')).replace(/^\uFEFF/, '')).toBe(
       'amount\tlabel\tpayload\tnullable\r\n9007199254740993\trow A\tbase64:AP8=\t\\N\r\n9007199254740994\trow B\tbase64:\t""\r\n');
+    const png = join(dataDir, '表页选区.png');
+    await desktop.evaluate(({ dialog, BrowserWindow }, input) => {
+      const original = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (parent: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
+        dialog.showSaveDialog = original;
+        if (parent !== BrowserWindow.getAllWindows()[0] || options.defaultPath !== input.name ||
+            options.filters?.[0]?.extensions.join() !== 'png') throw Error('越过本例 PNG 保存范围');
+        return { canceled: false, filePath: input.png };
+      }) as typeof original;
+    }, { png, name: gridRangePngText.name });
+    await tableAmount.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: gridRangeExportZh.quickPng, exact: true }).click();
+    await expect(page.getByText(gridRangeExportZh.pngSaved('表页选区.png'), { exact: true })).toBeVisible();
+    expect(await desktop.evaluate(({ nativeImage }, path) => nativeImage.createFromPath(path).getSize(), png))
+      .toEqual({ width: 1602, height: 170 });
     await tableAmount.click();
     await expect(tableBCheck).toBeChecked();
     if (local) {

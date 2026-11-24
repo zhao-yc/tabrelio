@@ -15,7 +15,7 @@ import { dataExportExtension, dataFileFormats, dataFileText, dataMarkupText, isX
 import { zh, formatText } from '../locales/zh-CN';
 import { invoke, errorMessage, uid } from '../lib';
 import { resultExportData } from '../resultExport';
-import { gridRangePng } from '../gridRangeImage';
+import { saveGridRangePng } from '../gridRangeImage';
 import { writeTableClipboardEvent } from '../gridClipboard';
 import { useWorkspace } from '../store';
 import { ResultsGrid } from './ResultsGrid';
@@ -163,9 +163,7 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
     if (scope !== 'rectangle' || !sourceCurrent() || busyRef.current || pickRef.current || prepareRef.current) return;
     busyRef.current = true; setBusy(true); setSavingPng(true); setError(''); setPngNotice('');
     try {
-      const base64 = await gridRangePng(data);
-      if (!sourceCurrent()) return;
-      const saved = await invoke('gridRange.savePng', { base64 });
+      const saved = await saveGridRangePng(data, sourceCurrent);
       if (saved && sourceCurrent()) setPngNotice(rangeExportText.pngSaved(saved.name));
     } catch (reason) { if (sourceCurrent()) report(reason); }
     finally { busyRef.current = false; if (alive.current) { setBusy(false); setSavingPng(false); } }

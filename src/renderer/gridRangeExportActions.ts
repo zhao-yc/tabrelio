@@ -1,15 +1,16 @@
 import { txtExportDefaults } from '../shared/txtExport';
 import type { GridRangeExportData } from './gridRangeExport';
+import { saveGridRangePng } from './gridRangeImage';
 import { errorMessage, invoke, uid } from './lib';
 import { gridRangeExportZh as text } from './locales/gridRangeExport.zh-CN';
 import { useWorkspace } from './store';
 
-let savingText = false;
+let saving = false;
 
 /** 选择目标后再次核对原网格。确认后沿文件任务写入冻结数据，不重新执行查询。 */
-async function saveRangeText(capture: () => GridRangeExportData, current: () => boolean): Promise<void> {
-  if (savingText || !current()) return;
-  savingText = true;
+async function saveRangeFile(format: 'txt' | 'png', capture: () => GridRangeExportData, current: () => boolean): Promise<void> {
+  if (saving || !current()) return;
+  saving = true;
   let valid = true;
   const stillCurrent = () => {
     if (valid) valid = current();
@@ -17,7 +18,13 @@ async function saveRangeText(capture: () => GridRangeExportData, current: () => 
   };
   const release = useWorkspace.subscribe(stillCurrent);
   try {
-    const { columns, rows, truncated } = capture();
+    const data = capture();
+    if (format === 'png') {
+      const saved = await saveGridRangePng(data, stillCurrent);
+      if (saved) useWorkspace.getState().notify(text.pngSaved(saved.name));
+      return;
+    }
+    const { columns, rows, truncated } = data;
     const file = await invoke('files.choose', { purpose: 'export', format: 'txt', suggestedName: text.txtFilename });
     if (!file) return;
     if (!stillCurrent()) throw Error(text.stale);
@@ -28,11 +35,11 @@ async function saveRangeText(capture: () => GridRangeExportData, current: () => 
     useWorkspace.getState().notify(errorMessage(reason), true);
   } finally {
     release();
-    savingText = false;
+    saving = false;
   }
 }
 
-/** 两个文件入口绑定同一矩形。只有导出窗口需要携带 SQLite 类型元数据。 */
+/** 文件入口绑定同一矩形。只有导出窗口需要携带 SQLite 类型元数据。 */
 export function gridRangeExportActions(capture: (withStorage: boolean) => GridRangeExportData, current: () => boolean,
   open: (data: GridRangeExportData) => void, report: (reason: unknown) => void) {
   return [
@@ -43,6 +50,7 @@ export function gridRangeExportActions(capture: (withStorage: boolean) => GridRa
         if (current()) open(data);
       } catch (reason) { if (current()) report(reason); }
     } },
-    { label: text.txt, run: () => { void saveRangeText(() => capture(false), current); } },
+    { label: text.txt, run: () => { void saveRangeFile('txt', () => capture(false), current); } },
+    { label: text.quickPng, run: () => { void saveRangeFile('png', () => capture(false), current); } },
   ];
 }

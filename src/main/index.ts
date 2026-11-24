@@ -217,6 +217,7 @@ let sqliteBatchSync: (SqliteSyncScope & { id: string; groups: SqliteSyncEvidence
 
 let sqliteCopyTask: { id: string; owner: MainInvocation; abort: AbortController } | undefined;
 let binaryCellFileActive = false;
+let gridRangePngTarget: { token: string; path: string; owner: ColumnsInvocation } | undefined;
 const exportReservations = new ExportReservations();
 const preparingTasks = new Map<string, { cancelled: boolean; failure?: string; connectionIds?: string[] }>();
 const exportProgress = new Map<string, QueryExportProgress>();
@@ -1925,8 +1926,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (command === 'table.filteredUpdate.apply') return filteredUpdates.apply(input, columns!);
   if (command === 'table.filteredUpdate.release') return filteredUpdates.release(input, columns!);
   if (command === 'query.cancel' && filteredUpdates.has(input.taskId)) return filteredUpdates.cancel(input.taskId, columns!);
-  // 原生选择器和实际写盘属于同一次文档操作；仅用本机连接概要保护 SQLite 文件，不连接数据库。
-  if (command === 'binaryCellFiles.open' || command === 'binaryCellFiles.save' || command === 'cellFiles.saveText' || command === 'relationshipDiagram.savePng' || command === 'gridRange.savePng') {
+  // 选择与写盘绑定原主文档。只用本机连接概要保护 SQLite 文件，不连接数据库。
+  if (command === 'binaryCellFiles.open' || command === 'binaryCellFiles.save' || command === 'cellFiles.saveText' ||
+      command === 'relationshipDiagram.savePng' || command === 'gridRange.savePng' || command === 'gridRange.choosePng') {
     const assertCurrent = () => { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error(binaryCellFileText.shuttingDown); };
     assertCurrent();
     if (binaryCellFileActive) throw Error(binaryCellFileText.busy);
@@ -1941,23 +1943,42 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           if (chosen.canceled || !chosen.filePaths.length) return null;
           return readBinaryCellFile(chosen.filePaths[0], assertCurrent);
         }
-        const png = command === 'relationshipDiagram.savePng' ? relationshipDiagramPngText : command === 'gridRange.savePng' ? gridRangePngText : undefined;
-        const chosen = await dialog.showSaveDialog(window!, png ?
-          { title: png.title, defaultPath: png.name, filters: [{ name: png.filter, extensions: ['png'] }] } :
-          command === 'cellFiles.saveText' ?
-          { title: textCellFileTitle, defaultPath: 'cell.txt', filters: [{ name: 'UTF-8 文本', extensions: ['txt'] }, ...filters] } :
-          { title: binaryCellFileText.saveTitle, defaultPath: input.suggestedName ?? binaryCellFileText.defaultName, filters });
-        assertCurrent();
-        if (chosen.canceled || !chosen.filePath) return null;
-        if (png && extname(chosen.filePath).toLowerCase() !== '.png') throw Error(png.extension);
-        const release = await exportReservations.acquire(chosen.filePath);
+        let filePath: string;
+        if (command === 'gridRange.savePng' && input.fileToken !== undefined) {
+          const target = gridRangePngTarget;
+          if (!target || target.token !== input.fileToken || !columnsMain.sharesDocumentOwner(target.owner, columns!))
+            throw Error(gridRangePngText.targetExpired);
+          gridRangePngTarget = undefined;
+          filePath = target.path;
+        } else {
+          const choosingGridPng = command === 'gridRange.choosePng';
+          if (choosingGridPng) gridRangePngTarget = undefined;
+          const png = command === 'relationshipDiagram.savePng' ? relationshipDiagramPngText :
+            choosingGridPng || command === 'gridRange.savePng' ? gridRangePngText : undefined;
+          const chosen = await dialog.showSaveDialog(window!, png ?
+            { title: png.title, defaultPath: png.name, filters: [{ name: png.filter, extensions: ['png'] }] } :
+            command === 'cellFiles.saveText' ?
+            { title: textCellFileTitle, defaultPath: 'cell.txt', filters: [{ name: 'UTF-8 文本', extensions: ['txt'] }, ...filters] } :
+            { title: binaryCellFileText.saveTitle, defaultPath: input.suggestedName ?? binaryCellFileText.defaultName, filters });
+          assertCurrent();
+          if (chosen.canceled || !chosen.filePath) return null;
+          if (png && extname(chosen.filePath).toLowerCase() !== '.png') throw Error(png.extension);
+          filePath = chosen.filePath;
+          if (choosingGridPng) {
+            // 仅保留本主文档最近一次选择，只能用于一次通过校验的选区 PNG 写入。
+            const token = randomUUID();
+            gridRangePngTarget = { token, path: filePath, owner: columns! };
+            return { token, name: basename(filePath) };
+          }
+        }
+        const release = await exportReservations.acquire(filePath);
         try {
           assertCurrent();
-          await assertSqliteExportDestination(chosen.filePath, store.connections());
+          await assertSqliteExportDestination(filePath, store.connections());
           assertCurrent();
           // 文件替换前最后核活由服务执行；成功替换后的回执不能因迟到导航被改写成可重试失败。
-          return await (command === 'cellFiles.saveText' ? writeTextCellFile(chosen.filePath, input, assertCurrent) :
-            writeBinaryCellFile(chosen.filePath, input, assertCurrent));
+          return await (command === 'cellFiles.saveText' ? writeTextCellFile(filePath, input, assertCurrent) :
+            writeBinaryCellFile(filePath, command === 'gridRange.savePng' ? input.base64 : input, assertCurrent));
         } finally { release(); }
       });
     } finally { binaryCellFileActive = false; }
@@ -3596,7 +3617,12 @@ async function createWindow(): Promise<void> {
   window = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 680, show: false, backgroundColor: '#101319', title: productName, icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
   columnsMain.trackWindow(window);
   // 重导航立即撤销旧菜单闭包，不能等待新页面初始化后再覆盖旧可用状态。
-  window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) applicationMenu?.invalidate(); });
+  window.webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument) {
+      applicationMenu?.invalidate();
+      gridRangePngTarget = undefined;
+    }
+  });
   window.webContents.on('render-process-gone', () => applicationMenu?.invalidate());
   window.webContents.on('destroyed', () => applicationMenu?.invalidate());
   // 不同主文档不能继承已经开始的打开操作；旧 Promise 仍等真实完成才释放队列。
@@ -3640,7 +3666,7 @@ async function createWindow(): Promise<void> {
   window.webContents.session.setPermissionCheckHandler(() => false);
   window.once('ready-to-show', () => window?.show());
   window.on('close', event => { if (!shutdownComplete) { event.preventDefault(); app.quit(); } });
-  window.on('closed', () => { applicationMenu?.invalidate(); window = undefined; resultSqlPreviews.clear(); files.clear(); sqliteFiles.clear(); importBatchGrant = undefined; });
+  window.on('closed', () => { applicationMenu?.invalidate(); window = undefined; resultSqlPreviews.clear(); files.clear(); sqliteFiles.clear(); importBatchGrant = undefined; gridRangePngTarget = undefined; });
   await window.loadURL(rendererURL);
 }
 
@@ -3915,7 +3941,7 @@ else {
         const filteredExportCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && ['table.exportFiltered', 'sqlite.tableExport', 'sqlite.queryExport', 'sqlite.workbookExport', 'postgres.workbookExport', 'mysql.workbookExport'].includes(tasks.get(payload.input.taskId)?.kind ?? '') && tableFilteredExports.has(payload.input.taskId);
         const historyDeleteCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && typeof historyDelete !== 'undefined' && historyDelete.owns(payload.input.taskId);
         if (payload.command.startsWith('result.insert') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(payload.input.taskId)) columns = columnsMain.capture(event);
-        if (payload.command.startsWith('history.delete') || historyDeleteCancel || payload.command.startsWith('binaryCellFiles.') || payload.command === 'cellFiles.saveText' || payload.command === 'relationshipDiagram.savePng' || payload.command === 'gridRange.savePng' || payload.command.startsWith('table.filteredUpdate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredUpdates.has(payload.input.taskId)) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('history.delete') || historyDeleteCancel || payload.command.startsWith('binaryCellFiles.') || payload.command === 'cellFiles.saveText' || payload.command === 'relationshipDiagram.savePng' || payload.command.startsWith('gridRange.') || payload.command.startsWith('table.filteredUpdate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredUpdates.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('table.filteredDelete.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredDeletes.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.tableChecks.') || payload.command === 'queries.readText' || payload.command === 'queries.readBatch' || payload.command === 'history.readBatch' || payload.command === 'queries.copySql' || payload.command === 'history.copySql' || payload.command === 'history.exportSql' || payload.command === 'history.exportSqlArchive' || payload.command === 'history.saveQuery' || payload.command === 'history.saveQueryBatch' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions' || payload.command === 'table.exportFiltered' || payload.command === 'sqlite.tableExport' || payload.command === 'sqlite.queryExport' || payload.command === 'sqlite.workbookExport' || payload.command === 'postgres.workbookExport' || payload.command === 'mysql.workbookExport' || filteredExportCancel) columns = columnsMain.capture(event);

@@ -12,6 +12,7 @@ import { gridHeaderMenuZh as gridText } from '../../src/renderer/locales/gridHea
 import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { queryResultSnapshotFileMessages as filesText } from '../../src/main/queryResultSnapshotFiles';
+import { gridRangePngText } from '../../src/shared/gridRangePng';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 
@@ -24,6 +25,7 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
   const csv = join(dataDir, '匹配行.csv'), json = join(dataDir, '勾选行.json');
   const rectangle = join(dataDir, '选区.json');
   const quickTxt = join(dataDir, '离线选区.txt');
+  const quickPng = join(dataDir, '离线选区.png');
   const right = join(dataDir, '对比输入.dbark-result.json'), report = join(dataDir, '对比报告.json');
   const wire = JSON.stringify({
     kind: 'dbark.query-result-snapshot', version: 1, result: {
@@ -53,11 +55,11 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     const handlers = (ipcMain as any)._invokeHandlers, original = handlers.get('dbark:request');
     if (!contents || extra || typeof original !== 'function') throw Error('测试窗口归属无效');
     const frame = contents.mainFrame;
-    const state = { dialogs: [] as string[], engine: [] as string[], requests: [] as string[], denied: [] as string[], quickSaves: 0 };
+    const state = { dialogs: [] as string[], engine: [] as string[], requests: [] as string[], denied: [] as string[], quickSaves: 0, quickPngSaves: 0 };
     const reject = (command: string): never => { state.denied.push(command); throw Error('离线导出收到未授权请求 ' + command); };
     const allowed = new Set(['settings.get', 'settings.save', 'connections.list', 'tasks.list', 'history.list', 'app.info',
       'app.runtimeInfo', 'app.setDirty', 'app.menuState', 'workbench.get', 'workbench.save', 'workbench.protocolReady', 'workbench.protocolTake',
-      'workbench.protocolFinish', 'resultSnapshotFiles.open', 'files.choose', 'files.exportResult']);
+      'workbench.protocolFinish', 'resultSnapshotFiles.open', 'files.choose', 'files.exportResult', 'gridRange.choosePng', 'gridRange.savePng']);
     handlers.set('dbark:request', (event: Electron.IpcMainInvokeEvent, payload: { command: string; input: any }) => {
       if (event.sender !== contents || event.senderFrame !== frame || !allowed.has(payload.command)) reject(payload.command);
       if (payload.command === 'files.choose' && (payload.input.purpose !== 'export' || !['csv', 'json', 'txt'].includes(payload.input.format))) reject(payload.command);
@@ -71,6 +73,12 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
       return { canceled: false, filePaths: [compare ? paths.right : paths.source] };
     }) as typeof dialog.showOpenDialog;
     dialog.showSaveDialog = (async (parent: Electron.BrowserWindow, options: Electron.SaveDialogOptions) => {
+      if (options.title === paths.pngTitle) {
+        if (parent !== window || options.defaultPath !== paths.pngName ||
+            options.filters?.[0]?.extensions.join() !== 'png' || state.quickPngSaves) reject('showSaveDialog.png');
+        state.quickPngSaves++;
+        return { canceled: false, filePath: paths.quickPng };
+      }
       if (options.defaultPath === paths.txtName) {
         if (parent !== window || options.title !== '导出文件' || options.filters?.[0]?.extensions.join() !== 'txt' || state.quickSaves)
           reject('showSaveDialog.txt');
@@ -100,6 +108,7 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     }) as typeof utilityProcess.fork;
     return state;
   }, { source, csv, json, rectangle, right, report, quickTxt, txtName: rangeText.txtFilename,
+    quickPng, pngTitle: gridRangePngText.title, pngName: gridRangePngText.name,
     openTitle: filesText.choose, reportName: comparisonText.reportName });
 
   try {
@@ -245,6 +254,11 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     expect((await readFile(quickTxt, 'utf8')).replace(/^\uFEFF/, '')).toBe(
       '内容\t金额\r\n匹配丙\t9007199254740993.0002\r\n匹配甲\t9007199254740993.0002\r\n');
     await page.keyboard.press('Shift+F10');
+    await viewer.getByRole('menuitem', { name: rangeText.quickPng, exact: true }).click();
+    await expect(page.getByText(rangeText.pngSaved('离线选区.png'), { exact: true })).toBeVisible();
+    expect(await desktop.evaluate(({ nativeImage }, path) => nativeImage.createFromPath(path).getSize(), quickPng))
+      .toEqual({ width: 802, height: 170 });
+    await page.keyboard.press('Shift+F10');
     await viewer.getByRole('menuitem', { name: rangeText.action, exact: true }).click();
     const rectangleDialog = page.getByRole('dialog', { name: rangeText.action, exact: true });
     await expect(rectangleDialog.getByText(rangeText.summary(2, 2), { exact: true })).toBeVisible();
@@ -342,6 +356,8 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     expect(audit.denied).toEqual([]);
     expect(audit.dialogs).toEqual(['open', 'csv', 'rectangle', 'json', 'compare', 'report', 'compare']);
     expect(audit.quickSaves).toBe(1);
+    expect(audit.quickPngSaves).toBe(1);
+    expect(audit.requests.filter(command => command.startsWith('gridRange.'))).toEqual(['gridRange.choosePng', 'gridRange.savePng']);
     expect(audit.engine).toEqual(Array(5).fill('files.exportResult'));
     expect(audit.requests.filter(command => command === 'files.exportResult')).toHaveLength(5);
   } finally {

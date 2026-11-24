@@ -86,7 +86,7 @@ export function mainColumnsHarness() {
     tableApplyReceipts: undefined, pendingQueryHistory: new Map(), completionTasks: new Set(), preparingTasks: new Map(), postgresImportChecks: new Map(), exportProgress: new Map(), sessions: new Map(),
     savedQuerySearches: { has: () => false }, savedQueryExternal: { orphan() {}, hasSession: () => false }, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,
     rendererSettingsCurrent: true, rendererURL: 'app://renderer', process: { resourcesPath: 'ram' }, __dirname: 'ram', join: (...parts: string[]) => parts.join('/'),
-    app: { isPackaged: false, quit() {} }, productName, files: new Map(),
+    app: { isPackaged: false, quit() {} }, productName, files: new Map(), gridRangePngTarget: undefined,
     BrowserWindow: function () { const window = fakeWindow(); windows.push(window); return window; },
     ipcMain: { handle(channel: string, callback: typeof handler) { if (channel !== 'dbark:request') throw Error('非预期IPC通道'); handler = callback; } },
     validateCommand,

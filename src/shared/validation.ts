@@ -835,6 +835,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'binaryCellFiles.save': binaryCellFileSaveSchema,
   'relationshipDiagram.savePng': relationshipDiagramPngSchema,
   'gridRange.savePng': gridRangePngSchema,
+  'gridRange.choosePng': empty,
   'cellFiles.saveText': textCellFileSaveSchema,
   'schema.databaseDrop.get': z.object({ connectionId: id, database: databaseDropName, taskId: id }).strict(),
   'schema.databaseDrop.preview': z.object({ snapshotId: id, taskId: id }).strict(),

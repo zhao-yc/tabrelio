@@ -3229,18 +3229,23 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
     await expect(modal).toHaveCount(0);
     expect(readFileSync(output, 'utf8').replace(/^\uFEFF/, '')).toBe(expected);
   }
-  async function savePng(name: string, expected: string[]) {
-    const output = join(dataDir, name);
-    await desktop.evaluate(({ dialog, BrowserWindow }, output) => {
+  async function choosePng(output: string, delayed = false) {
+    await desktop.evaluate(({ dialog, BrowserWindow }, { output, delayed }) => {
       const original = dialog.showSaveDialog;
       dialog.showSaveDialog = (async (...args: unknown[]) => {
         dialog.showSaveDialog = original;
         const options = args.at(-1) as Electron.SaveDialogOptions;
         if (args[0] !== BrowserWindow.getAllWindows()[0] || options.title !== '保存选区 PNG' ||
             options.filters?.[0]?.extensions.join(',') !== 'png') throw Error('仅允许本例选区 PNG 保存选择');
+        if (delayed) await new Promise<void>(resolve => { Object.assign(globalThis, { releaseRangePng: resolve }); });
         return { canceled: false, filePath: output };
       }) as typeof original;
-    }, output);
+    }, { output, delayed });
+  }
+  const quickPng = page.getByRole('menuitem', { name: rangeExport.quickPng, exact: true });
+  async function savePng(name: string, expected: string[], anchor?: Locator) {
+    const output = join(dataDir, name);
+    await choosePng(output);
     const capture = await page.evaluateHandle(() => {
       const prototype = CanvasRenderingContext2D.prototype, original = prototype.fillText, values: string[] = [];
       prototype.fillText = function(value, ...position) {
@@ -3250,8 +3255,15 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
       return { values, restore: () => { prototype.fillText = original; } };
     });
     try {
-      await modal.getByRole('button', { name: rangeExport.png, exact: true }).click();
-      await expect(modal.getByRole('status')).toHaveText(rangeExport.pngSaved(name));
+      if (anchor) {
+        await anchor.click({ button: 'right' });
+        await quickPng.click();
+        await expect(page.getByText(rangeExport.pngSaved(name), { exact: true })).toBeVisible();
+        await expect(modal).toHaveCount(0);
+      } else {
+        await modal.getByRole('button', { name: rangeExport.png, exact: true }).click();
+        await expect(modal.getByRole('status')).toHaveText(rangeExport.pngSaved(name));
+      }
       expect(await capture.evaluate(port => port.values)).toEqual(expected);
       const image = await desktop.evaluate(({ nativeImage }, path) => {
         const preview = nativeImage.createFromPath(path);
@@ -3314,6 +3326,24 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
   await expect(page.getByText(rangeExport.stale, { exact: true })).toBeVisible();
   expect(readFileSync(outdated, 'utf8')).toBe('本例保留目标');
   expect(await tasks()).toEqual(beforeStale);
+  await queryStart.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await savePng('直接另存查询.png', ['name', '记录 180', '记录 179'], queryStart);
+  const priorImage = join(dataDir, '原选区目标.png');
+  writeFileSync(priorImage, '本例保留的原目标字节', { flag: 'wx' });
+  const imageBefore = readFileSync(priorImage);
+  await choosePng(priorImage, true);
+  await queryStart.click({ button: 'right' });
+  await quickPng.click();
+  await expect.poll(() => desktop.evaluate(() => typeof Reflect.get(globalThis, 'releaseRangePng') === 'function')).toBe(true);
+  await queryStart.click();
+  await desktop.evaluate(() => {
+    Reflect.get(globalThis, 'releaseRangePng')();
+    Reflect.deleteProperty(globalThis, 'releaseRangePng');
+  });
+  await expect(page.getByText(rangeExport.stale, { exact: true })).toBeVisible();
+  expect(readFileSync(priorImage)).toEqual(imageBefore);
+  expect(await tasks()).toEqual(beforeStale);
 
   await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
   const table = page.locator('.sqlite-table-tab:visible');
@@ -3333,6 +3363,7 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
   expect(draftJson.typed).toBe('');
   expect(draftJson.sqlite).toBe('');
   await saveTxt(draftStart, '矩形草稿.txt', 'name\r\n待提交\r\n待提交\r\n');
+  await savePng('直接另存草稿.png', ['name', '待提交', '待提交'], draftStart);
   await draftStart.click({ button: 'right' });
   await menu.click();
   const beforeDraft = await tasks();

@@ -2,9 +2,10 @@ import type { ResultExportData } from '../shared/contracts';
 import { gridRangePngText as text } from '../shared/gridRangePng';
 import { pngFileScale } from '../shared/pngFile';
 import { canvasPngBase64, fitCanvasText } from './canvasPng';
-import { cellPreview, ownCell } from './lib';
+import { cellPreview, invoke, ownCell } from './lib';
+import { gridRangeExportZh } from './locales/gridRangeExport.zh-CN';
 
-/** 使用导出窗口冻结的行列绘制全选区，范围与屏幕滚动及虚拟网格无关。 */
+/** 使用冻结行列绘制全选区，范围与屏幕滚动及虚拟网格无关。 */
 export function gridRangePng(data: ResultExportData): Promise<string> {
   if (!data.columns.length || !data.rows.length) throw Error(text.invalid);
   const columnWidth = 200, rowHeight = 28, padding = 10;
@@ -43,4 +44,14 @@ export function gridRangePng(data: ResultExportData): Promise<string> {
   context.fillRect(0, height - 1, width, 1);
   for (let x = 0; x < width; x += columnWidth) context.fillRect(x, 0, 1, height);
   return canvasPngBase64(canvas, text.invalid, text.tooLarge);
+}
+
+/** 准备图像及选择位置后分别核对原选区；只有仍有效时才提交已经授权的写入。 */
+export async function saveGridRangePng(data: ResultExportData, current: () => boolean) {
+  const base64 = await gridRangePng(data);
+  if (!current()) throw Error(gridRangeExportZh.stale);
+  const chosen = await invoke('gridRange.choosePng', {});
+  if (!chosen) return null;
+  if (!current()) throw Error(gridRangeExportZh.stale);
+  return invoke('gridRange.savePng', { base64, fileToken: chosen.token });
 }

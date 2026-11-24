@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { extname, join } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import { runInContext } from 'node:vm';
 import ts from 'typescript';
 import { mainColumnsHarness, deferred } from './main-columns-owner-harness';
@@ -14,6 +15,7 @@ import { assertSqliteExportDestination } from '../../src/main/sqliteExportDestin
 
 let main: ReturnType<typeof mainColumnsHarness>, directory: string;
 const bytes = Buffer.from('EFBBBF00FF22275C0D0AE4B8AD', 'hex');
+const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=';
 
 /** 真实IPC/dispatch及文件IO，只替换Electron选择器；退出等待函数同样从生产AST提取。 */
 beforeEach(async () => {
@@ -23,7 +25,7 @@ beforeEach(async () => {
   const declaration = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'queryFileOperation');
   if (!declaration) throw Error('未找到真实退出文件等待函数');
   Object.assign(main.context.store, { connections: () => [] });
-  Object.assign(main.context, { queryFileOperations: new Set(), binaryCellFileActive: false, binaryCellFileText, textCellFileTitle, gridRangePngText, extname, readBinaryCellFile, writeBinaryCellFile, writeTextCellFile, assertSqliteExportDestination, exportReservations: new ExportReservations(), dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() } });
+  Object.assign(main.context, { queryFileOperations: new Set(), binaryCellFileActive: false, binaryCellFileText, textCellFileTitle, gridRangePngText, basename, extname, randomUUID, readBinaryCellFile, writeBinaryCellFile, writeTextCellFile, assertSqliteExportDestination, exportReservations: new ExportReservations(), dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() } });
   runInContext(ts.transpileModule(declaration.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, main.context);
   main.request.mockImplementation(async () => { throw Error('二进制文件禁止调用Engine'); });
 });
@@ -34,7 +36,7 @@ const saveDialog = () => main.context.dialog.showSaveDialog as ReturnType<typeof
 
 describe('二进制单元格真实Main入口', () => {
   it('选区 PNG 拒绝非图片和非 PNG 路径，确认后沿原字节写入', async () => {
-    const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=';
+    const base64 = pngBase64;
     expect((await main.invoke('gridRange.savePng', { base64: bytes.toString('base64') })).ok).toBe(false);
     expect(saveDialog()).not.toHaveBeenCalled();
     const guard = join(directory, '原值.txt');
@@ -49,6 +51,35 @@ describe('二进制单元格真实Main入口', () => {
     expect(saveDialog()).toHaveBeenLastCalledWith(expect.anything(), { title: gridRangePngText.title, defaultPath: gridRangePngText.name,
       filters: [{ name: gridRangePngText.filter, extensions: ['png'] }] });
     expect(await readFile(output)).toEqual(png);
+    expect(main.request).not.toHaveBeenCalled();
+  });
+
+  it('选区 PNG 的最新位置只供同一文档写入一次，迟到和重放均保留目标原内容', async () => {
+    const first = join(directory, '原位置.png'), second = join(directory, '新位置.png');
+    await writeFile(first, bytes); await writeFile(second, bytes);
+    expect((await main.invoke('gridRange.choosePng', { filePath: first })).ok).toBe(false);
+    expect((await main.invoke('gridRange.savePng', { base64: pngBase64, fileToken: randomUUID() })).ok).toBe(false);
+    expect(saveDialog()).not.toHaveBeenCalled();
+    const choose = async (filePath: string) => {
+      saveDialog().mockResolvedValueOnce({ canceled: false, filePath });
+      return main.run('gridRange.choosePng', {});
+    };
+    const before = await choose(first), active = await choose(second);
+    expect(active).toEqual({ token: expect.any(String), name: '新位置.png' });
+    expect(await readFile(second)).toEqual(bytes);
+    expect((await main.invoke('gridRange.savePng', { base64: pngBase64, fileToken: before.token })).ok).toBe(false);
+    expect(await readFile(first)).toEqual(bytes);
+    const png = Buffer.from(pngBase64, 'base64');
+    expect(await main.run('gridRange.savePng', { base64: pngBase64, fileToken: active.token })).toEqual({ bytes: png.length, name: '新位置.png' });
+    expect(await readFile(second)).toEqual(png);
+    await writeFile(second, bytes);
+    expect((await main.invoke('gridRange.savePng', { base64: pngBase64, fileToken: active.token })).ok).toBe(false);
+    const oldDocument = await choose(second);
+    main.windows[0].webContents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+    expect((await main.invoke('gridRange.savePng', { base64: pngBase64, fileToken: oldDocument.token })).ok).toBe(false);
+    expect(await readFile(second)).toEqual(bytes);
+    expect(saveDialog()).toHaveBeenCalledTimes(3);
+    expect(main.context.files.size).toBe(0);
     expect(main.request).not.toHaveBeenCalled();
   });
   it('精确载入BOM/NUL/FF及零字节，回执只有basename和完整字节', async () => {

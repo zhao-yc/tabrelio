@@ -77,8 +77,8 @@ async function parentIdentity(path: string, guard: () => void): Promise<string> 
 }
 
 /** 原值先完整校验，同目录独占暂存/同步/关闭后才替换；替换成功后不再以迟到撤权抹掉事实。 */
-export async function writeBinaryCellFile(path: string, raw: BinaryCellFileSaveInput, guard: () => void, io: AtomicFileIO = nativeAtomicFileIO): Promise<NonNullable<BinaryCellFileSaveOutput>> {
-  const input = binaryCellFileSaveSchema.parse(raw);
+export async function writeBinaryCellFile(path: string, raw: BinaryCellFileSaveInput | string, guard: () => void, io: AtomicFileIO = nativeAtomicFileIO): Promise<NonNullable<BinaryCellFileSaveOutput>> {
+  const input = binaryCellFileSaveSchema.parse(typeof raw === 'string' ? { base64: raw } : raw);
   return writeCellFile(path, Buffer.from(input.base64, 'base64'), guard, io);
 }
 export async function writeTextCellFile(path: string, raw: TextCellFileSaveInput, guard: () => void, io: AtomicFileIO = nativeAtomicFileIO): Promise<NonNullable<BinaryCellFileSaveOutput>> {

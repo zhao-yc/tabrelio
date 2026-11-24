@@ -3,6 +3,7 @@ export const gridRangeExportZh = {
   txt: '另存选区为 TXT', txtFilename: '选区.txt',
   txtSaved: (name: string, rows: number) => `已保存 ${rows} 行选区到 ${name}`,
   png: '保存为 PNG', pngSaving: '正在保存 PNG…',
+  quickPng: '另存选区为 PNG',
   pngHint: '图片包含可见列名和选区行。长内容以省略号显示。',
   pngSaved: (name: string) => `已保存选区图片 ${name}`,
   summary: (rows: number, columns: number) => `将导出选区内的 ${rows} 行 × ${columns} 列。`,
