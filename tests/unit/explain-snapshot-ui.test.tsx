@@ -56,7 +56,16 @@ ${menu}return <><ActionMenu label={navigationZh.tools}>{toolActions}</ActionMenu
 
 beforeAll(async () => {
   document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); ({ ActionMenu, ActionMenuSection } = await import('../../src/renderer/components/ActionMenu')); ({ errorMessage } = await import('../../src/renderer/lib')); (document as any).oninput = null; const create = document.createElement.bind(document);
-  document.createElement = name => { const node = create(name); (node as any).scrollIntoView = vi.fn(); const set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; }; node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; }; return node; };
+  document.createElement = name => {
+    const node = create(name);
+    (node as any).scrollIntoView = vi.fn();
+    const set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node);
+    node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; };
+    node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; };
+    if (name === 'select') Object.defineProperty(node, 'options', {get: () => node.querySelectorAll('option')});
+    if (name === 'option') Object.defineProperty(node, 'value', {get: () => node.getAttribute('value') ?? node.textContent});
+    return node;
+  };
   ({ createRoot } = await import('react-dom/client')); ({ useWorkspace: store } = await import('../../src/renderer/store')); ({ ExplainSnapshotDialog: Dialog } = await import('../../src/renderer/components/ExplainSnapshotDialog')); ({ ExplainPlanView: View } = await import('../../src/renderer/components/ExplainPlanView')); ({ ExplainSnapshotSaveButton: Save } = await import('../../src/renderer/components/ExplainSnapshotSaveButton'));
 });
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.textContent = ''; bridge.mockReset(); });
@@ -180,11 +189,14 @@ it('差异查找匹配路径、两侧字段和值，在匹配间环绕并保留�
 
   await compareSearch('3');
   expect(document.body.textContent).toContain(text.compareFindEmpty);
-  const showAll = document.querySelector('input[type="checkbox"]')!;
-  await act(async () => props(showAll).onChange({ currentTarget: { checked: true } }));
+  const filter = document.querySelector('select')!;
+  await act(async () => props(filter).onChange({ currentTarget: { value: 'same' } }));
   expect(activePath()).toBe('3');
   expect(document.body.textContent).toContain(text.compareFindCount(1, 1));
   expect(document.body.textContent).toContain(text.compareCount(2, 3));
+  await act(async () => props(filter).onChange({ currentTarget: { value: 'all' } }));
+  await click(text.compareFindClear);
+  expect(document.querySelectorAll('button[aria-pressed]')).toHaveLength(3);
   expect(bridge).not.toHaveBeenCalled();
 });
 

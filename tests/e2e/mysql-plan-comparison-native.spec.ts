@@ -90,6 +90,11 @@ test('MySQL 系列估算、实测及离线快照可通过真实窗口对照基�
     const access = compare.getByRole('row', { name: /^access_type / }).getByRole('cell');
     await expect(access.nth(0)).toHaveText('ALL');
     await expect(access.nth(1)).toHaveText('const');
+    await compare.getByRole('combobox', { name: text.compareFilter, exact: true }).selectOption('changed');
+    await compare.getByRole('button', { name: text.compareSwap, exact: true }).click();
+    await expect(access.nth(0)).toHaveText('const');
+    await expect(access.nth(1)).toHaveText('ALL');
+    await expect(compare.getByRole('button', { pressed: true })).toContainText(tablePath);
     await compare.getByRole('button', { name: zh.dialogs.text001, exact: true }).click();
     expect(await receipts()).toEqual(beforeEstimate);
     await estimated.getByRole('button', { name: text.save, exact: true }).click();

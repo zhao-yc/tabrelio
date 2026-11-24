@@ -67,7 +67,7 @@ export function LivePlanFileActions({ outcome, complete, busy, isCurrent, onFile
     <ErrorBox message={error}/>
     {comparison && createPortal(<Modal title={title} onClose={() => setComparison(undefined)} wide>
       <div className="explain-snapshot-dialog"><PlanComparisonView comparison={comparison.value} dialect={dialect} tree={outcome.analysis?.format === 'tree'}
-        left={comparison.left} right={comparison.right} rightLabel={text.compareCurrent}/></div>
+        left={comparison.left} right={comparison.right} rightIsCurrent/></div>
     </Modal>, document.body)}
   </>;
 }

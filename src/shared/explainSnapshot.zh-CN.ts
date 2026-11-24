@@ -1,3 +1,5 @@
+const compareStatuses = { added: '新增', removed: '移除', changed: '变化', same: '一致' } as const;
+
 /** 执行计划文件文案由界面、主进程和有界编解码共同使用。 */
 export const explainSnapshotZh = {
   entry: '打开计划快照', title: '计划快照', choose: '选择计划快照文件',
@@ -27,7 +29,10 @@ export const explainSnapshotZh = {
   treeCompareHint: '按树中同级位置对齐。节点重排会在对应位置显示差异。',
   compareDescription: '节点说明', compareNeverExecuted: '未执行', compareYes: '是',
   compareLeft: '基准快照', compareRight: '对比快照', compareField: '变化字段',
-  compareSame: '节点与所比较的字段一致', compareShowAll: '显示未变化节点',
+  compareSame: '节点与所比较的字段一致',
+  compareFilter: '差异类型', compareFilters: { different: '全部差异', all: '全部节点', ...compareStatuses },
+  compareFilterEmpty: '没有该类型的节点。',
+  compareSwap: '交换比较方向', compareSwapHint: '新增与移除按从左到右判断。',
   compareFind: '查找计划差异', compareFindPlaceholder: '节点、路径、字段或值',
   compareFindPrevious: '上一个匹配路径', compareFindNext: '下一个匹配路径', compareFindClear: '清空差异查找',
   compareFindHint: 'Enter 查找下一处，Shift+Enter 查找上一处。',
@@ -35,7 +40,7 @@ export const explainSnapshotZh = {
   compareFindEmpty: '没有匹配的路径或变化字段。',
   compareCount: (different: number, total: number) => `${different} / ${total} 个路径存在变化`,
   compareMore: (count: number) => `还有 ${count} 项差异，请查看两个快照的原始输出。`,
-  compareStatuses: { added: '新增', removed: '移除', changed: '变化', same: '一致' },
+  compareStatuses,
 } as const;
 
 export const planComparisonTitles = {

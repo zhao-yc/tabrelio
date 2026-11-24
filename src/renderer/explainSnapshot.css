@@ -7,7 +7,7 @@
 /* 比较区沿用快照窗口边界，路径清单和差异详情各自滚动。 */
 .explain-comparison{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;height:min(57vh,640px);overflow:auto}
 .explain-comparison p{margin:0}.explain-comparison-sources{display:grid;grid-template-columns:1fr 1fr;gap:12px;overflow-wrap:anywhere}
-.explain-comparison-summary{display:flex;flex-wrap:wrap;align-items:center;gap:12px}.explain-comparison-summary label{display:inline-flex;align-items:center;gap:4px}
+.explain-comparison-summary{display:flex;flex-wrap:wrap;align-items:center;gap:12px}.explain-comparison-summary label{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.explain-comparison-summary label select{width:auto}
 .explain-comparison-search{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.explain-comparison-search>input{min-width:0;width:min(230px,100%)}
 .explain-comparison-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(150px,1fr) minmax(0,2.4fr);border:1px solid var(--line)}
 .explain-comparison-paths,.explain-comparison-detail{min-width:0;overflow:auto;padding:8px}.explain-comparison-detail{border-inline-start:1px solid var(--line)}

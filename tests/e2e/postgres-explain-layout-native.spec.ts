@@ -112,6 +112,12 @@ test('PostgreSQL 最小窗口可读，当前估算和实测计划直接对照基
     const estimatedDiff = comparison.getByRole('row', { name: /^Node Type / }).getByRole('cell');
     await expect(estimatedDiff.nth(0)).toHaveText('Seq Scan');
     await expect(estimatedDiff.nth(1)).toHaveText('Limit');
+    await comparison.getByRole('combobox', { name: snapshotText.compareFilter, exact: true }).selectOption('changed');
+    await expect(comparison.getByRole('status', { name: snapshotText.compareFind, exact: true })).toHaveText(snapshotText.compareFindCount(1, 1));
+    await comparison.getByRole('button', { name: snapshotText.compareSwap, exact: true }).click();
+    await expect(estimatedDiff.nth(0)).toHaveText('Limit');
+    await expect(estimatedDiff.nth(1)).toHaveText('Seq Scan');
+    await expect(findChange).toHaveValue('NODE TYPE');
     await page.screenshot({ path: info.outputPath('PostgreSQL当前估算计划对照基准.png') });
     await comparison.getByRole('button', { name: zh.dialogs.text001, exact: true }).click();
     await expect(cost).toBeInViewport({ ratio: 0.8 });

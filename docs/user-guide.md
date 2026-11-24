@@ -886,6 +886,8 @@ MySQL、MariaDB 和 PostgreSQL 的「实际执行计划」也提供此入口。�
 
 在实际执行计划或离线实际计划快照中，可按节点名称、指标名、指标显示值和原始路径查找。按 Enter 或 Shift+Enter 可循环跳到下一处或上一处。跳转只展开命中节点的祖先，其他分支的折叠状态会保留。
 
+比较两个计划快照或将当前计划与基准快照比较时，可按「差异类型」查看新增、移除、变化或一致的节点，并与路径、字段和值的查找组合使用。点「交换比较方向」会交换两边的来源和字段值，新增与移除按从左到右重新标记。查找文字和选中路径会保留，原计划和快照文件无需重新读取。
+
 选择节点后展开「节点原始数据」，可查看 MySQL 的原始 TREE 行及指标续行，或 MariaDB 和 PostgreSQL 的对应 JSON 对象。JSON 预览重新排版，数值保留服务器返回的精确文本。详情达到展示上限时，可切换到「分析原始输出」查看完整内容。
 
 实际执行计划和离线快照的「行数对照」按实测值减估算值的绝对值降序排列。可勾选「仅显示有差异的节点」，点击节点名称可回到分析树。MySQL 与 PostgreSQL 对照单次执行口径的输出行数，MariaDB 对照同口径的过滤前枚举行数。只有已执行且提供可比指标的节点会列出。[MySQL EXPLAIN ANALYZE](https://dev.mysql.com/doc/refman/8.4/en/explain.html#explain-analyze) · [MariaDB 行数口径](https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/analyze-and-explain-statements/analyze-interpreting-rows-and-filtered-members) · [PostgreSQL Using EXPLAIN](https://www.postgresql.org/docs/18/using-explain.html)
