@@ -632,6 +632,12 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       const nodeText = (await rawNode.textContent())!;
       if (dialect === 'mysql') expect(nodeText.trim()).toMatch(/^-> /);
       else expect(JSON.parse(nodeText)).toHaveProperty(dialect === 'mariadb' ? 'table_name' : 'Relation Name', 'json_subject');
+      await actualPlan.getByRole('button', { name: analyzeText.rowComparison, exact: true }).click();
+      const comparison = actualPlan.getByRole('table', { name: analyzeText.rowComparison, exact: true });
+      const compared = comparison.getByRole('row').filter({ hasText: 'json_subject' }).first();
+      await expect(compared.getByRole('cell').nth(1)).toHaveText(/^2(?:\.0+)?$/);
+      await compared.getByRole('button').click();
+      await expect(actualPlan.getByRole('treeitem', { selected: true })).toBeFocused();
       await expect(locate).toBeEnabled();
       await locate.click();
       const located = await selection();

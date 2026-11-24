@@ -10,6 +10,8 @@ export interface QueryAnalyzeMetric {
 export interface QueryAnalyzeNode {
   id: string; parent?: string; depth: number; label: string; path?: string; pathTruncated?: boolean;
   metrics: QueryAnalyzeMetric[]; neverExecuted?: boolean;
+  /** MariaDB 表节点中与估算 rows 同为过滤前枚举行数的实测来源。 */
+  comparableReadRows?: 'r_index_rows' | 'r_rows';
 }
 export interface QueryAnalyzePlan {
   dialect: QueryAnalyzeDialect | 'postgresql'; version: string; format: QueryAnalyzeFormat;
@@ -167,8 +169,14 @@ function mariaJson(plan: QueryAnalyzePlan): void {
     // 已截断路径不能被误用于另一个同名前缀节点；原估算指标来自原记录，不受此查找影响。
     const record = item.pathTruncated ? undefined : planValueAtPath(document, item.path);
     if (record && typeof record === 'object' && !Array.isArray(record)) {
-      for (const [source, unit] of [['r_total_time_ms', 'ms'], ['r_table_time_ms', 'ms'], ['r_other_time_ms', 'ms'], ['r_rows', 'rows'], ['r_loops', 'loops'], ['r_filtered', 'percent'], ['pages_read_time_ms', 'ms']] as const) {
+      for (const [source, unit] of [['r_total_time_ms', 'ms'], ['r_table_time_ms', 'ms'], ['r_other_time_ms', 'ms'], ['r_rows', 'rows'], ['r_index_rows', 'rows'], ['r_loops', 'loops'], ['r_filtered', 'percent'], ['pages_read_time_ms', 'ms']] as const) {
         addMetric(node, source, Object.getOwnPropertyDescriptor(record, source)?.value, 'actual', unit, plan);
+      }
+      if (item.kind === 'table') {
+        // r_rows 在索引条件或 Rowid Filter 之后计数，存在过滤时必须用明确的过滤前计数。
+        if (Object.hasOwn(record, 'r_index_rows')) node.comparableReadRows = 'r_index_rows';
+        else if (!['index_condition', 'rowid_filter', 'r_icp_filtered'].some(key => Object.hasOwn(record, key)))
+          node.comparableReadRows = 'r_rows';
       }
     }
     return node;

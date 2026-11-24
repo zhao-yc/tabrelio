@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { explainNodeDetail } from '../../src/shared/explain';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../src/shared/postgresExplain';
 import { validateCommand } from '../../src/shared/validation';
+import { queryAnalyzeRowComparisons } from '../../src/shared/queryAnalyzeRows';
 
 const options = { standardStrings: true, version: '18.1', format: 'auto' } as const;
 
 describe('PostgreSQL估算计划', () => {
+  it('实际计划按每轮输出对照，未执行的子节点不计入', () => {
+    const plan = parsePostgresAnalyze('[{"Plan":{"Node Type":"Index Scan","Plan Rows":4,"Actual Rows":1.25,"Actual Loops":12,"Plans":[{"Node Type":"Result","Plan Rows":1,"Actual Rows":0,"Actual Loops":0}]}}]', '18.6', false);
+    expect(queryAnalyzeRowComparisons(plan)).toEqual([{ node: plan.nodes[0], estimate: '4', actual: '1.25', delta: '-2.75' }]);
+  });
   it('两种计划命令都接受正文内的光标，并拒绝越界或多余字段', () => {
     const input = { sessionId: '原会话', taskId: '计划任务', sql: 'SELECT 1;', maxRows: 1, currentStatement: { offset: 2 } };
     for (const command of ['postgres.explain', 'query.explain'] as const) {

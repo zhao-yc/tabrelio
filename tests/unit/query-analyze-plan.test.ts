@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseQueryAnalyzePlan, queryAnalyzeCapability, queryAnalyzeLimits, queryAnalyzeNodeDetail } from '../../src/shared/queryAnalyze';
+import { queryAnalyzeRowComparisons } from '../../src/shared/queryAnalyzeRows';
 
 const tree = [
   '-> Nested loop inner join  (cost=12.0000000000000000001 rows=9007199254740993) (actual time=0.01234567890123456789..1.23e+2 rows=2.5 loops=3)',
@@ -28,6 +29,24 @@ describe('实际执行分析能力只依赖明确版本', () => {
 });
 
 describe('MySQL TREE的服务器原始缩进与精确指标', () => {
+  it('行数差值精确对齐小数和指数，按绝对差排序，跳过未执行的节点', () => {
+    const raw = [
+      '-> 精确低位 (cost=1 rows=9007199254740993.000000000000000001) (actual time=0..1 rows=9007199254740993.000000000000000002 loops=3)',
+      '-> 正差 (cost=1 rows=1e1) (actual time=0..1 rows=13.5 loops=2)',
+      '-> 负差 (cost=1 rows=22.75) (actual time=0..1 rows=0 loops=1)',
+      '-> 等值 (cost=1 rows=.5) (actual time=0..1 rows=5e-1 loops=1)',
+      '-> 未执行 (cost=1 rows=9) (never executed)',
+      '-> 循环为零 (cost=1 rows=8) (actual time=0..1 rows=0 loops=0)',
+    ].join('\n');
+    const plan = parseQueryAnalyzePlan(raw, 'mysql', '8.4.11', 'tree');
+    expect(queryAnalyzeRowComparisons(plan).map(row => [row.node.label, row.estimate, row.actual, row.delta])).toEqual([
+      ['负差', '22.75', '0', '-22.75'],
+      ['正差', '1e1', '13.5', '+3.5'],
+      ['精确低位', '9007199254740993.000000000000000001', '9007199254740993.000000000000000002', '+0.000000000000000001'],
+      ['等值', '.5', '5e-1', '0'],
+    ]);
+    expect(queryAnalyzeRowComparisons({ ...plan, rawTruncated: true })).toEqual([]);
+  });
   it('保留估算与实测、科学计数、小数和never executed，不相乘或求和', () => {
     const plan = parseQueryAnalyzePlan(tree, 'mysql', '8.4.11', 'tree');
     expect(plan.raw).toBe(tree); expect(plan.rawTruncated).toBe(false); expect(plan.warnings).toEqual([]);
@@ -83,6 +102,23 @@ describe('MySQL TREE的服务器原始缩进与精确指标', () => {
 });
 
 describe('MariaDB JSON的自身字段和实测语义', () => {
+  it('优先对照过滤前的索引枚举行数，拒绝用过滤后的行数补位', () => {
+    const node = (table_name: string, extra: object) => ({ table: { table_name, rows: 8, r_rows: 3, r_loops: 1, ...extra } });
+    const raw = JSON.stringify({ query_block: { nested_loop: [
+      node('覆盖过滤', { index_condition: 'x > 0', r_index_rows: 12 }),
+      node('索引后计数', { index_condition: 'x > 0' }),
+      node('Rowid 后计数', { rowid_filter: {} }),
+      node('只在读取后过滤', { attached_condition: 'x > 0' }),
+      node('索引计数未知', { r_index_rows: null }),
+      node('未执行', { r_loops: 0 }),
+      node('无循环证据', { r_loops: null }),
+    ] } });
+    const plan = parseQueryAnalyzePlan(raw, 'mariadb', '11.4.13-MariaDB', 'json');
+    expect(queryAnalyzeRowComparisons(plan).map(row => [row.node.label, row.actual, row.delta])).toEqual([
+      ['table · 只在读取后过滤', '3', '-5'],
+      ['table · 覆盖过滤', '12', '+4'],
+    ]);
+  });
   it('保留平均行数、循环和包含子节点的时间，不混用MySQL成本模型', () => {
     const raw = '{"query_block":{"select_id":1,"r_total_time_ms":12.3456789012345678901,"r_loops":1,"nested_loop":[{"table":{"table_name":"t","access_type":"ALL","rows":9007199254740993,"filtered":50,"r_rows":2.5,"r_loops":3,"r_filtered":0,"r_table_time_ms":1.23e-12,"r_other_time_ms":0}}]}}';
     const plan = parseQueryAnalyzePlan(raw, 'mariadb', '10.11.15-MariaDB', 'json');

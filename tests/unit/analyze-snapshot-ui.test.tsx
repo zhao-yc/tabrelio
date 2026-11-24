@@ -57,7 +57,7 @@ function props(node: Node) { return (node as any)[Object.keys(node).find(key => 
 async function key(node: Node, value: string) { await act(async () => node.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: value }))); }
 function selected() { return document.querySelectorAll('[role="treeitem"]').find(node => node.getAttribute('aria-selected') === 'true'); }
 
-it('离线实际分析支持节点查找、详情和原文复制，阅读操作没有额外 IPC', async () => {
+it('离线实际分析支持节点查找、详情、行数对照和原文复制，阅读操作没有额外 IPC', async () => {
   const outcome = fixture();
   bridge.mockResolvedValueOnce({ name: '实际分析.dbark-plan.json', snapshot: actualDocument(outcome) });
   await mount(<Dialog onClose={vi.fn()}/>);
@@ -80,6 +80,18 @@ it('离线实际分析支持节点查找、详情和原文复制，阅读操作�
   expect(nodeDetails()).toBeDefined();
   expect(nodeDetails()).not.toBe(details);
   expect(document.querySelector(`pre[aria-label="${analysisText.nodeData}"]`)).toBeNull();
+  await click(analysisText.rowComparison);
+  const rows = document.querySelector(`table[aria-label="${analysisText.rowComparison}"]`)!;
+  expect(rows.querySelectorAll('tbody')[0].querySelectorAll('tr')).toHaveLength(4);
+  const differentOnly = document.querySelectorAll('input').find(node => node.type === 'checkbox')!;
+  await act(async () => { differentOnly.checked = true; differentOnly.dispatchEvent(new MemoryEvent('click')); });
+  expect(rows.querySelectorAll('tbody')[0].querySelectorAll('tr')).toHaveLength(0);
+  expect(document.body.textContent).toContain(analysisText.rowComparisonEqual);
+  await act(async () => { differentOnly.checked = false; differentOnly.dispatchEvent(new MemoryEvent('click')); });
+  const tableNode = rows.querySelectorAll('button').find(node => node.textContent === 'Table scan on customer')!;
+  await act(async () => tableNode.dispatchEvent(new MemoryEvent('click')));
+  expect(selected()?.textContent).toContain('Table scan on customer');
+  expect(document.activeElement).toBe(selected());
   const packet: Record<string, string> = {};
   (document as any).execCommand = (command: string) => {
     if (command !== 'copy') throw Error('仅允许本例计划复制');
