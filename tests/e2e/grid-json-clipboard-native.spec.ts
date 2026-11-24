@@ -624,6 +624,14 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       await expect(actualPlan.getByRole('treeitem', { selected: true })).toContainText('json_subject');
       await expect(actualPlan.getByRole('treeitem', { selected: true })).toHaveAttribute('data-plan-match', 'true');
       await expect(planSearch).toBeFocused();
+      const nodeData = actualPlan.getByRole('region', { name: analyzeText.details, exact: true });
+      const rawNode = nodeData.getByLabel(analyzeText.nodeData, { exact: true });
+      await expect(rawNode).toHaveCount(0);
+      await nodeData.getByText(analyzeText.nodeData, { exact: true }).click();
+      await expect(rawNode).toContainText('json_subject');
+      const nodeText = (await rawNode.textContent())!;
+      if (dialect === 'mysql') expect(nodeText.trim()).toMatch(/^-> /);
+      else expect(JSON.parse(nodeText)).toHaveProperty(dialect === 'mariadb' ? 'table_name' : 'Relation Name', 'json_subject');
       await expect(locate).toBeEnabled();
       await locate.click();
       const located = await selection();

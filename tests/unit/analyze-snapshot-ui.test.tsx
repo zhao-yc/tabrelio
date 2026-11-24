@@ -57,7 +57,7 @@ function props(node: Node) { return (node as any)[Object.keys(node).find(key => 
 async function key(node: Node, value: string) { await act(async () => node.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: value }))); }
 function selected() { return document.querySelectorAll('[role="treeitem"]').find(node => node.getAttribute('aria-selected') === 'true'); }
 
-it('离线实际分析支持节点查找和原文复制，阅读操作没有额外 IPC', async () => {
+it('离线实际分析支持节点查找、详情和原文复制，阅读操作没有额外 IPC', async () => {
   const outcome = fixture();
   bridge.mockResolvedValueOnce({ name: '实际分析.dbark-plan.json', snapshot: actualDocument(outcome) });
   await mount(<Dialog onClose={vi.fn()}/>);
@@ -66,6 +66,20 @@ it('离线实际分析支持节点查找和原文复制，阅读操作没有额�
   await act(async () => { input.value = 'table scan on customer'; input.dispatchEvent(new MemoryEvent('input')); });
   await key(input, 'Enter');
   expect(selected()?.textContent).toContain('Table scan on customer');
+  const nodeDetails = () => document.querySelectorAll('summary').find(node => node.textContent === analysisText.nodeData)?.parentNode;
+  const details = nodeDetails()!;
+  expect(document.querySelector(`pre[aria-label="${analysisText.nodeData}"]`)).toBeNull();
+  await act(async () => {
+    // RAM 中只补浏览器的原生展开状态，仍经过真实 React toggle 处理器。
+    (details as typeof details & { open: boolean }).open = true;
+    details.dispatchEvent(new MemoryEvent('toggle'));
+  });
+  const detailText = document.querySelector(`pre[aria-label="${analysisText.nodeData}"]`)?.textContent;
+  expect(detailText).toBe(outcome.analysis!.raw.split('\n')[2]);
+  await key(selected()!, 'End');
+  expect(nodeDetails()).toBeDefined();
+  expect(nodeDetails()).not.toBe(details);
+  expect(document.querySelector(`pre[aria-label="${analysisText.nodeData}"]`)).toBeNull();
   const packet: Record<string, string> = {};
   (document as any).execCommand = (command: string) => {
     if (command !== 'copy') throw Error('仅允许本例计划复制');

@@ -10,6 +10,7 @@ export const queryAnalyzeZh = {
   view: '实际执行计划', tree: '分析树', raw: '分析原始输出', details: '分析节点详情',
   findPlaceholder: '查找节点名称、指标或原始路径',
   findHint: '查找最多 200 字符，范围包括已收起节点。按 Enter 或 Shift+Enter 跳到下一处或上一处。',
+  nodeData: '节点原始数据', nodeDataUnavailable: '无法从计划原文读取此节点。',
   source: '分析来源', actual: '实测指标', estimate: '估算指标', unavailable: '未提供指标',
   neverExecuted: '未执行', path: '原始路径', pathTruncated: '路径展示已截断，请查看原始输出。', empty: '当前输出未生成分析树，请查看原始输出和警告。',
   rawMissing: '服务器未返回可展示的分析原文。', truncated: '分析输出已截断，不能视为完整计划。',

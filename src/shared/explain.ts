@@ -169,6 +169,6 @@ export function explainNodeDetail(raw: string, path: string): string {
     const value = planValueAtPath(readExplainJson(raw), path);
     if (value === undefined) return '';
     const text = JSON.stringify(value, null, 2);
-    return text.length > explainLimits.detail ? text.slice(0, explainLimits.detail) + '\n…详情展示已截断，请查看原始输出' : text;
+    return text.length > explainLimits.detail ? propertyPrefix(text, explainLimits.detail) + '\n…详情展示已截断，请查看原始输出' : text;
   } catch { return ''; }
 }

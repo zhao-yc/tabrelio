@@ -1,4 +1,4 @@
-import { parseExplainPlan, planValueAtPath, readExplainJson } from './explain';
+import { explainLimits, explainNodeDetail, parseExplainPlan, planValueAtPath, readExplainJson } from './explain';
 
 /** 实测计划只保留有界原文和展示节点；指标保留服务器十进制文本，不求和或转浮点数。 */
 export const queryAnalyzeLimits = { rawBytes: 192 * 1024, nodes: 300, depth: 64, label: 1024, path: 2048, metrics: 32, metricValue: 80 } as const;
@@ -67,6 +67,27 @@ const actualPattern = new RegExp('\\s+\\(actual time=(' + numeric + ')\\.\\.(' +
 const costPattern = new RegExp('\\s+\\(cost=(' + numeric + ')(?:\\.\\.(' + numeric + '))? rows=(' + numeric + ')\\)$');
 const continuationGroup = '(?:\\(actual time=' + numeric + '\\.\\.' + numeric + ' rows=' + numeric + ' loops=' + numeric + '\\)|\\(cost=' + numeric + '(?:\\.\\.' + numeric + ')? rows=' + numeric + '\\)|\\(never executed\\))';
 const continuationPattern = new RegExp('^' + continuationGroup + '(?:\\s+' + continuationGroup + ')*$');
+const mysqlArrow = /^( *)-> (.+)$/;
+
+/** 从已返回的完整计划读取本节点。TREE 仅包含原箭头行和已识别的指标续行。 */
+export function queryAnalyzeNodeDetail(plan: QueryAnalyzePlan, node: QueryAnalyzeNode): string {
+  const { path, pathTruncated } = node;
+  if (plan.rawTruncated || pathTruncated || path === undefined || plan.raw.length > queryAnalyzeLimits.rawBytes) return '';
+  if (plan.format === 'json') return (!path || path.startsWith('/')) ? explainNodeDetail(plan.raw, path) : '';
+  const position = /^line:([1-9]\d*)$/.exec(path);
+  if (!position) return '';
+  const lines = plan.raw.split('\n'), start = Number(position[1]) - 1;
+  if (!mysqlArrow.test(lines[start]?.replace(/\r$/, '') ?? '')) return '';
+  let end = start;
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index].trim();
+    if (!line) continue;
+    if (!continuationPattern.test(line)) break;
+    end = index;
+  }
+  const original = lines.slice(start, end + 1).join('\n').replace(/\r$/, '');
+  return original.length <= explainLimits.detail ? original : prefix(original, explainLimits.detail) + '\n…详情展示已截断，请查看原始输出';
+}
 
 /** 每个指标独立确认原文与长度；无值或非法值保持缺失，不补零。 */
 function addMetric(node: QueryAnalyzeNode, source: string, value: unknown, kind: QueryAnalyzeMetric['kind'], unit: QueryAnalyzeMetric['unit'], plan: QueryAnalyzePlan): void {
@@ -85,7 +106,7 @@ function mysqlLines(plan: QueryAnalyzePlan): { indent: number; description: stri
   for (const line of plan.raw.split(/\r?\n/)) {
     lineNumber++;
     if (!line.trim()) continue;
-    const found = /^( *)-> (.+)$/.exec(line);
+    const found = mysqlArrow.exec(line);
     if (found) {
       output.push({ indent: found[1].length, description: found[2].trimEnd(), lineNumber });
       // 多读一条只用于证明仍有未展示节点；最终是否先触及深度上限由树构造阶段报告。

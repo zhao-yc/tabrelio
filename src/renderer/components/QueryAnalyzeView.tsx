@@ -1,6 +1,6 @@
 import { UsageHelp } from './ui';
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import type { QueryAnalyzeMetric, QueryAnalyzeNode, QueryAnalyzePlan } from '../../shared/queryAnalyze';
+import { queryAnalyzeNodeDetail, type QueryAnalyzeMetric, type QueryAnalyzeNode, type QueryAnalyzePlan } from '../../shared/queryAnalyze';
 import type { QueryOutcome } from '../../shared/contracts';
 import type { AnalyzeSnapshotDocument } from '../../shared/explainSnapshot';
 import { explainSnapshotZh as snapshotText } from '../../shared/explainSnapshot.zh-CN';
@@ -17,6 +17,16 @@ import '../explainSnapshot.css';
 function metricTitle(metric: QueryAnalyzeMetric): string { return Object.hasOwn(t.metricLabels, metric.source) ? t.metricLabels[metric.source] : metric.source; }
 /** 单位只作展示附注，不能把原始十进制字符串转成 JavaScript 数值。 */
 function metricValue(metric: QueryAnalyzeMetric): string { return metric.value + (metric.unit ? ` ${t.units[metric.unit]}` : ''); }
+
+/** 展开时才读取节点数据，切换节点后丢弃上一个展开状态。 */
+function AnalyzeNodeData({ plan, node }: { plan: QueryAnalyzePlan; node: QueryAnalyzeNode }) {
+  const [open, setOpen] = useState(false);
+  const data = useMemo(() => open ? queryAnalyzeNodeDetail(plan, node) : '', [open, plan, node]);
+  return <details className="query-analyze-node-data" onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary>{t.nodeData}</summary>
+    {open && (data ? <pre className="query-analyze-raw" tabIndex={0} aria-label={t.nodeData}>{data}</pre> : <p>{t.nodeDataUnavailable}</p>)}
+  </details>;
+}
 
 /** 文件入口只接收当前计划对应结果；未启用时保持纯只读展示。 */
 export interface QueryAnalyzeViewProps {
@@ -153,7 +163,9 @@ function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, sourceLocation, fi
             <span className="query-analyze-node-metrics">{node.metrics.filter(metric => metric.kind === 'actual').slice(0, 3).map(metric => `${metricTitle(metric)}：${metricValue(metric)}`).join(' · ') || (node.neverExecuted ? t.neverExecuted : t.unavailable)}</span>
           </button>)}</div>
         </div>
-        {current && <section className="query-analyze-detail" aria-label={t.details}><strong>{current.label}</strong>{current.neverExecuted && <p>{t.neverExecuted}</p>}{(['actual', 'estimate'] as const).map(kind => <div key={kind}><h3>{t[kind]}</h3><dl>{current.metrics.filter(metric => metric.kind === kind).length ? current.metrics.filter(metric => metric.kind === kind).map((metric, index) => <div key={metric.source + index}><dt>{metricTitle(metric)}<small>{metric.source}</small></dt><dd>{metricValue(metric)}</dd></div>) : <div><dd>{t.unavailable}</dd></div>}</dl></div>)}{current.path !== undefined && <p className="muted small">{t.path}：{current.path || '/'}{current.pathTruncated && <span className="query-analyze-warning"> · {t.pathTruncated}</span>}</p>}</section>}
+        {current && <section className="query-analyze-detail" aria-label={t.details}><strong>{current.label}</strong>{current.neverExecuted && <p>{t.neverExecuted}</p>}{(['actual', 'estimate'] as const).map(kind => <div key={kind}><h3>{t[kind]}</h3><dl>{current.metrics.filter(metric => metric.kind === kind).length ? current.metrics.filter(metric => metric.kind === kind).map((metric, index) => <div key={metric.source + index}><dt>{metricTitle(metric)}<small>{metric.source}</small></dt><dd>{metricValue(metric)}</dd></div>) : <div><dd>{t.unavailable}</dd></div>}</dl></div>)}{current.path !== undefined && <p className="muted small">{t.path}：{current.path || '/'}{current.pathTruncated && <span className="query-analyze-warning"> · {t.pathTruncated}</span>}</p>}
+          {!plan.rawTruncated && !current.pathTruncated && current.path !== undefined && <AnalyzeNodeData key={current.id} plan={plan} node={current}/>}
+        </section>}
       </div>}
     </div>
   </section>;

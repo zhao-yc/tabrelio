@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseQueryAnalyzePlan, queryAnalyzeCapability, queryAnalyzeLimits } from '../../src/shared/queryAnalyze';
+import { parseQueryAnalyzePlan, queryAnalyzeCapability, queryAnalyzeLimits, queryAnalyzeNodeDetail } from '../../src/shared/queryAnalyze';
 
 const tree = [
   '-> Nested loop inner join  (cost=12.0000000000000000001 rows=9007199254740993) (actual time=0.01234567890123456789..1.23e+2 rows=2.5 loops=3)',
@@ -70,6 +70,13 @@ describe('MySQL TREE的服务器原始缩进与精确指标', () => {
     expect(plan.nodes[0].metrics).toContainEqual({ source: 'actual.last_row_time_ms', value: '0.2', kind: 'actual', unit: 'ms' });
     expect(plan.nodes[1].metrics).toEqual([]);
     expect(plan.nodes[2].metrics).toContainEqual({ source: 'cost', value: '1', kind: 'estimate', unit: 'cost' });
+    const crlf = parseQueryAnalyzePlan(raw.replaceAll('\n', '\r\n'), 'mysql', '8.4.11', 'tree');
+    expect(crlf.nodes.map(node => queryAnalyzeNodeDetail(crlf, node))).toEqual([
+      '-> join (cost=12 rows=2)\r\n(actual time=0.1..0.2 rows=2 loops=1)',
+      '    -> Hash',
+      '        -> table\r\n(cost=1 rows=2) (actual time=0.01..0.02 rows=2 loops=1)',
+    ]);
+    expect(queryAnalyzeNodeDetail(crlf, { ...crlf.nodes[0], path: 'line:2' })).toBe('');
     expect(plan.raw).toBe(raw); expect(plan.warnings).toEqual([]);
     expect(parseQueryAnalyzePlan('(actual time=0..1 rows=1 loops=1)', 'mysql', '8.4.11', 'tree').nodes).toEqual([]);
   });
@@ -88,6 +95,11 @@ describe('MariaDB JSON的自身字段和实测语义', () => {
     expect(tableNode.metrics).toContainEqual({ source: 'r_filtered', value: '0', kind: 'actual', unit: 'percent' });
     expect(tableNode.metrics).toContainEqual({ source: 'r_table_time_ms', value: '1.23e-12', kind: 'actual', unit: 'ms' });
     expect(tableNode.metrics.filter(metric => metric.unit === 'cost')).toEqual([]);
+    const detail = JSON.parse(queryAnalyzeNodeDetail(plan, tableNode));
+    expect(detail).toMatchObject({ table_name: 't', rows: '9007199254740993', r_table_time_ms: '1.23e-12', r_other_time_ms: '0' });
+    expect(detail).not.toHaveProperty('select_id');
+    expect(queryAnalyzeNodeDetail(plan, { ...tableNode, pathTruncated: true })).toBe('');
+    expect(queryAnalyzeNodeDetail({ ...plan, rawTruncated: true }, tableNode)).toBe('');
   });
   it('原型同名、JSON Pointer转义、零值与缺项按真实自身字段处理', () => {
     const raw = '{"__proto__":{"a/b~c":{"r_total_time_ms":0,"r_rows":0,"rows":7}},"constructor":{"r_loops":2}}';
