@@ -958,9 +958,11 @@ MySQL 和 MariaDB 查询页可在「会话与执行选项」开启「采集执�
 
 开启「采集服务端阶段」后，展开「执行状态」并点击某条语句的阶段数，可查看服务器记录的阶段及各自耗时。应用通过独立连接读取 Performance Schema，需要服务器已启用语句与阶段采集，并允许当前账号读取相应表。每条命令最多显示 64 条已保留的直接阶段。历史缓冲区或采集配置可能造成记录缺失，窗口会继续显示客户端执行状态。取消后仍可查看此前已取得的阶段。
 
-SQLite 查询页从「更多查询操作 → 执行与分析 → 执行并导出完整结果」打开导出。非空单选区优先，空光标使用全文。导出使用独立只读连接执行 SELECT 或 WITH 查询，读取已提交数据。选择 CSV、CSV ZIP、JSON 或 Excel，以及保存位置，再点击「执行查询并保存」。含 `:name` 时先设置本次导出参数。JSON 要求列名唯一，数值以字符串保留精度。详见 [SQLite 完整查询导出](development/sqlite-query-export-20261107.md)。
+SQLite 查询页从「更多查询操作 → 执行与分析 → 执行并导出完整结果」打开导出。非空单选区优先，空光标使用全文。导出使用独立只读连接执行 SELECT 或 WITH 查询，读取已提交数据。选择 CSV、CSV ZIP、JSON 或 Excel，以及保存位置，再点击「执行查询并保存」。含 `:name` 时先设置本次导出参数。默认 JSON 为单条查询的对象数组，要求列名唯一，数值以字符串保留精度。详见 [SQLite 完整查询导出](development/sqlite-query-export-20261107.md)。
 
-SQLite 选择 Excel 时最多导出 64 条查询，每条写入一张工作表。CSV ZIP 最多导出 200 条查询，每条写入一个 CSV，清单记录列映射和结果名称。两种格式均保留空结果的列标题，多条查询共用同一个主库只读快照，同名参数复用同一个值。普通 CSV 和 JSON 接收一条查询。[SQLite 多查询 Excel 工作簿](development/sqlite-query-export-20261107.md#多查询-excel-工作簿) [SQLite 多查询 CSV ZIP](development/sqlite-query-export-20261107.md#多查询-csv-zip)
+SQLite 选择 Excel 时最多导出 64 条查询，每条写入一张工作表。CSV ZIP 最多导出 200 条查询，每条写入一个 CSV，清单记录列映射和结果名称。多条查询共用同一个主库只读快照，同名参数复用同一个值。[SQLite 多查询 Excel 工作簿](development/sqlite-query-export-20261107.md#多查询-excel-工作簿) [SQLite 多查询 CSV ZIP](development/sqlite-query-export-20261107.md#多查询-csv-zip)
+
+选择 JSON 并勾选「包含结果名称和列定义（支持多条查询）」可将最多 200 条查询保存到同一个文件。各组结果按语句顺序写入 `results` 数组，保留 `NAME:`、原列名及空结果。这个选项和编码可保存为导出方案。文件用于按结果组读取，表数据导入仍使用单查询对象数组。[SQLite 多查询 JSON](development/sqlite-query-export-20261107.md#多查询-json)
 
 PostgreSQL 查询页的「执行并导出完整结果」可将 SELECT／WITH 查询分批保存为 CSV、CSV ZIP、JSON 或 Excel。非空单选区优先，空光标使用全文。导出使用独立只读会话，读取目标数据库已提交的数据。选好格式、编码和文件后点击「执行查询并保存」，完成后显示行数。含命名或位置参数时，先点击「设置导出参数」填写类型和值，再采用本次参数。[完整查询导出](development/postgres-query-export-20261107.md) [参数导出](development/postgres-export-parameters-20261107.md)
 
@@ -1324,7 +1326,7 @@ JSON 保存全部异构结果集与状态结果，文件包含 `DBArk-query-resu
 
 MySQL 和 MariaDB 的查询窗口也可选择「Excel（XLSX）：每个行结果集一张工作表」。结果按服务器返回顺序写入，空结果保留标题，执行状态显示在窗口摘要。工作簿可保存超过预览上限的行，另有 64 张工作表、500 万个单元格和 256 MiB 文件上限。至少返回一个行结果集才会保存工作簿。[完整查询 XLSX 导出](development/query-stream-xlsx-20261108.md)
 
-语句头的 `NAME:` 标题也会写入 MySQL、MariaDB 和 PostgreSQL 完整查询 JSON 的对应行结果 `label`。MySQL、MariaDB、PostgreSQL 和 SQLite 的 CSV ZIP 均在 `manifest.json` 用同一字段记录名称，文件按 `results/rows-001.csv` 等序号对应。未命名结果省略 `label`，空结果仍保留原有名称、列和序号。
+语句头的 `NAME:` 标题也会写入完整查询 JSON 的对应行结果 `label`。SQLite 需勾选「包含结果名称和列定义」。CSV ZIP 在 `manifest.json` 用同一字段记录名称，文件按 `results/rows-001.csv` 等序号对应。未命名结果省略 `label`，空结果仍保留原有名称、列和序号。
 
 完整流式 CSV 和 CSV ZIP 的“CSV导出分隔符”均可选择逗号（默认）、分号或制表符（Tab）。ZIP 内所有行结果使用同一分隔符，清单记录实际选择；字段包含当前分隔符、双引号或换行时按 CSV 规则引用，NULL、空字符串、反斜线及二进制仍沿用原协议。修改分隔符会撤销原保存文件和执行确认，须重新选择文件并确认后才能执行；恢复原分隔符也不会恢复旧确认。选择文件、执行期间及完成后锁定该选项。JSON 和 SQL 没有此选项。
 

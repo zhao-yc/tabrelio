@@ -12,6 +12,7 @@ const protector = { available: () => false, encrypt: () => '', decrypt: (value: 
 const csv = { name: '日报', options: { format: 'csv', encoding: 'gb18030', delimiter: '\t' } };
 const insert = { name: '日报', options: { format: 'sql', target: { schema: '报表', table: '数据', columns: ['编号', '附注'] } } };
 const csvZip = { name: '压缩报表', options: { format: 'csv-zip', encoding: 'utf16le', delimiter: ';' } };
+const jsonResults = { name: '完整脚本结果', options: { format: 'json', encoding: 'utf16le', jsonResults: true } };
 const sqlite = { dialect: 'sqlite' };
 const postgres = { dialect: 'postgresql' };
 let folder: string, file: string, store: LocalStore;
@@ -34,8 +35,9 @@ describe('完整查询导出方案', () => {
     expect(sqliteList).toMatchObject([csv]); expect(postgresList).toMatchObject([insert, csvZip]);
     const recordProfile = { name: 'XML 记录', options: { format: 'xml-attributes' } };
     store.mutateFullQueryExportProfiles({ ...sqlite, kind: 'add', profile: recordProfile });
-    const sqliteProfiles = store.mutateFullQueryExportProfiles({ ...sqlite, kind: 'add', profile: csvZip });
-    expect(sqliteProfiles).toMatchObject([csv, recordProfile, csvZip]);
+    store.mutateFullQueryExportProfiles({ ...sqlite, kind: 'add', profile: csvZip });
+    const sqliteProfiles = store.mutateFullQueryExportProfiles({ ...sqlite, kind: 'add', profile: jsonResults });
+    expect(sqliteProfiles).toMatchObject([csv, recordProfile, csvZip, jsonResults]);
     store.saveSettings({ ...store.settings(), theme: 'light' });
     store.close();
     store = await LocalStore.open(file, wasm, protector);
@@ -78,6 +80,9 @@ describe('完整查询导出方案', () => {
       expect(() => validateCommand('queryExportProfiles.mutate', request)).toThrow();
       expect(() => store.mutateFullQueryExportProfiles(request)).toThrow();
     }
+    const wrongJsonScope = {...postgres, kind: 'add', profile: jsonResults};
+    expect(() => validateCommand('queryExportProfiles.mutate', wrongJsonScope)).toThrow();
+    expect(() => store.mutateFullQueryExportProfiles(wrongJsonScope)).toThrow();
     expect(() => validateCommand('queryExportProfiles.list', { ...sqlite, connectionId: '不需要的连接' })).toThrow();
     expect(readFileSync(file)).toEqual(before);
   });

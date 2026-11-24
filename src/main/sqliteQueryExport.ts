@@ -19,38 +19,41 @@ import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import { dataFileWriter } from '../engine/dataMarkupExport';
 import { prepareQueryCsvZip, QueryCsvArchive } from '../engine/queryCsvZip';
 import { queryStreamExportLimits } from '../shared/queryStreamExport';
+import { queryJsonResultsEnd, queryJsonResultsStart, queryJsonRowsEnd, queryJsonRowsStart } from '../engine/queryJsonResults';
 
 export type SqliteQueryExportRequest = SqliteQueryExportInput & SqliteExportDestination;
 
 /** 先核对全文和数量，原生只读进程仍逐条复核实际语句类型和尾部。 */
-function sqliteQueryExportStatements(sql: string, format?: SqliteQueryExportInput['format']) {
-  const limit = format === 'xlsx' ? EXCEL_LIMITS.maxSheets : format === 'csv-zip' ? queryStreamExportLimits.results : 1;
+function sqliteQueryExportStatements(sql: string, format?: 'xlsx' | 'csv-zip' | 'json') {
+  const limit = format === 'xlsx' ? EXCEL_LIMITS.maxSheets : format ? queryStreamExportLimits.results : 1;
   const statements = sqliteStatementRanges(sql);
-  if (!statements.length || statements.length > limit)
+  if (!statements.length || statements.length > limit) {
+    const label = format === 'xlsx' ? 'Excel' : format === 'csv-zip' ? 'CSV ZIP' : '多结果 JSON';
     throw Error(limit === 1 ? 'SQLite 完整导出只接受单条 SELECT 或 WITH 查询' :
-      `SQLite ${format === 'xlsx' ? 'Excel' : 'CSV ZIP'} 导出需要 1 至 ${limit} 条查询`);
+      `SQLite ${label} 导出需要 1 至 ${limit} 条查询`);
+  }
   if (statements.some(part => !['SELECT', 'WITH'].includes(sqliteLeadingKeyword(part.sql) ?? '')))
     throw Error('SQLite 完整导出只接受 SELECT 或 WITH 查询');
   return statements;
 }
 
 /** 多结果导出内重复名称只询问一次，每条语句只绑定实际引用的值。 */
-export function sqliteQueryExportParameterNames({sql, workbook, csvZip, sqliteNavicatParameters}: SqliteQueryExportSource): QueryParameterNames {
-  sqliteQueryExportStatements(sql, workbook ? 'xlsx' : csvZip ? 'csv-zip' : undefined);
+export function sqliteQueryExportParameterNames({sql, workbook, csvZip, jsonResults, sqliteNavicatParameters}: SqliteQueryExportSource): QueryParameterNames {
+  sqliteQueryExportStatements(sql, workbook ? 'xlsx' : csvZip ? 'csv-zip' : jsonResults ? 'json' : undefined);
   return sqliteParameterInfo(sql, sqliteNavicatParameters);
 }
 
 /** 打开源库前核对全部语句和参数。每条语句只发送原生驱动要求的实际绑定。 */
 export function sqliteQueryExportPlan(input: SqliteQueryExportInput) {
-  const multiple = input.format === 'xlsx' || input.format === 'csv-zip';
-  const statements = sqliteQueryExportStatements(input.sql, input.format);
+  const multipleFormat = input.format === 'xlsx' || input.format === 'csv-zip' ? input.format : input.jsonResults ? 'json' : undefined;
+  const statements = sqliteQueryExportStatements(input.sql, multipleFormat);
   const {sql, names} = sqliteParameterPlan(input.sql, input.sqliteNavicatParameters);
   const values = validateSqliteQueryParameters(input.parameters ?? []);
   if (values.size !== names.length || names.some(name => !values.has(name))) throw Error('SQLite 导出参数必须完整匹配模板中的参数名称');
   return statements.map(part => {
-    const statement = multiple ? sql.slice(part.start, part.end) : sql;
-    const used = multiple && statements.length > 1 ? sqliteNamedParameterNames(statement) : names;
-    const title = multiple ? queryResultTitle(part.sql, 'sqlite') : undefined;
+    const statement = multipleFormat ? sql.slice(part.start, part.end) : sql;
+    const used = multipleFormat && statements.length > 1 ? sqliteNamedParameterNames(statement) : names;
+    const title = multipleFormat ? queryResultTitle(part.sql, 'sqlite') : undefined;
     return {sql: statement, namedParameters: Object.fromEntries(used.map(name => [':' + name, values.get(name)!])) as Record<string, SqliteValue>,
       ...(title ? {title} : {})};
   });
@@ -66,15 +69,17 @@ export async function prepareSqliteQueryExport(driver: SqliteDriverSession, inpu
   const csvZip = input.format === 'csv-zip';
   const delimiter = csvExportDelimiter(csvZip ? 'csv' : input.format, input.csvDelimiter);
   const archive = csvZip ? new QueryCsvArchive(file, input.encoding, check, delimiter) : undefined;
-  const sharedSnapshot = workbook || csvZip;
+  const sharedSnapshot = workbook || csvZip || input.jsonResults;
   type Workbook = Awaited<ReturnType<typeof createExcelWorkbookWriter>>;
   let excel: Workbook | undefined;
   let count = 0;
   try {
     check();
-    if (archive) {
-      await prepareQueryCsvZip(input.filePath, check);
-      await file.open();
+    if (archive) await prepareQueryCsvZip(input.filePath, check);
+    if (archive || input.jsonResults) await file.open();
+    if (input.jsonResults) {
+      if (input.encoding === 'utf16le') await file.write('\uFEFF');
+      await file.write(queryJsonResultsStart);
     }
     if (sharedSnapshot) {
       if (!driver.readOnly || (await driver.execute('BEGIN')).transaction !== true)
@@ -97,22 +102,25 @@ export async function prepareSqliteQueryExport(driver: SqliteDriverSession, inpu
           check();
           if (statement.index !== 0 || columns || !statement.columns.length) throw Error('SQLite 查询导出必须恰好产生一组查询结果');
           columns = statement.columns.map(column => column.name);
-          if (archive) {
+          if (archive || input.jsonResults || workbook) {
             const headers = resultExportColumns(columns.map((name, index) => ({key: String(index), name})))
               .map((column, index) => ({...column, position: index + 1, type: 'SQLITE'}));
-            await archive.start({resultOrdinal: ordinal, statementOrdinal: ordinal, rowResultOrdinal: ordinal, title: query.title}, headers);
-            await archive.text(headers.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n');
-            return;
-          }
-          if (workbook) {
-            if (!excel) {
-              await file.open();
-              excel = await createExcelWorkbookWriter({filePath: input.filePath, deferredAtomicFile: file.excelFile(),
-                checkCancelled: check, onCommitStart: () => { throw Error('SQLite Excel 不能自行发布文件'); }});
+            const frame = {resultOrdinal: ordinal, statementOrdinal: ordinal, rowResultOrdinal: ordinal, title: query.title};
+            if (archive) {
+              await archive.start(frame, headers);
+              await archive.text(headers.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n');
+            } else if (input.jsonResults) {
+              await file.write(queryJsonRowsStart(frame, headers));
+              // JSON 行对象用唯一输出名逐列写入，原列名和重名关系仍保留在列定义。
+              columns = headers.map(column => column.exportName);
+            } else {
+              if (!excel) {
+                await file.open();
+                excel = await createExcelWorkbookWriter({filePath: input.filePath, deferredAtomicFile: file.excelFile(),
+                  checkCancelled: check, onCommitStart: () => { throw Error('SQLite Excel 不能自行发布文件'); }});
+              }
+              sheet = await excel.startSheet(sheetNames[index], headers.map(({exportName, type}) => ({name: exportName, type})));
             }
-            const headers = resultExportColumns(columns.map((name, index) => ({key: String(index), name})));
-            sheet = await excel.startSheet(sheetNames[index],
-              headers.map(({exportName}) => ({name: exportName, type: 'SQLITE'})));
             return;
           }
           if (input.format === 'json' && new Set(columns).size !== columns.length) throw Error('JSON 导出需要不同的列名，请为重名列设置别名或选择 CSV／Excel／HTML');
@@ -156,6 +164,7 @@ export async function prepareSqliteQueryExport(driver: SqliteDriverSession, inpu
           sharedSnapshot && result.transaction !== true) throw Error('SQLite 查询导出未取得完整原生结果，文件未发布');
       sheet?.close();
       if (archive) await archive.end(rows);
+      if (input.jsonResults) await file.write(queryJsonRowsEnd(rows));
     }
     if (workbook && (!excel || (await excel.complete()).rows !== count)) throw Error('SQLite Excel 导出行数与原结果不一致');
     await archive?.complete();
@@ -165,7 +174,7 @@ export async function prepareSqliteQueryExport(driver: SqliteDriverSession, inpu
       if ((await driver.execute('ROLLBACK')).transaction !== false) throw Error('SQLite 未确认导出快照结束');
       check();
     }
-    if (input.format === 'json') await file.write('\n]\n');
+    if (input.format === 'json') await file.write(input.jsonResults ? queryJsonResultsEnd : '\n]\n');
     if (markup) await file.write(markup.tableEnd(count) + markup.documentEnd);
     return count;
   } finally { await excel?.dispose(); }

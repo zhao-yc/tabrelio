@@ -11,6 +11,7 @@ import { dataMarkupText, isXmlFormat } from '../shared/dataMarkupExport';
 import { createExcelWorksheetNamer, EXCEL_LIMITS } from '../shared/excelTransfer';
 import { validQueryResultTitle } from '../shared/queryResultTitle';
 import { createExcelWorkbookWriter } from './excelFiles';
+import { queryJsonResultsEnd, queryJsonResultsStart, queryJsonRowsEnd, queryJsonRowsStart } from './queryJsonResults';
 
 export interface QueryStreamFileOptions {
   filePath: string; format: QueryExportFormat; encoding: QueryFileEncoding; resultSelection: QueryExportSelection;
@@ -85,11 +86,8 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
           const name = worksheetName(label ?? `结果 ${frame.rowResultOrdinal}`);
           sheet = await workbook.startSheet(name, columns.map(column => ({ name: column.exportName, type: column.type })));
         } else if (archive) { await archive.start(frame, columns); await archive.text(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n'); }
-        else if (input.format === 'json') {
-          const metadata = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: 'rows', rowResultOrdinal: frame.rowResultOrdinal,
-            ...(label ? { label } : {}), columns: columns.map(({ key: _key, ...column }) => column) };
-          await file.write((resultCount > 1 ? ',\n' : '\n') + JSON.stringify(metadata).slice(0, -1) + ',"rows":[\n');
-        } else if (markup) {
+        else if (input.format === 'json') await file.write(queryJsonRowsStart(frame, columns));
+        else if (markup) {
           if (selected) await file.write(markup.tableStart(columns.map(column => isXmlFormat(input.format) ? column.name : column.exportName), frame));
         }
         else if (selected) await file.write(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n');
@@ -129,7 +127,7 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
         if (frame.warningCount !== undefined && (!Number.isInteger(frame.warningCount) || frame.warningCount < 0 || frame.warningCount > 65535)) throw new Error('完整导出警告数量无效');
         if (sheet) { sheet.close(); sheet = undefined; }
         else if (archive) await archive.end(active.rows, frame.warningCount);
-        else if (input.format === 'json') await file.write('\n],"rowsWritten":' + active.rows + (frame.warningCount === undefined ? '' : ',"warningCount":' + frame.warningCount) + '}');
+        else if (input.format === 'json') await file.write(queryJsonRowsEnd(active.rows, frame.warningCount));
         else if (markup && active.selected) await file.write(markup.tableEnd(active.rows, frame.warningCount));
         active = undefined; break;
       case 'status':
@@ -144,7 +142,7 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
   try {
     if (xlsx) workbook = await createExcelWorkbookWriter({ ...input, deferredAtomicFile: file });
     if (!archive && input.encoding === 'utf16le') await file.write('\uFEFF');
-    if (input.format === 'json') await file.write('{"format":"DBArk-query-results","version":1,"results":[');
+    if (input.format === 'json') await file.write(queryJsonResultsStart);
     if (markup) await file.write(markup.documentStart());
   } catch (error) { await file.dispose(); throw error; }
   return {
@@ -156,7 +154,7 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
       if (singleResult && !selectedFound) throw new Error('本次执行不存在指定的行结果集；SQL 可能已执行，原目标文件保持不变');
       await workbook?.complete();
       if (archive) await archive.complete();
-      if (input.format === 'json') await file.write('\n]}\n');
+      if (input.format === 'json') await file.write(queryJsonResultsEnd);
       if (markup) await file.write(markup.documentEnd);
       await file.commit(); completed = true;
     },

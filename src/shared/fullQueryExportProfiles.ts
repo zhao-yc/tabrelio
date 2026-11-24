@@ -48,7 +48,7 @@ const tableSettings = z.object({
 const options = z.discriminatedUnion('format', [
   z.object({ format: z.literal('csv'), encoding, delimiter }).strict(),
   z.object({ format: z.literal('csv-zip'), encoding, delimiter }).strict(),
-  z.object({ format: z.literal('json'), encoding }).strict(),
+  z.object({ format: z.literal('json'), encoding, jsonResults: z.literal(true).optional() }).strict(),
   z.object({ format: z.literal('txt'), encoding, txtOptions: txtExportOptionsSchema }).strict(),
   z.object({ format: z.enum(['xlsx', ...dataMarkupFormats]) }).strict(),
   z.object({ format: z.literal('sql'), target: z.union([sqliteQueryInsertTargetSchema, postgresQueryInsertTargetSchema]) }).strict(),
@@ -84,6 +84,7 @@ function matchesScope({ dialect, area }: FullQueryExportProfileScope, value: Ful
   if (value.format === 'table') return false;
   if (dialect === 'mysql' || dialect === 'mariadb') return value.format === 'stream';
   if (value.format === 'stream') return false;
+  if (value.format === 'json' && value.jsonResults) return dialect === 'sqlite';
   return value.format !== 'sql' || ('database' in value.target) === (dialect === 'sqlite');
 }
 

@@ -436,8 +436,9 @@ function queryRequest(profile: SqliteConnectionProfile, patch: Partial<SqliteQue
 }
 
 describe('SQLite 完整查询导出', () => {
-  it.each(['xlsx', 'csv-zip'] as const)('%s 在首组常量查询前固定 WAL 快照，各语句只接收所需绑定', async format => {
+  it.each(['xlsx', 'csv-zip', 'json'] as const)('%s 在首组常量查询前固定 WAL 快照，各语句只接收所需绑定', async format => {
     const zip = format === 'csv-zip';
+    const json = format === 'json';
     const profile = fixture();
     disk(profile, db => db.exec('PRAGMA journal_mode=WAL'));
     let intervened = false;
@@ -449,15 +450,22 @@ describe('SQLite 完整查询导出', () => {
       }
       forward();
     })});
-    const filePath = join(dirname(profile.sqlite.filePath!), zip ? 'query-results.zip' : 'query-workbook.xlsx');
-    const sql = "SELECT :exact AS id, ';' AS note;" + (zip ? '\n-- NAME: 原快照/数据\n' : ' ') +
+    const filePath = join(dirname(profile.sqlite.filePath!), 'query-results.' + (zip ? 'zip' : format));
+    const sql = "SELECT :exact AS id, ';' AS note;" + (format === 'xlsx' ? ' ' : '\n-- NAME: 原快照/数据\n') +
       'SELECT :exact AS id, note, payload FROM subject WHERE id=1; SELECT :extra AS label WHERE 0;';
-    const input = queryRequest(profile, {format, filePath, sql, ...(zip ? {csvDelimiter: ';' as const} : {}),
+    const containerOptions = json ? {jsonResults: true as const} : {};
+    const input = queryRequest(profile, {format, filePath, sql, ...containerOptions, ...(zip ? {csvDelimiter: ';' as const} : {}),
       parameters: [{name: 'exact', type: 'integer', value: '9223372036854775807'}, {name: 'extra', type: 'text', value: '只用于末张'}]});
-    const parameterSource = {sql, ...(zip ? {csvZip: true as const} : {workbook: true as const})};
+    const parameterSource = {sql, ...(zip ? {csvZip: true as const} : json ? containerOptions : {workbook: true as const})};
     expect(validateCommand('sqlite.queryExportParameterNames', parameterSource)).toEqual(parameterSource);
     expect(sqliteQueryExportParameterNames(parameterSource).names).toEqual(['exact', 'extra']);
     expect(() => validateCommand('sqlite.queryExportParameterNames', {sql, csvZip: true, workbook: true})).toThrow();
+    if (json) {
+      expect(() => validateCommand('sqlite.queryExportParameterNames', {...parameterSource, csvZip: true})).toThrow();
+      expect(() => validateCommand('sqlite.queryExport', {format: 'csv', encoding: 'utf8', sql, jsonResults: true,
+        connectionId: profile.id, fileToken: '本例授权', taskId: '格式冲突'})).toThrow('仅用于');
+      expect(sqliteQueryExportParameterNames({...parameterSource, sql: 'SELECT 1;'.repeat(200)}).names).toEqual([]);
+    }
     await expect(app.request('sqlite.queryExport', input)).resolves.toEqual({rows: 2, fileCommitted: true});
     expect(intervened).toBe(true);
     const worker = processes.at(-1)!;
@@ -477,6 +485,14 @@ describe('SQLite 完整查询导出', () => {
       expect(files.get('results/rows-001.csv')!.toString('utf8')).toBe('id;note\r\n9223372036854775807;";"\r\n');
       expect(files.get('results/rows-002.csv')!.toString('utf8')).toBe('id;note;payload\r\n9223372036854775807;中文🚢;base64:AP8=\r\n');
       expect(files.get('results/rows-003.csv')!.toString('utf8')).toBe('label\r\n');
+    } else if (json) {
+      const value = JSON.parse(readFileSync(filePath, 'utf8'));
+      expect(value).toMatchObject({format: 'DBArk-query-results', version: 1, results: [
+        {resultOrdinal: 1, rowsWritten: 1, rows: [{id: '9223372036854775807', note: ';'}]},
+        {resultOrdinal: 2, rowsWritten: 1, label: '原快照/数据',
+          rows: [{id: '9223372036854775807', note: '中文🚢', payload: {type: 'binary', base64: 'AP8='}}]},
+        {resultOrdinal: 3, rowsWritten: 0, columns: [{name: 'label', exportName: 'label'}], rows: []},
+      ]});
     } else {
       const sheets = await listExcelSheets({filePath});
       expect(sheets.map(sheet => sheet.name)).toEqual(['结果 1', '结果 2', '结果 3']);
@@ -486,9 +502,9 @@ describe('SQLite 完整查询导出', () => {
     }
     expect(disk(profile, db => db.prepare('SELECT note FROM subject WHERE id=1').get()!.note)).toBe('另一连接已提交');
     const original = readFileSync(filePath);
-    for (const [index, sql] of [zip ? 'SELECT 1; SELECT missing FROM subject' : "SELECT 1; SELECT printf('%032768d', 1)",
-      'SELECT 1; WITH x AS (SELECT 1) DELETE FROM subject RETURNING id', 'SELECT 1;'.repeat(zip ? 201 : 65)].entries()) {
-      await expect(app.request('sqlite.queryExport', queryRequest(profile, {taskId: '多查询导出失败' + index, format, filePath, sql}))).rejects.toThrow();
+    for (const [index, sql] of [format === 'xlsx' ? "SELECT 1; SELECT printf('%032768d', 1)" : 'SELECT 1; SELECT missing FROM subject',
+      'SELECT 1; WITH x AS (SELECT 1) DELETE FROM subject RETURNING id', 'SELECT 1;'.repeat(format === 'xlsx' ? 65 : 201)].entries()) {
+      await expect(app.request('sqlite.queryExport', queryRequest(profile, {taskId: '多查询导出失败' + index, format, filePath, sql, ...containerOptions}))).rejects.toThrow();
       expect(readFileSync(filePath)).toEqual(original);
     }
     expect(readdirSync(dirname(filePath)).filter(path => path.endsWith('.partial'))).toEqual([]);
@@ -610,14 +626,17 @@ describe('SQLite 完整查询导出', () => {
     expect(readdirSync(dirname(filePath)).filter(path => path.endsWith('.partial'))).toEqual([]);
   });
 
-  it.each(['json', 'xlsx', 'csv-zip', 'sql'] as const)('%s 流读取期间取消只撤销本次暂存并保留旧目标', async format => {
+  it.each(['json', 'json-results', 'xlsx', 'csv-zip', 'sql'] as const)('%s 流读取期间取消只撤销本次暂存并保留旧目标', async kind => {
+    const jsonResults = kind === 'json-results';
+    const format = kind === 'json-results' ? 'json' : kind;
     const profile = fixture(), reached = deferred<void>();
     let paused = false;
     const {app, events} = runtime(profile, {create: () => transport((message, forward) => {
       if (!paused && message.kind === 'batch') { paused = true; reached.resolve(); } else forward();
     })});
     const input = queryRequest(profile, {format, filePath: join(dirname(profile.sqlite.filePath!), 'result.' + (format === 'csv-zip' ? 'zip' : format)),
-      ...(format === 'xlsx' || format === 'csv-zip' ? {sql: 'SELECT 0 WHERE 0; SELECT id FROM subject'} : {}),
+      ...(jsonResults ? {jsonResults: true as const} : {}),
+      ...(format === 'xlsx' || format === 'csv-zip' || jsonResults ? {sql: 'SELECT 0 WHERE 0; SELECT id FROM subject'} : {}),
       ...(format === 'sql' ? {insertTarget: {database: 'main', table: 'target'}} : {})});
     writeFileSync(input.filePath, '旧文件');
     const work = app.request('sqlite.queryExport', input).catch(reason => reason);

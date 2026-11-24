@@ -9,6 +9,8 @@ export const sqliteQueryExportZh = {
   workbookHint: '每条查询按顺序写入一张工作表，页签名沿用语句头的 NAME: 注释。空结果保留标题。各条查询可用 :name 绑定参数，同名复用同一个值。',
   multiResultScope: `将在独立只读连接执行 1 至 ${queryStreamExportLimits.results} 条 SELECT 或 WITH 查询。所有结果共用同一份主库快照，原会话临时表不随查询转移。`,
   formatHint: 'JSON 将数值写为字符串以保留精度，列名必须唯一。CSV 可保留重名列，Excel 会按列位置追加后缀。',
+  jsonResults: '包含结果名称和列定义（支持多条查询）',
+  jsonHint: '按语句顺序保存每组结果及列定义，沿用语句头的 NAME: 名称。空结果保留列定义，重名列按位置区分，数值以字符串保留精度。',
   insertFormat: 'SQLite INSERT SQL',
   insertDatabase: 'INSERT 目标数据库名',
   insertHint: '留空沿用结果列名。重名、空名或需改名时，填写全部目标字段。脚本写入文件，目标字段亲和性和约束在回放时生效。',
