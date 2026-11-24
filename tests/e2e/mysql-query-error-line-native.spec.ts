@@ -103,10 +103,13 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
       await locate(line, firstLine);
     }
     await execute('SELECT missing_native_field;'); await expect(primary).toBeVisible(); await expect(line).toHaveCount(0);
-    await resultNavigation.click();
+    await editor.focus();
+    await page.keyboard.press('ControlOrMeta+Shift+F8');
+    await expect(resultSearch).toBeFocused();
     await expect(includeErrors).toBeChecked();
     await expect(errorDetails).toContainText('missing_native_field');
     await resultSearch.press('Escape');
+    await expect(editor).toBeFocused();
 
     await (await toggle(queryWarningsZh.option)).check();
     await execute(failed); await locate(line, firstLine);

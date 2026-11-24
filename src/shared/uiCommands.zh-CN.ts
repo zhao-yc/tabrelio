@@ -46,6 +46,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'open-current-statement-query': '在新查询中打开当前语句',
   'previous-statement': '上一条语句', 'next-statement': '下一条语句',
   'previous-query-error': '上一处执行错误', 'next-query-error': '下一处执行错误',
+  'find-query-receipts': '查找执行回执',
   'import': '导入数据', 'export': '导出数据', 'sqlite-data-compare': sqliteDataCompareZh.title, 'postgres-data-compare': postgresDataCompareZh.title, 'mysql-data-compare': mysqlDataCompareZh.title, 'schema-compare': '结构比较', 'structure-search': '全库搜索',
   'server-monitor': '服务器监控', 'postgres-roles': 'PostgreSQL 角色与权限', 'backup-archive': databaseBackupArchiveZh.title, 'postgres-table-backup': postgresBackupSetTitle, 'postgres-database-backup': postgresDatabaseBackupTitle, 'postgres-custom-archive': postgresArchiveTitle, 'explain-snapshot': '打开计划快照', 'result-snapshot': '打开结果快照',
   'mysql-database-backup': mysqlDatabaseBackupTitle,

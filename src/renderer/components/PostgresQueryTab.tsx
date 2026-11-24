@@ -15,7 +15,7 @@ import type { PostgresQueryRecordPageInput } from '../../shared/postgresQueryRec
 import { PostgresQueryReferenceDialog } from './PostgresQueryReferenceDialog';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
-import { QueryResultNavigator } from './QueryResultNavigator';
+import { QueryResultNavigator, type QueryResultNavigatorControl } from './QueryResultNavigator';
 import { PinnedResultRename } from './PinnedResultRename';
 import { ResultSqlDialog } from './ResultSqlDialog';
 import { focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
@@ -2189,6 +2189,8 @@ export function PostgresQueryTab({
     positionAvailable: failure => availableFailure(failure) && !!failureSource.current?.canLocateError(failure, false),
     onLocatePosition: locateFailurePosition,
   });
+  const resultNavigator = useRef<QueryResultNavigatorControl>(null);
+  const hasResultNavigation = results.length > 1 || pinState.items.length > 0 || failureNavigation.failures.length > 0;
   const commands: Partial<Record<UiCommandId, UiCommandHandler>> = {
     execute: { enabled: canRun, run: () => run() },
     'execute-selection': { enabled: canRun && editorSelection.single, run: () => run('selection') },
@@ -2203,6 +2205,7 @@ export function PostgresQueryTab({
     'next-statement': { enabled: canNavigate, run: () => navigation.open('next') },
     'previous-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(-1) },
     'next-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(1) },
+    'find-query-receipts': { enabled: hasResultNavigation && !locked, run: () => resultNavigator.current?.openReceipts() },
     stop: { enabled: canStop, run: stop },
     explain: { enabled: canPlan, run: () => run('explain') },
     analyze: { enabled: canPlan, run: () => run('analyzePreview') },
@@ -2491,13 +2494,13 @@ export function PostgresQueryTab({
             <button disabled={locked || pinState.items.length < 2} title={pinState.items.length < 2 ? comparisonText.requireTwo : comparisonText.notice}
               onClick={openResultComparison}>{comparisonText.open}</button>
           </div>}
-          {(!pin && results.length > 1 || dataResult || pinState.items.length > 0 || failureNavigation.failures.length > 0) && (
+          {(hasResultNavigation || dataResult) && (
             <div className="postgres-result-actions">
               {!pin && results.length > 1 && <select aria-label="PostgreSQL结果集" value={selected} disabled={locked}
                 onChange={event => selectCurrentResult(Number(event.target.value))}>
                 {results.map((r, i) => <option key={i} value={i}>{text.result(resultSources?.[i]?.statementOrdinal ?? i + 1, r.postgresCommand ?? '', r.rows.length, resultNames[i])}</option>)}
               </select>}
-              {(results.length > 1 || pinState.items.length > 0 || failureNavigation.failures.length > 0) && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames}
+              {hasResultNavigation && <QueryResultNavigator control={resultNavigator} tabId={tab.id} results={results} names={resultNames}
                 statementOrdinals={resultStatementOrdinals} executionErrors={failureNavigation}
                 selected={pin ? undefined : selected} pins={pinState.items} selectedPin={pin}
                 disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}

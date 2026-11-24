@@ -413,6 +413,17 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     await step(() => expect(resultDialog.getByRole('option')).toContainText(resultNavText.statement(4)));
     await step(() => resultSearch.press('Enter'));
     await step(() => expect(query().getByRole('gridcell', {name: '后续🚢', exact: true})).toBeVisible());
+    const sqlInput = query().locator('.sql-editor-wrap .monaco-editor').getByRole('textbox');
+    await step(() => sqlInput.focus());
+    await step(() => page.keyboard.press('ControlOrMeta+Shift+F8'));
+    await step(() => expect(resultSearch).toBeFocused());
+    await step(() => expect(includeErrors).toBeChecked());
+    await step(() => expect(resultDialog.getByRole('option', {selected: true})).toContainText(resultNavText.result(2)));
+    await step(() => expect(resultDialog.getByRole('option')).toHaveCount(4));
+    await step(() => page.keyboard.press('ControlOrMeta+Shift+F8'));
+    await step(() => expect(resultDialog).toHaveCount(1));
+    await step(() => resultSearch.press('Escape'));
+    await step(() => expect(sqlInput).toBeFocused());
     expect((await step(audit)).operations).toEqual(continuedFacts.operations);
     expect(await history()).toEqual(continuedHistory);
     expect(continuedHistory.find(entry => entry.sql === continuedSource)?.success).toBe(false);

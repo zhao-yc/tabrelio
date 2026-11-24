@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import type { QueryResult } from '../../shared/contracts';
 import type { QueryFailure } from '../../shared/queryFailure';
@@ -17,7 +17,10 @@ interface ExecutionErrors {
   locate(failure: QueryFailure, target: 'best'): void;
 }
 
+export interface QueryResultNavigatorControl { openReceipts(): void; }
+
 interface Props {
+  control?: Ref<QueryResultNavigatorControl>;
   tabId: string;
   results: readonly QueryResult[];
   names: readonly (string | undefined)[];
@@ -41,12 +44,12 @@ const pageSize = 40;
 
 /** 导航绑定打开时的结果与固定列表，选中后走查询页原有的来源切换。 */
 export function QueryResultNavigator(props: Props) {
-  const { tabId, results, pins, executionErrors, disabled, isCurrent } = props;
+  const { tabId, results, pins, executionErrors, disabled, isCurrent, control } = props;
   const { failures } = executionErrors;
   const latest = useRef(props);
   latest.current = props;
   const [owner, setOwner] = useState<{ results: readonly QueryResult[]; pins: readonly PinnedQueryResult[];
-    failures: readonly QueryFailure[];
+    failures: readonly QueryFailure[]; includeFailures: boolean;
     current(): boolean; invalidate(): void }>();
   const opened = owner?.results === results && owner.pins === pins && owner.failures === failures && !disabled;
   useLayoutEffect(() => {
@@ -61,19 +64,21 @@ export function QueryResultNavigator(props: Props) {
     });
   }, [owner, opened]);
 
-  function open() {
+  function open(includeFailures: boolean) {
     if (disabled || !isCurrent() || document.querySelector(appModalSelector)) return;
     const workspace = useWorkspace.getState();
     const tab = workspace.settings.tabs.find(item => item.id === tabId);
     if (!tab || workspace.settings.activeTabId !== tabId) return;
     const version = workspace.connectionVersions[tab.connectionId];
     let live = true;
-    setOwner({ results, pins, failures, invalidate() { live = false; }, current() {
+    setOwner({ results, pins, failures, includeFailures, invalidate() { live = false; }, current() {
       const state = useWorkspace.getState();
       return live && state.settings.activeTabId === tabId && state.settings.tabs.find(item => item.id === tabId) === tab &&
         state.connectionVersions[tab.connectionId] === version && !state.activeJobs[tabId];
     } });
   }
+  // 菜单和快捷键从同一入口进入，复用当前标签、模态和回执的检查。
+  useImperativeHandle(control, () => ({ openReceipts: () => open(true) }));
 
   function select(entry: Entry) {
     if (!owner || !opened || !owner.current()) return;
@@ -91,24 +96,22 @@ export function QueryResultNavigator(props: Props) {
   }
 
   return <>
-    <button type="button" disabled={disabled} aria-haspopup="dialog" aria-expanded={opened} onClick={open}>{text.open}</button>
+    <button type="button" disabled={disabled} aria-haspopup="dialog" aria-expanded={opened} onClick={() => open(false)}>{text.open}</button>
     {opened && createPortal(<ResultList results={results} names={props.names} statementOrdinals={props.statementOrdinals}
       executionErrors={executionErrors} selected={props.selected} pins={pins} selectedPin={props.selectedPin}
-      onSelect={select} onClose={() => setOwner(undefined)}/>, document.body)}
+      startWithFailures={owner.includeFailures} onSelect={select} onClose={() => setOwner(undefined)}/>, document.body)}
   </>;
 }
 
-function ResultList({ results, names, statementOrdinals, executionErrors, selected, pins, selectedPin, onSelect, onClose }:
-  Pick<Props, 'results' | 'names' | 'statementOrdinals' | 'executionErrors' | 'selected' | 'pins' | 'selectedPin'> & { onSelect(entry: Entry): void; onClose(): void }) {
+function ResultList({ results, names, statementOrdinals, executionErrors, selected, pins, selectedPin, startWithFailures, onSelect, onClose }:
+  Pick<Props, 'results' | 'names' | 'statementOrdinals' | 'executionErrors' | 'selected' | 'pins' | 'selectedPin'> & {
+    startWithFailures: boolean; onSelect(entry: Entry): void; onClose(): void;
+  }) {
+  const { failures } = executionErrors;
   const [query, setQuery] = useState(''), [source, setSource] = useState<Source>('all');
-  const [includeFailures, setIncludeFailures] = useState(!results.length && !pins.length);
-  const [position, setPosition] = useState(() => {
-    if (selectedPin) return Math.max(0, pins.indexOf(selectedPin));
-    return selected === undefined ? 0 : pins.length + selected;
-  });
+  const [includeFailures, setIncludeFailures] = useState(failures.length > 0 && (startWithFailures || !results.length && !pins.length));
   const input = useRef<HTMLInputElement>(null), active = useRef<HTMLButtonElement>(null), listId = useId();
   const composing = useRef(false);
-  const { failures } = executionErrors;
   const entries = useMemo<Entry[]>(() => {
     const current = results.map((result, index): CurrentEntry => {
       // 来源必须与完整结果列表逐项对齐。缺失的语句序号不能由结果序号补造。
@@ -126,6 +129,9 @@ function ResultList({ results, names, statementOrdinals, executionErrors, select
     }
     return [...pins.map((pin): Entry => ({ kind: 'pinned', pin, name: pin.label, result: pin.result })), ...current];
   }, [results, names, statementOrdinals, pins, includeFailures, failures]);
+  // 插入失败条目后，列表位置会变化。用原结果身份定位初始高亮。
+  const [position, setPosition] = useState(() => Math.max(0, entries.findIndex(entry =>
+    entry.kind === 'pinned' ? entry.pin === selectedPin : entry.kind === 'current' && !selectedPin && entry.index === selected)));
   const matches = useMemo(() => {
     const value = query.trim().toLowerCase();
     const ordinal = Number(/^#?(\d+)$/.exec(value)?.[1]);

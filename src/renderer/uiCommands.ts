@@ -84,6 +84,8 @@ export function useUiCommandRuntime(): void {
         id = event.shiftKey ? 'previous-query-error' : 'next-query-error';
       } else if (event.altKey || !event.metaKey && !event.ctrlKey) {
         return;
+      } else if (primary && event.shiftKey && event.key === 'F8') {
+        id = 'find-query-receipts';
       } else if (primary && event.shiftKey && event.key === 'F6') {
         id = 'last-used-tab';
       } else if (mac && event.metaKey && event.shiftKey && !event.ctrlKey) {

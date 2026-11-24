@@ -536,6 +536,7 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await observer.query('CREATE TABLE public.continue_sentinel (id int PRIMARY KEY)');
     await prepare({id: '', name: '隔离 PostgreSQL 遇错继续', dialect: 'postgresql', group: '', color: '#123456',
       host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, sql);
+    await expect.poll(() => enabled('find-query-receipts')).toBe(false);
     await expect(choice()).not.toBeChecked(); await command('execute-all');
     await expect(tab().getByRole('status', {name: partialText.title, exact: true})).toContainText(partialText.position(2, 1));
     expect(await records()).toEqual([1]); await expect(report()).toHaveCount(0);
@@ -564,12 +565,14 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await expect(navigator).toContainText(continueText.located(4, 2, 2));
     await navigator.getByRole('button', {name: continueText.next, exact: true}).click();
     await expect.poll(inspectModel).toMatchObject({selected: 'm', position: {lineNumber: 2, column: 9}});
+    await expect.poll(() => enabled('execute-selection')).toBe(true);
     await modelSelection(1, 1);
+    await expect.poll(() => enabled('execute-selection')).toBe(false);
     const resultNavigation = tab().getByRole('button', {name: resultNavText.open, exact: true});
-    await resultNavigation.click();
+    await command('find-query-receipts');
     const resultDialog = page.getByRole('dialog', {name: resultNavText.open, exact: true});
     const resultSearch = resultDialog.getByRole('combobox', {name: resultNavText.input, exact: true});
-    await resultDialog.getByRole('checkbox', {name: resultNavText.includeFailures, exact: true}).check();
+    await expect(resultDialog.getByRole('checkbox', {name: resultNavText.includeFailures, exact: true})).toBeChecked();
     const receiptOptions = resultDialog.getByRole('option');
     await expect(receiptOptions).toHaveCount(5);
     await expect(receiptOptions.nth(1)).toContainText(resultNavText.failedStatement(2));
@@ -761,7 +764,11 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     // 等待 BEGIN 已回执且原标签结束忙态，再投递下一条原生命令。
     await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
     await expect(tab().getByRole('button', {name: postgresZh.commit, exact: true})).toBeEnabled();
-    await select(selectedScript.indexOf('missing_column')); await command('execute-current');
+    await expect.poll(() => enabled('execute-selection')).toBe(true);
+    await select(selectedScript.indexOf('missing_column'));
+    // 收起选区还会更新原生菜单代次，等可用性同步后才点击原生菜单。
+    await expect.poll(() => enabled('execute-selection')).toBe(false);
+    await command('execute-current');
     await expect(notice()).toContainText(partialText.position(1, 0));
     await expect(tab().locator('.tab-status')).toContainText(postgresZh.failedTransaction);
     const sessions = async () => (await observer.query("SELECT pid,state FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;

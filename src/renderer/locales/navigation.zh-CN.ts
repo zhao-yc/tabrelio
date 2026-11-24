@@ -41,6 +41,7 @@ export const navigationZh = {
     ['切换查询结果（第 1 至 10 组）', 'Alt + 1…9、0（macOS 在结果区按 Option + 数字）'],
     ['在 SQL 编辑器与当前结果之间切换焦点', 'F6'],
     ['定位上一处／下一处执行错误', 'Alt / Option + Shift + F8 ／ Alt / Option + F8'],
+    ['查找当前查询的执行回执', 'Ctrl / ⌘ + Shift + F8'],
     ['跳到当前行的首列或末列', 'Ctrl / ⌘ + ← 或 →'],
     ['跳到当前列的首行或末行', 'Ctrl / ⌘ + Home 或 End'],
     ['按焦点所在列升序或降序', 'macOS 网格内按 ⌘ + ↑ 或 ⌘ + ↓'],

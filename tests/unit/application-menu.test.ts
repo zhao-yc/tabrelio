@@ -53,6 +53,7 @@ describe('原生菜单状态与原文档命令归属', () => {
     expect(mac.find('previous-tab')?.accelerator).toBe('Command+Shift+[');
     for (const platform of [windows, mac]) {
       expect(platform.find('last-used-tab')).toMatchObject({ label: '切换到上次使用的标签', accelerator: 'CmdOrCtrl+Shift+F6', enabled: false });
+      expect(platform.find('find-query-receipts')).toMatchObject({ label: '查找执行回执', accelerator: 'CmdOrCtrl+Shift+F8', enabled: false });
     }
   });
 

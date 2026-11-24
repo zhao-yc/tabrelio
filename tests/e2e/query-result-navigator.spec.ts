@@ -59,7 +59,8 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     const dialog = page.getByRole('dialog', { name: text.open, exact: true });
     const search = dialog.getByRole('combobox', { name: text.input, exact: true });
     const grid = tab.getByRole('grid');
-    await trigger.click();
+    await tab.locator('.monaco-editor').getByRole('textbox').focus();
+    await page.keyboard.press('ControlOrMeta+Shift+F8');
     await expect(search).toBeFocused();
     await expect(dialog.getByRole('option')).toHaveCount(40);
     await expect(dialog.getByText(text.receiptHint, { exact: true })).toBeVisible();

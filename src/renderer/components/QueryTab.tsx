@@ -3,7 +3,7 @@ import { queryViewDraftZh as queryViewText } from '../locales/queryViewDraft.zh-
 import { sqlClipboardStackAction } from '../sqlClipboardStack';
 import { sqlQuotedCopyAction } from '../sqlQuotedCopy';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
-import { QueryResultNavigator } from './QueryResultNavigator';
+import { QueryResultNavigator, type QueryResultNavigatorControl } from './QueryResultNavigator';
 import { PinnedResultRename } from './PinnedResultRename';
 import { ResultSqlDialog } from './ResultSqlDialog';
 import { focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
@@ -2775,6 +2775,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     positionAvailable: failure => belongsToExecution(failure) && !!failureLocator?.canLocateError(failure, false),
     onLocatePosition: failure => locateScriptFailure(failure, true),
   });
+  const resultNavigator = useRef<QueryResultNavigatorControl>(null);
+  const hasResultNavigation = results.length > 1 || pins.length > 0 || failureNavigation.failures.length > 0;
+  const resultNavigationLocked = busy || queryRunning || resultModal || fileSource.busy;
   useUiCommandScope(`tab:${tab.id}`, {
     execute: { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void execute(); } },
     'execute-selection': { enabled: canExecuteSelection, run: () => { void execute('selection-only'); } },
@@ -2800,6 +2803,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'next-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'next') },
     'previous-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(-1) },
     'next-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(1) },
+    'find-query-receipts': { enabled: hasResultNavigation && !resultNavigationLocked, run: () => resultNavigator.current?.openReceipts() },
     'syntax-check': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !syntaxView?.busy, run: () => openSyntaxCheck() },
     'object-definition': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !objectDefinition, run: () => openObjectStructure() },
     replace: { enabled: (!!searchEditor || canReplaceResult) && !closeRequest && !fileSource.busy,
@@ -2938,10 +2942,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         return <button className={!pin && resultIndex === index ? 'selected' : ''} aria-label={label} title={label}
           aria-pressed={!pin && resultIndex === index} onClick={() => selectCurrentResult(index)} key={index}>{name ?? ordinal}</button>;
       })}</div>
-      {(results.length > 1 || pins.length > 0 || failureNavigation.failures.length > 0) && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames}
+      {hasResultNavigation && <QueryResultNavigator control={resultNavigator} tabId={tab.id} results={results} names={resultNames}
         statementOrdinals={resultStatementOrdinals} executionErrors={failureNavigation}
         selected={pin ? undefined : resultIndex} pins={pins} selectedPin={pin}
-        disabled={busy || queryRunning || resultModal || fileSource.busy}
+        disabled={resultNavigationLocked}
         isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
       {pin && <PinnedResultRename tabId={tab.id} pin={pin} disabled={busy || queryRunning || resultModal || fileSource.busy}
         isCurrent={pinNavigationCurrent} onRename={renameSelectedPin}/>}
