@@ -12,6 +12,14 @@ export const schemaComparePreviewSchema = z.object({ snapshotId: z.string().min(
   if (new Set(value.selections.map(item => JSON.stringify([item.category, item.name]))).size !== value.selections.length) context.addIssue({ code: 'custom', message: '不能重复选择差异项' });
 });
 export const schemaCompareReleaseSchema = z.object({ snapshotId: z.string().min(1).max(200) }).strict();
+export const schemaCompareApplySchema = z.object({
+  taskId: z.string().min(1).max(200), snapshotId: z.uuid(), previewId: z.uuid(),
+  target: schemaCompareTargetSchema, confirmation: z.string().max(129), acknowledge: z.literal(true),
+}).strict();
+export type SchemaCompareApplyInput = z.infer<typeof schemaCompareApplySchema>;
+export interface SchemaCompareApplyResult {
+  status: 'verified' | 'unverified'; target: SchemaCompareTarget; changed: number; warningCount: number | null;
+}
 export type SchemaComparePreviewInput = z.infer<typeof schemaComparePreviewSchema>;
 export interface SchemaCompareResult extends SchemaCompareReport { snapshotId: string; expiresAt: string; }
 export interface SchemaComparePreview {
@@ -19,6 +27,7 @@ export interface SchemaComparePreview {
   statements: { category: SchemaCompareCategory; name: string; sql: string; destructive: boolean }[];
   blocked: { category: SchemaCompareCategory; name: string; reasons: string[] }[];
   warnings: string[]; executable: false;
+  synchronization?: { previewId: string; sql: string };
 }
 export type SchemaCompareCategory = 'columns' | 'indexes' | 'foreignKeys' | 'unclassified';
 export type SchemaCompareStatus = 'added' | 'removed' | 'changed' | 'same' | 'unknown';

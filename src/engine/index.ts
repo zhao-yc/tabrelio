@@ -45,6 +45,7 @@ import { auditDatabaseBackupTarget } from './databaseBackupTargetAudit';
 import { mysqlDataCompareSchema } from '../shared/mysqlDataCompare';
 import { mysqlBatchSyncPreviewSchema } from '../shared/mysqlBatchSync';
 import { batchSyncApplySchema } from '../shared/dataCompareBatchSync';
+import { MysqlDataTransferTasks } from './mysqlDataTransferTasks';
 import { readSchemaComparisonTarget } from './schemaCompare';
 import { open, rename, rm } from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
@@ -251,6 +252,7 @@ export class Engine {
   private readonly dataSearches:DataSearchTasks;
   private readonly dataSearchRecords=new DataSearchRecords();
   private readonly tableCopySources = new TableCopySources();
+  private readonly mysqlDataTransfers: MysqlDataTransferTasks;
   /** 注入任务事件出口，使引擎既能在 utility process 中运行，也能独立测试。 */
   constructor(private readonly emit: (event: TaskEvent) => void = () => undefined,options?:{dataSearchAcknowledgementMs?:number}) {
     this.dataSearches=new DataSearchTasks(emit,options?.dataSearchAcknowledgementMs,this.dataSearchRecords);
@@ -270,7 +272,20 @@ export class Engine {
       }), undefined, write ? '按所选差异同步' : '只读表数据比较', true, undefined, true, undefined, write),
       cancel: taskId => this.cancelTask(taskId),
     }, emit);
-    this.schemaComparisons = new SchemaCompareTasks({ read: (target, taskId) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => readSchemaComparisonTarget({ managed, ...control }, target), undefined, '只读结构比较', true, undefined, true), cancel: taskId => this.cancelTask(taskId) }, emit);
+    this.mysqlDataTransfers = new MysqlDataTransferTasks({
+      source: (endpoint, action) => this.withIndependentTask(endpoint.connectionId, randomUUID(),
+        (managed, control) => action({ managed, ...control }), undefined, '读取数据传输来源', 'no-default-database', undefined, true),
+      target: (endpoint, taskId, action, write) => this.withIndependentTask(endpoint.connectionId, taskId,
+        (managed, control) => action({ managed, ...control }), undefined, write ? '执行数据传输' : '预览数据传输', 'no-default-database',
+        () => ({}), false, undefined, write ? { targets: write.tables.map(table => ({ database: endpoint.database, table })), commitProtected: write.protected } : undefined),
+    });
+    this.schemaComparisons = new SchemaCompareTasks({
+      read: (target, taskId) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => readSchemaComparisonTarget({ managed, ...control }, target), undefined, '只读结构比较', true, undefined, true),
+      cancel: taskId => this.cancelTask(taskId),
+      write: (target, taskId, action, submitted) => this.withIndependentTask(target.connectionId, taskId,
+        (managed, control) => action({ managed, ...control }), undefined, '执行结构同步', 'no-default-database',
+        () => ({}), false, undefined, { target, commitProtected: submitted }),
+    }, emit);
     this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), { label: options.label, purpose: 'columns', progress: options.columnPatch, executionTarget: options.executionTarget }) }, undefined, this.structureCache);
     this.indexPatches = new TableIndexPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableDataCopies = new TableCopyDataTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
@@ -545,16 +560,34 @@ export class Engine {
         return this.withCopySourceTask(input.connectionId, input.taskId,
           context => auditDatabaseBackupTarget(context, input.manifest, input.targetDatabase), '检查备份恢复目标', 'no-default-database');
       }
+      case 'mysql.dataTransfer.preview':
+      case 'mysql.dataTransfer.apply': {
+        const { sourceProfile, targetProfile, connectionRevision, owner, ...request } = input;
+        for (const [profile, endpoint] of [[sourceProfile, request.source], [targetProfile, request.target]]) {
+          if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== endpoint.connectionId)
+            throw Error('缺少可信的数据传输连接');
+          this.copySourceProfile({ connectionId: endpoint.connectionId, profile });
+        }
+        return this.withConnectionUse(request.source.connectionId, () => this.withConnectionUse(request.target.connectionId,
+          async () => command === 'mysql.dataTransfer.preview'
+            ? this.mysqlDataTransfers.preview(request, connectionRevision, owner)
+            : this.mysqlDataTransfers.apply(request, connectionRevision, owner)));
+      }
+      case 'mysql.dataTransfer.release': return this.mysqlDataTransfers.release(input.previewId, input.owner);
       case 'schema.compare': {
         for (const [profile, target] of [[input.sourceProfile, input.source], [input.targetProfile, input.target]]) {
           if (!profile || profile.id !== target.connectionId) throw new Error('主进程未提供有效结构比较连接配置');
           if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
         }
         if (this.taskIdInUse(input.taskId)) throw new Error('任务编号已使用');
-        return this.withConnectionUse(input.source.connectionId, () => this.withConnectionUse(input.target.connectionId, () => this.schemaComparisons.compare({ taskId: input.taskId, source: input.source, target: input.target }, input.connectionRevision)));
+        return this.withConnectionUse(input.source.connectionId, () => this.withConnectionUse(input.target.connectionId, () => this.schemaComparisons.compare({ taskId: input.taskId, source: input.source, target: input.target }, input.connectionRevision, input.owner)));
       }
-      case 'schema.comparePreview': return this.schemaComparisons.preview({ snapshotId: input.snapshotId, selections: input.selections }, input.connectionRevision);
-      case 'schema.compareRelease': return this.schemaComparisons.release(input.snapshotId);
+      case 'schema.comparePreview': return this.schemaComparisons.preview({ snapshotId: input.snapshotId, selections: input.selections }, input.connectionRevision, input.owner);
+      case 'schema.compareRelease': return this.schemaComparisons.release(input.snapshotId, input.owner);
+      case 'schema.compareApply': {
+        const { connectionRevision, owner, ...request } = input;
+        return this.schemaComparisons.apply(request, connectionRevision, owner);
+      }
       case 'connections.close': {
         if (this.disconnecting.has(input.id)) throw Error('该连接正在断开，请等待本次资源回收完成');
         this.disconnecting.add(input.id);

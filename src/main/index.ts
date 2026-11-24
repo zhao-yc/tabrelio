@@ -2314,6 +2314,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (command === 'schema.tableChecks.release') return tableChecksMain.release(checkRequest!, input);
   // 纯能力释放先同步撤销父及关联预览，退出/保存锁不得阻止精确回收。
   if (command === 'schema.columns.release') return columnsMain.release(columnRequest!, input);
+  const dataTransfer = command === 'mysql.dataTransfer.preview' || command === 'mysql.dataTransfer.apply';
+  if (dataTransfer) {
+    if (shuttingDown) throw Error('客户端正在退出，不能开始数据传输');
+    connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId);
+  }
   const requestConnectionId = sqlitePreview?.target.connectionId ?? sqliteApplySource?.target.connectionId ?? structureToken?.connectionId ?? input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined);
   // 切库只绑定Main已登记的原会话，不能借缺失会话或客户端连接字段走新连接。
   const databaseSwitchSession = command === 'query.databaseSwitch' ? sessions.get(input.sessionId) : undefined;
@@ -2391,6 +2396,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   let publishMonitor: ReturnType<ServerMonitorSignals['begin']> | undefined;
   let assertRolesPublication: (() => void) | undefined;
   if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
+  if (command === 'schema.compareApply') connectionConfig.assertAvailable(input.target.connectionId);
   switch (command) {
     case 'joinDesigns.list':
     case 'joinDesigns.read':
@@ -3377,7 +3383,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream' || command === 'query.analyze' || command === 'postgres.analyze') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: currentStatement ? '' : input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
   const pendingHistory = history ? { entry: history, currentStatement, executionSqlReceived: !currentStatement } : undefined;
   if(pendingHistory&&taskId)pendingQueryHistory.set(taskId,pendingHistory);
-  const preparing: { cancelled: boolean; failure?: string; connectionIds?: string[] } = { cancelled: false, connectionIds: command === 'schema.compare' ? [input.source.connectionId, input.target.connectionId] : requestConnectionId ? [requestConnectionId] : [] }; if (taskId) preparingTasks.set(taskId, preparing);
+  const preparing: { cancelled: boolean; failure?: string; connectionIds?: string[] } = { cancelled: false, connectionIds: command === 'schema.compare' || dataTransfer ? [input.source.connectionId, input.target.connectionId] : command === 'schema.compareApply' ? [input.target.connectionId] : requestConnectionId ? [requestConnectionId] : [] }; if (taskId) preparingTasks.set(taskId, preparing);
   let releaseTarget: (() => void) | undefined;
   let filteredExportLease: TableFilteredExportMainLease | undefined;
   let sentToEngine = false;
@@ -3447,8 +3453,18 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (columnRequest) columnsMain.beforeSend(columnRequest, input.connectionRevision);
     if (checkRequest) tableChecksMain.beforeSend(checkRequest, input.connectionRevision);
     if (command === 'files.exportColumns' || command === 'files.export' && input.csvSelection) input = { ...input, connectionRevision: store.connectionRevision() };
+    if (command.startsWith('mysql.dataTransfer.')) {
+      columnsMain.assertCapturedOwner(columns);
+      input = { ...input, owner: networkCompareOwner(columns!), connectionRevision: store.connectionRevision() };
+      if (dataTransfer) {
+        connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId);
+        input = { ...input, sourceProfile: store.resolveConnection(input.source.connectionId), targetProfile: store.resolveConnection(input.target.connectionId) };
+      }
+    }
     if (command.startsWith('schema.compare')) {
-      input = { ...input, connectionRevision: store.connectionRevision() };
+      columnsMain.assertCapturedOwner(columns);
+      input = { ...input, connectionRevision: store.connectionRevision(), owner: networkCompareOwner(columns!) };
+      if (command === 'schema.compareApply') connectionConfig.assertAvailable(input.target.connectionId);
       if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
     }
     if (taskId) preparingTasks.delete(taskId);
@@ -3954,7 +3970,8 @@ else {
           databaseEncodingCommand = payload.command.slice('schema.databaseDefaultEncoding.'.length) as DatabaseEncodingOwnerCommand;
         }
         if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.calendar'|| payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command === 'sqlite.view.inspectQuery'||payload.command === 'sqlite.view.dependencies' || payload.command.startsWith('sqlite.queryBuilder.')||payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('sqlite.tablePresets.')||payload.command.startsWith('sqlite.tableLayout.')||payload.command.startsWith('record.templates.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
-        if (payload.command.startsWith('mysql.join.preview')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('mysql.join.preview') || payload.command.startsWith('schema.compare') ||
+            payload.command.startsWith('mysql.dataTransfer.')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('joinDesigns.') || payload.command.startsWith('singleQueryDesigns.')) columns = columnsMain.capture(event);
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         if (payload.command.startsWith('postgres.queryBuilder.')) columns = columnsMain.capture(event);

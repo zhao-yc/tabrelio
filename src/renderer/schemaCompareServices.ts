@@ -6,6 +6,7 @@ export const schemaCompareServices: SchemaCompareServices = {
   compare: input => invoke('schema.compare', input),
   cancel: taskId => invoke('query.cancel', { taskId }),
   preview: input => invoke('schema.comparePreview', input),
+  apply: input => invoke('schema.compareApply', input),
   release: snapshotId => invoke('schema.compareRelease', { snapshotId }),
   async save(sql) {
     const file = await invoke('files.choose', { purpose: 'export', format: 'sql', suggestedName: '结构比较预览.sql' });

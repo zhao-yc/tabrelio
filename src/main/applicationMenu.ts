@@ -91,7 +91,7 @@ export class ApplicationMenu {
           item('syntax-check'), item('object-definition'), item('parameters'), item('explain'), item('explain-current'), item('analyze'), item('analyze-current'), item('transaction-settings'),
         ] },
         { label: text.transfer, submenu: [item('import'), item('export')] }, separator,
-        item('schema-compare'), item('sqlite-data-compare'), item('postgres-data-compare'), item('mysql-data-compare'), item('structure-search', 'CmdOrCtrl+Shift+F'), item('server-monitor'), item('postgres-roles'), item('backup-archive'), item('postgres-table-backup'), item('postgres-database-backup'), item('postgres-custom-archive'), item('postgres-sql-file'), item('mysql-database-backup'), item('mysql-sql-file'),
+        item('schema-compare'), item('mysql-data-transfer'), item('sqlite-data-compare'), item('postgres-data-compare'), item('mysql-data-compare'), item('structure-search', 'CmdOrCtrl+Shift+F'), item('server-monitor'), item('postgres-roles'), item('backup-archive'), item('postgres-table-backup'), item('postgres-database-backup'), item('postgres-custom-archive'), item('postgres-sql-file'), item('mysql-database-backup'), item('mysql-sql-file'),
         { label: text.snapshots, submenu: [item('explain-snapshot'), item('result-snapshot')] }, separator, item('task-center')
       ] },
       { label: text.window, submenu: [

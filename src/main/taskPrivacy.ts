@@ -75,6 +75,8 @@ export function persistedTaskMessage(command: string, event: TaskEvent): string 
   }
   if (command === 'table.apply') return event.status === 'completed' ? '数据提交任务已结束；确切提交结果请查看提交记录，SQL、字段值和错误原文未保存。' : event.status === 'running' ? '正在提交数据；SQL及字段值不写入任务概要。' : '数据提交任务未正常完成；请查看提交记录核对已确认或未知结果，不要重复执行原批次。';
   if (command.startsWith('excel.')) return event.status === 'completed' ? 'Excel 文件任务已完成；文件内容与字段值未保存到任务摘要。' : event.status === 'running' ? '正在处理 Excel 文件；进度与详细信息请在当前窗口核对。' : 'Excel 文件任务未完成；已提交批次与错误详情请在当前窗口核对，字段值和错误原文未保存。';
+  if(command.startsWith('mysql.dataTransfer.'))return '数据传输记录不包含来源数据与服务器错误原文。';
+  if(command==='schema.compareApply')return '结构同步回执不含原定义、字段值或 SQL；执行如有中断，请核对目标定义。';
   if(command.startsWith('schema.compare'))return '结构比较仅供只读审查，尚未同步；原定义、默认值、注释和错误原文未保存。';
   if(command.startsWith('search.savedQueries'))return event.status==='completed'?'本地保存查询搜索批次已结束；搜索文字、正文、命中和错误原文未保存。':event.status==='running'?'正在搜索本地保存查询；正文及命中只在当前窗口保留。':'本地保存查询搜索未完成；搜索文字、正文、命中和错误原文未保存，请在当前窗口核对。';
   if(command.startsWith('search.structure'))return event.status==='completed'?'结构搜索批次已结束。':event.status==='running'?'正在只读搜索结构。':'结构搜索未完成，请在原窗口核对。';

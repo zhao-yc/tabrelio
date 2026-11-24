@@ -1,3 +1,4 @@
+import { mysqlDataTransferApplySchema, mysqlDataTransferPreviewSchema, mysqlDataTransferReleaseSchema } from './mysqlDataTransfer';
 import { sidebarViewSchema } from './sidebarView';
 import { objectInformationWidthSchema } from './objectInformationLayout';
 import { mysqlJoinPreviewSchema } from './mysqlJoinPreview';
@@ -143,7 +144,7 @@ import { taskCancelInputSchema } from './taskCancelState';
 import { tableApplyReceiptListSchema } from './tableApplyReceipt';
 import { tlsPassphraseMaxLength, tlsCredentialMessages, validTlsPassphrase } from './tlsCredentials';
 import { workbenchSaveSchema, workbenchTargetSchema } from './workbench';
-import { schemaCompareInputSchema, schemaComparePreviewSchema, schemaCompareReleaseSchema } from './schemaCompare';
+import { schemaCompareApplySchema, schemaCompareInputSchema, schemaComparePreviewSchema, schemaCompareReleaseSchema } from './schemaCompare';
 import { queryCreateSchema, queryUpdateSourceSchema, querySourceBindingSchema } from './queryBinding';
 import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema,savedQueryFavoriteSchema,savedQueryRememberOpenSchema,savedQueryExportSqlArchiveSchema}from'./savedQueryPages';
 import { savedQueryRenameSchema } from './savedQueryRename';
@@ -423,6 +424,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.backup.database': postgresDatabaseBackupExecuteSchema,
   'mysql.backup.chooseTool': z.object({}).strict(), 'mysql.backup.chooseFile': mysqlDatabaseBackupChooseSchema,
   'mysql.backup.database': mysqlDatabaseBackupExecuteSchema,
+  'mysql.dataTransfer.preview': mysqlDataTransferPreviewSchema,
+  'mysql.dataTransfer.apply': mysqlDataTransferApplySchema,
+  'mysql.dataTransfer.release': mysqlDataTransferReleaseSchema,
   'mysql.backup.tables': mysqlBackupTablesSchema,
   'mysql.sqlFile.choose': mysqlSqlFilePickSchema, 'mysql.sqlFile.execute': mysqlSqlFileExecuteSchema,
   'mysql.sqlFile.inspect': mysqlSqlFileInspectionSchema, 'mysql.sqlFile.cancelInspection': mysqlSqlFileCancelInspectionSchema,
@@ -556,7 +560,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'queries.create': queryCreateSchema, 'queries.updateSource': queryUpdateSourceSchema,
   'queries.organizationGet': savedQueryOrganizationGetSchema, 'queries.organizationApply': savedQueryOrganizationApplySchema,
   'table.preferences.get': tablePreferenceTargetSchema, 'table.preferences.save': tablePreferenceSaveSchema, 'table.preferences.reset': tablePreferenceTargetSchema,
-  'schema.compare': schemaCompareInputSchema, 'schema.comparePreview': schemaComparePreviewSchema, 'schema.compareRelease': schemaCompareReleaseSchema,
+  'schema.compare': schemaCompareInputSchema, 'schema.comparePreview': schemaComparePreviewSchema, 'schema.compareRelease': schemaCompareReleaseSchema, 'schema.compareApply': schemaCompareApplySchema,
   'app.runtimeInfo': empty, 'app.info': empty,
   'app.setDirty': z.object({ dirty: z.boolean() }).strict(),
   'connections.export': z.object({ connectionIds: z.array(id).min(1).max(connectionTransferLimits.connections), fileToken: id }).strict(),

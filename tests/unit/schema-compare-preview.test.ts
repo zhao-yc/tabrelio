@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSchemaComparePreview } from '../../src/engine/schemaComparePreview';
+import { schemaSynchronizationSql } from '../../src/engine/schemaCompareApply';
 import { compareSchemaSnapshots } from '../../src/engine/schemaCompareProjection';
 import { validateCommand } from '../../src/shared/validation';
 import { comparisonSnapshot as snapshot } from './schema-compare-fixtures';
@@ -11,6 +12,20 @@ function preview(source: ReturnType<typeof snapshot>, target: ReturnType<typeof 
   return buildSchemaComparePreview(source, target, report, selections);
 }
 describe('结构比较的保守 SQL 审查稿', () => {
+  it('同步仅发布一次原子 ALTER，新增列须有可明确定义的现有行值', () => {
+    const target = snapshot('`id` int', 'target');
+    target.normalizedMode = 'STRICT_TRANS_TABLES';
+    const source = snapshot("`id` int, `a` int DEFAULT 7, KEY `ix` (`a`)", 'source');
+    source.normalizedMode = target.normalizedMode;
+    const synchronization = (value: typeof source) => {
+      const report = { ...compareSchemaSnapshots(value, target), snapshotId: 'snapshot', expiresAt: new Date().toISOString() };
+      return schemaSynchronizationSql(target, report, preview(value, target));
+    };
+    expect(synchronization(source)).toBe('ALTER TABLE `db`.`target` ADD COLUMN `a` int DEFAULT 7 AFTER `id`,\n  ADD KEY `ix` (`a`);');
+    const required = snapshot('`id` int, `a` int NOT NULL', 'source');
+    required.normalizedMode = target.normalizedMode;
+    expect(synchronization(required)).toBeUndefined();
+  });
   it('目标引用安全、字段先于索引，保留精确默认值和字段顺序', () => {
     const source = snapshot('`id` int, `a` decimal(30,8) DEFAULT 1234567890123456789012.12345678, KEY `a``idx` (`a`)');
     const result = preview(source, snapshot('`id` int', 't`target', 'db`target'));

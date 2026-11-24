@@ -121,6 +121,7 @@ import { tableCreateZh } from './locales/tableCreate.zh-CN';
 import { TableCopyStructureDialog } from './components/TableCopyStructureDialog';
 import { tableCopyStructureServices, assertTableCopyStructureTargetAvailable } from './tableCopyStructureServices';
 import { tableCopyStructureZh } from './locales/tableCopyStructure.zh-CN';
+import { MysqlDataTransferDialog } from './components/MysqlDataTransferDialog';
 import { SchemaCompareDialog } from './components/SchemaCompareDialog';
 import { schemaCompareServices } from './schemaCompareServices';
 import { PostgresRolesDialog } from './components/PostgresRolesDialog';
@@ -284,6 +285,7 @@ function WorkspaceApp({ historyInsertionRegistry }: { historyInsertionRegistry: 
     if (typeof current?.scrollIntoView === 'function') current.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
   }, [settings.activeTabId, tabOrderKey, tabScrollRevision]);
   const [schemaCompare, setSchemaCompare] = useState(false);
+  const [mysqlDataTransfer, setMysqlDataTransfer] = useState(false);
   const [serverMonitor, setServerMonitor] = useState(false);
   const [postgresRoles, setPostgresRoles] = useState(false);
   const [structureSearch,setStructureSearch]=useState(false);
@@ -1284,6 +1286,7 @@ function WorkspaceApp({ historyInsertionRegistry }: { historyInsertionRegistry: 
     'favorite-toggle': handler(async () => { if (selectedObject && treeSelection.current() === selectedObject) await useWorkbench.getState().toggleFavorite(selectedObject); }, !!selectedObject && workbench.ready && !workbench.busy, !!selectedFavorite),
     'favorites-manage': handler(openWorkbenchManager), 'object-link': handler(openObjectLink),
     // 全库搜索仍提供离线保存查询入口；数据库搜索由弹窗内的真实连接能力限制。
+    'mysql-data-transfer': handler(() => setMysqlDataTransfer(true), networkConnections.some(profile => !profile.pendingFiles?.length)),
     'schema-compare': handler(() => setSchemaCompare(true), !!networkConnections.length), 'structure-search': handler(() => setStructureSearch(true)),
     'server-monitor': handler(() => setServerMonitor(true), !sqliteObjects && !!monitorConnections.length),
     'postgres-roles': handler(() => { if (!document.querySelector(appModalSelector)) setPostgresRoles(true); }, !!roleConnections.length),
@@ -1361,7 +1364,7 @@ function WorkspaceApp({ historyInsertionRegistry }: { historyInsertionRegistry: 
     {workbenchDialog && <WorkbenchDialog onOpen={openWorkbenchTarget} onClose={closeWorkbenchManager}/>}
     {objectLinkDialog && <ObjectLinkDialog onOpen={openWorkbenchTarget} onClose={closeObjectLink}/>}
 
-    {schemaCompare && <SchemaCompareDialog connections={networkConnections} services={schemaCompareServices} onClose={() => setSchemaCompare(false)}/>}
+    {schemaCompare && <SchemaCompareDialog connections={networkConnections} services={schemaCompareServices} onRefresh={id => setConnectionRefreshVersions(current => ({ ...current, [id]: (current[id] ?? 0) + 1 }))} onClose={() => setSchemaCompare(false)}/>}
     {postgresRoles && <PostgresRolesDialog connections={roleConnections} preferred={state.selection ?? activeTab}
       versions={state.connectionVersions} onClose={() => setPostgresRoles(false)}
       onEditConnection={profile => {setPostgresRoles(false); setConnectionDialog(profile);}}/>}
@@ -1524,6 +1527,8 @@ function WorkspaceApp({ historyInsertionRegistry }: { historyInsertionRegistry: 
     {serverDataCompare && <ServerDataCompareDialog dialect={serverDataCompare} connections={connections.filter(profile => !profile.pendingFiles?.length &&
       (serverDataCompare === 'postgres' ? profile.dialect === 'postgresql' : profile.dialect === 'mysql' || profile.dialect === 'mariadb'))} onClose={() => setServerDataCompare(undefined)}/>}
     {sqliteDataCompare && <SqliteDataCompareDialog connections={connections.filter(profile => profile.dialect === 'sqlite' && !!profile.sqlite.filePath && !profile.pendingFiles?.length)} onClose={() => setSqliteDataCompare(false)}/>}
+    {mysqlDataTransfer && <MysqlDataTransferDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)}
+      onRefresh={id => setConnectionRefreshVersions(current => ({ ...current, [id]: (current[id] ?? 0) + 1 }))} onClose={() => setMysqlDataTransfer(false)}/>}
     {mysqlDatabaseBackup && <MysqlDatabaseBackupDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)}
       onClose={() => setMysqlDatabaseBackup(false)}/>}
     {mysqlSqlFile && <MysqlSqlFileDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)}

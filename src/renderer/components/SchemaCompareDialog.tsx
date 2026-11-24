@@ -1,24 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
-import { schemaCompareInputSchema, type SchemaCompareInput, type SchemaCompareResult, type SchemaComparePreview, type SchemaComparePreviewInput, type SchemaCompareTarget } from '../../shared/schemaCompare';
+import { schemaCompareInputSchema, type SchemaCompareApplyInput, type SchemaCompareApplyResult, type SchemaCompareInput, type SchemaCompareResult, type SchemaComparePreview, type SchemaComparePreviewInput, type SchemaCompareTarget } from '../../shared/schemaCompare';
 import { schemaCompareZh as text } from '../locales/schemaCompare.zh-CN';
 import { ErrorBox, Field, Modal, UsageHelp } from './ui';
 import { SchemaCompareResults } from './SchemaCompareResults';
 import { applySchemaCompareResultsSelection } from '../schemaCompareResults';
 import '../schemaCompare.css';
 
-export interface SchemaCompareServices { compare(input: SchemaCompareInput): Promise<SchemaCompareResult>; cancel(taskId: string): Promise<unknown>; preview(input: SchemaComparePreviewInput): Promise<SchemaComparePreview>; release(snapshotId: string): Promise<unknown>; save(sql: string): Promise<boolean>; }
+export interface SchemaCompareServices { compare(input: SchemaCompareInput): Promise<SchemaCompareResult>; cancel(taskId: string): Promise<unknown>; preview(input: SchemaComparePreviewInput): Promise<SchemaComparePreview>; apply?(input: SchemaCompareApplyInput): Promise<SchemaCompareApplyResult>; release(snapshotId: string): Promise<unknown>; save(sql: string): Promise<boolean>; }
 export interface SchemaCompareDialogProps {
   connections: readonly { id: string; name: string }[]; services: SchemaCompareServices;
-  initialSource?: SchemaCompareTarget; initialTarget?: SchemaCompareTarget; onClose(): void;
+  initialSource?: SchemaCompareTarget; initialTarget?: SchemaCompareTarget; onClose(): void; onRefresh?(connectionId: string): void;
 }
 /** 已接纳选择以同步引用为权威；React state 只负责投影，不能作为请求范围的同步屏障。 */
 interface AcceptedSelection { report: SchemaCompareResult; ids: string[]; revision: number; }
 /** 通过注入服务接线，渲染侧只提交连接引用和表名，不能持有凭据或自行借用查询会话。 */
-export function SchemaCompareDialog({ connections, services, initialSource, initialTarget, onClose }: SchemaCompareDialogProps) {
+export function SchemaCompareDialog({ connections, services, initialSource, initialTarget, onClose, onRefresh }: SchemaCompareDialogProps) {
   const fallback = { connectionId: '', database: '', table: '' };
   const [source, setSource] = useState<SchemaCompareTarget>(initialSource ?? fallback), [target, setTarget] = useState<SchemaCompareTarget>(initialTarget ?? fallback);
   const [report, setReport] = useState<SchemaCompareResult | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false);
   const [selected, setSelected] = useState<string[]>([]), [preview, setPreview] = useState<SchemaComparePreview | null>(null), [previewBusy, setPreviewBusy] = useState(false), [saved, setSaved] = useState(false);
+  const [confirmation, setConfirmation] = useState(''), [acknowledge, setAcknowledge] = useState(false), [syncMessage, setSyncMessage] = useState('');
   const snapshot = useRef<string | null>(null), previewWork = useRef<Promise<void> | null>(null);
   const active = useRef<string | null>(null), work = useRef<Promise<void> | null>(null), cancellation = useRef<{ taskId: string; promise: Promise<unknown> } | null>(null), stopRequested = useRef(false), alive = useRef(true), closeRequested = useRef(false), service = useRef(services);
   const activeService = useRef(services), cancelFailure = useRef<string | null>(null);
@@ -35,7 +36,7 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
     if (!parsed.success) { setError(text.invalid); return; }
     const taskId = parsed.data.taskId, current = service.current;
     if (snapshot.current) void current.release(snapshot.current).catch(() => undefined);
-    snapshot.current = null; acceptedSelection.current = null; acceptedPreview.current = null; setSelected([]); setPreview(null); setSaved(false);
+    snapshot.current = null; acceptedSelection.current = null; acceptedPreview.current = null; setSelected([]); setPreview(null); setSaved(false); setSyncMessage('');
     activeService.current = current;
     active.current = taskId; stopRequested.current = false; cancelFailure.current = null; setBusy(true); setReport(null); setError('');
     const operation = (async () => {
@@ -66,7 +67,7 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
   /** 输入一旦变化就撤销旧预览，避免将旧方向或旧目标显示为当前结果。 */
   function changeEndpoint(side: 'source' | 'target', value: SchemaCompareTarget): void {
     if (snapshot.current) void service.current.release(snapshot.current).catch(() => undefined);
-    snapshot.current = null; acceptedSelection.current = null; acceptedPreview.current = null; setReport(null); setPreview(null); setSelected([]); setSaved(false);
+    snapshot.current = null; acceptedSelection.current = null; acceptedPreview.current = null; setReport(null); setPreview(null); setSelected([]); setSaved(false); setSyncMessage('');
     if (side === 'source') setSource(value); else setTarget(value);
   }
   /** 只把稳定差异的类别与名称传给引擎；SQL 及原定义不回传。 */
@@ -80,7 +81,7 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
     const operation = (async () => {
       try {
         const result = await service.current.preview(input);
-        if (previewOwner.current === owner && acceptedSelection.current === selection && alive.current && !closeRequested.current && snapshot.current === id) { acceptedPreview.current = { selection, value: result }; setPreview(result); }
+        if (previewOwner.current === owner && acceptedSelection.current === selection && alive.current && !closeRequested.current && snapshot.current === id) { acceptedPreview.current = { selection, value: result }; setConfirmation(''); setAcknowledge(false); setPreview(result); }
       } catch (reason) { if (previewOwner.current === owner && alive.current && snapshot.current === id) setError(reason instanceof Error ? reason.message : text.failed); }
       finally {
         // 只释放本操作；旧异步尾部不能解除后续操作、比较或关闭持有的门。
@@ -105,15 +106,41 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
     previewWork.current = operation;
     try { await operation; } finally { if (previewWork.current === operation) previewWork.current = null; }
   }
+  /** 同步固定已预览的选择，关闭窗口时等待 ALTER 的真实回执。 */
+  function synchronize(): void {
+    const draft = acceptedPreview.current, apply = service.current.apply;
+    if (!draft?.value.synchronization || !apply || !report || draft.selection !== acceptedSelection.current ||
+        draft.selection.report !== report || snapshot.current !== report.snapshotId || selectionBlocked.current ||
+        !alive.current || currentEpoch.current !== epoch || closeRequested.current || !acknowledge ||
+        confirmation !== draft.value.target.database + '.' + draft.value.target.table) return;
+    const owner = {}, id = report.snapshotId;
+    previewOwner.current = owner; selectionBlocked.current = true; setPreviewBusy(true); setError(''); setSyncMessage('');
+    const operation = (async () => {
+      try {
+        const result = await apply({ taskId: crypto.randomUUID(), snapshotId: id, previewId: draft.value.synchronization!.previewId,
+          target: draft.value.target, confirmation, acknowledge: true });
+        if (alive.current) setSyncMessage(result.status === 'verified' ? text.syncSuccess(result.changed) : text.syncUnverified);
+      } catch (reason) { if (alive.current) setError(reason instanceof Error ? reason.message : text.failed); }
+      finally {
+        onRefresh?.(draft.value.target.connectionId);
+        snapshot.current = null; acceptedSelection.current = null; acceptedPreview.current = null;
+        previewOwner.current = null; selectionBlocked.current = closeRequested.current;
+        if (alive.current) { setPreviewBusy(false); setReport(null); setPreview(null); setSelected([]); }
+        await service.current.release(id).catch(() => undefined);
+      }
+    })();
+    previewWork.current = operation;
+    void operation.finally(() => { if (previewWork.current === operation) previewWork.current = null; });
+  }
   /** 表身份始终保留原始输入，引用和 SQL 转义由引擎负责。 */
   function endpoint(label: string, value: SchemaCompareTarget, update: (value: SchemaCompareTarget) => void) {
     return <fieldset disabled={busy || closing || previewBusy}><legend>{label}</legend><Field label={text.connection}><select aria-label={`${label} ${text.connection}`} value={value.connectionId} onChange={event => update({ ...value, connectionId: event.target.value })}><option value="">—</option>{connections.map(connection => <option key={connection.id} value={connection.id}>{connection.name}</option>)}</select></Field><Field label={text.database}><input aria-label={`${label} ${text.database}`} value={value.database} onChange={event => update({ ...value, database: event.target.value })}/></Field><Field label={text.table}><input aria-label={`${label} ${text.table}`} value={value.table} onChange={event => update({ ...value, table: event.target.value })}/></Field></fieldset>;
   }
   const endpointName = (value: SchemaCompareTarget) => `${connections.find(connection => connection.id === value.connectionId)?.name ?? value.connectionId} · ${JSON.stringify(value.database)}.${JSON.stringify(value.table)}`;
   return <Modal title={text.title} wide onClose={() => void close()}><div className="modal-content schema-compare-content">
-    <p>{text.direction}</p><UsageHelp><p>{text.scope}</p><p>{text.exactNames}</p></UsageHelp>
+    <p>{text.direction}</p><UsageHelp><p>{services.apply ? text.syncScope : text.scope}</p><p>{text.exactNames}</p></UsageHelp>
     <div className="schema-compare-endpoints">{endpoint(text.source, source, value => changeEndpoint('source', value))}{endpoint(text.target, target, value => changeEndpoint('target', value))}</div><button disabled={busy || closing || previewBusy} onClick={() => { changeEndpoint('source', target); changeEndpoint('target', source); }}>{text.swap}</button><ErrorBox message={error}/>
-    <div role="status">{closing ? text.closing : busy ? text.reading : report ? <>{Object.entries(report.counts).map(([status, count]) => <span className="schema-compare-count" key={status}>{text.statuses[status as keyof typeof text.statuses]}：{count}</span>)}{report.counts.unknown > 0 ? text.unknown : report.counts.added + report.counts.removed + report.counts.changed === 0 ? text.allSame : ''}</> : text.empty}</div>
+    <div role="status">{closing ? text.closing : busy ? text.reading : report ? <>{Object.entries(report.counts).map(([status, count]) => <span className="schema-compare-count" key={status}>{text.statuses[status as keyof typeof text.statuses]}：{count}</span>)}{report.counts.unknown > 0 ? text.unknown : report.counts.added + report.counts.removed + report.counts.changed === 0 ? text.allSame : ''}</> : syncMessage || text.empty}</div>
     {report && <><p className="schema-compare-direction">{endpointName(report.source)}（{text.version} {report.sourceVersion}） → {endpointName(report.target)}（{text.version} {report.targetVersion}）</p>
       <SchemaCompareResults report={report} selectedIds={selected} disabled={busy || closing || previewBusy} onSelectionChange={event => {
         // 回调捕获原快照，接纳前活读父级归属和忙碌状态，旧报告不能借新报告改选择或撤销预览。
@@ -129,6 +156,12 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
       }}/>
       <p>{text.previewScope} {text.selected}：{selected.length}</p>
       {preview && <section className="schema-compare-preview"><h3>{text.sql}</h3><ul>{preview.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul><textarea aria-label={text.sql} readOnly value={preview.sql}/>{preview.blocked.length > 0 && <div><strong>{text.blocked}</strong><ul>{preview.blocked.map(item => <li key={JSON.stringify([item.category, item.name])}>{text.categories[item.category]} {JSON.stringify(item.name)}：{item.reasons.join('；')}</li>)}</ul></div>}{saved && <p role="status">{text.saved}</p>}</section>}
+      {preview?.synchronization && services.apply && <fieldset disabled={closing || previewBusy} className="schema-compare-preview">
+        <legend>{text.sync}</legend><Field label={text.syncSql}><textarea readOnly value={preview.synchronization.sql}/></Field>
+        <Field label={text.syncTarget}><input value={confirmation} onChange={event => setConfirmation(event.target.value)} placeholder={preview.target.database + '.' + preview.target.table}/></Field>
+        <label><input type="checkbox" checked={acknowledge} onChange={event => setAcknowledge(event.target.checked)}/> {text.syncRisk}</label>
+        <button onClick={synchronize} disabled={!acknowledge || confirmation !== preview.target.database + '.' + preview.target.table}>{text.sync}</button>
+      </fieldset>}
       <details className="schema-compare-limits"><summary>{text.limits}</summary><ul>{report.ignored.map(reason => <li key={reason}>{reason}</li>)}</ul><details><summary>{text.rawTail}</summary>{report.ignoredFragments.map(fragment => <div key={fragment.side}><strong>{fragment.side === 'source' ? text.source : text.target}</strong><pre>{fragment.rawSql}</pre></div>)}</details></details></>}
   </div><footer className="modal-footer"><button className="primary" disabled={busy || closing || previewBusy} onClick={compare}>{text.start}</button><button disabled={!busy || closing} onClick={() => void cancel().catch(reason => setError(reason instanceof Error ? reason.message : text.failed))}>{text.cancel}</button><button disabled={!report || !selected.length || selected.length > 100 || busy || closing || previewBusy} onClick={generatePreview}>{text.preview}</button><button disabled={!preview?.statements.length || busy || closing || previewBusy} onClick={() => void savePreview()}>{text.save}</button><span className="grow"/><button disabled={closing} onClick={() => void close()}>{text.close}</button></footer></Modal>;
 }

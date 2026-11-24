@@ -493,6 +493,9 @@ export interface CommandMap {
   'postgres.backup.chooseDatabaseFile': { input: import('./postgresDatabaseBackup').PostgresDatabaseBackupChooseInput; output: FileChoice | null };
   'postgres.backup.database': { input: import('./postgresDatabaseBackup').PostgresDatabaseBackupInput; output: import('./postgresDatabaseBackup').PostgresDatabaseBackupResult };
   'mysql.backup.chooseTool': { input: Record<string, never>; output: FileChoice | null };
+  'mysql.dataTransfer.preview': { input: import('./mysqlDataTransfer').MysqlDataTransferPreviewInput; output: import('./mysqlDataTransfer').MysqlDataTransferPreview };
+  'mysql.dataTransfer.apply': { input: import('./mysqlDataTransfer').MysqlDataTransferApplyInput; output: import('./mysqlDataTransfer').MysqlDataTransferResult };
+  'mysql.dataTransfer.release': { input: { previewId: string }; output: void };
   'mysql.backup.tables': { input: Pick<import('./mysqlDatabaseBackup').MysqlDatabaseBackupChooseInput, 'connectionId' | 'database'>; output: string[] };
   'mysql.backup.chooseFile': { input: import('./mysqlDatabaseBackup').MysqlDatabaseBackupChooseInput; output: FileChoice | null };
   'mysql.backup.database': { input: import('./mysqlDatabaseBackup').MysqlDatabaseBackupInput; output: import('./mysqlDatabaseBackup').MysqlDatabaseBackupResult };
@@ -633,6 +636,7 @@ export interface CommandMap {
   'schema.apply': { input: { connectionId: string; database: string; sql: string; taskId: string }; output: QueryOutcome };
   'schema.compare': { input: SchemaCompareInput; output: SchemaCompareResult };
   'schema.comparePreview': { input: SchemaComparePreviewInput; output: SchemaComparePreview };
+  'schema.compareApply': { input: import('./schemaCompare').SchemaCompareApplyInput; output: import('./schemaCompare').SchemaCompareApplyResult };
   'schema.compareRelease': { input: { snapshotId: string }; output: void };
   'schema.columns.get': { input: TableColumnGetInput; output: TableColumnGetOutput };
   'schema.columns.preview': { input: TableColumnPreviewInput; output: TableColumnPreviewOutput };
