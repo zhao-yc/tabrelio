@@ -38,7 +38,7 @@ describe('原生菜单状态与原文档命令归属', () => {
       ['sql-goto-bracket', false], ['sql-select-bracket', false], ['sql-toggle-comment', false],
       ['sql-toggle-block-comment', false], ['sql-uppercase', false], ['sql-lowercase', false],
       ['sql-selection-to-snippet', false], ['sql-clipboard-stack', false], ['sql-copy-quoted', false],
-      ['sql-copy-current-statement-quoted', false],
+      ['sql-copy-current-statement', false], ['sql-copy-current-statement-quoted', false],
     ]);
     expect(windows.find('sql-toggle-comment')?.accelerator).toBe('CmdOrCtrl+/');
     expect(windows.find('sql-editor-zoom-in')).toMatchObject({ label: '放大当前 SQL 编辑器', enabled: false });

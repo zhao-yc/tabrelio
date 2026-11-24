@@ -566,21 +566,21 @@ for (const dialect of ['mysql', 'postgresql'] as const) {
 }
 
 /** 只观测本例复制事件及其文本，不调用电脑的剪贴板。 */
-async function observeQuotedCopies() {
+async function observeSqlCopies() {
   await page.evaluate(() => {
     const copies: string[] = [];
-    Object.assign(window, { __quotedSqlCopies: copies });
+    Object.assign(window, { __observedSqlCopies: copies });
     const original = document.execCommand.bind(document);
     document.execCommand = (command, ...rest) => {
       if (command !== 'copy') return original(command, ...rest);
       const data = new DataTransfer();
       const event = new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data });
       document.dispatchEvent(event);
-      if (event.defaultPrevented) copies.push(data.getData('text/plain'));
+      if (event.defaultPrevented && data.types.includes('text/plain')) copies.push(data.getData('text/plain'));
       return event.defaultPrevented;
     };
   });
-  return () => page.evaluate(() => (window as Window & { __quotedSqlCopies?: string[] }).__quotedSqlCopies);
+  return () => page.evaluate(() => (window as Window & { __observedSqlCopies?: string[] }).__observedSqlCopies);
 }
 
 for (const dialect of ['mysql', 'postgresql'] as const) {
@@ -589,7 +589,7 @@ for (const dialect of ['mysql', 'postgresql'] as const) {
     const sql = lines.join('\n');
     await seed(dialect, sql);
     await desktop.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(0.7); });
-    const copies = await observeQuotedCopies();
+    const copies = await observeSqlCopies();
     function model(range?: 'all' | 'first' | 'move') {
       return activeEditor().evaluate((element, range) => {
         const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
@@ -647,14 +647,14 @@ for (const dialect of ['mysql', 'postgresql'] as const) {
 }
 
 for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
-  test(`${dialect} 带引号复制当前语句只使用原语句，光标变化撤销复制资格`, async () => {
+  test(`${dialect} 从两处菜单复制当前语句，保留分隔符并拒绝过期光标`, async () => {
     const custom = dialect === 'mysql' || dialect === 'mariadb';
     const body = String.raw`SELECT '船🚢', "字段", '\n',` + '\n  7';
     const statement = body + (custom ? '' : ';');
     const sql = "SELECT '前置';\n" + (custom ? 'DELIMITER $$\n' : '') + statement +
       (custom ? '$$\nDELIMITER ;' : '') + "\nSELECT '尾部';";
     await seed(dialect, dialect === 'sqlite' ? sql.replaceAll('\n', '\r\n') : sql);
-    const copies = await observeQuotedCopies(), line = custom ? 3 : 2;
+    const copies = await observeSqlCopies(), line = custom ? 3 : 2;
     const model = (caret?: number) => activeEditor().evaluate((element, caret) => {
       const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
       const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
@@ -687,6 +687,43 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     await page.locator('.monaco-menu-container:visible').getByRole('menuitem', {name: uiCommandLabels[command], exact: true}).click({delay: 120});
     await preview(); await confirm.click(); await expect(dialog).toBeHidden();
     expect(await copies()).toEqual([expected]);
+    expect(await model()).toMatchObject({sql: initial.sql, line, empty: true});
+
+    const plain = 'sql-copy-current-statement';
+    const raw = statement.replaceAll('\n', initial.eol);
+    const script = custom ? ['DELIMITER $$', raw + '$$', 'DELIMITER ;'].join(initial.eol) :
+      (dialect === 'postgresql' ? initial.eol : '') + raw;
+    const plainDialog = page.getByRole('dialog', {name: quotedText.plainTitle, exact: true});
+    const copyPlain = plainDialog.getByRole('button', {name: quotedText.plainCopy, exact: true});
+    // 模拟原生菜单没有激活页面时的情况，同时隔离系统剪贴板。
+    await page.evaluate(() => Object.defineProperty(navigator, 'userActivation', {configurable: true, value: {isActive: false}}));
+    await box.focus();
+    await model(line);
+    await nativeQueryCommand(plain, false);
+    await expect(plainDialog.getByLabel(quotedText.plainPreview, {exact: true})).toHaveText(script);
+    expect(await copies()).toEqual([expected]);
+    await copyPlain.click();
+    await expect(plainDialog).toBeHidden();
+    await expect.poll(copies).toEqual([expected, script]);
+    expect(await model()).toMatchObject({sql: initial.sql, line, column: 4, empty: true});
+
+    await box.focus();
+    await model(line);
+    await nativeQueryCommand(plain, false);
+    await expect(plainDialog).toBeVisible();
+    await model(1);
+    await copyPlain.click();
+    await expect(plainDialog.getByRole('alert')).toHaveText(quotedText.stale);
+    expect(await copies()).toEqual([expected, script]);
+    await page.keyboard.press('Escape');
+    await expect(plainDialog).toBeHidden();
+    await page.evaluate(() => Reflect.deleteProperty(navigator, 'userActivation'));
+
+    const plainPoint = await model(line);
+    await page.mouse.click(plainPoint.x, plainPoint.y, {button: 'right'});
+    await page.locator('.monaco-menu-container:visible').getByRole('menuitem', {name: uiCommandLabels[plain], exact: true}).click({delay: 120});
+    await expect.poll(copies).toEqual([expected, script, script]);
+    await expect(plainDialog).toHaveCount(0);
     expect(await model()).toMatchObject({sql: initial.sql, line, empty: true});
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);

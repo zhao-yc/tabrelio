@@ -1,5 +1,10 @@
 export const sqlQuotedCopyZh = {
   title: '带引号复制 SQL',
+  plainTitle: '复制当前语句',
+  plainPreview: 'SQL 预览',
+  plainPreviewLimited: '预览只显示开头，复制将写入完整语句。',
+  plainCopy: '复制 SQL',
+  plainCopied: '已复制当前语句。',
   hint: '把选区转换为代码字符串。复制前可核对引号、反斜杠及换行的转义结果。',
   statementHint: '把光标所在语句转换为代码字符串。复制前可核对引号、反斜杠及换行的转义结果。',
   statementTooLarge: '当前语句超过 16,000 个 UTF-16 单元。可选择较短的范围后复制。',

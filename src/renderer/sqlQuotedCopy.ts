@@ -8,16 +8,17 @@ export const sqlQuoteFormats = ['javascript', 'python', 'java'] as const;
 export type SqlQuoteFormat = typeof sqlQuoteFormats[number];
 
 export interface SqlQuotedStatementSource { source: string; range: NavigableStatement; }
-type StatementPreview = (statement: SqlQuotedStatementSource) => void;
+export type SqlStatementCopyKind = 'plain' | 'quoted';
+type StatementPreview = (statement: SqlQuotedStatementSource, kind: SqlStatementCopyKind) => void;
 const previews = new WeakMap<editor.IStandaloneCodeEditor, StatementPreview>();
 
 /** 只把已核准的原文范围交还给同一编辑器，预览和剪贴板权限仍由编辑器持有。 */
-export function bindSqlQuotedStatementPreview(instance: editor.IStandaloneCodeEditor, open: StatementPreview): () => void {
+export function bindSqlStatementCopy(instance: editor.IStandaloneCodeEditor, open: StatementPreview): () => void {
   previews.set(instance, open);
   return () => { if (previews.get(instance) === open) previews.delete(instance); };
 }
-export function openSqlQuotedStatement(instance: editor.IStandaloneCodeEditor, source: string, range: NavigableStatement): void {
-  previews.get(instance)?.({source, range});
+export function openSqlStatementCopy(instance: editor.IStandaloneCodeEditor, source: string, range: NavigableStatement, kind: SqlStatementCopyKind): void {
+  previews.get(instance)?.({source, range}, kind);
 }
 
 /** 保留语句正文和普通分号，排除语句之间的空白及客户端自定义分隔符。 */

@@ -9,9 +9,10 @@ import { zh } from '../locales/zh-CN';
 import { captureSqlClipboardSelection, sqlClipboardStack, sqlClipboardStackAction } from '../sqlClipboardStack';
 import { sqlClipboardStackZh as clipboardText } from '../locales/sqlClipboardStack.zh-CN';
 import { sqlQuotedCopyZh as quotedText } from '../locales/sqlQuotedCopy.zh-CN';
-import { bindSqlQuotedStatementPreview, quoteSqlForCode, sqlQuotedCopyAction, sqlQuotedCopyMaxUnits, sqlQuotedStatementText, sqlQuoteFormats,
+import { bindSqlStatementCopy, quoteSqlForCode, sqlQuotedCopyAction, sqlQuotedCopyMaxUnits, sqlQuotedStatementText, sqlQuoteFormats,
   type SqlQuoteFormat, type SqlQuotedStatementSource } from '../sqlQuotedCopy';
 import { writeTableClipboardEvent } from '../gridClipboard';
+import { statementDraftSql } from '../queryDuplicateIntent';
 import { ErrorBox, Modal } from './ui';
 import { SqlSelectionFindDialog, sqlSelectionFindLimit } from './SqlSelectionFindDialog';
 import { sqlSelectionFindZh } from '../locales/sqlSelectionFind.zh-CN';
@@ -113,7 +114,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const contentRef = useRef<ReturnType<typeof editorContentBridge> | null>(null);
   const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable; formatAction?: monaco.IDisposable; formatToken?: object;
-    indentation?: ReturnType<typeof bindEditorIndentation>; releaseQuotedStatement?: () => void } | null>(null);
+    indentation?: ReturnType<typeof bindEditorIndentation>; releaseStatementCopy?: () => void } | null>(null);
   const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat, queryTabId, clipboardDisabled });
   const foldingAnsiQuotes = requestedDialect === 'mysql' || requestedDialect === 'mariadb' ? mysqlMode?.ansiQuotes : undefined;
   const foldingEscapes = requestedDialect === 'postgresql' ? postgresStandardStrings : requestedDialect === 'mysql' || requestedDialect === 'mariadb' ? mysqlMode?.noBackslashEscapes : undefined;
@@ -131,7 +132,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   }, [queryTabId, contentReady]);
   const queryEditor = !!onExecute;
   type ClipboardRequest = { intent: NonNullable<ReturnType<typeof captureSqlClipboardSelection>>; unsubscribe(): void } &
-    ({ kind: 'paste'; entries: readonly string[] } | { kind: 'quoted'; sql: string; currentStatement: boolean });
+    ({ kind: 'paste'; entries: readonly string[] } | { kind: 'plain' | 'quoted'; sql: string; currentStatement: boolean });
   const clipboardRequest = useRef<ClipboardRequest | null>(null), clipboardHost = useRef<HTMLDivElement>(null);
   const [clipboardDialog, setClipboardDialog] = useState<ClipboardRequest>(), [clipboardIndex, setClipboardIndex] = useState(0);
   const [selectionFind, setSelectionFind] = useState<{
@@ -160,15 +161,16 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   function closeClipboard(): void { disposeClipboard(); setClipboardDialog(undefined); }
   /** 绑定打开时的标签、连接配置和编辑器，等待选择时不得切换目标。 */
   function openClipboard(editor: monaco.editor.IStandaloneCodeEditor, kind: ClipboardRequest['kind'] = 'paste', statement?: SqlQuotedStatementSource): void {
-    if (clipboardRequest.current || document.querySelector(appModalSelector)) return;
+    if (clipboardRequest.current || document.querySelector(appModalSelector) || (kind === 'plain' && !statement)) return;
     const workspace = useWorkspace.getState(), tab = workspace.settings.tabs.find(item => item.id === propsRef.current.queryTabId);
     if (!tab) return;
     const profile = workspace.connections.find(item => item.id === tab.connectionId), version = workspace.connectionVersions[tab.connectionId];
+    if (!profile) return;
     const allowed = () => {
       const current = useWorkspace.getState(), props = propsRef.current;
       return aliveRef.current && editorRef.current === editor && contentRef.current?.ready === true && props.queryTabId === tab.id &&
         !props.clipboardDisabled && !props.readOnly && !editor.getRawOptions().readOnly && current.settings.activeTabId === tab.id &&
-        current.settings.tabs.includes(tab) && !!profile && current.connections.includes(profile) &&
+        current.settings.tabs.includes(tab) && current.connections.includes(profile) &&
         current.connectionVersions[tab.connectionId] === version && !current.activeJobs[tab.id] && !current.queryFileOpenings?.[tab.id];
     };
     if (!allowed()) return;
@@ -176,14 +178,30 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     if (statement && editor.getModel()?.getValue() !== statement.source) { workspace.notify(quotedText.stale, true); return; }
     const intent = captureSqlClipboardSelection(editor, allowed);
     if (!intent) { workspace.notify(kind === 'paste' ? clipboardText.single : quotedText.select, true); return; }
-    let sql: string | undefined;
+    let sql = '';
+    if (kind === 'plain' && statement) {
+      try { sql = statementDraftSql(statement.source, [statement.range], profile.dialect); }
+      catch { intent.dispose(); workspace.notify(quotedText.stale, true); return; }
+      const current = () => !document.querySelector(appModalSelector) && intent.current();
+      // 原生菜单或语句扫描可能没有可用的用户激活。继续沿用浏览器的剪贴板权限，由复制按钮确认。
+      if (navigator.userActivation?.isActive) {
+        try {
+          const output = sql;
+          writeTableClipboardEvent(current, data => data.setData('text/plain', output));
+          intent.dispose(); workspace.notify(quotedText.plainCopied); return;
+        } catch {
+          if (!current()) { intent.dispose(); workspace.notify(quotedText.stale, true); return; }
+        }
+      }
+    }
     if (kind === 'quoted') {
-      try { sql = statement ? sqlQuotedStatementText(statement) : intent.selectedText(sqlQuotedCopyMaxUnits); }
+      try { sql = (statement ? sqlQuotedStatementText(statement) : intent.selectedText(sqlQuotedCopyMaxUnits)) ?? ''; }
       catch { intent.dispose(); workspace.notify(statement ? quotedText.statementTooLarge : quotedText.tooLarge, true); return; }
       if (!sql) { intent.dispose(); workspace.notify(statement ? quotedText.stale : quotedText.select, true); return; }
     }
     const owner = { intent, unsubscribe: useWorkspace.subscribe(intent.current) };
-    const request: ClipboardRequest = sql ? { ...owner, kind: 'quoted', sql, currentStatement: !!statement } : { ...owner, kind: 'paste', entries: sqlClipboardStack.snapshot() };
+    const request: ClipboardRequest = kind === 'paste' ? { ...owner, kind, entries: sqlClipboardStack.snapshot() } :
+      { ...owner, kind, sql, currentStatement: !!statement };
     clipboardRequest.current = request;
     setClipboardIndex(0); setClipboardError(''); setClipboardDialog(request);
   }
@@ -196,14 +214,14 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     if (!request.intent.paste(request.entries[clipboardIndex] ?? '')) { setClipboardError(clipboardText.stale); return; }
     closeClipboard();
   }
-  /** 只写本次明确选择的格式，失效选区不触发剪贴板事件。 */
-  function copyQuoted(request: Extract<ClipboardRequest, { kind: 'quoted' }>, encoded: string): void {
+  /** 只写本次确认的文本，失效选区不触发剪贴板事件。 */
+  function copySql(request: Exclude<ClipboardRequest, { kind: 'paste' }>, encoded: string): void {
     const current = () => clipboardCurrent(request) && request.intent.current();
     if (!current()) { setClipboardError(quotedText.stale); return; }
     try { writeTableClipboardEvent(current, data => data.setData('text/plain', encoded)); }
     catch { setClipboardError(current() ? quotedText.unavailable : quotedText.stale); return; }
     closeClipboard();
-    useWorkspace.getState().notify(quotedText.copied);
+    useWorkspace.getState().notify(request.kind === 'quoted' ? quotedText.copied : quotedText.plainCopied);
   }
   useEffect(() => {
     const instance = editorRef.current;
@@ -272,7 +290,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     widgetRef.current?.indentation?.sync();
   }, [tabSize, insertSpaces]);
   // 真实卸载释放widget存活监听；单纯布局隐藏保留句柄，不能用已销毁实例恢复桥接。
-  useEffect(() => () => { const widget = widgetRef.current; widgetRef.current = null; if (widget) { widget.alive = false; widget.formatToken = undefined; widget.formatAction?.dispose(); widget.indentation?.dispose(); widget.releaseQuotedStatement?.(); widget.disposal?.dispose(); } }, []);
+  useEffect(() => () => { const widget = widgetRef.current; widgetRef.current = null; if (widget) { widget.alive = false; widget.formatToken = undefined; widget.formatAction?.dispose(); widget.indentation?.dispose(); widget.releaseStatementCopy?.(); widget.disposal?.dispose(); } }, []);
   const toggleCommentRef = useRef(onToggleComment); toggleCommentRef.current = onToggleComment;
   const toggleBlockCommentRef = useRef(onToggleBlockComment); toggleBlockCommentRef.current = onToggleBlockComment;
   const runRef = useRef(onExecute); runRef.current = onExecute;
@@ -628,13 +646,13 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const mounted: OnMount = editor => {
     // 已卸载组件的迟到挂载通知不得重新开放输入或调用父层。
     if (!aliveRef.current) { if (editor.getModel()) editor.updateOptions({ readOnly: true }); return; }
-    widgetRef.current?.formatAction?.dispose(); widgetRef.current?.indentation?.dispose(); widgetRef.current?.releaseQuotedStatement?.(); widgetRef.current?.disposal?.dispose();
+    widgetRef.current?.formatAction?.dispose(); widgetRef.current?.indentation?.dispose(); widgetRef.current?.releaseStatementCopy?.(); widgetRef.current?.disposal?.dispose();
     const widget: NonNullable<typeof widgetRef.current> = { editor, alive: true }; widgetRef.current = widget;
     widget.indentation = bindEditorIndentation(editor, () => editorIndentationOptions(optionsRef.current.tabSize, optionsRef.current.insertSpaces), () => aliveRef.current && widget.alive && widgetRef.current === widget);
-    if (propsRef.current.queryTabId) widget.releaseQuotedStatement = bindSqlQuotedStatementPreview(editor, statement => {
-      if (widget.alive && widgetRef.current === widget) openClipboard(editor, 'quoted', statement);
+    if (propsRef.current.queryTabId) widget.releaseStatementCopy = bindSqlStatementCopy(editor, (statement, kind) => {
+      if (widget.alive && widgetRef.current === widget) openClipboard(editor, kind, statement);
     });
-    widget.disposal = editor.onDidDispose(() => { widget.alive = false; widget.formatToken = undefined; widget.formatAction?.dispose(); widget.indentation?.dispose(); widget.releaseQuotedStatement?.(); if (editorRef.current === editor) editorRef.current = null; });
+    widget.disposal = editor.onDidDispose(() => { widget.alive = false; widget.formatToken = undefined; widget.formatAction?.dispose(); widget.indentation?.dispose(); widget.releaseStatementCopy?.(); if (editorRef.current === editor) editorRef.current = null; });
     const bridge = attachContent(editor);
     editor.addAction({ id: 'dbark-run', label: zh.editor.text001, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter], run: () => runRef.current?.() });
     // 与原动作分开注册；按钮和快捷键最终进入同一个忙碌/模态守卫。
@@ -728,7 +746,10 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     // 正文订阅、受控同步与readonly解除均已完成，父层才可取得可交互实例。
     if (bridge.ready) propsRef.current.onReady?.(editor);
   };
-  const quoted = clipboardDialog?.kind === 'quoted' ? quoteSqlForCode(clipboardDialog.sql, quoteFormat) : '';
+  const copyDialog = clipboardDialog?.kind === 'paste' ? undefined : clipboardDialog;
+  const quoted = copyDialog?.kind === 'quoted';
+  const copyOutput = copyDialog ? quoted ? quoteSqlForCode(copyDialog.sql, quoteFormat) : copyDialog.sql : '';
+  const plainPreviewLimit = 16_000;
   /** 只接管内部插入标记。行号、滚动条和编辑器弹层不作为 SQL 落点。 */
   function handleInsertionDrop(event: DragEvent<HTMLDivElement>) {
     if (!event.dataTransfer.types.includes(objectIdentifierDragType)) return;
@@ -761,17 +782,19 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     <footer className="modal-footer"><button disabled={!clipboardDialog.entries.length} onClick={() => { sqlClipboardStack.clear(); closeClipboard(); }}>{clipboardText.clear}</button><span className="grow"/>
       <button onClick={closeClipboard}>{zh.common.cancel}</button><button className="primary" disabled={!clipboardDialog.entries.length || !!clipboardError}
         onClick={() => pasteClipboard(clipboardDialog)}>{clipboardText.paste}</button></footer>
-  </Modal></div>}{clipboardDialog?.kind === 'quoted' && <div ref={clipboardHost}><Modal title={quotedText.title} onClose={closeClipboard}>
+  </Modal></div>}{copyDialog && <div ref={clipboardHost}><Modal title={quoted ? quotedText.title : quotedText.plainTitle} onClose={closeClipboard}>
     <div className="modal-content">
-      <p>{clipboardDialog.currentStatement ? quotedText.statementHint : quotedText.hint}</p>
+      {quoted ? <><p>{copyDialog.currentStatement ? quotedText.statementHint : quotedText.hint}</p>
       <label>{quotedText.format}<select aria-label={quotedText.format} value={quoteFormat} onChange={event => {
         const format = sqlQuoteFormats.find(value => value === event.target.value);
         if (format) setQuoteFormat(format);
       }}>{sqlQuoteFormats.map(format => <option key={format} value={format}>{quotedText.formats[format]}</option>)}</select></label>
-      <pre aria-label={quotedText.preview} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 220, overflow: 'auto' }}>{quoted}</pre>
+      </> : copyOutput.length > plainPreviewLimit && <p>{quotedText.plainPreviewLimited}</p>}
+      <pre aria-label={quoted ? quotedText.preview : quotedText.plainPreview} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 220, overflow: 'auto' }}>
+        {quoted ? copyOutput : copyOutput.slice(0, plainPreviewLimit)}</pre>
       <ErrorBox message={clipboardError}/>
     </div>
     <footer className="modal-footer"><span className="grow"/><button onClick={closeClipboard}>{zh.common.cancel}</button>
-      <button className="primary" onClick={() => copyQuoted(clipboardDialog, quoted)}>{quotedText.copy}</button></footer>
+      <button className="primary" onClick={() => copySql(copyDialog, copyOutput)}>{quoted ? quotedText.copy : quotedText.plainCopy}</button></footer>
   </Modal></div>}</div>;
 }
