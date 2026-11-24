@@ -224,6 +224,45 @@ it('标签计划基准跨待确认状态保留，确认换库后回到旧库也�
   expect(bridge).not.toHaveBeenCalled();
 });
 
+it('文件基准只在成功校验和标签保有归属时替换，另存使用已固定文件正文', async () => {
+  const originalSettings = store.getState().settings;
+  const selectTab = (activeTabId: string) => store.setState(state => ({settings: {...state.settings, activeTabId}}));
+  const snapshot = capturePlanSnapshot(fixture('existing_baseline'));
+  const other = capturePlanSnapshot(fixture('late_baseline'));
+  const sqliteResult = {columns: ['id', 'parent', 'notused', 'detail'].map(key => ({key, name: key, type: 'SQLITE'})),
+    rows: [{id: 1, parent: 0, notused: 0, detail: 'SCAN other_table'}], elapsedMs: 0, statement: '', truncated: false};
+  const incompatible = capturePlanSnapshot({results: [sqliteResult], elapsedMs: 0, sqliteExplain: buildSqliteExplainPlan(sqliteResult, '3.53.4')});
+  const awaitRead = deferred<{name: string; snapshot: typeof other}>();
+  try {
+    selectTab('plan-owner');
+    await mount(<QueryPlanBaselines scope="原标签的文件基准" database="orders_db"><View outcome={fixture()} busy={false} fileActions/></QueryPlanBaselines>);
+    bridge.mockResolvedValueOnce({name: '基准文件.json', snapshot});
+    await click(text.pinnedMenu); await click(text.pinnedLoad);
+
+    bridge.mockResolvedValueOnce(null);
+    await click(text.pinnedMenu); await click(text.pinnedLoad);
+    bridge.mockResolvedValueOnce({name: '无效文件.json', snapshot: {version: 9}});
+    await click(text.pinnedMenu); await click(text.pinnedLoad);
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(text.invalid);
+    bridge.mockResolvedValueOnce({name: '异类计划.json', snapshot: incompatible});
+    await click(text.pinnedMenu); await click(text.pinnedLoad);
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(text.mysqlCompareUnsupported);
+
+    bridge.mockReturnValueOnce(awaitRead.promise);
+    await click(text.pinnedMenu); await click(text.pinnedLoad);
+    await act(async () => { selectTab('another-tab'); selectTab('plan-owner'); });
+    await act(async () => awaitRead.resolve({name: '迟到文件.json', snapshot: other}));
+    await click(text.pinnedMenu); await click(text.pinnedCompare);
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('基准文件.json');
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('existing_baseline');
+    await click(zh.dialogs.text001);
+
+    bridge.mockResolvedValueOnce({name: '另存基准.json'});
+    await click(text.pinnedMenu); await click(text.pinnedExport);
+    expect(bridge.mock.calls).toEqual([...Array.from({length: 5}, () => ['explainFiles.open', {}]), ['explainFiles.save', {snapshot}]]);
+  } finally { await act(async () => store.setState({settings: originalSettings})); }
+});
+
 it('取消和不合法新文件保留原计划、查找、节点选择和文件名', async () => {
   await mount(<Dialog onClose={vi.fn()}/>); bridge.mockResolvedValueOnce(opened()); await click(text.choose); await search('orders'); await click(planText.next);
   const selected = document.querySelectorAll('[role="treeitem"]').find(node => node.getAttribute('aria-selected') === 'true');

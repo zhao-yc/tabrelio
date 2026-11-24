@@ -100,7 +100,7 @@ test('PostgreSQL 最小窗口可读，当前估算和实测计划直接对照基
         return { canceled: false, filePaths: [path] };
       }) as typeof original;
       state.finishPlanPicker = () => { dialog.showOpenDialog = original; delete state.finishPlanPicker; return opened; };
-    }, { paths: [estimatedPath, estimatedPath, actualPath], title: snapshotText.choose });
+    }, { paths: [estimatedPath, estimatedPath, actualPath, estimatedPath], title: snapshotText.choose });
     const receipts = () => page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }));
     const estimateReceipt = await receipts();
     const openPinnedMenu = async (region: typeof plan) => {
@@ -156,12 +156,21 @@ test('PostgreSQL 最小窗口可读，当前估算和实测计划直接对照基
     await expect((await openPinnedMenu(actualPlan)).getByRole('menuitem', {name: snapshotText.pinnedCompare, exact: true})).toBeDisabled();
     await page.keyboard.press('Escape');
     expect(await receipts()).toEqual(actualReceipt);
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { finishPlanPicker: () => number }).finishPlanPicker())).toBe(3);
     await query.getByRole('button', {name: postgresZh.explain, exact: true}).click();
     await expect(plan.getByRole('treeitem')).toHaveCount(2);
     await (await openPinnedMenu(plan)).getByRole('menuitem', {name: snapshotText.pinnedCompare, exact: true}).click();
     await expect(comparison).toContainText(snapshotText.pinnedBaselineName);
     await comparison.getByRole('button', {name: zh.dialogs.text001, exact: true}).click();
+    const beforeFileBaseline = await receipts();
+    await (await openPinnedMenu(plan)).getByRole('menuitem', {name: snapshotText.pinnedLoad, exact: true}).click();
+    await expect(page.getByText(snapshotText.pinnedLoaded(basename(estimatedPath)), {exact: true})).toBeVisible();
+    await (await openPinnedMenu(plan)).getByRole('menuitem', {name: snapshotText.pinnedCompare, exact: true}).click();
+    await expect(comparison).toContainText(basename(estimatedPath));
+    await expect(estimatedDiff.nth(0)).toHaveText('Seq Scan');
+    await expect(estimatedDiff.nth(1)).toHaveText('Limit');
+    await comparison.getByRole('button', {name: zh.dialogs.text001, exact: true}).click();
+    expect(await receipts()).toEqual(beforeFileBaseline);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { finishPlanPicker: () => number }).finishPlanPicker())).toBe(4);
     expect((await observer.query('SELECT id, note FROM public.explain_layout ORDER BY id')).rows)
       .toEqual([{ id: 1, note: '原值' }, { id: 2, note: '第二行' }]);
     await confirmOwnedDesktopExit(info);

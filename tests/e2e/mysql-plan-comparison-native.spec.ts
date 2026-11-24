@@ -70,7 +70,7 @@ test('MySQL 系列估算、实测及离线快照可通过真实窗口对照基�
         return { canceled: false, filePaths: [path] };
       }) as typeof originalOpen;
       state.restorePlanPicker = () => { dialog.showSaveDialog = originalSave; dialog.showOpenDialog = originalOpen; delete state.restorePlanPicker; return { opens, saves }; };
-    }, { saveTitle: text.save, openTitle: text.choose, currentFile, openPaths: [estimateFile, actualFile, estimateFile, currentFile] });
+    }, { saveTitle: text.save, openTitle: text.choose, currentFile, openPaths: [estimateFile, estimateFile, actualFile, estimateFile, currentFile] });
     const receipts = () => page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }));
     const query = page.locator('.query-tab:visible');
     await expect(query).toBeVisible();
@@ -105,6 +105,14 @@ test('MySQL 系列估算、实测及离线快照可通过真实窗口对照基�
     await (await openPinnedMenu(estimated)).getByRole('menuitem', {name: text.pinnedCompare, exact: true}).click();
     await expect(compare).toContainText(text.pinnedBaselineName);
     await compare.getByRole('button', {name: zh.dialogs.text001, exact: true}).click();
+    await (await openPinnedMenu(estimated)).getByRole('menuitem', {name: text.pinnedLoad, exact: true}).click();
+    await expect(page.getByText(text.pinnedLoaded(basename(estimateFile)), {exact: true})).toBeVisible();
+    await (await openPinnedMenu(estimated)).getByRole('menuitem', {name: text.pinnedCompare, exact: true}).click();
+    await diffSearch.fill('ACCESS_TYPE');
+    await expect(compare.getByRole('button', {pressed: true})).toContainText(tablePath);
+    await expect(access.nth(0)).toHaveText('ALL');
+    await expect(access.nth(1)).toHaveText('const');
+    await compare.getByRole('button', {name: zh.dialogs.text001, exact: true}).click();
     expect(await receipts()).toEqual(beforeEstimate);
     await estimated.getByRole('button', { name: text.save, exact: true }).click();
     await expect(estimated.getByText(text.saved(basename(currentFile)), { exact: true })).toBeVisible();
@@ -134,7 +142,7 @@ test('MySQL 系列估算、实测及离线快照可通过真实窗口对照基�
     await expect(offline.getByRole('region', { name: planComparisonTitles[dialect], exact: true })).toContainText(basename(currentFile));
     await offline.getByRole('button', { name: text.close, exact: true }).click();
     expect(await receipts()).toEqual(beforeActual);
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { restorePlanPicker: () => unknown }).restorePlanPicker())).toEqual({ opens: 4, saves: 1 });
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { restorePlanPicker: () => unknown }).restorePlanPicker())).toEqual({ opens: 5, saves: 1 });
     expect((await observer.query<RowDataPacket[]>('SELECT id,label FROM plan_subject ORDER BY id'))[0]).toEqual([{ id: 1, label: '基准行' }, { id: 2, label: '第二行' }]);
     await confirmOwnedDesktopExit(info);
   } catch (error) {

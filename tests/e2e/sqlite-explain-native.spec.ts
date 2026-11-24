@@ -41,6 +41,7 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
   const directory = runtime.dataDir, database = join(directory, 'sqlite-explain-native.sqlite');
   const snapshotPath = join(directory, 'sqlite-original.dbark-plan.json'), snapshotCopy = join(directory, 'sqlite-copy.dbark-plan.json');
   const snapshotTarget = join(directory, 'sqlite-target.dbark-plan.json');
+  const snapshotPinned = join(directory, 'sqlite-pinned.dbark-plan.json');
   let closed = false, armed = false, stage = '独占合成SQLite准备';
   /** 所有异步边界只承认本例准确owner与原120秒单次期限。 */
   const check = () => { const current = runtime.ownedDesktopResources(info); if (current.application !== application || current.page !== page || current.closed !== closed || runtime.dataDir !== directory || info.timeout !== 120000 || info.retry !== 0 || info.repeatEachIndex !== 0 || info.config.workers !== 1) throw Error('SQLite执行计划owner/profile/120秒单次期限变化'); };
@@ -126,8 +127,8 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
         if (snapshotRequest || pickerRequest) return deny('快照请求重叠');
         const opened = state.operations.filter(fact => fact.command === 'explainFiles.open').length;
         const saved = state.operations.filter(fact => fact.command === 'explainFiles.save').length;
-        const openPath = restored ? !saved && [input.snapshotPath, input.snapshotTarget][opened] : saved === 1 && !opened && input.snapshotPath;
-        const savePath = restored ? opened === 2 && !saved && input.snapshotCopy : [input.snapshotPath, input.snapshotTarget][saved];
+        const openPath = restored ? !saved && [input.snapshotPath, input.snapshotTarget][opened] : saved === 2 && [input.snapshotPinned, input.snapshotPath][opened];
+        const savePath = restored ? opened === 2 && !saved && input.snapshotCopy : [input.snapshotPath, input.snapshotPinned, input.snapshotTarget][saved];
         if (command === 'explainFiles.open' && openPath && !Object.keys(value).length) snapshotRequest = { mode: 'open', path: openPath };
         else if (command === 'explainFiles.save' && Object.keys(value).join(',') === 'snapshot' && value.snapshot && typeof value.snapshot === 'object' &&
           'kind' in value.snapshot && value.snapshot.kind === 'dbark.sqlite-explain-snapshot' && savePath) snapshotRequest = { mode: 'save', path: savePath };
@@ -140,7 +141,7 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     };
     state.check = check; state.restore = () => { check(); if (state.pending) throw Error('SQLite执行计划请求仍在途'); for (const port of children) { port.child.postMessage = port.original; if (port.child.postMessage !== port.original) throw Error('原SQLite child消息端口未准确恢复'); } handlers.set('dbark:request', original); dialog.showOpenDialog = originalPicker; dialog.showSaveDialog = originalSave; utilityProcess.fork = originalFork; window.webContents.send = originalSend; delete root.__sqliteExplainNative; };
     root.__sqliteExplainNative = state; handlers.set('dbark:request', wrapped); dialog.showOpenDialog = picker; dialog.showSaveDialog = save; utilityProcess.fork = fork; window.webContents.send = send; check();
-  }, { database, savedProfiles, rwName, roName, plans: allowedPlans, currentScript, currentOffset, executions: [temporarySql, transactionSql], snapshotPath, snapshotTarget, snapshotCopy, snapshotSave: snapshotText.save, snapshotChoose: snapshotText.choose }));
+  }, { database, savedProfiles, rwName, roName, plans: allowedPlans, currentScript, currentOffset, executions: [temporarySql, transactionSql], snapshotPath, snapshotTarget, snapshotCopy, snapshotPinned, snapshotSave: snapshotText.save, snapshotChoose: snapshotText.choose }));
   /** 两个连接都通过真实表单保存；读写连接必须明确取消产品默认只读。 */
   const createConnection = async (name: string, readOnly: boolean) => {
     await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
@@ -328,11 +329,28 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     await step(() => expect(pinnedDetail.nth(1)).toHaveText(targetPlan.expectedNodes[0].detail));
     await step(() => page.screenshot({path: info.outputPath('SQLite标签内计划基准.png')}));
     await step(() => pinnedComparison.getByRole('button', {name: zh.dialogs.text001, exact: true}).click());
+    await assertLocalBaselineAction(beforePinnedCompare, beforePinnedSettings);
+    stage = '另存旧基准、替换并读回旧基准';
+    const beforeBaselineFiles = await step(audit);
+    await step(async () => (await baselineItem(snapshotText.pinnedExport)).click());
+    await step(() => expect(page.getByText(snapshotText.pinnedExported(basename(snapshotPinned)), {exact: true})).toBeVisible());
+    expect(readFileSync(snapshotPinned, 'utf8')).toBe(bytes);
     await step(async () => (await baselineItem(snapshotText.pinnedReplace)).click());
     await step(async () => (await baselineItem(snapshotText.pinnedCompare)).click());
     await step(() => expect(pinnedComparison.getByRole('status')).toHaveText(snapshotText.compareCount(0, targetPlan.expectedNodes.length)));
     await step(() => pinnedComparison.getByRole('button', {name: zh.dialogs.text001, exact: true}).click());
-    await assertLocalBaselineAction(beforePinnedCompare, beforePinnedSettings);
+    await step(async () => (await baselineItem(snapshotText.pinnedLoad)).click());
+    await step(() => expect(page.getByText(snapshotText.pinnedLoaded(basename(snapshotPinned)), {exact: true})).toBeVisible());
+    await step(async () => (await baselineItem(snapshotText.pinnedCompare)).click());
+    await step(() => expect(pinnedComparison).toContainText(basename(snapshotPinned)));
+    await step(() => expect(pinnedDetail.nth(0)).toHaveText(plan.expectedNodes[0].detail));
+    await step(() => expect(pinnedDetail.nth(1)).toHaveText(targetPlan.expectedNodes[0].detail));
+    await step(() => page.screenshot({path: info.outputPath('SQLite从文件载入标签基准.png')}));
+    await step(() => pinnedComparison.getByRole('button', {name: zh.dialogs.text001, exact: true}).click());
+    const afterBaselineFiles = await step(audit);
+    expect(afterBaselineFiles.operations.slice(beforeBaselineFiles.operations.length).map(fact => fact.command)).toEqual(['explainFiles.save', 'explainFiles.open']);
+    expect(afterBaselineFiles.driverSql).toEqual(beforeBaselineFiles.driverSql);
+    expect(await settings()).toEqual(beforePinnedSettings);
     stage = '当前原生计划直接读取基准，关闭后保留结果视图';
     await step(() => view().getByRole('button', { name: sqliteExplainZh.rawLabel, exact: true }).click());
     const beforeLiveCompare = await step(audit);
