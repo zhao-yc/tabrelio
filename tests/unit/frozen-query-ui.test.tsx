@@ -165,10 +165,14 @@ it('内存暂存完整携带边界，旧无边界暂存仍保持旧形状且应�
   await click(text.open); await click(text.unfreeze); await click(text.apply); await click(memoryText.save); await freeze(2); await click(memoryText.apply); expect(frozen()).toEqual([]);
 });
 
-it('当前固定快照能独立冻结，切换准确来源按原布局寿命重置', async () => {
+it('当前结果与固定快照分别恢复各自的冻结边界，旧网格回调失效', async () => {
   await mount(); await freeze(2); await click(zh.query.pinResult); expect(frozen()).toEqual([]);
   const pinnedRows = grid().rows; expect(pinnedRows).not.toBe(original.rows); await freeze(1); expect(frozen()).toEqual(['c0']); expect(grid().rows).toBe(pinnedRows);
-  const old = grid(); await click(zh.query.currentResults); expect(frozen()).toEqual([]); expect(grid().rows).toBe(original.rows); expect(copy(old).size).toBe(0);
+  const old = grid(); await click(zh.query.currentResults); expect(frozen()).toEqual(['c0', 'c1']); expect(grid().rows).toBe(original.rows); expect(copy(old).size).toBe(0);
+  const snapshot = document.querySelector('.pinned-result button[aria-pressed="false"]');
+  expect(snapshot).not.toBeNull();
+  await act(async () => snapshot!.dispatchEvent(new MemoryEvent('click')));
+  expect(grid().rows).toBe(pinnedRows); expect(frozen()).toEqual(['c0']);
 });
 
 it('旧冻结行和应用闭包不能越过草稿换代、关闭重开及工作台ABA', async () => {
