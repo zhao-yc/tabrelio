@@ -57,11 +57,15 @@ function props(node: Node) { return (node as any)[Object.keys(node).find(key => 
 async function key(node: Node, value: string) { await act(async () => node.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: value }))); }
 function selected() { return document.querySelectorAll('[role="treeitem"]').find(node => node.getAttribute('aria-selected') === 'true'); }
 
-it('离线实际分析按原文复制，复制时没有额外 IPC', async () => {
+it('离线实际分析支持节点查找和原文复制，阅读操作没有额外 IPC', async () => {
   const outcome = fixture();
   bridge.mockResolvedValueOnce({ name: '实际分析.dbark-plan.json', snapshot: actualDocument(outcome) });
   await mount(<Dialog onClose={vi.fn()}/>);
   await click(text.choose);
+  const input = document.querySelector(`input[aria-label="${explainText.find}"]`)!;
+  await act(async () => { input.value = 'table scan on customer'; input.dispatchEvent(new MemoryEvent('input')); });
+  await key(input, 'Enter');
+  expect(selected()?.textContent).toContain('Table scan on customer');
   const packet: Record<string, string> = {};
   (document as any).execCommand = (command: string) => {
     if (command !== 'copy') throw Error('仅允许本例计划复制');

@@ -599,7 +599,9 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     }
     expect(await history()).toEqual(historyBefore);
     if (!local) {
-      const actualSql = [statement + ';', statement + '  ;', 'SELECT 3;'].join('\n');
+      // 主键等值查询可能在计划中提前取行。范围查询保留一个可按表名查找的访问节点。
+      const actualStatement = 'SELECT * FROM json_subject WHERE id >= 1';
+      const actualSql = [actualStatement + ';', actualStatement + '  ;', 'SELECT 3;'].join('\n');
       await write(actualSql);
       await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
       await page.keyboard.press('ArrowDown');
@@ -612,12 +614,22 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       await expect(actualPlan.getByRole('treeitem').first()).toBeVisible();
       const historyAfterAnalysis = await history();
       expect(historyAfterAnalysis).toHaveLength(historyBefore.length + 1);
+      await actualPlan.getByRole('button', { name: analyzeText.collapse, exact: true }).click();
+      await actualPlan.getByRole('button', { name: analyzeText.raw, exact: true }).click();
+      await expect(actualPlan.getByLabel(analyzeText.raw, { exact: true })).toContainText('json_subject');
+      const planSearch = actualPlan.getByRole('textbox', { name: explainZh.find, exact: true });
+      await planSearch.fill('JSON_SUBJECT');
+      await expect(actualPlan.getByLabel(explainZh.findCount, { exact: true })).toHaveText(/^0 \/ [1-9]\d* 个匹配节点$/);
+      await planSearch.press('Enter');
+      await expect(actualPlan.getByRole('treeitem', { selected: true })).toContainText('json_subject');
+      await expect(actualPlan.getByRole('treeitem', { selected: true })).toHaveAttribute('data-plan-match', 'true');
+      await expect(planSearch).toBeFocused();
       await expect(locate).toBeEnabled();
       await locate.click();
       const located = await selection();
       expect(located.sql.replaceAll('\r\n', '\n')).toBe(actualSql);
-      expect(located.selected).toBe(statement);
-      expect(located.start).toBe(located.sql.lastIndexOf(statement));
+      expect(located.selected).toBe(actualStatement);
+      expect(located.start).toBe(located.sql.lastIndexOf(actualStatement));
       await write('SELECT 2;');
       await expect(locate).toBeDisabled();
       await write(actualSql);

@@ -9,6 +9,7 @@ import { queryAnalyzeZh as t } from '../locales/queryAnalyze.zh-CN';
 import { ExplainSnapshotSaveButton } from './ExplainSnapshotSaveButton';
 import { LivePlanFileActions } from './LivePlanFileActions';
 import { PlanOutputCopyButton } from './PlanOutputCopyButton';
+import '../explain.css';
 import '../queryAnalyze.css';
 import '../explainSnapshot.css';
 
@@ -31,16 +32,27 @@ export function QueryAnalyzeView(props: QueryAnalyzeViewProps) {
   return <OwnedQueryAnalyzeView key={owner.current.generation} {...props}/>;
 }
 
-/** 这里只阅读已经返回的分析结果；展开、选择及切换原文都不会执行 SQL 或调用 IPC。 */
+/** 只在本地阅读和搜索已经返回的分析节点；不从截断原文或未解析字段推测匹配。 */
 function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, sourceLocation, fileActions = false, busy = false, saveAs = false, isFileCurrent, onFileBusyChange }: QueryAnalyzeViewProps) {
   const postgres = plan.dialect === 'postgresql';
   const [view, setView] = useState<'tree' | 'raw'>(plan.nodes.length ? 'tree' : 'raw');
   const [selected, setSelected] = useState(plan.nodes[0]?.id ?? '');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [focusRequest, setFocusRequest] = useState<string>();
+  const [focusRequest, setFocusRequest] = useState<{ id: string; moveFocus: boolean }>();
+  const [search, setSearch] = useState(''), [searchError, setSearchError] = useState(false), [matchIndex, setMatchIndex] = useState(-1);
   const alive = useRef(true), buttons = useRef(new Map<string, HTMLButtonElement>());
   useLayoutEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const children = useMemo(() => new Set(plan.nodes.flatMap(node => node.parent ? [node.parent] : [])), [plan]);
+  const byId = useMemo(() => new Map(plan.nodes.map(node => [node.id, node])), [plan]);
+  const matches = useMemo(() => {
+    if (!search) return [];
+    const term = search.toLowerCase();
+    const includes = (value?: string) => !!value?.toLowerCase().includes(term);
+    return plan.nodes.filter(node => includes(node.label) || includes(node.path === '' ? '/' : node.path) ||
+      (node.neverExecuted && includes(t.neverExecuted)) ||
+      node.metrics.some(metric => includes(metric.source) || includes(metricTitle(metric)) || includes(metricValue(metric))));
+  }, [plan, search]);
+  const matchedIds = useMemo(() => new Set(matches.map(node => node.id)), [matches]);
   const visible = useMemo(() => {
     const hidden = new Set<string>();
     return plan.nodes.filter(node => {
@@ -48,15 +60,36 @@ function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, sourceLocation, fi
       return true;
     });
   }, [plan, collapsed]);
-  const current = plan.nodes.find(node => node.id === selected) ?? plan.nodes[0];
+  const current = byId.get(selected) ?? plan.nodes[0];
   const result = outcome?.results[0];
   useLayoutEffect(() => {
     if (!focusRequest || !alive.current) return;
-    const element = buttons.current.get(focusRequest); element?.focus(); element?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const element = buttons.current.get(focusRequest.id);
+    if (focusRequest.moveFocus) element?.focus();
+    element?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [focusRequest]);
 
   /** 焦点只在真实可见节点上移动，树的收起状态不影响原计划。 */
-  function focus(id: string) { if (alive.current) { setSelected(id); setFocusRequest(id); } }
+  function focus(id: string) { if (alive.current) { setSelected(id); setFocusRequest({ id, moveFocus: true }); } }
+  /** 只展开命中的祖先。保留查找框或按钮焦点，连续按键可环绕跳转。 */
+  function travel(direction: -1 | 1) {
+    if (!alive.current || !matches.length) return;
+    const index = matchIndex < 0 ? (direction === 1 ? 0 : matches.length - 1)
+      : (matchIndex + direction + matches.length) % matches.length;
+    const node = matches[index], ancestors = new Set<string>();
+    for (let parent = node.parent; parent && !ancestors.has(parent); parent = byId.get(parent)?.parent) ancestors.add(parent);
+    setCollapsed(previous => new Set([...previous].filter(id => !ancestors.has(id))));
+    setView('tree');
+    setMatchIndex(index);
+    setSelected(node.id);
+    setFocusRequest({ id: node.id, moveFocus: false });
+  }
+  function updateSearch(value: string) {
+    if (!alive.current) return;
+    setSearch(value);
+    setSearchError(false);
+    setMatchIndex(-1);
+  }
   /** 折叠后把选择移回父节点，隐藏子节点不保留不可见的键盘活动项。 */
   function toggle(node: QueryAnalyzeNode) {
     if (!alive.current || !children.has(node.id)) return;
@@ -94,11 +127,28 @@ function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, sourceLocation, fi
         <span className="explain-snapshot-save"><button disabled title={snapshotText.unavailable}>{saveAs ? snapshotText.saveAs : snapshotText.save}</button></span>)}
       <span className="muted">{t.source}：{postgres ? 'PostgreSQL' : plan.dialect === 'mysql' ? 'MySQL' : 'MariaDB'} {plan.version} · {postgres ? 'EXPLAIN (ANALYZE, FORMAT JSON)' : plan.format === 'tree' ? 'EXPLAIN ANALYZE' : 'ANALYZE FORMAT=JSON'}</span>
     </div>
-    <div className="query-analyze-hints"><UsageHelp><p>{postgres ? t.postgresHint : plan.dialect === 'mysql' ? t.mysqlHint : t.mariaHint}</p><p>{t.estimateHint}</p><p>{postgres ? t.postgresRelation : t.relationHint}</p><p>{t.keyboard}</p></UsageHelp>{plan.rawTruncated && <p className="query-analyze-warning" role="alert">{t.truncated}</p>}{plan.warnings.map((warning, index) => <p className="query-analyze-warning" role="status" key={index}>{warning}</p>)}</div>
+    {!!plan.nodes.length && <div className="explain-search" role="search" aria-label={planText.find}>
+      <input aria-label={planText.find} aria-invalid={searchError || undefined} maxLength={200} placeholder={t.findPlaceholder} value={search}
+        onInput={event => {
+          if (!alive.current) return;
+          const value = event.currentTarget.value;
+          if (value.length > 200) { event.currentTarget.value = search; setSearchError(true); return; }
+          updateSearch(value);
+        }} onKeyDown={event => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229 || event.key !== 'Enter') return;
+          event.preventDefault();
+          travel(event.shiftKey ? -1 : 1);
+        }}/>
+      <span role="status" aria-label={planText.findCount}>{search ? planText.matches(matchIndex + 1, matches.length) : planText.findIdle}</span>
+      <button disabled={!matches.length} onClick={() => travel(-1)}>{planText.previous}</button>
+      <button disabled={!matches.length} onClick={() => travel(1)}>{planText.next}</button>
+      <button disabled={!search && !searchError} onClick={() => updateSearch('')}>{planText.clear}</button>
+    </div>}
+    <div className="query-analyze-hints"><UsageHelp><p>{postgres ? t.postgresHint : plan.dialect === 'mysql' ? t.mysqlHint : t.mariaHint}</p><p>{t.estimateHint}</p><p>{postgres ? t.postgresRelation : t.relationHint}</p><p>{t.keyboard}</p>{!!plan.nodes.length && <p>{t.findHint}</p>}</UsageHelp>{searchError && <p className="query-analyze-warning" role="alert">{planText.findTooLong}</p>}{plan.rawTruncated && <p className="query-analyze-warning" role="alert">{t.truncated}</p>}{plan.warnings.map((warning, index) => <p className="query-analyze-warning" role="status" key={index}>{warning}</p>)}</div>
     <div className="query-analyze-content">
       {view === 'raw' ? <pre className="query-analyze-raw" aria-label={t.raw} tabIndex={0}>{plan.raw || t.rawMissing}</pre> : !plan.nodes.length ? <p className="query-analyze-empty">{t.empty}</p> : <div className="query-analyze-layout">
         <div className="query-analyze-tree-pane"><div className="query-analyze-actions"><button onClick={() => { if (alive.current) setCollapsed(new Set()); }}>{t.expand}</button><button onClick={() => { if (alive.current) { setCollapsed(new Set(children)); focus(plan.nodes[0].id); } }}>{t.collapse}</button></div>
-          <div role="tree" aria-label={t.tree} className="query-analyze-tree">{visible.map(node => <button key={node.id} data-node-id={node.id} ref={element => { if (element) buttons.current.set(node.id, element); else buttons.current.delete(node.id); }} role="treeitem" aria-level={node.depth + 1} aria-expanded={children.has(node.id) ? !collapsed.has(node.id) : undefined} aria-selected={selected === node.id} tabIndex={selected === node.id ? 0 : -1} className="query-analyze-node" style={{ paddingLeft: 10 + Math.min(node.depth, 10) * 14 }} onFocus={() => { if (alive.current) setSelected(node.id); }} onClick={() => { if (alive.current) setSelected(node.id); }} onDoubleClick={() => toggle(node)} onKeyDown={event => navigate(event, node)}>
+          <div role="tree" aria-label={t.tree} className="query-analyze-tree">{visible.map(node => <button key={node.id} data-node-id={node.id} data-plan-match={matchedIds.has(node.id) || undefined} ref={element => { if (element) buttons.current.set(node.id, element); else buttons.current.delete(node.id); }} role="treeitem" aria-level={node.depth + 1} aria-expanded={children.has(node.id) ? !collapsed.has(node.id) : undefined} aria-selected={selected === node.id} tabIndex={selected === node.id ? 0 : -1} className="query-analyze-node" style={{ paddingLeft: 10 + Math.min(node.depth, 10) * 14 }} onFocus={() => { if (alive.current) setSelected(node.id); }} onClick={() => { if (alive.current) setSelected(node.id); }} onDoubleClick={() => toggle(node)} onKeyDown={event => navigate(event, node)}>
             <span className="query-analyze-node-title"><span aria-hidden="true">{children.has(node.id) ? collapsed.has(node.id) ? '▸' : '▾' : '·'}</span> {node.label}{node.neverExecuted && <small>{t.neverExecuted}</small>}</span>
             <span className="query-analyze-node-metrics">{node.metrics.filter(metric => metric.kind === 'actual').slice(0, 3).map(metric => `${metricTitle(metric)}：${metricValue(metric)}`).join(' · ') || (node.neverExecuted ? t.neverExecuted : t.unavailable)}</span>
           </button>)}</div>

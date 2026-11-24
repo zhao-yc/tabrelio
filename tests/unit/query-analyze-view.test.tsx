@@ -50,8 +50,14 @@ function button(label: string) { const value = document.querySelectorAll('button
 async function click(label: string) { await act(async () => button(label).dispatchEvent(new MemoryEvent('click'))); }
 function tree() { return document.querySelectorAll('[role="treeitem"]'); }
 function selected() { return tree().find(node => node.getAttribute('aria-selected') === 'true'); }
+function searchInput() { return document.querySelector(`input[aria-label="${explainZh.find}"]`)!; }
+function searchCount() { return document.querySelector(`[aria-label="${explainZh.findCount}"]`)!.textContent; }
+async function search(value: string) {
+  const input = searchInput();
+  await act(async () => { input.value = value; input.dispatchEvent(new MemoryEvent('input')); });
+}
 function props(node: Node) { return (node as any)[Object.keys(node).find(key => key.startsWith('__reactProps$'))!]; }
-async function key(node: Node, value: string) { const event = Object.assign(new MemoryEvent('keydown'), { key: value }); await act(async () => node.dispatchEvent(event)); return event; }
+async function key(node: Node, value: string, shiftKey = false) { const event = Object.assign(new MemoryEvent('keydown'), { key: value, shiftKey }); await act(async () => node.dispatchEvent(event)); return event; }
 async function acknowledge() { const node = document.querySelectorAll('input').find(item => item.type === 'checkbox')!; expect(node).toBeDefined(); await act(async () => { node.checked = true; node.dispatchEvent(new MemoryEvent('click')); }); }
 
 it('实测和估算指标分别展示，保留极小小数和大整数文本，服务器标签仅作为文字', async () => {
@@ -98,15 +104,55 @@ it('MariaDB 的包含关系和累计耗时语义独立说明，缺失指标不�
   expect(detail.textContent).toContain('1.234567890123456789 毫秒'); expect(detail.textContent).not.toContain('0 成本');
 });
 
+it('在原文视图也可查找节点和精确指标，只展开命中的祖先并保留键盘焦点', async () => {
+  const plan = fixture();
+  plan.nodes.push({ id: 'other', parent: 'last', depth: 2, label: '另一个分支', metrics: [] });
+  const f = await mount(<QueryAnalyzeView plan={plan}/>);
+  await click(t.collapse);
+  await click(t.raw);
+  await search('table SCAN');
+  expect(searchCount()).toBe(explainZh.matches(0, 1));
+  const input = searchInput();
+  input.focus();
+  await key(input, 'Enter');
+  expect(selected()?.getAttribute('data-node-id')).toBe('leaf');
+  expect(selected()?.getAttribute('data-plan-match')).toBe('true');
+  expect(tree().find(node => node.getAttribute('data-node-id') === 'last')?.getAttribute('aria-expanded')).toBe('false');
+  expect(document.activeElement).toBe(input);
+  await search('9007199254740993');
+  await key(input, 'Enter', true);
+  expect(searchCount()).toBe(explainZh.matches(2, 2));
+  expect(selected()?.getAttribute('data-node-id')).toBe('branch');
+  await key(input, 'Enter');
+  expect(searchCount()).toBe(explainZh.matches(1, 2));
+  expect(selected()?.getAttribute('data-node-id')).toBe('root');
+  await search('0.000000000000000001 毫秒');
+  expect(searchCount()).toBe(explainZh.matches(0, 1));
+  await search('x'.repeat(201));
+  expect(input.value).toBe('0.000000000000000001 毫秒');
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe(explainZh.findTooLong);
+  await search('/__proto__/unknown');
+  await click(explainZh.next);
+  expect(selected()?.getAttribute('data-node-id')).toBe('last');
+  await click(explainZh.clear);
+  expect(searchCount()).toBe(explainZh.findIdle);
+  expect(selected()?.getAttribute('data-node-id')).toBe('last');
+  expect(scroll).toHaveBeenCalled();
+  expect(f.invoke).not.toHaveBeenCalled();
+});
+
 it('结果 A→B→A 重新初始化阅读状态，旧折叠及原文回调不操作新结果', async () => {
   const plan = fixture(), locate = vi.fn();
   const f = await mount(<QueryAnalyzeView plan={plan} sourceLocation={{ available: true, locate }}/>);
   const oldCollapse = props(button(t.collapse)).onClick, oldRaw = props(button(t.raw)).onClick;
   const oldLocate = props(button(explainZh.locate)).onClick;
   await click(explainZh.locate); expect(locate).toHaveBeenCalledTimes(1);
+  await search('unknown_source');
+  const oldNext = props(button(explainZh.next)).onClick, oldSearch = props(searchInput()).onInput;
   await click(t.collapse); expect(tree()).toHaveLength(1);
   await f.render(<QueryAnalyzeView plan={{ ...fixture(), raw: '新计划' }}/>); await f.render(<QueryAnalyzeView plan={plan}/>);
-  await act(async () => { oldCollapse(); oldRaw(); oldLocate(); }); expect(tree()).toHaveLength(4);
+  await act(async () => { oldCollapse(); oldRaw(); oldLocate(); oldNext(); oldSearch({ currentTarget: { value: '旧查找' } }); }); expect(tree()).toHaveLength(4);
+  expect(searchInput().value).toBe('');
   expect(locate).toHaveBeenCalledTimes(1);
   expect(document.querySelectorAll('button').some(node => node.textContent === explainZh.locate)).toBe(false);
   expect(button(t.tree).getAttribute('aria-pressed')).toBe('true'); expect(f.invoke).not.toHaveBeenCalled();
