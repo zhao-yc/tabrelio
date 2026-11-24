@@ -194,6 +194,7 @@ interface AnalyzeOwner {
   model: monaco.editor.ITextModel;
   version: number;
   failureSource?: QueryFailureSourceLease;
+  cursorWatch?: monaco.IDisposable;
 }
 interface SortDraft { binding: QueryResultSortBinding; view: QueryResultSortView; }
 interface FilterDraft { binding: QueryResultFilterBinding; view: QueryResultFilterView; sortView: QueryResultSortView; seed?: QueryResultFilterGroup; }
@@ -484,6 +485,7 @@ export function PostgresQueryTab({
     const current = analyzeRef.current;
     analyzeRef.current = undefined;
     setAnalyze(undefined);
+    current?.cursorWatch?.dispose();
     if (discard && current) {
       current.failureSource?.dispose();
       void invoke('postgres.analyzeDiscard', { sessionId: current.sessionId, token: current.token }).catch(() => {});
@@ -573,14 +575,16 @@ export function PostgresQueryTab({
   }
   /** 查询和计划都捕获原模型版本，实际分析只接受已经确认的原令牌。 */
   function run(
-    mode: 'normal' | 'selection' | 'current' | 'all' | 'explain' | 'explain-current' | 'analyzePreview' = 'normal',
+    mode: 'normal' | 'selection' | 'current' | 'all' | 'explain' | 'explain-current' | 'analyzePreview' | 'analyze-current' = 'normal',
     values?: QueryParameter[],
     parameter?: ParameterOwner,
     sqlOverride?: string,
     confirmed?: AnalyzeOwner,
   ) {
-    const currentPlan = mode === 'explain-current';
-    const explaining = mode === 'explain' || currentPlan;
+    const currentAnalyze = mode === 'analyze-current';
+    const analyzing = mode === 'analyzePreview' || currentAnalyze;
+    const currentPlan = mode === 'explain-current' || currentAnalyze;
+    const explaining = mode === 'explain' || mode === 'explain-current';
     if (confirmed) {
       const current = useWorkspace.getState();
       if (analyzeRef.current !== confirmed || phase.current || closeRef.current || !same(confirmed.scope) ||
@@ -617,7 +621,7 @@ export function PostgresQueryTab({
     let sql = confirmed?.source ?? sqlOverride ?? original,
       offset: number | undefined;
     if (!confirmed && !sqlOverride && !values && selection && mode !== 'all') {
-      if (mode === 'current' || currentPlan || (explaining || mode === 'analyzePreview') && selection.isEmpty()) offset = model!.getOffsetAt(selection.getPosition());
+      if (mode === 'current' || currentPlan || (explaining || analyzing) && selection.isEmpty()) offset = model!.getOffsetAt(selection.getPosition());
       else if (!selection.isEmpty()) sql = model!.getValueInRange(selection);
     }
     if (values) sql = parameter!.source;
@@ -625,13 +629,13 @@ export function PostgresQueryTab({
       setError(text.noSql);
       return;
     }
-    if (mode !== 'analyzePreview') clearFailureSource();
+    if (!analyzing) clearFailureSource();
     // 预览保存原选区的基址；确认只转移同一租约，与弹窗关闭时的光标无关。
     const locator = confirmed ? confirmed.failureSource : parameter?.failureSource ??
       (!sqlOverride ? captureFailureSource(sql, mode === 'all' || mode === 'current' || offset !== undefined) : undefined);
     if (confirmed) clearAnalyze(false);
     if (parameter) parameter.failureSource = undefined;
-    const continuing = !sqlOverride && !confirmed && !explaining && mode !== 'analyzePreview' &&
+    const continuing = !sqlOverride && !confirmed && !explaining && !analyzing &&
       (parameter ? parameter.continueOnError : continueOnError);
     const modelVersion = model?.getVersionId(),
       job = acquireWorkspaceBusy(tab.id),
@@ -654,7 +658,7 @@ export function PostgresQueryTab({
     parameterTask.current = owner.taskId;
     setBusy(true);
     setError('');
-    if (mode !== 'analyzePreview') {
+    if (!analyzing) {
       resetResultView();
       if (pinStateRef.current.selected) publishPinState({ ...pinStateRef.current, selected: undefined });
       setOutcome(undefined);
@@ -676,13 +680,17 @@ export function PostgresQueryTab({
           (parameter && (!parameterCurrent(parameter) || parameter.session !== id))
         )
           throw Error(text.changed);
-        if (mode === 'analyzePreview') {
+        if (analyzing) {
           const preview = await invoke('postgres.analyzePreview', { sessionId: id, sql,
             ...(offset === undefined ? {} : { currentStatement: { offset } }) });
           if (model && modelVersion !== undefined && !model.isDisposed() && model.getVersionId() === modelVersion &&
               owner.valid && !owner.cancelled && same(owner.scope) && !closeRef.current &&
               editor.current?.getModel() === model && useWorkspace.getState().settings.activeTabId === tab.id) {
-            const intent = { ...preview, sessionId: id, scope: owner.scope, model, version: modelVersion, failureSource: locator };
+            const intent: AnalyzeOwner = { ...preview, sessionId: id, scope: owner.scope, model, version: modelVersion, failureSource: locator };
+            // 显式当前语句在等待确认时仍归属原光标，移动或增加选区即撤销该令牌。
+            if (currentAnalyze) intent.cursorWatch = editor.current?.onDidChangeCursorSelection(event => {
+              if (analyzeRef.current === intent && (!selection?.equalsSelection(event.selection) || event.secondarySelections.length)) clearAnalyze();
+            });
             analyzeRef.current = intent;
             retainLocator = true;
             setAnalyze(intent);
@@ -1010,6 +1018,7 @@ export function PostgresQueryTab({
       alive.current = false;
       clearFailureSource(); parameters.current?.failureSource?.dispose();
       analyzeRef.current?.failureSource?.dispose();
+      analyzeRef.current?.cursorWatch?.dispose();
       parameterReuse.current?.dispose(); parameterReuse.current = null;
       sessionSettingRef.current?.intent.dispose();
       duplicateIntent.current?.dispose();
@@ -2335,6 +2344,7 @@ export function PostgresQueryTab({
     explain: { enabled: canPlan, run: () => run('explain') },
     'explain-current': { enabled: canPlan && !resultsOnly, run: () => run('explain-current') },
     analyze: { enabled: canPlan, run: () => run('analyzePreview') },
+    'analyze-current': { enabled: canPlan && !resultsOnly, run: () => run('analyze-current') },
     parameters: { enabled: canRun, run: () => openParameters() },
     format: { enabled: editable, run: formatQuery },
     'format-current-statement': { enabled: canNavigate && !resultsOnly, run: () => navigation.open('format') },
@@ -2435,6 +2445,11 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.71,
       run: () => { if (active && editor.current === editorInstance) run('explain-current'); },
     });
+    const analyzeStatement = editorInstance.addAction({
+      id: `dbark-postgres-analyze-current:${uid()}`, label: uiCommandLabels['analyze-current'],
+      precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.72,
+      run: () => { if (active && editor.current === editorInstance) run('analyze-current'); },
+    });
     const definition = editorInstance.addAction({
       id: `dbark-postgres-object-definition:${uid()}`, label: definitionText.entry,
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.8,
@@ -2445,7 +2460,7 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly', contextMenuGroupId: 'navigation', contextMenuOrder: 1.9,
       run: () => { if (active && editor.current === editorInstance && editorInstance.getModel() === menuModel) syntax.open(); },
     });
-    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); formatStatement.dispose(); copyStatement.dispose(); quoteStatement.dispose(); saveStatement.dispose(); planStatement.dispose(); definition.dispose(); syntaxCheck.dispose(); };
+    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); formatStatement.dispose(); copyStatement.dispose(); quoteStatement.dispose(); saveStatement.dispose(); planStatement.dispose(); analyzeStatement.dispose(); definition.dispose(); syntaxCheck.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery, state.standardConformingStrings]);
   const renderResultGrid = (target?: GridFindTarget, marks?: ReadonlySet<string>) => result && displayResult ? (
     <ResultsGrid zoomable columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding} findMemory={findMemory} restoreCell={comparisonCell}
@@ -2537,6 +2552,9 @@ export function PostgresQueryTab({
             </button>
             <button disabled={!canPlan} onClick={() => run('analyzePreview')}>
               {queryAnalyzeZh.open}
+            </button>
+            <button disabled={!canPlan || resultsOnly} onClick={() => run('analyze-current')}>
+              {uiCommandLabels['analyze-current']}
             </button>
             <button disabled={!canRun} onClick={() => openParameters()}>
               {text.parameters}

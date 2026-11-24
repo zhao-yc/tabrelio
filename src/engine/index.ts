@@ -130,7 +130,7 @@ import { queryInsertTargetSchema } from '../shared/queryInsertExport';
 import { queryInsertZh } from '../shared/queryInsertExport.zh-CN';
 import { explainQuery } from './queryExplain';
 import { explainLimits } from '../shared/explain';
-import { analyzeQuery } from './queryAnalyze';
+import { analyzeQuery, currentAnalyzeSource } from './queryAnalyze';
 import { queryAnalyzeCapability } from '../shared/queryAnalyze';
 import { applyQueryTransactionSettings, readQueryTransactionSettings, queryTransactionSettingsMayHaveChanged, type QueryTransactionSettingsContext } from './queryTransactionSettings';
 import { applyQueryAutocommit } from './queryAutocommit';
@@ -781,7 +781,9 @@ export class Engine {
       case 'query.analyzeContext': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '读取实际分析上下文', async task => {
         const capability = queryAnalyzeCapability(managed.status);
         if (!capability.supported) throw Error(capability.reason ?? '当前服务器不支持实际执行分析');
-        // 仅此显式入口读取内置函数，既不接收用户SQL，也不提交、切库或建立替代会话。
+        // 可选正文只用于定位原文范围，诊断阶段只发送内置函数。
+        const current = input.currentStatement;
+        const sourceRange = current && currentAnalyzeSource(current.sql, current.offset, await this.sqlMode(managed, task)).sourceRange;
         const results = await this.streamQuery(task, 'SELECT DATABASE() AS __dbark_analyze_database', 1, 0, { remainingRows: 1, remainingBytes: 4096, remainingResults: 1 });
         const result = results[0], value = result?.rows[0]?.[result.columns[0]?.key];
         if (results.length !== 1 || result.columns.length !== 1 || result.rows.length !== 1 || result.truncated || !(value === null || typeof value === 'string')) {
@@ -790,7 +792,7 @@ export class Engine {
         managed.completionDatabase = initialCompletionDatabase(value);
         const state = completionSessionState(managed, false);
         if (state.broken || !state.databaseKnown) throw Error('无法确认原会话的实际默认库，未允许执行分析');
-        return state;
+        return sourceRange ? { ...state, analysisSourceRange: sourceRange } : state;
       }));
       case 'query.analyze': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '实际执行分析', async task => {
         if (input.acknowledged !== true || !Number.isInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > 100000 || !(input.expectedDatabase === null || typeof input.expectedDatabase === 'string' && input.expectedDatabase.length > 0 && input.expectedDatabase.length <= 64)) throw Error('实际执行分析参数无效或尚未确认');
@@ -807,7 +809,7 @@ export class Engine {
         const result = await analyzeQuery(input.sql, input.acknowledged, {
           status: managed.status, mode, check: () => this.checkCancelled(task), reusable: () => !managed.broken && managed.serverStatus !== undefined,
           run: sql => { assertDatabase(); return this.streamQuery(task, sql, Math.min(input.maxRows, explainLimits.textRows), 0, { remainingRows: Math.min(input.maxRows, explainLimits.textRows), remainingBytes: 1024 * 1024, remainingResults: 1 }, sql, true); },
-        });
+        }, input.currentStatement);
         if (managed.serverStatus === undefined) { managed.broken = true; managed.connection.destroy(); }
         return { ...result, transactionOpen: managed.serverStatus === undefined ? undefined : Boolean(managed.serverStatus & 1) };
       }));

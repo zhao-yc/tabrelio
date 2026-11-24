@@ -601,19 +601,40 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     if (!local) {
       // 主键等值查询可能在计划中提前取行。范围查询保留一个可按表名查找的访问节点。
       const actualStatement = 'SELECT * FROM json_subject WHERE id >= 1';
-      const actualSql = [actualStatement + ';', actualStatement + '  ;', 'SELECT 3;'].join('\n');
+      const actualSql = [actualStatement + ';', ...(custom ? ['DELIMITER $$'] : []),
+        actualStatement + (custom ? '$$' : ';'), ...(custom ? ['DELIMITER ;'] : []), 'SELECT * FROM missing_actual_next;'].join('\n');
       await write(actualSql);
       await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
       await page.keyboard.press('ArrowDown');
-      if (custom) await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowRight' : 'Shift+End');
-      await (await navigationMenuItem(query, { name: analyzeText.open, exact: true })).click();
+      if (custom) await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('Shift+ArrowRight');
+      const currentAnalyze = 'analyze-current';
+      await expect.poll(() => desktop.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.enabled === true, currentAnalyze)).toBe(true);
+      await desktop.evaluate(({ Menu, BrowserWindow }, { id, label }) => {
+        const item = Menu.getApplicationMenu()?.getMenuItemById(id), [window, extra] = BrowserWindow.getAllWindows();
+        if (!item?.enabled || item.label !== label || !window || extra) throw Error('当前语句实际分析菜单不可用');
+        item.click(item, window, {} as Electron.KeyboardEvent);
+      }, { id: currentAnalyze, label: uiCommandLabels[currentAnalyze] });
       const confirm = page.getByRole('dialog', { name: analyzeText.title, exact: true });
+      const frozenSource = () => confirm.getByLabel(analyzeText.sql, { exact: true }).evaluate(element => {
+        const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+        return api?.editor.getEditors().find(item => element.contains(item.getContainerDomNode()))?.getModel()?.getValue().trim();
+      });
+      await expect.poll(frozenSource).toBe(actualStatement);
+      await confirm.getByRole('button', { name: analyzeText.cancel, exact: true }).click();
+      await expect(confirm).toBeHidden();
+      expect(await history()).toEqual(historyBefore);
+      await (await navigationMenuItem(query, { name: uiCommandLabels[currentAnalyze], exact: true })).click();
+      await expect.poll(frozenSource).toBe(actualStatement);
       await confirm.getByRole('checkbox', { name: analyzeText.acknowledge, exact: true }).check();
       await confirm.getByRole('button', { name: analyzeText.confirm, exact: true }).click();
       const actualPlan = query.getByRole('region', { name: analyzeText.view, exact: true });
       await expect(actualPlan.getByRole('treeitem').first()).toBeVisible();
       const historyAfterAnalysis = await history();
       expect(historyAfterAnalysis).toHaveLength(historyBefore.length + 1);
+      const recorded = historyAfterAnalysis.find(entry => !historyBefore.some(previous => previous.id === entry.id));
+      expect(recorded?.sql).toContain(actualStatement);
+      expect(recorded?.sql).not.toMatch(/DELIMITER|missing_actual_next/);
       await actualPlan.getByRole('button', { name: analyzeText.collapse, exact: true }).click();
       await actualPlan.getByRole('button', { name: analyzeText.raw, exact: true }).click();
       await expect(actualPlan.getByLabel(analyzeText.raw, { exact: true })).toContainText('json_subject');

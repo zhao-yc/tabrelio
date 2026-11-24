@@ -1,9 +1,14 @@
 import { explainLimits, explainNodeDetail, parseExplainPlan, planValueAtPath, readExplainJson } from './explain';
+import type { QueryFailureSourceRange } from './queryFailure';
 
 /** 实测计划只保留有界原文和展示节点；指标保留服务器十进制文本，不求和或转浮点数。 */
 export const queryAnalyzeLimits = { rawBytes: 192 * 1024, nodes: 300, depth: 64, label: 1024, path: 2048, metrics: 32, metricValue: 80 } as const;
 export type QueryAnalyzeDialect = 'mysql' | 'mariadb';
 export type QueryAnalyzeFormat = 'tree' | 'json';
+export interface QueryAnalyzeCurrentStatement {
+  offset: number;
+  confirmedRange: QueryFailureSourceRange;
+}
 export interface QueryAnalyzeMetric {
   source: string; value: string; kind: 'actual' | 'estimate'; unit?: 'ms' | 'rows' | 'loops' | 'percent' | 'cost' | 'blocks';
 }

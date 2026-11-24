@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。MySQL、MariaDB 和 PostgreSQL 查询页新增「实际分析当前语句」，可从原生菜单、查询操作或编辑器右键打开整句确认。macOS 源码 Electron 已验证部分选区、重复语句、取消零执行、确认仅执行命中语句和结果定位，MySQL／MariaDB 同验客户端分隔符。SQLite 原估算计划通过回归。Q02、Q07 继续为部分覆盖。
+
 2026-11-24 源码增量。实际执行计划及离线快照新增「行数对照」，按实测减估算的绝对差降序排列，可筛选差异并返回节点。MySQL 与 PostgreSQL 对照输出行数，MariaDB 仅对照口径明确的过滤前枚举行数。macOS 源码 Electron 已在 MySQL 8.4、MariaDB 11.4 和 PostgreSQL 18 验证对照及节点跳转，MariaDB 新版 `r_index_rows` 口径由单测验证。Q07 继续为部分覆盖。[MariaDB 行数口径](https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/analyze-and-explain-statements/analyze-interpreting-rows-and-filtered-members)
 
 2026-11-24 源码增量。实际执行计划与离线快照的节点详情可展开「节点原始数据」。MySQL 保留本节点的 TREE 行和指标续行，MariaDB 与 PostgreSQL 展示对应的 JSON 对象并保留精确数值文本。macOS 源码 Electron 已验证三种实库的命中节点展开，离线快照切换节点和零额外 IPC 由单测验证。Q07 继续为部分覆盖。

@@ -10,7 +10,8 @@ const unknownDatabase = JSON.stringify([undefined, { state: 'unknown' }]);
 function fixture(sourceValue = 'SELECT 1; SELECT 2;') {
   const listeners = new Map<string, Set<() => void>>();
   let source = sourceValue, version = 1, disposed = false, failSubscription = false;
-  let selection = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1, selectionStartLineNumber: 1, selectionStartColumn: 1, positionLineNumber: 1, positionColumn: 1 };
+  let selection = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1, selectionStartLineNumber: 1, selectionStartColumn: 1, positionLineNumber: 1, positionColumn: 1,
+    getPosition: () => ({ lineNumber: 1, column: selection.positionColumn }) };
   const scope: QueryAnalyzeScope = {
     tabId: 'query-tab', connectionId: 'connection', connectionVersion: 1, connection: { id: 'connection', host: '离线合成来源' },
     sessionId: 'original-session', draft: source, databaseKey: knownDatabase('原库'), sourceKey: JSON.stringify([undefined, undefined]), present: true, active: true,
@@ -23,21 +24,22 @@ function fixture(sourceValue = 'SELECT 1; SELECT 2;') {
   const emit = (kind: string) => { for (const action of [...listeners.get(kind) ?? []]) action(); };
   const model = {
     getValue: () => source, getValueInRange: (range: typeof selection) => source.slice(range.startColumn - 1, range.endColumn - 1),
+    getOffsetAt: (position: { column: number }) => position.column - 1,
     getVersionId: () => version, isDisposed: () => disposed,
     onDidChangeContent: (action: () => void) => listen('content', action), onWillDispose: (action: () => void) => listen('model-dispose', action),
   };
   let activeModel: unknown = model;
   const editor = {
-    getModel: () => activeModel, getSelection: () => selection,
+    getModel: () => activeModel, getSelection: () => selection, getSelections: () => [selection],
     onDidChangeModel: (action: () => void) => listen('model', action), onDidDispose: (action: () => void) => listen('editor-dispose', action),
     onDidChangeCursorSelection: (action: () => void) => listen('selection', action),
   };
   return {
     scope, editor, model, changed, listeners, emit,
-    create: () => new QueryAnalyzeIntent(editor as unknown as monaco.editor.IStandaloneCodeEditor, () => scope, action => {
+    create: (current = false) => new QueryAnalyzeIntent(editor as unknown as monaco.editor.IStandaloneCodeEditor, () => scope, action => {
       if (failSubscription) throw Error('合成订阅失败');
       return listen('scope', action).dispose;
-    }, changed, changedMessage),
+    }, changed, changedMessage, current),
     select: (startColumn: number, endColumn: number) => {
       selection = { ...selection, startColumn, endColumn, selectionStartColumn: startColumn, positionColumn: endColumn }; emit('selection');
     },
@@ -50,6 +52,21 @@ function fixture(sourceValue = 'SELECT 1; SELECT 2;') {
 }
 
 describe('实际执行分析捕获原文和固定会话', () => {
+  it('当前语句捕获全文和光标，确认框只显示引擎给出的范围，移走再移回也失效', () => {
+    const current = fixture();
+    current.select(12, 14);
+    const intent = current.create(true);
+    expect(intent.source).toBe('SELECT 1; SELECT 2;');
+    expect(intent.offset).toBe(13);
+    expect(() => intent.ready('原库', { start: 0, end: 20 })).toThrow(changedMessage);
+    intent.ready('原库', { start: 10, end: 18 });
+    expect(intent.confirmationSource).toBe('SELECT 2');
+    expect(intent.currentStatement).toEqual({ offset: 13, confirmedRange: { start: 10, end: 18 } });
+    current.select(1, 1);
+    current.select(12, 14);
+    expect(() => intent.beginSend()).toThrow(changedMessage);
+    intent.dispose();
+  });
   it('有非空选区时冻结原选区，保留原空白，不替换为标签草稿或完整模型', () => {
     const current = fixture(); current.select(10, 20); current.scope.draft = '标签保存的旧草稿';
     const intent = current.create();

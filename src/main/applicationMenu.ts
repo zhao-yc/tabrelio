@@ -88,7 +88,7 @@ export class ApplicationMenu {
           item('next-statement', 'CmdOrCtrl+Alt+PageDown'), item('statement-navigation'),
           item('previous-query-error', 'Alt+Shift+F8'), item('next-query-error', 'Alt+F8'), item('find-query-receipts', 'CmdOrCtrl+Shift+F8'),
           item('previous-query-result', 'CmdOrCtrl+Shift+PageUp'), item('next-query-result', 'CmdOrCtrl+Shift+PageDown'),
-          item('syntax-check'), item('object-definition'), item('parameters'), item('explain'), item('explain-current'), item('analyze'), item('transaction-settings'),
+          item('syntax-check'), item('object-definition'), item('parameters'), item('explain'), item('explain-current'), item('analyze'), item('analyze-current'), item('transaction-settings'),
         ] },
         { label: text.transfer, submenu: [item('import'), item('export')] }, separator,
         item('schema-compare'), item('sqlite-data-compare'), item('postgres-data-compare'), item('mysql-data-compare'), item('structure-search', 'CmdOrCtrl+Shift+F'), item('server-monitor'), item('postgres-roles'), item('backup-archive'), item('postgres-table-backup'), item('postgres-database-backup'), item('postgres-custom-archive'), item('postgres-sql-file'), item('mysql-database-backup'), item('mysql-sql-file'),

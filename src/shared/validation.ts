@@ -622,8 +622,14 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.searchPath.apply': postgresSearchPathApplySchema,
   'postgres.queryTimeouts.read': postgresQueryTimeoutRead,
   'postgres.queryTimeouts.apply': postgresQueryTimeoutApply,
-  'query.analyze': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000), acknowledged: z.literal(true), expectedDatabase: z.string().min(1).max(64).nullable() }).strict(),
-  'query.analyzeContext': z.object({ sessionId: id, taskId: id }).strict(),
+  'query.analyze': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000), acknowledged: z.literal(true), expectedDatabase: z.string().min(1).max(64).nullable(),
+    currentStatement: z.object({ offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+      confirmedRange: z.object({ start: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), end: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) }).strict(),
+    }).strict().optional(),
+  }).strict().refine(({ sql, currentStatement }) => !currentStatement || currentStatement.offset <= sql.length &&
+    currentStatement.confirmedRange.start < currentStatement.confirmedRange.end && currentStatement.confirmedRange.end <= sql.length, '当前语句确认范围超出完整正文'),
+  'query.analyzeContext': z.object({ sessionId: id, taskId: id, currentStatement: z.object({ sql: text.min(1), offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict()
+    .refine(value => value.offset <= value.sql.length, '当前语句光标超出完整正文范围').optional() }).strict(),
   'query.parameterNames': z.object({ sessionId: id, sql: text.min(1), sqliteNavicatParameters: z.literal(true).optional(), currentStatement: z.object({ offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict().optional() }).strict().refine(value => value.currentStatement === undefined || value.currentStatement.offset <= value.sql.length, '当前语句光标超出完整正文范围'),
   'query.sessionState': z.object({ sessionId: id }).strict(),
   'sqlite.completion': sqliteCompletionInputSchema,

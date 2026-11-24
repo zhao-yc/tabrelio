@@ -1,4 +1,6 @@
 import type * as monaco from 'monaco-editor';
+import type { QueryAnalyzeCurrentStatement } from '../shared/queryAnalyze';
+import type { QueryFailureSourceRange } from '../shared/queryFailure';
 
 export interface QueryAnalyzeScope {
   tabId: string; connectionId: string; connectionVersion: number; connection: unknown;
@@ -9,6 +11,7 @@ export interface QueryAnalyzeScope {
 /** 确认始终绑定原模型、选区、连接及固定会话；离开再回到同值也不能复活旧确认。 */
 export class QueryAnalyzeIntent {
   readonly source: string;
+  readonly offset?: number;
   private readonly model: monaco.editor.ITextModel;
   private readonly version: number;
   private readonly selection: string;
@@ -20,20 +23,25 @@ export class QueryAnalyzeIntent {
   private preparingContext = false;
   private contextPrepared = false;
   private databaseValue: string | null | undefined;
+  private confirmedRange?: QueryFailureSourceRange;
   private subscriptions: Array<{ dispose(): void }> = [];
 
-  constructor(private readonly editor: monaco.editor.IStandaloneCodeEditor, private readonly read: () => QueryAnalyzeScope, subscribe: (changed: () => void) => () => void, private readonly changed: () => void, private readonly changedMessage: string) {
+  constructor(private readonly editor: monaco.editor.IStandaloneCodeEditor, private readonly read: () => QueryAnalyzeScope, subscribe: (changed: () => void) => () => void, private readonly changed: () => void, private readonly changedMessage: string, current = false) {
     const model = editor.getModel(), selection = editor.getSelection(), scope = read();
     if (!model || model.isDisposed() || !selection || !scope.present || !scope.active || !scope.connection) throw Error(changedMessage);
     this.model = model; this.version = model.getVersionId(); this.selection = JSON.stringify(selection);
     this.scope = { ...scope }; this.session = scope.sessionId;
-    const selected = model.getValueInRange(selection);
+    if (current) {
+      if (editor.getSelections()?.length !== 1) throw Error(changedMessage);
+      this.offset = model.getOffsetAt(selection.getPosition());
+    }
+    const selected = current ? '' : model.getValueInRange(selection);
     this.source = selected.trim() ? selected : model.getValue();
     if (!this.source.trim() || new TextEncoder().encode(this.source).byteLength > 20 * 1024 * 1024) throw Error('实际执行分析需要非空且不超过20MiB的SQL');
     try {
       const invalidate = () => this.invalidate();
       this.subscriptions.push(model.onDidChangeContent(invalidate), model.onWillDispose(invalidate), editor.onDidChangeModel(invalidate), editor.onDidDispose(invalidate));
-      this.subscriptions.push(editor.onDidChangeCursorSelection(() => { if (JSON.stringify(editor.getSelection()) !== this.selection) this.invalidate(); }));
+      this.subscriptions.push(editor.onDidChangeCursorSelection(() => { if (!this.selectionMatches()) this.invalidate(); }));
       const unsubscribe = subscribe(() => { if (!this.matches()) this.invalidate(); });
       this.subscriptions.push({ dispose: unsubscribe });
       this.assertCurrent();
@@ -47,9 +55,15 @@ export class QueryAnalyzeIntent {
   }
 
   /** 默认库来自原会话的可信缓存；打开确认前不执行用户SQL。 */
-  ready(database: string | null): void {
+  ready(database: string | null, range?: QueryFailureSourceRange): void {
     this.assertCurrent();
     if (this.phase !== 'preparing' || !this.session || !(database === null || typeof database === 'string')) throw Error(this.changedMessage);
+    if (this.offset !== undefined) {
+      if (!range || !Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end) ||
+          range.start < 0 || range.start > this.offset || range.end <= range.start || range.end > this.source.length)
+        throw Error(this.changedMessage);
+      this.confirmedRange = { ...range };
+    }
     this.databaseValue = database; this.databaseKey = this.read().databaseKey; this.phase = 'ready'; this.assertCurrent();
   }
 
@@ -60,6 +74,19 @@ export class QueryAnalyzeIntent {
   allowContextPreparation(): void { this.assertCurrent(); if (this.phase !== 'sending' || this.preparingContext || this.contextPrepared) throw Error(this.changedMessage); this.preparingContext = true; }
 
   get database(): string | null { if (this.databaseValue === undefined) throw Error(this.changedMessage); return this.databaseValue; }
+  get confirmationSource(): string {
+    return this.confirmedRange ? this.source.slice(this.confirmedRange.start, this.confirmedRange.end) : this.source;
+  }
+
+  /** 当前语句携带原光标和已确认范围，其余入口沿用原选区或全文。 */
+  get currentStatement(): QueryAnalyzeCurrentStatement | undefined {
+    if (this.offset !== undefined && this.confirmedRange) return { offset: this.offset, confirmedRange: { ...this.confirmedRange } };
+  }
+
+  private selectionMatches(): boolean {
+    return (this.offset === undefined || this.editor.getSelections()?.length === 1) &&
+      JSON.stringify(this.editor.getSelection()) === this.selection;
+  }
 
   private matches(): boolean {
     const now = this.read(), before = this.scope;
@@ -68,7 +95,7 @@ export class QueryAnalyzeIntent {
     if (!context && this.phase === 'sending' && this.preparingContext && now.databaseKey === JSON.stringify([undefined, { state: 'unknown' }])) {
       this.databaseKey = now.databaseKey; this.preparingContext = false; this.contextPrepared = true; context = true;
     }
-    return now.present && now.active && now.tabId === before.tabId && now.connectionId === before.connectionId && now.connectionVersion === before.connectionVersion && now.connection === before.connection && now.draft === before.draft && now.sourceKey === before.sourceKey && (!this.session || now.sessionId === this.session) && context && this.editor.getModel() === this.model && !this.model.isDisposed() && this.model.getVersionId() === this.version && JSON.stringify(this.editor.getSelection()) === this.selection;
+    return now.present && now.active && now.tabId === before.tabId && now.connectionId === before.connectionId && now.connectionVersion === before.connectionVersion && now.connection === before.connection && now.draft === before.draft && now.sourceKey === before.sourceKey && (!this.session || now.sessionId === this.session) && context && this.editor.getModel() === this.model && !this.model.isDisposed() && this.model.getVersionId() === this.version && this.selectionMatches();
   }
 
   private invalidate(): void { if (!this.valid) return; this.valid = false; this.changed(); }

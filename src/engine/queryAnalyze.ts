@@ -1,14 +1,25 @@
 import type { QueryOutcome } from '../shared/contracts';
-import { parseQueryAnalyzePlan, queryAnalyzeCapability, queryAnalyzeLimits } from '../shared/queryAnalyze';
+import { parseQueryAnalyzePlan, queryAnalyzeCapability, queryAnalyzeLimits, type QueryAnalyzeCurrentStatement } from '../shared/queryAnalyze';
 import { explainPlanSource, type ExplainContext } from './queryExplain';
 
+/** 确认窗口显示可精确定位的原文，任何省略或改写都无法形成当前语句的确认。 */
+export function currentAnalyzeSource(sql: string, offset: number, mode: ExplainContext['mode']) {
+  const { statement, sourceRange } = explainPlanSource(sql, mode, offset);
+  if (!sourceRange || sql.slice(sourceRange.start, sourceRange.end) !== statement)
+    throw Error('无法确认当前分析语句的原文范围');
+  return { statement, sourceRange };
+}
+
 /** 实际执行分析与估算计划分开；用户必须明确确认，且只向原会话发送一次冻结语句。 */
-export async function analyzeQuery(sql: string, acknowledged: boolean, context: ExplainContext): Promise<QueryOutcome> {
+export async function analyzeQuery(sql: string, acknowledged: boolean, context: ExplainContext, current?: QueryAnalyzeCurrentStatement): Promise<QueryOutcome> {
   if (acknowledged !== true) throw Error('实际执行分析需要明确确认；该操作会真正执行 SQL，并可能修改数据');
   context.check();
   const capability = queryAnalyzeCapability(context.status);
   if (!capability.supported || !capability.sqlPrefix || !capability.format) throw Error(capability.reason || '当前服务器不支持实际执行分析');
-  const { statement, sourceRange } = explainPlanSource(sql, context.mode), started = performance.now();
+  const { statement, sourceRange } = current ? currentAnalyzeSource(sql, current.offset, context.mode) : explainPlanSource(sql, context.mode);
+  if (current && (sourceRange?.start !== current.confirmedRange?.start || sourceRange?.end !== current.confirmedRange?.end))
+    throw Error('会话中的当前分析语句范围已变化，请重新确认');
+  const started = performance.now();
   // 扫描大语句之后再核取消；任何格式、权限或网络失败都原样返回，不回退或重放。
   context.check();
   const results = await context.run(capability.sqlPrefix + ' ' + statement);

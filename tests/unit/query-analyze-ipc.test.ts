@@ -68,7 +68,7 @@ function databaseResult(value: string | null = '真实默认库'): QueryResult[]
 }
 
 describe('实际分析上下文只读诊断IPC', () => {
-  it('公开输入只有会话与任务编号，拒绝任意SQL、目标和格式字段', () => {
+  it('公开输入接受有界的当前语句定位，拒绝任意SQL、目标和格式字段', () => {
     expect(publicCommands['query.analyzeContext']).toBe(true);
     expect(commandSchemas['query.analyzeContext'].parse(contextInput)).toEqual(contextInput);
     for (const patch of [
@@ -76,6 +76,28 @@ describe('实际分析上下文只读诊断IPC', () => {
       { profile: { host: 'other' } }, { maxRows: 100 }, { format: 'auto' }, { acknowledged: true },
       { sessionId: undefined }, { sessionId: '' }, { taskId: undefined }, { taskId: '' },
     ]) expect(commandSchemas['query.analyzeContext'].safeParse({ ...contextInput, ...patch }).success).toBe(false);
+    expect(commandSchemas['query.analyzeContext'].safeParse({ ...contextInput, currentStatement: { sql: 'SELECT 1', offset: 2 } }).success).toBe(true);
+    expect(commandSchemas['query.analyzeContext'].safeParse({ ...contextInput, currentStatement: { sql: 'SELECT 1', offset: 9 } }).success).toBe(false);
+    expect(commandSchemas['query.analyze'].safeParse({ ...input, currentStatement: { offset: 2 } }).success).toBe(false);
+  });
+
+  it('预览仅诊断默认库，确认只执行光标命中的自定义分隔语句并按原脚本返回范围', async () => {
+    const f = fixture();
+    const statement = "SELECT '船🚢;'";
+    const sql = `SELECT 0;\r\nDELIMITER $$\r\n${statement}$$\r\nDELIMITER ;\r\nSELECT 3;`;
+    const start = sql.indexOf(statement), offset = start + 3;
+    const confirmedRange = { start, end: start + statement.length };
+    f.stream.mockResolvedValueOnce(databaseResult('original'));
+    const state = await f.engine.handle('query.analyzeContext', { ...contextInput, currentStatement: { sql, offset } });
+    expect(state.analysisSourceRange).toEqual(confirmedRange);
+    expect(f.stream.mock.calls.map(call => call[1])).toEqual([databaseDiagnostic]);
+    const request = { ...input, sql, currentStatement: { offset, confirmedRange } };
+    const result = await f.engine.handle('query.analyze', request);
+    expect(result.analysisSourceRange).toEqual(confirmedRange);
+    expect(f.stream.mock.calls.map(call => call[1])).toEqual([databaseDiagnostic, 'EXPLAIN ANALYZE FORMAT=TREE ' + statement]);
+    await expect(f.engine.handle('query.analyze', { ...request, currentStatement: { ...request.currentStatement,
+      confirmedRange: { ...confirmedRange, end: confirmedRange.end - 1 } } })).rejects.toThrow('重新确认');
+    expect(f.stream).toHaveBeenCalledTimes(2);
   });
 
   it.each(['真实默认库', null])('从当前会话读取%s并恢复错误后未知缓存，保留事务且不报告用户执行SQL', async database => {

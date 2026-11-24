@@ -53,7 +53,7 @@ import type { SavedQueryOrganizationApply, SavedQueryOrganizationSnapshot } from
 import type{HistoryPageInput,HistoryPage,HistoryOpenResult}from'./historyPages';
 import type { HistoryDeletePreviewInput, HistoryDeletePreviewOutput, HistoryDeleteApplyInput, HistoryDeleteApplyOutput, HistoryDeleteReleaseInput } from './historyDelete';
 import type { ExplainPlan } from './explain';
-import type { QueryAnalyzePlan } from './queryAnalyze';
+import type { QueryAnalyzeCurrentStatement, QueryAnalyzePlan } from './queryAnalyze';
 import type { QueryTransactionSettingsSnapshot, QueryTransactionIsolation } from './queryTransactionSettings';
 import type { QueryAutocommitApplyInput, QueryAutocommitOutput } from './queryAutocommit';
 import type { QueryScriptReport } from './queryContinueOnError';
@@ -350,8 +350,8 @@ export interface CommandMap {
   'postgres.analyzePreview': { input: { sessionId: string; sql: string; currentStatement?: { offset: number } }; output: { token: string; source: string } };
   'postgres.analyze': { input: { sessionId: string; token: string; taskId: string; acknowledged: true }; output: QueryOutcome };
   'postgres.analyzeDiscard': { input: { sessionId: string; token: string }; output: void };
-  'query.analyze': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; acknowledged: true; expectedDatabase: string | null }; output: QueryOutcome };
-  'query.analyzeContext': { input: { sessionId: string; taskId: string }; output: CompletionSessionState };
+  'query.analyze': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; acknowledged: true; expectedDatabase: string | null; currentStatement?: QueryAnalyzeCurrentStatement }; output: QueryOutcome };
+  'query.analyzeContext': { input: { sessionId: string; taskId: string; currentStatement?: { sql: string; offset: number } }; output: CompletionSessionState & { analysisSourceRange?: import('./queryFailure').QueryFailureSourceRange } };
   'query.parameterNames': { input: { sessionId: string; sql: string; currentStatement?: { offset: number }; sqliteNavicatParameters?: true }; output: QueryParameterNames };
   'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; transactionFailed?: boolean; broken: boolean; standardConformingStrings?: boolean } };
   'query.completionState':{input:{sessionId:string};output:CompletionSessionState};
