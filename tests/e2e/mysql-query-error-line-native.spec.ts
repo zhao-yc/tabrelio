@@ -6,6 +6,7 @@ import { queryFailureSourceZh as text } from '../../src/renderer/locales/queryFa
 import { queryContinueOnErrorZh as continuing } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 import { queryWarningsZh } from '../../src/renderer/locales/queryWarnings.zh-CN';
 import { queryResultNavigatorZh as resultNavText } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
+import { queryResultColumnsZh as resultColumnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryPartialOutcomeZh } from '../../src/renderer/locales/queryPartialOutcome.zh-CN';
 import { currentStatementZh } from '../../src/renderer/locales/currentStatement.zh-CN';
@@ -179,6 +180,25 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     await page.keyboard.press('ControlOrMeta+Shift+PageDown');
     await expect(query.getByRole('gridcell', {name: '70', exact: true})).toBeVisible();
     expect(await history()).toEqual(beforeResultNavigation);
+
+    await execute('SELECT 80 AS layout_key, 800 AS layout_note; SELECT 81 AS layout_key, 810 AS layout_note;');
+    const layoutHistory = await history();
+    const noteHeader = query.getByRole('columnheader', {name: /^layout_note/});
+    const columns = page.getByRole('dialog', {name: resultColumnsText.title, exact: true});
+    const openColumns = async () => (await navigationMenuItem(query, {name: resultColumnsText.open, exact: true})).click();
+    const applyColumns = async () => {
+      await columns.getByRole('button', {name: resultColumnsText.apply, exact: true}).click();
+      await expect(columns).toBeHidden();
+    };
+    await openColumns(); await columns.getByLabel(resultColumnsText.visible(2), {exact: true}).uncheck(); await applyColumns();
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(query.getByRole('gridcell', {name: '81', exact: true})).toBeVisible();
+    await openColumns(); await columns.getByLabel(resultColumnsText.width(2), {exact: true}).fill('215'); await applyColumns();
+    await page.keyboard.press('ControlOrMeta+Shift+PageUp');
+    await expect(query.getByRole('gridcell', {name: '80', exact: true})).toBeVisible();
+    await expect(noteHeader).toHaveCount(0);
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown'); await expect(noteHeader).toHaveCSS('width', '215px');
+    expect(await history()).toEqual(layoutHistory);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

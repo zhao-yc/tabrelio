@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 查询页为每组返回结果与固定快照保留独立列布局。切回原结果恢复显隐、列顺序、冻结、列宽和行高，新结果使用默认布局。Q02 继续为部分覆盖。
+
 2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 支持用原生菜单或 `Ctrl／⌘+Shift+PageUp／PageDown` 循环切换本次执行的全部返回结果，包括存储过程的多个行集和执行状态。Q02 继续为部分覆盖。
 
 2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 支持在当前查询页从原生菜单或 `Ctrl／⌘+Shift+F8` 打开执行回执查找，直接包含本次错误，并在混合列表中保留当前结果的初始高亮。Q02 继续为部分覆盖。

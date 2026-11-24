@@ -62,6 +62,7 @@ import { capturePostgresQueryTransfer, usePostgresRecordTransfer } from '../post
 import { queryResultComparisonZh as comparisonText } from '../locales/queryResultComparison.zh-CN';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
 import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, freezeQueryResultColumn, setQueryResultHeaderColumnVisibility, reorderQueryResultColumn, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
+import { useQueryResultColumnLayout } from '../useQueryResultColumnLayout';
 import { captureQueryResultPreset, prepareQueryResultPresetLayout, queryResultPresetMatches } from '../queryResultPresetLayout';
 import { queryResultPresetsZh as presetsText } from '../locales/queryResultPresets.zh-CN';
 import { queryResultColumnsZh as columnText } from '../locales/queryResultColumns.zh-CN';
@@ -193,7 +194,7 @@ interface FilterDraft { binding: QueryResultFilterBinding; view: QueryResultFilt
 interface ColumnDraft { binding: ResultSelectionBinding; owner: string; initial: QueryResultColumnLayout; }
 interface StatisticsDraft { binding: ResultSelectionBinding; owner: string; column: ResultColumn; indices: ReadonlySet<number>; }
 interface PresetDraft { binding: ResultSelectionBinding; owner: string; value: QueryResultPresetValue; }
-interface ResultLayout { source: QueryResult; layout: QueryResultColumnLayout; columns: ResultColumn[]; }
+interface ResultLayout { layout: QueryResultColumnLayout; columns: ResultColumn[]; }
 interface PinState { items: PinnedQueryResult[]; selected?: string; sequence: number; }
 const emptyResults: QueryResult[] = [];
 interface ComparisonDraft { pins: PinnedQueryResult[]; owner: string; }
@@ -317,7 +318,6 @@ export function PostgresQueryTab({
   const [filterDraft, setFilterDraft] = useState<FilterDraft>();
   const filterDraftRef = useRef<FilterDraft | undefined>(undefined);
   const [filterError, setFilterError] = useState('');
-  const [columnLayout, setColumnLayout] = useState<ResultLayout>();
   const [columnDraft, setColumnDraft] = useState<ColumnDraft>();
   const columnDraftRef = useRef<ColumnDraft | undefined>(undefined);
   const [statisticsDraft, setStatisticsDraft] = useState<StatisticsDraft>();
@@ -1143,7 +1143,7 @@ export function PostgresQueryTab({
   const resultContext = [pin?.result ?? outcome, pin ? undefined : selected, profile, version, scope.database];
   const snapshotIdentity = [tab, pinState, ...resultContext, resultSource];
   useLayoutEffect(() => { snapshotOperation.current?.observe(snapshotIdentity); });
-  const currentLayout = columnLayout?.source === resultSource ? columnLayout : undefined;
+  const [currentLayout, setColumnLayout] = useQueryResultColumnLayout<ResultLayout>(resultSource, tab.connectionId, version);
   const layout = currentLayout?.layout;
   const visibleColumns = currentLayout?.columns ?? resultSource?.columns;
   const frozenKeys = useMemo(() => resultSource && layout ? frozenQueryResultKeys(resultSource.columns, layout) : undefined,
@@ -1194,13 +1194,12 @@ export function PostgresQueryTab({
       !statisticsDraftRef.current && !presetDraftRef.current && !comparisonDraftRef.current && resultSelection.current(binding);
   }
 
-  /** 切换结果来源时同步撤销旧布局、整理历史和网格回执。 */
+  /** 切换结果来源时同步撤销旧整理历史和网格回执。列布局随其原结果保留。 */
   function resetResultView() {
     organization.filter.invalidate();
     organization.sorter.invalidate();
     resultSelection.invalidate();
     resultHistory.invalidate();
-    setColumnLayout(undefined);
   }
 
   /** 同步替换快照列表与选中项，旧按钮不能覆盖后续快照。 */
@@ -1738,7 +1737,7 @@ export function PostgresQueryTab({
       sort: next.sorter.view(next.sortBinding)!.rules,
     }, next.filterBinding);
     else resultHistory.invalidate();
-    setColumnLayout({ source: resultSource, ...nextLayout });
+    setColumnLayout(nextLayout);
     closeResultPresets(draft);
     publishResultOrganization(next);
   }
@@ -1815,7 +1814,7 @@ export function PostgresQueryTab({
       organization.filter = next.filter;
       organization.sorter = next.sorter;
     }
-    setColumnLayout({ source: resultSource, layout: nextLayout, columns: changed ? projected : visibleColumns });
+    setColumnLayout({ layout: nextLayout, columns: changed ? projected : visibleColumns });
   }
 
   /** 网格拖动只更新当前可见列的宽度，沿用行、列投影及其它显示配置。 */
@@ -1833,13 +1832,13 @@ export function PostgresQueryTab({
     }
     if (!changed) return;
     const keys = resultSource.columns.map(column => column.key);
-    setColumnLayout({ source: resultSource, columns: visibleColumns,
+    setColumnLayout({ columns: visibleColumns,
       layout: { ...(layout ?? { order: keys, visible: keys }), widths } });
   }
 
   function resizeResultRowHeight(height: number): void {
     if (!resultSource || !visibleColumns || !resultCurrent()) return;
-    setColumnLayout({ source: resultSource, columns: visibleColumns, layout: setQueryResultRowHeight(resultSource.columns, layout, height) });
+    setColumnLayout({ columns: visibleColumns, layout: setQueryResultRowHeight(resultSource.columns, layout, height) });
   }
 
   const headerFreeze = {
@@ -1849,11 +1848,11 @@ export function PostgresQueryTab({
         changeHeaderColumnLayout(layout => freezeQueryResultColumn(layout, key));
         return;
       }
-      if (!resultSource || !visibleColumns) return;
+      if (!resultSource || !visibleColumns || !resultCurrent()) return;
       try {
         const keys = queryResultColumnKeys(resultSource.columns);
         const next = setQueryResultFrozenThrough(layout ?? { order: keys, visible: keys }, key);
-        setColumnLayout({ source: resultSource, layout: next, columns: visibleColumns });
+        setColumnLayout({ layout: next, columns: visibleColumns });
       } catch (reason) { setError(errorMessage(reason)); }
     },
   };

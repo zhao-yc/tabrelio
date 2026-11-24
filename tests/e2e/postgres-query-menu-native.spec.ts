@@ -10,6 +10,7 @@ import { test, expect, page, desktop, pageErrors, quitDesktop, confirmOwnedDeskt
 import type { ConnectionProfile } from '../../src/shared/contracts';
 import type { UiCommandId } from '../../src/shared/uiCommands';
 import { queryResultNavigatorZh as resultNavText } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
+import { queryResultColumnsZh as resultColumnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
 import { savedQueryOrganizationZh as groupText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
@@ -626,6 +627,31 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     expect(JSON.stringify(settings)).not.toContain(secret); expect(settings.tabs.every(item => !Object.hasOwn(item, 'continueOnError'))).toBe(true);
     await page.locator('.tab-strip').getByText('另一 PostgreSQL 查询', {exact: true}).click(); await expect(choice()).not.toBeChecked();
     await page.locator('.tab-strip').getByText('原 PostgreSQL 查询', {exact: true}).click(); await expect(choice()).toBeChecked();
+
+    await replaceDraft('SELECT 10 AS layout_key, 100 AS layout_note; SELECT 20 AS layout_key, 200 AS layout_note;');
+    await command('execute-all');
+    const layoutGrid = tab().getByRole('grid');
+    const noteHeader = layoutGrid.getByRole('columnheader', {name: /^layout_note/});
+    const columns = page.getByRole('dialog', {name: resultColumnsText.title, exact: true});
+    const openColumns = () => tab().getByRole('button', {name: resultColumnsText.open, exact: true}).click();
+    const applyColumns = async () => {
+      await columns.getByRole('button', {name: resultColumnsText.apply, exact: true}).click();
+      await expect(columns).toBeHidden();
+    };
+    await expect(layoutGrid.getByRole('gridcell', {name: '10', exact: true})).toBeVisible();
+    const afterLayoutExecution = await history();
+    await openColumns(); await columns.getByLabel(resultColumnsText.visible(2), {exact: true}).uncheck(); await applyColumns();
+    await expect(noteHeader).toHaveCount(0);
+    await resultChoice.selectOption('1');
+    await expect(layoutGrid.getByRole('gridcell', {name: '20', exact: true})).toBeVisible();
+    await openColumns(); await columns.getByLabel(resultColumnsText.width(2), {exact: true}).fill('215'); await applyColumns();
+    await resultChoice.selectOption('0'); await expect(noteHeader).toHaveCount(0);
+    await resultChoice.selectOption('1'); await expect(noteHeader).toHaveCSS('width', '215px');
+    expect(await history()).toEqual(afterLayoutExecution);
+    await command('execute-all');
+    await expect.poll(async () => (await history()).length).toBe(afterLayoutExecution.length + 1);
+    await expect(resultChoice).toHaveValue('0');
+    await expect(noteHeader).toBeVisible();
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
   await quitDesktop();

@@ -35,6 +35,7 @@ import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { queryRowDetailsZh as rowDetailsText } from '../locales/queryRowDetails.zh-CN';
 import { QueryResultColumnsDialog } from './QueryResultColumnsDialog';
 import { queryResultColumnKeys, queryResultVisibleColumns, frozenQueryResultKeys, setQueryResultFrozenThrough, freezeQueryResultColumn, setQueryResultHeaderColumnVisibility, reorderQueryResultColumn, setQueryResultRowHeight, queryResultColumnWidth, type QueryResultColumnLayout } from '../queryResultColumns';
+import { useQueryResultColumnLayout } from '../useQueryResultColumnLayout';
 import type { ColumnWidths } from 'react-data-grid';
 import { queryResultColumnsZh as columnText } from '../locales/queryResultColumns.zh-CN';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
@@ -398,7 +399,6 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const [rowDetail, setRowDetail] = useState<QueryRowDetailsView | null>(null);
   const [activeDetailRow, setActiveDetailRow] = useState<{ binding: QueryRowDetailsBinding; index: number } | null>(null);
   const [resultSelectionRevision, refreshResultSelection] = useState(0);
-  const [columnLayout,setColumnLayout]=useState<{result:QueryResult;context:readonly unknown[];layout:QueryResultColumnLayout}>();
   type ColumnLease={binding:ResultSelectionBinding;owner:string;initial:QueryResultColumnLayout};
   const [columnLease,setColumnLease]=useState<ColumnLease|null>(null), columnLeaseRef=useRef<ColumnLease|null>(null);
   const resultOwner=useRef({tabId:tab.id,connectionId:tab.connectionId,version:connectionVersion});resultOwner.current={tabId:tab.id,connectionId:tab.connectionId,version:connectionVersion};
@@ -1488,7 +1488,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   // 结果快照的寿命独立于模态/保存锁；只有新查询才撤销数据来源，操作权限仍走原忙态守卫。
   const viewSource = !pin && outcome?.sqliteExplain ? undefined : exportableQueryResult(queryRunning, outcome, resultIndex, pin?.result);
   const resultContext=[outcome,resultIndex,selectedPin,task.current,connectionVersion,tab.connectionId];
-  const layoutMatches=!!columnLayout&&columnLayout.result===sourceResult&&columnLayout.context.length===resultContext.length&&columnLayout.context.every((value,index)=>Object.is(value,resultContext[index]));
+  const [columnLayout, setColumnLayout] = useQueryResultColumnLayout<{layout: QueryResultColumnLayout}>(sourceResult, tab.connectionId, connectionVersion);
+  const layoutMatches = !!columnLayout;
   const shownColumns=useRef<ResultColumn[]>([]);
   const visibleColumns=useMemo(()=>{
     let next=sourceResult?.columns??[];
@@ -2029,7 +2030,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       resultHistory.record(historyBinding, resultMemory.configuration, prepared.filterBinding);
       resultFilter.invalidate(); resultSorter.invalidate();
       resultFilterRef.current = prepared.filter; resultSorterRef.current = prepared.sorter;
-      setColumnLayout({result:sourceResult!,context:resultContext,layout});
+      setColumnLayout({layout});
       invalidateResultSelection(); setError(''); refreshResultSelection(value => value + 1);
     } catch (reason) { setError(errorMessage(reason)); }
   }
@@ -2128,7 +2129,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     else resultHistory.invalidate();
     resultFilter.invalidate(); resultSorter.invalidate(); resultFilterRef.current = prepared.filter; resultSorterRef.current = prepared.sorter;
     shownColumns.current = columns;
-    setColumnLayout({ result: sourceResult!, context: resultContext, layout });
+    setColumnLayout({ layout });
     presetLeaseRef.current=null;setPresetLease(null);invalidateResultSelection();setError('');refreshResultSelection(number=>number+1);
   }
   /** 旧窗口关闭回调只撤销自己的租约，不影响下一份方案或当前结果。 */
@@ -2254,7 +2255,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 接纳前再次核同一准确结果及布局，原outcome与pinned对象都不改写。 */
   function applyColumnLayout(lease:ColumnLease,layout:QueryResultColumnLayout){
     if(!columnManagerCurrent(lease))return;
-    try{queryResultVisibleColumns(lease.binding.columns,layout);setColumnLayout({result:sourceResult!,context:resultContext,layout});closeColumnManager(lease);}catch(reason){setError(errorMessage(reason));}
+    try{queryResultVisibleColumns(lease.binding.columns,layout);setColumnLayout({layout});closeColumnManager(lease);}catch(reason){setError(errorMessage(reason));}
   }
   /** 只接纳原网格的当前可见列尺寸，保留隐藏列宽和原结果数据。 */
   function resizeResultColumns(sizes: ColumnWidths): void {
@@ -2273,12 +2274,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if (!changed) return;
     const keys = sourceResult.columns.map(column => column.key);
     const layout = layoutMatches && columnLayout ? columnLayout.layout : { order: keys, visible: keys };
-    setColumnLayout({ result: sourceResult, context: resultContext, layout: { ...layout, widths } });
+    setColumnLayout({ layout: { ...layout, widths } });
   }
   function resizeResultRowHeight(height: number): void {
     if (!sourceResult || !resultSelectionAllowed(selectionBinding)) return;
     const layout = setQueryResultRowHeight(sourceResult.columns, layoutMatches ? columnLayout?.layout : undefined, height);
-    setColumnLayout({ result: sourceResult, context: resultContext, layout });
+    setColumnLayout({ layout });
   }
   /** 方案和暂存仅替换当前边界，不改可见列/顺序；旧方案没有边界就明确清除当前冻结。 */
   function layoutWithFrozenThrough(key?:string):QueryResultColumnLayout {
@@ -2294,8 +2295,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         changeHeaderColumnLayout(layout => freezeQueryResultColumn(layout, key));
         return;
       }
-      if (!sourceResult) return;
-      try { setColumnLayout({ result: sourceResult, context: resultContext, layout: layoutWithFrozenThrough(key) }); }
+      if (!sourceResult || !resultSelectionAllowed(selectionBinding)) return;
+      try { setColumnLayout({ layout: layoutWithFrozenThrough(key) }); }
       catch (reason) { setError(errorMessage(reason)); }
     },
   };
@@ -2323,7 +2324,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       }
       shownColumns.current = projected;
       invalidateResultSelection();
-      setColumnLayout({ result: sourceResult, context: resultContext, layout: next });
+      setColumnLayout({ layout: next });
       setError('');
     } catch (reason) { setError(errorMessage(reason)); }
   }

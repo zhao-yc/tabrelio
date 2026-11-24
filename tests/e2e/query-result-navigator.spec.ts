@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { queryResultNavigatorZh as text } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
+import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
+import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { queryPinsZh as pinText } from '../../src/renderer/locales/queryPins.zh-CN';
 import { queryDuplicateZh as duplicateText } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { historyPagesZh as previewText } from '../../src/renderer/locales/historyPages.zh-CN';
@@ -25,7 +27,8 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
       const title = number === 2 || number === 42 ? '-- NAME: 月度汇总\n' : '';
       const column = number === 44 ? 'UniqueOutput' : 'sample';
       const comment = number === 44 ? ` /* ${'x'.repeat(66000)}完整原语句尾部🚢 */` : number === 41 ? ' /* navigator_receipt_🧭 */' : '';
-      return `${title}SELECT ${number} AS ${column}${comment};`;
+      const additional = number === 11 || number === 12 ? ', 100 AS layout_note, 200 AS layout_flag' : '';
+      return `${title}SELECT ${number} AS ${column}${additional}${comment};`;
     }).join('\n');
     // 只替换文件选择器。连接、执行、缓存及结果切换仍使用正式应用。
     await desktop.evaluate(({ dialog }, file) => {
@@ -59,6 +62,12 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     const dialog = page.getByRole('dialog', { name: text.open, exact: true });
     const search = dialog.getByRole('combobox', { name: text.input, exact: true });
     const grid = tab.getByRole('grid');
+    const columns = page.getByRole('dialog', {name: columnsText.title, exact: true});
+    const openColumns = async () => (await navigationMenuItem(tab, {name: columnsText.open, exact: true})).click();
+    const applyColumns = async () => {
+      await columns.getByRole('button', {name: columnsText.apply, exact: true}).click();
+      await expect(columns).toBeHidden();
+    };
     const resultBody = tab.locator('.query-layout-results > .result-body');
     await grid.getByRole('gridcell', {name: '1', exact: true}).focus();
     await page.keyboard.press('ControlOrMeta+Shift+PageUp');
@@ -66,6 +75,36 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await expect(resultBody).toBeFocused();
     await page.keyboard.press('ControlOrMeta+Shift+PageDown');
     await expect(grid.getByRole('gridcell', {name: '1', exact: true})).toBeVisible();
+    await trigger.click(); await search.fill('#11'); await search.press('Enter');
+    await expect(grid.getByRole('gridcell', {name: '11', exact: true})).toBeVisible();
+    await openColumns();
+    await columns.getByLabel(columnsText.visible(2), {exact: true}).uncheck();
+    await columns.getByRole('button', {name: columnsText.up(3), exact: true}).click();
+    await columns.getByRole('button', {name: columnsText.up(3), exact: true}).click();
+    await columns.getByRole('button', {name: columnsText.freezeThrough(3), exact: true}).click();
+    await columns.getByLabel(columnsText.width(3), {exact: true}).fill('240');
+    await columns.getByLabel(heightText.label, {exact: true}).selectOption('56');
+    await applyColumns();
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(grid.getByRole('gridcell', {name: '12', exact: true})).toBeVisible();
+    const note = grid.getByRole('columnheader', {name: /^layout_note/});
+    const flag = grid.getByRole('columnheader', {name: /^layout_flag/});
+    await expect(note).toBeVisible();
+    await openColumns();
+    await columns.getByLabel(columnsText.width(2), {exact: true}).fill('190');
+    await columns.getByLabel(heightText.label, {exact: true}).selectOption('24');
+    await applyColumns();
+    await page.keyboard.press('ControlOrMeta+Shift+PageUp');
+    await expect(grid.getByRole('gridcell', {name: '11', exact: true})).toBeVisible();
+    await expect(note).toHaveCount(0);
+    await expect(grid).toHaveClass(/grid-row-height-56/);
+    await expect(grid.getByRole('columnheader').filter({hasText: /sample|layout_flag/}).first()).toContainText('layout_flag');
+    await expect(flag).toHaveCSS('width', '240px');
+    await expect(flag).toHaveClass(/rdg-cell-frozen-start/);
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(grid.getByRole('gridcell', {name: '12', exact: true})).toBeVisible();
+    await expect(note).toHaveCSS('width', '190px');
+    await expect(grid).toHaveClass(/grid-row-height-24/);
     await tab.locator('.monaco-editor').getByRole('textbox').focus();
     await page.keyboard.press('ControlOrMeta+Shift+F8');
     await expect(search).toBeFocused();
@@ -165,6 +204,9 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     const pinCurrent = async () => (await navigationMenuItem(tab, { name: zh.query.pinResult, exact: true })).click();
     await pinCurrent();
     await expect(pinGroup.getByRole('button', { name: '固定 1 · 月度汇总', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await openColumns();
+    await columns.getByLabel(columnsText.width(1), {exact: true}).fill('208');
+    await applyColumns();
     await trigger.click();
     await search.fill('#44');
     await search.press('Enter');
@@ -219,6 +261,7 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await expect(renamedPin).toHaveAttribute('aria-pressed', 'false');
     await renamedPin.click();
     await expect(grid.getByRole('gridcell', {name: '2', exact: true})).toBeVisible();
+    await expect(grid.getByRole('columnheader', {name: /^sample/})).toHaveCSS('width', '208px');
     await trigger.click();
     await expect(dialog.getByRole('option', { selected: true })).toContainText('上月对账基准📌');
     await search.fill('月度汇总');
