@@ -4,6 +4,7 @@ import { sqlClipboardStackAction } from '../sqlClipboardStack';
 import { openSqlStatementCopy, sqlQuotedCopyAction } from '../sqlQuotedCopy';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { QueryResultNavigator, type QueryResultNavigatorControl } from './QueryResultNavigator';
+import { QueryPlanBaselines } from './LivePlanFileActions';
 import { PinnedResultRename } from './PinnedResultRename';
 import { ResultSqlDialog } from './ResultSqlDialog';
 import { adjacentQueryResultIndex, focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace, selectAdjacentQueryResult } from '../queryResultShortcut';
@@ -3074,7 +3075,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     return true;
   }
 
-  return <div ref={layoutRoot} className="workspace-tab query-tab" data-result-layout={resultLayout}
+  return <QueryPlanBaselines scope={JSON.stringify([tab.id, tab.connectionId, connectionVersion])}
+    database={sqlite ? 'main' : draftContext.state === 'known' ? draftContext.database : undefined}><div ref={layoutRoot} className="workspace-tab query-tab" data-result-layout={resultLayout}
     onKeyDownCapture={event => {
       const focused = () => !!editor.current?.hasTextFocus();
       if (handleQueryExecutionShortcut(event, tab.id, focused)) return;
@@ -3353,5 +3355,5 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           if (!queryOwnerCurrent() || busyRef.current || origin?.database !== 'main') return;
           setOriginDialog(undefined);
           useWorkspace.getState().openTab({ kind: 'table', title: origin.table, connectionId: tab.connectionId, database: 'main', table: origin.table });
-        }}/>}{archiveOutcome && <ResultArchiveDialog outcome={archiveOutcome} tabId={tab.id} dialect={sqlite ? 'sqlite' : 'mysql'} identity={JSON.stringify([organizationScope, organizationExecution])} organizedView={archiveView} isCurrent={() => multipleReturnedResults && archiveOutcome === outcome && queryOwnerCurrent()} onClose={() => setArchiveOutcome(undefined)}/>}{exportResult && <ResultExportDialog result={exportResult} tabId={tab.id} scope={exportResult.rectangle ? 'rectangle' : undefined} allowSql={!sqlite || !!exportResult.sqliteStorage} sqlDialect={sqlite ? 'sqlite' : undefined} selected={exportSelected} onClose={() => {invalidateResultSelection();setExportResult(null);}}/>}</div>;
+        }}/>}{archiveOutcome && <ResultArchiveDialog outcome={archiveOutcome} tabId={tab.id} dialect={sqlite ? 'sqlite' : 'mysql'} identity={JSON.stringify([organizationScope, organizationExecution])} organizedView={archiveView} isCurrent={() => multipleReturnedResults && archiveOutcome === outcome && queryOwnerCurrent()} onClose={() => setArchiveOutcome(undefined)}/>}{exportResult && <ResultExportDialog result={exportResult} tabId={tab.id} scope={exportResult.rectangle ? 'rectangle' : undefined} allowSql={!sqlite || !!exportResult.sqliteStorage} sqlDialect={sqlite ? 'sqlite' : undefined} selected={exportSelected} onClose={() => {invalidateResultSelection();setExportResult(null);}}/>}</div></QueryPlanBaselines>;
 }

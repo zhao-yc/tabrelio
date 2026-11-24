@@ -266,6 +266,34 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     const canonicalDatabase = realpathSync(database), baseline = disk(); expect(baseline.rows).toEqual([1, 2, 3, 4].map(id => ({ id: String(id), label: '标签' + id + '🚢', v: String(id * 10), value_type: 'integer' }))); expect(baseline.userVersion).toEqual({ user_version: 0 }); await arm(); armed = true;
     stage = '真实RW/RO表单与原QueryTab'; await createConnection(rwName, false); await createConnection(roName, true); const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(2); const rw = profiles.find(profile => profile.name === rwName), ro = profiles.find(profile => profile.name === roName); if (!rw || rw.dialect !== 'sqlite' || !ro || ro.dialect !== 'sqlite') throw Error('SQLite计划本例连接方言不正确'); expect(rw.sqlite).toMatchObject({ filePath: canonicalDatabase, readOnly: false }); expect(ro.sqlite).toMatchObject({ filePath: canonicalDatabase, readOnly: true }); for (const profile of [rw, ro]) { expect(profile.sqlite.fileToken).toBeUndefined(); for (const field of ['host', 'port', 'user', 'password', 'rememberPassword', 'hasPassword', 'ssh', 'tls']) expect(profile).not.toHaveProperty(field); } await openQuery(rwName);
     stage = '原菜单索引SELECT计划与原始关系独立核对'; const first = await explain(indexedSql); if (!first.outcome) throw Error('有效SQLite计划没有回执'); const plan = inspectPlan(first.outcome); expect(plan.expectedNodes.some(node => node.detail.includes(indexName))).toBe(true); expect(plan.expectedNodes.some(node => node.depth > 0)).toBe(true); const rwSession = first.fact.request.sessionId; expect(typeof rwSession).toBe('string'); expect(disk()).toEqual(baseline); expect(await history()).toEqual([]); const localEvidence = await localViews(plan, first.fact); expect((await model()).source).toBe(indexedSql);
+    const baselineItem = async (name: string) => {
+      await step(() => view().getByRole('button', {name: snapshotText.pinnedMenu, exact: true}).click());
+      return page.getByRole('menu', {name: snapshotText.pinnedMenu, exact: true}).getByRole('menuitem', {name, exact: true});
+    };
+    const settledPlanSettings = async (sql: string) => {
+      // 捕获的是上一次计划完成并保存后的设置，先等原查询恢复上下文的防抖写入落盘。
+      await step(() => expect.poll(async () => {
+        const saved = await settings();
+        return saved.tabs.find(tab => tab.id === saved.activeTabId);
+      }).toMatchObject({sql, database: 'main', databaseContext: {state: 'known', database: 'main'}}));
+      return settings();
+    };
+    const assertLocalBaselineAction = async (before: Audit, original: Awaited<ReturnType<typeof settings>>) => {
+      const after = await step(audit);
+      expect(after.operations).toEqual(before.operations);
+      expect(after.driverSql).toEqual(before.driverSql);
+      expect(after.events).toEqual(before.events);
+      // 开关模态会刷新原生菜单，之前的编辑器草稿也可能在此期间完成防抖保存。
+      expect(after.commands.slice(before.commands.length).filter(command => !['app.menuState', 'settings.save'].includes(command))).toEqual([]);
+      expect(await settings()).toEqual(original);
+    };
+    stage = '固定原计划为本标签内存基准';
+    const beforePinSettings = await settledPlanSettings(indexedSql);
+    const beforePin = await step(audit);
+    await step(async () => (await baselineItem(snapshotText.pinnedSet)).click());
+    await step(async () => expect(await baselineItem(snapshotText.pinnedCompare)).toBeEnabled());
+    await step(() => page.keyboard.press('Escape'));
+    await assertLocalBaselineAction(beforePin, beforePinSettings);
     stage = '保存当前四列计划快照';
     const beforeSave = await step(audit);
     await step(() => view().getByRole('button', { name: snapshotText.save, exact: true }).click());
@@ -288,6 +316,23 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     if (!dml.outcome) throw Error('对比快照缺少原生 DML 计划');
     const targetPlan = inspectPlan(dml.outcome);
     expect(targetPlan.expectedNodes).toHaveLength(1);
+    stage = '重跑后与标签基准比较并替换';
+    const beforePinnedSettings = await settledPlanSettings(dmlSql);
+    const beforePinnedCompare = await step(audit);
+    const pinnedComparison = page.getByRole('dialog', {name: snapshotText.sqliteCompareTitle, exact: true});
+    await step(async () => (await baselineItem(snapshotText.pinnedCompare)).click());
+    await step(() => expect(pinnedComparison.getByRole('status')).toHaveText(snapshotText.compareCount(plan.expectedNodes.length, plan.expectedNodes.length)));
+    await step(() => expect(pinnedComparison).toContainText(snapshotText.pinnedBaselineName));
+    const pinnedDetail = pinnedComparison.getByRole('row', {name: /^detail /}).getByRole('cell');
+    await step(() => expect(pinnedDetail.nth(0)).toHaveText(plan.expectedNodes[0].detail));
+    await step(() => expect(pinnedDetail.nth(1)).toHaveText(targetPlan.expectedNodes[0].detail));
+    await step(() => page.screenshot({path: info.outputPath('SQLite标签内计划基准.png')}));
+    await step(() => pinnedComparison.getByRole('button', {name: zh.dialogs.text001, exact: true}).click());
+    await step(async () => (await baselineItem(snapshotText.pinnedReplace)).click());
+    await step(async () => (await baselineItem(snapshotText.pinnedCompare)).click());
+    await step(() => expect(pinnedComparison.getByRole('status')).toHaveText(snapshotText.compareCount(0, targetPlan.expectedNodes.length)));
+    await step(() => pinnedComparison.getByRole('button', {name: zh.dialogs.text001, exact: true}).click());
+    await assertLocalBaselineAction(beforePinnedCompare, beforePinnedSettings);
     stage = '当前原生计划直接读取基准，关闭后保留结果视图';
     await step(() => view().getByRole('button', { name: sqliteExplainZh.rawLabel, exact: true }).click());
     const beforeLiveCompare = await step(audit);
@@ -339,7 +384,10 @@ test('SQLite真实执行计划原始节点与本地视图、同会话临时表�
     await write(currentScript + '\r\n-- 修改后原定位失效');
     await step(() => expect(locate).toBeDisabled());
     stage = '副作用PRAGMA和多句在driver之前拒绝'; const pragma = await explain(pragmaSql, true); expect(disk()).toEqual(baseline); const multiple = await explain(multipleSql, true); expect(disk()).toEqual(baseline); const recovered = await explain(indexedSql); expect(recovered.fact.request.sessionId).toBe(rwSession); expect(disk()).toEqual(baseline);
-    stage = '只读连接SELECT成功与原输入保持'; await openQuery(roName); const readonly = await explain(indexedSql); expect(readonly.fact.request.sessionId).not.toBe(rwSession); if (!readonly.outcome) throw Error('只读计划结果丢失'); const roPlan = inspectPlan(readonly.outcome); expect(roPlan.expectedNodes.some(node => node.detail.includes(indexName))).toBe(true); const firstFacts = await step(audit); expect(firstFacts.sessions[String(rwSession)]).toBe(rw.id); expect(firstFacts.sessions[String(readonly.fact.request.sessionId)]).toBe(ro.id); expect(firstFacts.denied).toEqual([]); expect(firstFacts.pickerIds).toHaveLength(2); expect(operations(firstFacts, 'query.explain')).toHaveLength(8); expect(operations(firstFacts, 'query.execute').map(fact => fact.request.sql).sort()).toEqual([temporarySql, transactionSql].sort()); expect(disk()).toEqual(baseline); expect(runtime.pageErrors).toEqual([]);
+    stage = '只读连接SELECT成功与原输入保持'; await openQuery(roName); const readonly = await explain(indexedSql); expect(readonly.fact.request.sessionId).not.toBe(rwSession); if (!readonly.outcome) throw Error('只读计划结果丢失'); const roPlan = inspectPlan(readonly.outcome); expect(roPlan.expectedNodes.some(node => node.detail.includes(indexName))).toBe(true);
+    await step(async () => expect(await baselineItem(snapshotText.pinnedCompare)).toBeDisabled());
+    await step(() => page.keyboard.press('Escape'));
+    const firstFacts = await step(audit); expect(firstFacts.sessions[String(rwSession)]).toBe(rw.id); expect(firstFacts.sessions[String(readonly.fact.request.sessionId)]).toBe(ro.id); expect(firstFacts.denied).toEqual([]); expect(firstFacts.pickerIds).toHaveLength(2); expect(operations(firstFacts, 'query.explain')).toHaveLength(8); expect(operations(firstFacts, 'query.execute').map(fact => fact.request.sql).sort()).toEqual([temporarySql, transactionSql].sort()); expect(disk()).toEqual(baseline); expect(runtime.pageErrors).toEqual([]);
     const firstHistory = await history(); expect(firstHistory.map(entry => entry.sql).sort()).toEqual([temporarySql, transactionSql].sort()); expect(firstHistory.every(entry => entry.success)).toBe(true); const firstTasks = await tasks(); expect(firstTasks.filter(task => task.kind === 'query.explain').map(task => task.status).sort()).toEqual(['completed', 'completed', 'completed', 'completed', 'completed', 'completed', 'failed', 'failed']);
     stage = '保存未执行写草稿并正常退出'; await write(restoredSql); const persisted = await settings(); await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); const beforeQuit = await step(audit); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteExplainNative?: { restore(): void } }).__sqliteExplainNative; if (!state) throw Error('原观察器失效'); state.restore(); }), true); armed = false;
     stage = '第一owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); const firstPid = originalProcess.pid;

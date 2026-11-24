@@ -16,6 +16,7 @@ import { PostgresQueryReferenceDialog } from './PostgresQueryReferenceDialog';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { QueryResultNavigator, type QueryResultNavigatorControl } from './QueryResultNavigator';
+import { QueryPlanBaselines } from './LivePlanFileActions';
 import { PinnedResultRename } from './PinnedResultRename';
 import { ResultSqlDialog } from './ResultSqlDialog';
 import { adjacentQueryResultIndex, focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace, selectAdjacentQueryResult } from '../queryResultShortcut';
@@ -2523,6 +2524,7 @@ export function PostgresQueryTab({
   ) : null;
 
   return (
+    <QueryPlanBaselines scope={JSON.stringify([tab.id, tab.connectionId, version])} database={scope.database}>
     <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}
       onKeyDownCapture={event => {
         const focused = () => !!editor.current?.hasTextFocus();
@@ -3000,5 +3002,6 @@ export function PostgresQueryTab({
       {snippets && <SnippetsDialog dialect="postgresql" initialSql={snippets.initialSql} startWithDraft={snippets.create}
         onInsert={insertSnippet} onClose={closeSnippets} />}
     </div>
+    </QueryPlanBaselines>
   );
 }

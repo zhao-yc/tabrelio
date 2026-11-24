@@ -103,6 +103,11 @@ test('PostgreSQL 最小窗口可读，当前估算和实测计划直接对照基
     }, { paths: [estimatedPath, estimatedPath, actualPath], title: snapshotText.choose });
     const receipts = () => page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }));
     const estimateReceipt = await receipts();
+    const openPinnedMenu = async (region: typeof plan) => {
+      await region.getByRole('button', {name: snapshotText.pinnedMenu, exact: true}).click();
+      return page.getByRole('menu', {name: snapshotText.pinnedMenu, exact: true});
+    };
+    await (await openPinnedMenu(plan)).getByRole('menuitem', {name: snapshotText.pinnedSet, exact: true}).click();
     const comparison = page.getByRole('dialog', { name: snapshotText.compareTitle, exact: true });
     await plan.getByRole('button', { name: snapshotText.compareBaseline, exact: true }).click();
     await expect(comparison).toContainText(basename(estimatedPath));
@@ -131,6 +136,9 @@ test('PostgreSQL 最小窗口可读，当前估算和实测计划直接对照基
     await expect(actualPlan.getByRole('treeitem').first()).toContainText('Limit');
     await expect(actualPlan.getByRole('button', { name: snapshotText.compareBaseline, exact: true })).toBeEnabled();
     const actualReceipt = await receipts();
+    const actualBaselineMenu = await openPinnedMenu(actualPlan);
+    await expect(actualBaselineMenu.getByRole('menuitem', {name: snapshotText.pinnedCompare, exact: true})).toBeDisabled();
+    await actualBaselineMenu.getByRole('menuitem', {name: snapshotText.pinnedSet, exact: true}).click();
     await actualPlan.getByRole('button', { name: snapshotText.compareBaseline, exact: true }).click();
     await expect(actualPlan.getByRole('alert')).toHaveText(snapshotText.compareUnsupported);
     await expect(comparison).toHaveCount(0);
@@ -141,8 +149,19 @@ test('PostgreSQL 最小窗口可读，当前估算和实测计划直接对照基
     await expect(comparison.getByRole('row', { name: /^Actual Rows / })).toHaveAttribute('data-plan-match', 'true');
     await page.screenshot({ path: info.outputPath('PostgreSQL当前实测计划对照基准.png') });
     await comparison.getByRole('button', { name: zh.dialogs.text001, exact: true }).click();
+    await (await openPinnedMenu(actualPlan)).getByRole('menuitem', {name: snapshotText.pinnedCompare, exact: true}).click();
+    await expect(comparison.getByRole('status')).toHaveText(snapshotText.compareCount(0, 2));
+    await comparison.getByRole('button', {name: zh.dialogs.text001, exact: true}).click();
+    await (await openPinnedMenu(actualPlan)).getByRole('menuitem', {name: snapshotText.pinnedClear, exact: true}).click();
+    await expect((await openPinnedMenu(actualPlan)).getByRole('menuitem', {name: snapshotText.pinnedCompare, exact: true})).toBeDisabled();
+    await page.keyboard.press('Escape');
     expect(await receipts()).toEqual(actualReceipt);
     expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { finishPlanPicker: () => number }).finishPlanPicker())).toBe(3);
+    await query.getByRole('button', {name: postgresZh.explain, exact: true}).click();
+    await expect(plan.getByRole('treeitem')).toHaveCount(2);
+    await (await openPinnedMenu(plan)).getByRole('menuitem', {name: snapshotText.pinnedCompare, exact: true}).click();
+    await expect(comparison).toContainText(snapshotText.pinnedBaselineName);
+    await comparison.getByRole('button', {name: zh.dialogs.text001, exact: true}).click();
     expect((await observer.query('SELECT id, note FROM public.explain_layout ORDER BY id')).rows)
       .toEqual([{ id: 1, note: '原值' }, { id: 2, note: '第二行' }]);
     await confirmOwnedDesktopExit(info);

@@ -31,6 +31,7 @@ let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('reac
 let Dialog: typeof import('../../src/renderer/components/ExplainSnapshotDialog')['ExplainSnapshotDialog'];
 let View: typeof import('../../src/renderer/components/ExplainPlanView')['ExplainPlanView'];
 let Save: typeof import('../../src/renderer/components/ExplainSnapshotSaveButton')['ExplainSnapshotSaveButton'];
+let QueryPlanBaselines: typeof import('../../src/renderer/components/LivePlanFileActions')['QueryPlanBaselines'];
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 let store: typeof import('../../src/renderer/store')['useWorkspace'];
 const bridge = vi.fn();
@@ -67,6 +68,7 @@ beforeAll(async () => {
     return node;
   };
   ({ createRoot } = await import('react-dom/client')); ({ useWorkspace: store } = await import('../../src/renderer/store')); ({ ExplainSnapshotDialog: Dialog } = await import('../../src/renderer/components/ExplainSnapshotDialog')); ({ ExplainPlanView: View } = await import('../../src/renderer/components/ExplainPlanView')); ({ ExplainSnapshotSaveButton: Save } = await import('../../src/renderer/components/ExplainSnapshotSaveButton'));
+  ({ QueryPlanBaselines } = await import('../../src/renderer/components/LivePlanFileActions'));
 });
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.textContent = ''; bridge.mockReset(); });
 afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
@@ -197,6 +199,28 @@ it('差异查找匹配路径、两侧字段和值，在匹配间环绕并保留�
   await act(async () => props(filter).onChange({ currentTarget: { value: 'all' } }));
   await click(text.compareFindClear);
   expect(document.querySelectorAll('button[aria-pressed]')).toHaveLength(3);
+  expect(bridge).not.toHaveBeenCalled();
+});
+
+it('标签计划基准跨待确认状态保留，确认换库后回到旧库也不恢复', async () => {
+  const outcome = fixture();
+  const plan = (database?: string) => <QueryPlanBaselines scope="原标签和连接代次" database={database}>
+    <View outcome={outcome} busy={false} fileActions/>
+  </QueryPlanBaselines>;
+  await mount(plan('orders_db'));
+  await click(text.pinnedMenu); await click(text.pinnedSet);
+  await render(plan());
+  expect(document.querySelector(`button[aria-label="${text.pinnedMenu}"]`)).toBeNull();
+  await render(plan('orders_db'));
+  await click(text.pinnedMenu);
+  expect(button(text.pinnedCompare).disabled).toBe(false);
+  await click(text.pinnedCompare);
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(text.pinnedBaselineName);
+  await click(zh.dialogs.text001);
+  await render(plan('another_db'));
+  await render(plan('orders_db'));
+  await click(text.pinnedMenu);
+  expect(button(text.pinnedCompare).disabled).toBe(true);
   expect(bridge).not.toHaveBeenCalled();
 });
 

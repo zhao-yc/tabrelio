@@ -97,6 +97,15 @@ test('MySQL 系列估算、实测及离线快照可通过真实窗口对照基�
     await expect(compare.getByRole('button', { pressed: true })).toContainText(tablePath);
     await compare.getByRole('button', { name: zh.dialogs.text001, exact: true }).click();
     expect(await receipts()).toEqual(beforeEstimate);
+    const openPinnedMenu = async (region: typeof estimated) => {
+      await region.getByRole('button', {name: text.pinnedMenu, exact: true}).click();
+      return page.getByRole('menu', {name: text.pinnedMenu, exact: true});
+    };
+    await (await openPinnedMenu(estimated)).getByRole('menuitem', {name: text.pinnedSet, exact: true}).click();
+    await (await openPinnedMenu(estimated)).getByRole('menuitem', {name: text.pinnedCompare, exact: true}).click();
+    await expect(compare).toContainText(text.pinnedBaselineName);
+    await compare.getByRole('button', {name: zh.dialogs.text001, exact: true}).click();
+    expect(await receipts()).toEqual(beforeEstimate);
     await estimated.getByRole('button', { name: text.save, exact: true }).click();
     await expect(estimated.getByText(text.saved(basename(currentFile)), { exact: true })).toBeVisible();
 

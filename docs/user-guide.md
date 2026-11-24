@@ -888,6 +888,8 @@ MySQL、MariaDB 和 PostgreSQL 的「实际执行计划」也提供此入口。�
 
 比较两个计划快照或将当前计划与基准快照比较时，可按「差异类型」查看新增、移除、变化或一致的节点，并与路径、字段和值的查找组合使用。点「交换比较方向」会交换两边的来源和字段值，新增与移除按从左到右重新标记。查找文字和选中路径会保留，原计划和快照文件无需重新读取。
 
+调优时，可从「本标签计划基准」把已返回的完整计划设为基准。修改 SQL 并生成新计划后，选择「与本标签基准对比」即可查看差异，再随时替换或清除基准。估算与实测分别保留一份。基准存在当前查询标签的内存里，关闭标签或改变该标签的数据库、连接配置后清除。需要跨标签或跨次启动复用时，可用计划快照文件。
+
 选择节点后展开「节点原始数据」，可查看 MySQL 的原始 TREE 行及指标续行，或 MariaDB 和 PostgreSQL 的对应 JSON 对象。JSON 预览重新排版，数值保留服务器返回的精确文本。详情达到展示上限时，可切换到「分析原始输出」查看完整内容。
 
 实际执行计划和离线快照的「行数对照」按实测值减估算值的绝对值降序排列。可勾选「仅显示有差异的节点」，点击节点名称可回到分析树。MySQL 与 PostgreSQL 对照单次执行口径的输出行数，MariaDB 对照同口径的过滤前枚举行数。只有已执行且提供可比指标的节点会列出。[MySQL EXPLAIN ANALYZE](https://dev.mysql.com/doc/refman/8.4/en/explain.html#explain-analyze) · [MariaDB 行数口径](https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/analyze-and-explain-statements/analyze-interpreting-rows-and-filtered-members) · [PostgreSQL Using EXPLAIN](https://www.postgresql.org/docs/18/using-explain.html)
