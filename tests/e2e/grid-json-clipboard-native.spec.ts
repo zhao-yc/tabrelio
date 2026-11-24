@@ -365,6 +365,18 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     await resultSource.getByRole('button', {name: queryResultNavigatorZh.copyOriginal, exact: true}).click();
     await expect(resultSource.getByText(queryResultNavigatorZh.originalCopied, {exact: true})).toBeVisible();
     expect(await lastPacket()).toEqual({'text/plain': sql});
+    const resultFile = join(dataDir, '结果来源原语句.sql');
+    await desktop.evaluate(({dialog, BrowserWindow}, filePath) => {
+      const original = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (owner: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
+        dialog.showSaveDialog = original;
+        if (owner !== BrowserWindow.getAllWindows()[0] || !options.filters?.[0]?.extensions.includes('sql'))
+          throw Error('仅允许保存本例原语句 SQL 文件');
+        return {canceled: false, filePath};
+      }) as typeof original;
+    }, resultFile);
+    await resultSource.getByRole('button', {name: queryResultNavigatorZh.saveOriginal, exact: true}).click();
+    await expect.poll(() => readFile(resultFile, 'utf8').catch(() => undefined)).toBe(sql);
     await resultSource.getByRole('button', {name: zh.common.close, exact: true}).click();
     expect(await history()).toEqual(historyBefore);
     await rowA.locator('..').getByRole('checkbox').check();

@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
@@ -193,6 +193,39 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     expect(await copies()).toEqual([{'text/plain': sql.slice(sql.indexOf('SELECT 44 AS UniqueOutput'))}]);
     await expect(grid.getByRole('gridcell', {name: '42', exact: true})).toBeVisible();
     await expect(search).toHaveValue('uniqueoutput');
+    const savedSql = join(dataDir, '完整原语句.sql'), staleSql = join(dataDir, '迟到选择原文件.sql');
+    writeFileSync(staleSql, '原目标内容');
+    await desktop.evaluate(({dialog, BrowserWindow}, files) => {
+      const original = dialog.showSaveDialog;
+      let calls = 0;
+      dialog.showSaveDialog = (async (owner: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
+        if (owner !== BrowserWindow.getAllWindows()[0] || !options.filters?.[0]?.extensions.includes('sql'))
+          throw Error('原语句测试只允许本例 SQL 保存');
+        if (++calls === 1) return {canceled: false, filePath: files.savedSql};
+        if (calls !== 2) throw Error('原语句测试超出允许选择次数');
+        return new Promise<Electron.SaveDialogReturnValue>(resolve => {
+          Object.assign(globalThis, {resolveReceiptSave() {
+            dialog.showSaveDialog = original;
+            resolve({canceled: false, filePath: files.staleSql});
+          }});
+        });
+      }) as typeof original;
+    }, {savedSql, staleSql});
+    const saveOriginal = dialog.getByRole('button', {name: text.saveOriginal, exact: true});
+    await saveOriginal.click();
+    await expect.poll(() => {
+      try { return readFileSync(savedSql, 'utf8'); } catch { return undefined; }
+    }).toBe(sql.slice(sql.indexOf('SELECT 44 AS UniqueOutput')));
+    await saveOriginal.click();
+    await expect.poll(() => desktop.evaluate(() =>
+      typeof (globalThis as typeof globalThis & {resolveReceiptSave?: () => void}).resolveReceiptSave)).toBe('function');
+    await search.fill('#2');
+    await expect(dialog.getByRole('option')).toContainText('结果 2');
+    await search.fill('uniqueoutput');
+    await expect(dialog.getByRole('option')).toContainText('结果 44');
+    await desktop.evaluate(() => (globalThis as typeof globalThis & {resolveReceiptSave(): void}).resolveReceiptSave());
+    await expect(page.getByText(text.originalUnavailable, {exact: true})).toBeVisible();
+    expect(readFileSync(staleSql, 'utf8')).toBe('原目标内容');
     await dialog.getByRole('option').click();
     await expect(grid.getByRole('gridcell', { name: '44', exact: true })).toBeVisible();
     await (await navigationMenuItem(tab, { name: zh.query.resultSql, exact: true })).click();
@@ -265,6 +298,7 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await search.fill('#2');
     await expect(navigatorDraft).toBeDisabled();
     await expect(copyOriginal).toBeDisabled();
+    await expect(saveOriginal).toBeDisabled();
     expect(await copies()).toHaveLength(1);
     await search.press('Escape');
     await (await navigationMenuItem(tab, { name: zh.query.resultSql, exact: true })).click();

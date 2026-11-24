@@ -8,6 +8,7 @@ import { SqlTextPreview } from './SqlTextPreview';
 import { appModalSelector, gridDialogCurrent } from '../modalSelectors';
 import { copyQuerySourceSql } from '../querySourceClipboard';
 import { errorMessage } from '../lib';
+import { SaveOriginalQueryButton } from './SaveOriginalQueryButton';
 import '../savedQueryPages.css';
 
 /** 完整原文由调用方在打开窗口前核验，预览不持有原编辑器或数据库的操作权限。 */
@@ -40,6 +41,9 @@ export function ResultSqlDialog({ title, hint, statement, sourceSql, dialect, on
           setCopyFeedback({source: sourceSql});
         } catch (reason) { setCopyFeedback({source: sourceSql, error: errorMessage(reason)}); }
       }}>{text.copyOriginal}</button>}
+      {sourceSql !== undefined && <SaveOriginalQueryButton capture={dialogCurrent => ({
+        sql: sourceSql, current: () => currentSource.current === sourceSql && dialogCurrent(),
+      })}/>}
       <button type="button" onClick={onClose}>{zh.common.close}</button>
     </footer>
   </Modal>;

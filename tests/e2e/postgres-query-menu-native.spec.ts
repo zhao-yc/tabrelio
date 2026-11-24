@@ -889,6 +889,19 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     const copied = await page.evaluate(() => (globalThis as typeof globalThis & {failureSourcePackets: Record<string, string>[]}).failureSourcePackets);
     expect(copied).toEqual([{'text/plain': named.slice(0, -1)}]);
     expect(JSON.stringify(copied)).not.toContain(secret);
+    await mkdir(info.outputDir, {recursive: true});
+    const savedTemplate = info.outputPath('失败原语句.sql');
+    await desktop.evaluate(({dialog, BrowserWindow}, filePath) => {
+      const original = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (owner: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
+        dialog.showSaveDialog = original;
+        if (owner !== BrowserWindow.getAllWindows()[0] || !options.filters?.[0]?.extensions.includes('sql'))
+          throw Error('仅允许保存本例失败参数模板');
+        return {canceled: false, filePath};
+      }) as typeof original;
+    }, savedTemplate);
+    await navigator.getByRole('button', {name: resultNavText.saveOriginal, exact: true}).click();
+    await expect.poll(() => readFile(savedTemplate, 'utf8').catch(() => undefined)).toBe(named.slice(0, -1));
     expect(await history()).toEqual(beforeDraftHistory);
     await navigator.getByRole('button', {name: queryDuplicateZh.failureStatement, exact: true}).click();
     await expect(navigator).toHaveCount(0);

@@ -12,6 +12,7 @@ import { useWorkspace } from '../store';
 import { ErrorBox, Modal } from './ui';
 import { errorMessage } from '../lib';
 import { copyQuerySourceSql } from '../querySourceClipboard';
+import { SaveOriginalQueryButton } from './SaveOriginalQueryButton';
 import '../openTabSearch.css';
 
 interface ExecutionErrors {
@@ -110,8 +111,8 @@ export function QueryResultNavigator(props: Props) {
     }
   }
 
-  /** 导航窗口保持打开，读范围和写剪贴板时分别复核条目仍属于本次执行。 */
-  function copyEntry(entry: CurrentEntry, dialogCurrent: () => boolean) {
+  /** 导航窗口保持打开，取原文和提交输出时分别复核本次执行。 */
+  function captureEntry(entry: CurrentEntry, dialogCurrent: () => boolean) {
     const current = () => {
       const props = latest.current;
       return dialogCurrent() && !!owner && opened && owner.current() && !props.disabled &&
@@ -120,23 +121,23 @@ export function QueryResultNavigator(props: Props) {
         props.statementSource?.canRead(entry) === true;
     };
     if (!current()) throw Error(text.originalUnavailable);
-    const source = latest.current.statementSource?.read(entry);
-    if (source === undefined) throw Error(text.originalUnavailable);
-    copyQuerySourceSql(source, current);
+    const sql = latest.current.statementSource?.read(entry);
+    if (sql === undefined) throw Error(text.originalUnavailable);
+    return {sql, current};
   }
 
   return <>
     <button type="button" disabled={disabled} aria-haspopup="dialog" aria-expanded={opened} onClick={() => open(false)}>{text.open}</button>
     {opened && createPortal(<ResultList results={results} names={props.names} statementOrdinals={props.statementOrdinals}
       executionErrors={executionErrors} statementSource={props.statementSource} selected={props.selected} pins={pins} selectedPin={props.selectedPin}
-      startWithFailures={owner.includeFailures} onActivate={activateEntry} onCopy={copyEntry} onClose={() => setOwner(undefined)}/>, document.body)}
+      startWithFailures={owner.includeFailures} onActivate={activateEntry} capture={captureEntry} onClose={() => setOwner(undefined)}/>, document.body)}
   </>;
 }
 
-function ResultList({ results, names, statementOrdinals, executionErrors, statementSource, selected, pins, selectedPin, startWithFailures, onActivate, onCopy, onClose }:
+function ResultList({ results, names, statementOrdinals, executionErrors, statementSource, selected, pins, selectedPin, startWithFailures, onActivate, capture, onClose }:
   Pick<Props, 'results' | 'names' | 'statementOrdinals' | 'executionErrors' | 'statementSource' | 'selected' | 'pins' | 'selectedPin'> & {
     startWithFailures: boolean; onActivate(entry: Entry, action: 'navigate' | 'draft'): void;
-    onCopy(entry: CurrentEntry, current: () => boolean): void; onClose(): void;
+    capture(entry: CurrentEntry, current: () => boolean): {sql: string; current(): boolean}; onClose(): void;
   }) {
   const { failures } = executionErrors;
   const [query, setQuery] = useState(''), [source, setSource] = useState<Source>('all');
@@ -202,16 +203,20 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
     if (!statementSource) return null;
     const available = item.kind === 'failure' ? draftText.failureStatementHint : draftText.resultStatementHint;
     const unavailable = item.kind === 'failure' ? draftText.failureStatementUnavailable : draftText.resultStatementUnavailable;
+    const actionCurrent = () => !composing.current && currentEntry.current === item;
     return <>
       {statementSource.open && <button type="button" disabled={!canReadSource} title={canReadSource ? available : unavailable} onClick={() => activate(item, 'draft')}>
         {item.kind === 'failure' ? draftText.failureStatement : draftText.resultStatement}</button>}
       <button type="button" disabled={!canReadSource} title={canReadSource ? undefined : text.originalUnavailable} onClick={event => {
         const button = event.currentTarget, dialog = input.current?.closest(appModalSelector) ?? undefined;
         try {
-          onCopy(item, () => !composing.current && currentEntry.current === item && button.isConnected && gridDialogCurrent(button, () => dialog));
+          const source = capture(item, () => actionCurrent() && button.isConnected && gridDialogCurrent(button, () => dialog));
+          copyQuerySourceSql(source.sql, source.current);
           setFeedback({entry: item});
         } catch (reason) { setFeedback({entry: item, error: errorMessage(reason)}); }
       }}>{text.copyOriginal}</button>
+      <SaveOriginalQueryButton key={optionId(item)} disabled={!canReadSource}
+        capture={dialogCurrent => capture(item, () => actionCurrent() && dialogCurrent())}/>
     </>;
   }
 
