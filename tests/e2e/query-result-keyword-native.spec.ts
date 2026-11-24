@@ -9,6 +9,7 @@ import { postgresTableFindZh as checkedText } from '../../src/renderer/locales/p
 import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { resultArchiveZh as archiveText } from '../../src/renderer/locales/resultArchive.zh-CN';
+import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -38,7 +39,7 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
   };
   const sql = [
     "SELECT 1 AS id, 'target A' AS label UNION ALL SELECT 2, 'other' UNION ALL SELECT 3, 'Target C' ORDER BY id;",
-    "SELECT 4 AS id, 'archive A' AS label, 'hide me' AS omitted UNION ALL SELECT 5, 'active B', 'hide me' ORDER BY id;",
+    "SELECT 2 AS id, 'archive A' AS label, 'hide me' AS omitted UNION ALL SELECT 3, 'active B', 'hide me' ORDER BY id;",
   ].join('\n');
   try {
     // 只接管本例隔离文件选择，SQL 执行、文件授权及导出仍经过真实客户端。
@@ -180,7 +181,7 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     await filter.getByRole('button', { name: filterText.add, exact: true }).click();
     if (local) await filter.getByLabel(filterText.sqliteType(1), { exact: true }).selectOption('integer');
     await filter.getByLabel(`${filterText.operator} 1`, { exact: true }).selectOption('gt');
-    await filter.getByLabel(`${filterText.input} 1`, { exact: true }).fill('4');
+    await filter.getByLabel(`${filterText.input} 1`, { exact: true }).fill('2');
     await filter.getByRole('button', { name: filterText.apply, exact: true }).click();
     await expect(cells).toHaveText(['active B']);
     await page.keyboard.press('ControlOrMeta+Shift+PageUp');
@@ -210,7 +211,7 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     }
     const zip = decodeQueryCsvZip(await readFile(await writeArchive('zip')));
     expect(zip.get('results/rows-001.csv')?.toString()).toBe('id,label\r\n3,Target C\r\n1,target A\r\n');
-    expect(zip.get('results/rows-002.csv')?.toString()).toBe('id,label\r\n5,active B\r\n');
+    expect(zip.get('results/rows-002.csv')?.toString()).toBe('id,label\r\n3,active B\r\n');
     expect(JSON.parse(zip.get('manifest.json')!.toString()).results).toMatchObject([
       { sourceOrdinal: 1, rowsWritten: 2 }, { sourceOrdinal: 2, rowsWritten: 1 },
     ]);
@@ -224,7 +225,7 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
       return rows;
     })).toEqual([
       [['id', 'label'], ['3', 'Target C'], ['1', 'target A']],
-      [['id', 'label'], ['5', 'active B']],
+      [['id', 'label'], ['3', 'active B']],
     ]);
     const json = JSON.parse(await readFile(await writeArchive('json'), 'utf8'));
     await expect(archive.getByLabel(archiveText.encoding, { exact: true })).toHaveCount(0);
@@ -238,6 +239,25 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
       { position: 1, name: 'id', exportName: 'id' }, { position: 2, name: 'label', exportName: 'label' },
     ]);
     await archive.getByRole('button', { name: zh.common.close, exact: true }).click();
+
+    await (await navigationMenuItem(query, { name: comparisonText.returnedTitle, exact: true })).click();
+    const comparison = page.getByRole('dialog', { name: comparisonText.returnedTitle, exact: true });
+    await expect(comparison.getByLabel(comparisonText.leftReturned)).toHaveValue('0');
+    await expect(comparison.getByLabel(comparisonText.rightReturned)).toHaveValue('1');
+    await comparison.getByLabel(comparisonText.alignmentMode).selectOption('name');
+    await comparison.getByRole('checkbox', { name: /^匹配键 / }).first().check();
+    await comparison.getByRole('button', { name: comparisonText.start, exact: true }).click();
+    for (const [label, count] of [[comparisonText.added, '0'], [comparisonText.removed, '1'],
+      [comparisonText.changed, '2'], [comparisonText.equal, '0']])
+      await expect(comparison.getByLabel(label, { exact: true })).toHaveText(count);
+    const changedRow = comparison.getByRole('row').filter({ hasText: comparisonText.changed }).first();
+    await changedRow.getByRole('button', { name: /^查看差异 / }).click();
+    const difference = comparison.getByRole('region', { name: comparisonText.detailsTitle, exact: true });
+    await expect(difference).toContainText('"other"');
+    await expect(difference).toContainText('"archive A"');
+    await comparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click();
+    await expect(cells).toHaveText(['Target C', 'target A']);
+    expect(await history()).toEqual(baseline);
 
     await input.fill('absent');
     await search.getByRole('button', { name: text.apply, exact: true }).click();

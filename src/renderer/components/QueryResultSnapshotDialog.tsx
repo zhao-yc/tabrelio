@@ -26,7 +26,8 @@ import { queryResultColumnsZh as columnText } from '../locales/queryResultColumn
 import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
-import { QueryResultComparisonDialog, type QueryResultComparisonSource } from './QueryResultComparisonDialog';
+import { QueryResultComparisonDialog } from './QueryResultComparisonDialog';
+import type { QueryResultComparisonSource } from '../queryResultComparison';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
@@ -521,7 +522,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
         <ErrorBox message={error}/>
       </div>
     </Modal>}
-    {overlay?.kind === 'compare' && <QueryResultComparisonDialog offline owner={overlay.owner} pins={overlay.files} dialect={overlay.dialect}
+    {overlay?.kind === 'compare' && <QueryResultComparisonDialog offline owner={overlay.owner} inputs={overlay.files} dialect={overlay.dialect}
       isCurrent={() => comparisonCurrent(overlay)} onClose={() => closeOverlay(overlay)}/>}
     {overlay?.kind === 'columns' && <QueryResultColumnsDialog binding={overlay.binding} initial={overlay.initial} owner={overlay.owner}
       isCurrent={() => columnsCurrent(overlay)} onApply={layout => applyColumns(overlay, layout)} onClose={() => closeOverlay(overlay)}/>}

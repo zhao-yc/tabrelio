@@ -2,7 +2,7 @@ import { act, type ComponentProps } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataRow, QueryResult, ResultColumn } from '../../src/shared/contracts';
 import { QueryResultComparisonDialog } from '../../src/renderer/components/QueryResultComparisonDialog';
-import { QueryResultComparisonScan } from '../../src/renderer/queryResultComparison';
+import { QueryResultComparisonScan, returnedQueryResultComparison } from '../../src/renderer/queryResultComparison';
 import { snapshotQueryResult, type PinnedQueryResult } from '../../src/renderer/queryPins';
 import { queryResultComparisonZh as text } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
@@ -66,7 +66,7 @@ function fixture() {
 /** 真组件、真扫描器和真固定快照；仅时间与父层身份端口可控，外界IPC一律失败。 */
 async function mount(pins = fixture(), patch: Partial<ComponentProps<typeof QueryResultComparisonDialog>> = {}) {
   let live = true; const invoke = vi.fn(() => { throw Error('对比不得调用外界命令'); }); (window as any).dbark = { invoke };
-  let props: ComponentProps<typeof QueryResultComparisonDialog> = { pins, owner: 'ram-comparison-owner', isCurrent: () => live, onClose: vi.fn(), ...patch };
+  let props: ComponentProps<typeof QueryResultComparisonDialog> = { inputs: pins, owner: 'ram-comparison-owner', isCurrent: () => live, onClose: vi.fn(), ...patch };
   const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any);
   await act(async () => root!.render(<QueryResultComparisonDialog {...props}/>));
   return { pins, props, invoke, invalidate: () => { live = false; }, restore: () => { live = true; },
@@ -94,6 +94,24 @@ function many(count: number) {
 }
 
 describe('两份固定查询结果的真实只读对话框', () => {
+  it('本次执行跳过状态包，保留原序号，允许在五组以上结果中按当前位置选源', async () => {
+    const pins = fixture();
+    const status: QueryResult = { columns: [], rows: [], affectedRows: 1, truncated: false, elapsedMs: 1, statement: '状态' };
+    const inputs = returnedQueryResultComparison({ results: [
+      status, pins[0].result, ...Array.from({ length: 4 }, () => structuredClone(pins[1].result)), pins[2].result,
+    ], elapsedMs: 2 }, [undefined, '首组', undefined, undefined, undefined, undefined, '末组']);
+    expect(inputs).toHaveLength(6);
+    expect(inputs[0]).toMatchObject({ id: '1', label: '结果 2 · 首组' });
+    expect(inputs[5]).toMatchObject({ id: '6', label: '结果 7 · 末组' });
+    const f = await mount(pins, { inputs, returned: { preferredId: '6' } });
+    expect(node(text.returnedTitle).getAttribute('role')).toBe('dialog');
+    expect(node(text.leftReturned).value).toBe('6');
+    expect(node(text.rightReturned).value).toBe('1');
+    await compare();
+    expect(counts()).toEqual(['1', '1', '1', '1']);
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+
   it('报告位置选择期间锁定范围，原来源失效后拒绝写入', async () => {
     const f = await mount();
     await compare();
@@ -237,7 +255,7 @@ describe('两份固定查询结果的真实只读对话框', () => {
   });
 
   it('准确pin数组更换即使成员相同也撤销，owner或父身份ABA不能恢复旧对比', async () => {
-    const f = await mount(); await compare(); await f.update({ pins: [...f.pins] }); expect(hasCounts()).toBe(false); await f.update({ pins: f.pins }); expect(hasCounts()).toBe(false); expect(button(text.start).disabled).toBe(true);
+    const f = await mount(); await compare(); await f.update({ inputs: [...f.pins] }); expect(hasCounts()).toBe(false); await f.update({ inputs: f.pins }); expect(hasCounts()).toBe(false); expect(button(text.start).disabled).toBe(true);
   });
 
   it('父当前门曾失效后永久隐藏，正在排队回调不能跨工作区恢复继续', async () => {

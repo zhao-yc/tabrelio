@@ -54,6 +54,7 @@ import { queryResultPresetValueSchema, type QueryResultPresetValue } from '../..
 import { QueryResultPresetsDialog } from './QueryResultPresetsDialog';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
 import { QueryResultComparisonDialog } from './QueryResultComparisonDialog';
+import { returnedQueryResultComparison, type QueryResultComparisonDraft } from '../queryResultComparison';
 import { queryResultComparisonZh as comparisonText } from '../locales/queryResultComparison.zh-CN';
 import { captureQueryResultStatistics } from '../queryResultStatistics';
 import { queryResultStatisticsZh as statisticsText } from '../locales/queryResultStatistics.zh-CN';
@@ -392,9 +393,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const [presetLease, setPresetLease] = useState<PresetLease | null>(null), presetLeaseRef = useRef<PresetLease | null>(null);
   type StatisticsLease = SortLease & { source?:QueryResult; owner:string; columns:ResultColumn[]; rows:DataRow[]; column:ResultColumn; indices:ReadonlySet<number>; truncated:boolean; filter:QueryResultFilter; sorter:QueryResultSort };
   const [statisticsLease,setStatisticsLease]=useState<StatisticsLease|null>(null),statisticsLeaseRef=useRef<StatisticsLease|null>(null);
-  type ComparisonLease={owner:string;pins:readonly PinnedQueryResult[]};
+  type ComparisonLease=QueryResultComparisonDraft;
   const [comparisonLease,setComparisonLease]=useState<ComparisonLease|null>(null),comparisonLeaseRef=useRef<ComparisonLease|null>(null);
   const comparisonPinsRef=useRef(pins);comparisonPinsRef.current=pins;
+  const comparisonOutcomeRef=useRef(outcome);comparisonOutcomeRef.current=outcome;
   const [sortLease, setSortLease] = useState<SortLease | null>(null), sortLeaseRef = useRef<SortLease | null>(null);
   const [filterLease,setFilterLease]=useState<FilterLease|null>(null),filterLeaseRef=useRef<FilterLease|null>(null);
   const rowDetails = useRef(new QueryRowDetails()).current;
@@ -1413,7 +1415,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const resultStatementOrdinals = useMemo(() => outcome?.results === results
     ? outcome.sqliteResultReceipts?.map(receipt => receipt.statementOrdinal) ?? outcome.mysqlResultStatementOrdinals
     : undefined, [outcome, results]);
-  const archiveAvailable = !pin && !busy && !queryRunning && !!outcome && !outcome.explain && !outcome.analysis && !outcome.sqliteExplain
+  const multipleReturnedResults = !pin && !busy && !queryRunning && !!outcome && !outcome.explain && !outcome.analysis && !outcome.sqliteExplain
     && outcome.results.filter(item => item.columns.length).length > 1;
   const resultOrigins = sqlite && !pin && !busy && !queryRunning && settings.activeTabId === tab.id && !closeRequest
     ? outcome?.sqliteResultOrigins?.[resultIndex] : undefined;
@@ -2080,15 +2082,28 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       invalidateResultSelection();const lease={owner:uid(),value,binding:sortBinding,view:sortView,filterBinding,filterView};presetLeaseRef.current=lease;setPresetLease(lease);
     }catch(reason){setError(errorMessage(reason));}
   }
-  /** 对比独立于当前结果的选择；仅持有明确的本标签固定快照，不执行SQL或猜测行键。 */
-  function openResultComparison():void {
+  /** 对比来源绑定本标签的固定快照或准确的一次执行。 */
+  function openResultComparison(source: 'pinned' | 'returned'):void {
     const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id);
-    if(!alive.current||busyRef.current||workspace.activeJobs[tab.id]||workspace.settings.activeTabId!==tab.id||current?.kind!=='query'||current.connectionId!==tab.connectionId||(workspace.connectionVersions[current.connectionId]??0)!==connectionVersion||comparisonPinsRef.current!==pins||pins.length<2||comparisonLeaseRef.current||statisticsLeaseRef.current||columnLeaseRef.current||filterLeaseRef.current||sortLeaseRef.current||presetLeaseRef.current||document.querySelector(appDialogSelector))return;
-    invalidateResultSelection();const lease={owner:uid(),pins};comparisonLeaseRef.current=lease;setComparisonLease(lease);setError('');
+    if(!alive.current||busyRef.current||workspace.activeJobs[tab.id]||workspace.settings.activeTabId!==tab.id||current?.kind!=='query'||current.connectionId!==tab.connectionId||(workspace.connectionVersions[current.connectionId]??0)!==connectionVersion||comparisonLeaseRef.current||statisticsLeaseRef.current||columnLeaseRef.current||filterLeaseRef.current||sortLeaseRef.current||presetLeaseRef.current||document.querySelector(appDialogSelector))return;
+    let lease: ComparisonLease;
+    if (source === 'returned') {
+      if (!multipleReturnedResults || !outcome || comparisonOutcomeRef.current !== outcome || task.current !== organizationExecution) return;
+      lease = { owner: uid(), inputs: returnedQueryResultComparison(outcome, resultNames),
+        returned: { outcome, execution: task.current, preferredId: String(resultIndex) } };
+    } else {
+      if (comparisonPinsRef.current !== pins || pins.length < 2) return;
+      lease = { owner: uid(), inputs: pins };
+    }
+    invalidateResultSelection();comparisonLeaseRef.current=lease;setComparisonLease(lease);setError('');
   }
-  /** 每批只核父级轻门；对比器最终完整核固定来源，旧窗口不能在标签或连接ABA后复活。 */
+  function comparisonSourceCurrent(lease: ComparisonLease): boolean {
+    return lease.returned ? comparisonOutcomeRef.current === lease.returned.outcome && task.current === lease.returned.execution
+      : comparisonPinsRef.current === lease.inputs;
+  }
+  /** 每批核对父级来源；原行及单元格的完整核验由对比器完成。 */
   function comparisonCurrent(lease:ComparisonLease):boolean {
-    if(comparisonLeaseRef.current!==lease||comparisonPinsRef.current!==lease.pins)return false;
+    if(comparisonLeaseRef.current!==lease||!comparisonSourceCurrent(lease))return false;
     const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id);
     const owned=document.querySelector(`[data-query-result-comparison-owner="${lease.owner}"]`)?.querySelector(appDialogSelector);
     return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!statisticsLeaseRef.current&&!columnLeaseRef.current&&!filterLeaseRef.current&&!sortLeaseRef.current&&!presetLeaseRef.current&&!Array.from(document.querySelectorAll(appDialogSelector)).some(node=>node!==owned);
@@ -2098,7 +2113,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if(comparisonLeaseRef.current!==lease)return;
     comparisonLeaseRef.current=null;setComparisonLease(null);invalidateResultSelection();refreshResultSelection(value=>value+1);
   }
-  const activeComparisonLease=comparisonLease&&comparisonLeaseRef.current===comparisonLease&&comparisonPinsRef.current===comparisonLease.pins?comparisonLease:null;
+  const activeComparisonLease=comparisonLease&&comparisonLeaseRef.current===comparisonLease&&comparisonSourceCurrent(comparisonLease)?comparisonLease:null;
   useEffect(()=>{if(comparisonLease&&!activeComparisonLease){if(comparisonLeaseRef.current===comparisonLease)comparisonLeaseRef.current=null;setComparisonLease(null);}},[comparisonLease,activeComparisonLease]);
   /** 每批只核工作区与所属模态；统计器在开始和完成时完整核列、行及原值，避免二次方扫描。 */
   function statisticsCurrent(lease:StatisticsLease):boolean {
@@ -2990,7 +3005,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         ]}
         moreLabel={menuText.resultMore}
         more={<>
-          <ActionMenuSection label={menuText.resultView}>{<button disabled={busy||pins.length<2||!!comparisonLease||!!statisticsLease} title={comparisonText.notice} onClick={openResultComparison}>{comparisonText.open}</button>}{outcome?.warnings && !pin && <button disabled={busy || !!pin || !warningsReportAvailable() || !!closeRequest} onClick={openWarningsReport}>{queryWarningsZh.open}</button>}
+          <ActionMenuSection label={menuText.resultView}>{<button disabled={busy||pins.length<2||!!comparisonLease||!!statisticsLease} title={comparisonText.notice} onClick={() => openResultComparison('pinned')}>{comparisonText.open}</button>}{multipleReturnedResults && <button disabled={resultModal} onClick={() => openResultComparison('returned')}>{comparisonText.returnedTitle}</button>}{outcome?.warnings && !pin && <button disabled={busy || !!pin || !warningsReportAvailable() || !!closeRequest} onClick={openWarningsReport}>{queryWarningsZh.open}</button>}
 <button disabled={busy || !outcome || !result?.columns.length || !!pin} title={zh.query.pinHint} onClick={pinResult}><Pin size={12}/>{zh.query.pinResult}</button>
 {resultOrigins && <button onClick={() => { if (outcome && queryMenuCurrent() && !busyRef.current) setOriginDialog({ outcome, index: resultIndex }); }}>{originsText.open}</button>}
 {mysqlOrigins && <button onClick={() => {
@@ -3029,7 +3044,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           <ActionMenuSection label={menuText.resultHistory}><button title={resultHistory.limited?historyText.limited:historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,-1)} onClick={()=>travelResultHistory(-1)}>{historyText.undo}</button>
 <button title={historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,1)} onClick={()=>travelResultHistory(1)}>{historyText.redo}</button>{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!filterView?.rules.length||!!activeFilterLease||!!activeColumnLease||!!activeSortLease} onClick={clearResultFilter}>{filterText.clear}</button>:null}{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={presetsText.hint} onClick={openResultPresets}>{presetsText.open}</button>:null}
 {sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={memoryText.hint} onClick={rememberResultOrganization}>{memoryText.save}</button></>:null}{resultMemory&&<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)} title={queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)?memoryText.scope:memoryText.mismatch} onClick={applyRememberedOrganization}>{memoryText.apply}</button><button disabled={!rememberedOrganizationCanDiscard()} onClick={discardRememberedOrganization}>{memoryText.clear}</button></>}<div className="action-menu-field" role="group" aria-label={zh.app.text020}><label className="inline-field">{zh.query.text020}<input aria-label={zh.query.text021} type="number" min="1" max="100000" value={settings.resultLimit} onChange={event => useWorkspace.getState().updateSettings({ resultLimit: Math.max(1, Math.min(100000, Number(event.target.value))) })}/>{zh.query.text022}</label></div></ActionMenuSection>
-          <ActionMenuSection label={menuText.resultTransfer}>{archiveAvailable && <button onClick={() => { if (queryMenuCurrent() && !busyRef.current && outcome) setArchiveOutcome(outcome); }}>{archiveText.open}</button>}<button disabled={!selectedExportCount || busy} onClick={exportSelectedRows}>{zh.resultExport.selectedTitle}</button>
+          <ActionMenuSection label={menuText.resultTransfer}>{multipleReturnedResults && <button onClick={() => { if (queryMenuCurrent() && !busyRef.current && outcome) setArchiveOutcome(outcome); }}>{archiveText.open}</button>}<button disabled={!selectedExportCount || busy} onClick={exportSelectedRows}>{zh.resultExport.selectedTitle}</button>
 {connection && connection.dialect !== 'postgresql' && !pin && <button disabled={busy || !selectionBinding ||
   sqlite && !selectionBinding.result.sqliteStorage || !selectedExportCount ||
   selectedExportCount > postgresTableLimits.changes || selectionBinding.visibleColumns.length > postgresTableLimits.fields}
@@ -3143,7 +3158,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
             const range = parameterDialog.confirmedRange;
             if (!range) throw Error(parameterZh.currentSourceChanged);
             return parameterSource.slice(range.start, range.end);
-          } : undefined} onExecute={(parameters, navicat) => submitParameterQuery(parameterSource, parameters, parameterDialog ?? undefined, navicat)} onClose={() => closeParameters(parameterDialog ?? undefined)}/ >}{sqliteFullExport && <FullQueryExportDialog source={sqliteFullExport} onClose={() => setSqliteFullExport(null)}/>}{streamExportSource !== null && (connection?.dialect === 'mysql' || connection?.dialect === 'mariadb') && <QueryStreamExportDialog dialect={connection.dialect} sessionBusy={busy} source={streamExportSource} loadNames={loadStreamParameterNames} onExecute={runStreamExport} onCancel={cancelStreamExport} onClose={() => { if (!busyRef.current) setStreamExportSource(null); }}/ >}{activeColumnLease&&<QueryResultColumnsDialog binding={activeColumnLease.binding} initial={activeColumnLease.initial} owner={activeColumnLease.owner} isCurrent={()=>columnManagerCurrent(activeColumnLease)} onApply={layout=>applyColumnLayout(activeColumnLease,layout)} onClose={()=>closeColumnManager(activeColumnLease)}/ >}{activePresetLease&&<QueryResultPresetsDialog key={activePresetLease.owner} connectionId={tab.connectionId} value={activePresetLease.value} owner={activePresetLease.owner} isCurrent={()=>presetManagerCurrent(activePresetLease)} matches={value=>queryResultPresetMatches(value,viewSource,visibleColumns)} onApply={value=>applyResultPreset(activePresetLease,value)} onClose={()=>closeResultPresets(activePresetLease)}/ >}{activeStatisticsLease&&<QueryResultStatisticsDialog key={activeStatisticsLease.owner} sqliteSource={activeStatisticsLease.source} columns={activeStatisticsLease.columns} rows={activeStatisticsLease.rows} initialColumn={activeStatisticsLease.column} selectedIndices={activeStatisticsLease.indices} truncated={activeStatisticsLease.truncated} owner={activeStatisticsLease.owner} isCurrent={()=>statisticsCurrent(activeStatisticsLease)} onClose={()=>closeResultStatistics(activeStatisticsLease)} onFilter={node=>filterFromStatistics(activeStatisticsLease,node)}/ >}{activeComparisonLease&&<QueryResultComparisonDialog key={activeComparisonLease.owner} pins={activeComparisonLease.pins} owner={activeComparisonLease.owner} isCurrent={()=>comparisonCurrent(activeComparisonLease)} onClose={()=>closeResultComparison(activeComparisonLease)}/ >}{resultInsertSource && <ResultInsertDialog intent={resultInsertSource} initialConnectionId={tab.connectionId} onActivity={resultInsertActivityChange} onClose={() => closeResultInsert(resultInsertSource)} onCommitted={output => useWorkspace.getState().notify(resultInsertZh.committed(output.rows))} onCleanupError={message => useWorkspace.getState().notify(resultInsertZh.cleanupFailed + message, true)}/>}{recordEdit && <SqliteSearchRecordEditDialog connectionId={tab.connectionId} table={recordEdit.table} queryRecord={recordEdit.source} cell={recordEdit.cell} rangeFill={recordEdit.rangeFill} rangePaste={recordEdit.rangePaste} deletePositions={recordEdit.deletePositions} duplicatePositions={recordEdit.duplicatePositions} rangeReplace={recordEdit.rangeReplace} visible={settings.activeTabId === tab.id}
+          } : undefined} onExecute={(parameters, navicat) => submitParameterQuery(parameterSource, parameters, parameterDialog ?? undefined, navicat)} onClose={() => closeParameters(parameterDialog ?? undefined)}/ >}{sqliteFullExport && <FullQueryExportDialog source={sqliteFullExport} onClose={() => setSqliteFullExport(null)}/>}{streamExportSource !== null && (connection?.dialect === 'mysql' || connection?.dialect === 'mariadb') && <QueryStreamExportDialog dialect={connection.dialect} sessionBusy={busy} source={streamExportSource} loadNames={loadStreamParameterNames} onExecute={runStreamExport} onCancel={cancelStreamExport} onClose={() => { if (!busyRef.current) setStreamExportSource(null); }}/ >}{activeColumnLease&&<QueryResultColumnsDialog binding={activeColumnLease.binding} initial={activeColumnLease.initial} owner={activeColumnLease.owner} isCurrent={()=>columnManagerCurrent(activeColumnLease)} onApply={layout=>applyColumnLayout(activeColumnLease,layout)} onClose={()=>closeColumnManager(activeColumnLease)}/ >}{activePresetLease&&<QueryResultPresetsDialog key={activePresetLease.owner} connectionId={tab.connectionId} value={activePresetLease.value} owner={activePresetLease.owner} isCurrent={()=>presetManagerCurrent(activePresetLease)} matches={value=>queryResultPresetMatches(value,viewSource,visibleColumns)} onApply={value=>applyResultPreset(activePresetLease,value)} onClose={()=>closeResultPresets(activePresetLease)}/ >}{activeStatisticsLease&&<QueryResultStatisticsDialog key={activeStatisticsLease.owner} sqliteSource={activeStatisticsLease.source} columns={activeStatisticsLease.columns} rows={activeStatisticsLease.rows} initialColumn={activeStatisticsLease.column} selectedIndices={activeStatisticsLease.indices} truncated={activeStatisticsLease.truncated} owner={activeStatisticsLease.owner} isCurrent={()=>statisticsCurrent(activeStatisticsLease)} onClose={()=>closeResultStatistics(activeStatisticsLease)} onFilter={node=>filterFromStatistics(activeStatisticsLease,node)}/ >}{activeComparisonLease&&<QueryResultComparisonDialog key={activeComparisonLease.owner} inputs={activeComparisonLease.inputs} returned={activeComparisonLease.returned} owner={activeComparisonLease.owner} isCurrent={()=>comparisonCurrent(activeComparisonLease)} onClose={()=>closeResultComparison(activeComparisonLease)}/ >}{resultInsertSource && <ResultInsertDialog intent={resultInsertSource} initialConnectionId={tab.connectionId} onActivity={resultInsertActivityChange} onClose={() => closeResultInsert(resultInsertSource)} onCommitted={output => useWorkspace.getState().notify(resultInsertZh.committed(output.rows))} onCleanupError={message => useWorkspace.getState().notify(resultInsertZh.cleanupFailed + message, true)}/>}{recordEdit && <SqliteSearchRecordEditDialog connectionId={tab.connectionId} table={recordEdit.table} queryRecord={recordEdit.source} cell={recordEdit.cell} rangeFill={recordEdit.rangeFill} rangePaste={recordEdit.rangePaste} deletePositions={recordEdit.deletePositions} duplicatePositions={recordEdit.duplicatePositions} rangeReplace={recordEdit.rangeReplace} visible={settings.activeTabId === tab.id}
         isCurrent={() => recordEdit.job.owns() && queryOwnerCurrent() && recordEdit.source.sessionId === sessionRef.current && recordEdit.source.taskId === task.current}
         onDirty={() => { /* 整个编辑对话框占用原标签，关闭时由记录编辑器核对本地修改。 */ }}
         onDone={committed => {
@@ -3166,5 +3181,5 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           if (!queryOwnerCurrent() || busyRef.current || origin?.database !== 'main') return;
           setOriginDialog(undefined);
           useWorkspace.getState().openTab({ kind: 'table', title: origin.table, connectionId: tab.connectionId, database: 'main', table: origin.table });
-        }}/>}{archiveOutcome && <ResultArchiveDialog outcome={archiveOutcome} tabId={tab.id} dialect={sqlite ? 'sqlite' : 'mysql'} identity={JSON.stringify([organizationScope, organizationExecution])} organizedView={archiveView} isCurrent={() => archiveAvailable && archiveOutcome === outcome && queryOwnerCurrent()} onClose={() => setArchiveOutcome(undefined)}/>}{exportResult && <ResultExportDialog result={exportResult} tabId={tab.id} scope={exportResult.rectangle ? 'rectangle' : undefined} allowSql={!sqlite || !!exportResult.sqliteStorage} sqlDialect={sqlite ? 'sqlite' : undefined} selected={exportSelected} onClose={() => {invalidateResultSelection();setExportResult(null);}}/>}</div>;
+        }}/>}{archiveOutcome && <ResultArchiveDialog outcome={archiveOutcome} tabId={tab.id} dialect={sqlite ? 'sqlite' : 'mysql'} identity={JSON.stringify([organizationScope, organizationExecution])} organizedView={archiveView} isCurrent={() => multipleReturnedResults && archiveOutcome === outcome && queryOwnerCurrent()} onClose={() => setArchiveOutcome(undefined)}/>}{exportResult && <ResultExportDialog result={exportResult} tabId={tab.id} scope={exportResult.rectangle ? 'rectangle' : undefined} allowSql={!sqlite || !!exportResult.sqliteStorage} sqlDialect={sqlite ? 'sqlite' : undefined} selected={exportSelected} onClose={() => {invalidateResultSelection();setExportResult(null);}}/>}</div>;
 }

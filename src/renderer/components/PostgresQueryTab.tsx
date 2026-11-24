@@ -95,6 +95,7 @@ import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
 import { QueryResultPresetsDialog } from './QueryResultPresetsDialog';
 import { QueryResultComparisonDialog } from './QueryResultComparisonDialog';
+import { returnedQueryResultComparison, type QueryResultComparisonDraft } from '../queryResultComparison';
 import { QueryResultSnapshotActions, type QueryResultSnapshotOperation } from './QueryResultSnapshotActions';
 import { ExplainPlanView } from './ExplainPlanView';
 import { QueryAnalyzeView } from './QueryAnalyzeView';
@@ -199,7 +200,7 @@ interface PresetDraft { binding: ResultSelectionBinding; owner: string; value: Q
 interface ResultLayout { layout: QueryResultColumnLayout; columns: ResultColumn[]; }
 interface PinState { items: PinnedQueryResult[]; selected?: string; sequence: number; }
 const emptyResults: QueryResult[] = [];
-interface ComparisonDraft { pins: PinnedQueryResult[]; owner: string; }
+type ComparisonDraft = QueryResultComparisonDraft;
 /** PostgreSQL查询复用原编辑器、结果网格、文件来源及保存查询；驱动任务和事务明确独立。 */
 export function PostgresQueryTab({
   tab,
@@ -308,6 +309,8 @@ export function PostgresQueryTab({
   const [resultSql, setResultSql] = useState<{ result: QueryResult; pinned: boolean; sourceSql?: string }>();
   const [comparisonDraft, setComparisonDraft] = useState<ComparisonDraft>();
   const comparisonDraftRef = useRef<ComparisonDraft | undefined>(undefined);
+  const comparisonOutcome = useRef(outcome);
+  comparisonOutcome.current = outcome;
   const [resultHistory] = useState(() => new QueryResultHistory());
   const [rowDetails] = useState(() => new QueryRowDetails());
   const [activeDetailRow, setActiveDetailRow] = useState<{ binding: QueryRowDetailsBinding; index: number }>();
@@ -1059,7 +1062,7 @@ export function PostgresQueryTab({
     controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!archiveOutcome || !!originsView || !!recordEdit || !!recordReference || !!resultSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
     locked = operationLocked || !!snippets || !!fullExport;
-  const archiveAvailable = !pin && !busy && !!outcome && !outcome.explain && !outcome.analysis
+  const multipleReturnedResults = !pin && !busy && !!outcome && !outcome.explain && !outcome.analysis
     && results.filter(item => item.columns.length).length > 1;
   const resultSources = outcome?.postgresResultSources;
   const resultStatementOrdinals = useMemo(() => resultSources?.map(source => source.statementOrdinal), [resultSources]);
@@ -1362,17 +1365,27 @@ export function PostgresQueryTab({
     catch (reason) { setError(errorMessage(reason)); }
   }
 
-  /** 对比只使用当前标签的固定快照，即使本次查询没有行结果也可打开。 */
-  function openResultComparison() {
-    if (!pinNavigationCurrent() || pinState.items.length < 2) return;
-    const draft = { pins: pinState.items, owner: uid() };
+  /** 只从本标签捕获固定快照或已返回结果。 */
+  function openResultComparison(source: 'pinned' | 'returned') {
+    if (!pinNavigationCurrent() || comparisonDraftRef.current) return;
+    let draft: ComparisonDraft;
+    if (source === 'returned') {
+      if (!multipleReturnedResults || !outcome || comparisonOutcome.current !== outcome || resultExecution.current !== organizationExecution) return;
+      draft = { inputs: returnedQueryResultComparison(outcome, resultNames), owner: uid(),
+        returned: { outcome, execution: resultExecution.current, preferredId: String(selected) } };
+    } else {
+      if (pinState.items.length < 2) return;
+      draft = { inputs: pinState.items, owner: uid() };
+    }
     comparisonDraftRef.current = draft;
     setComparisonDraft(draft);
   }
 
-  /** 每批核对当前标签、固定列表和本窗口，逐行校验由对比器完成。 */
+  /** 每批核对当前标签、准确来源和本窗口。 */
   function comparisonCurrent(draft: ComparisonDraft) {
-    if (!resultScopeCurrent() || comparisonDraftRef.current !== draft || pinStateRef.current.items !== draft.pins) return false;
+    if (!resultScopeCurrent() || comparisonDraftRef.current !== draft) return false;
+    if (draft.returned ? comparisonOutcome.current !== draft.returned.outcome || resultExecution.current !== draft.returned.execution
+      : pinStateRef.current.items !== draft.inputs) return false;
     const owned = document.querySelector(`[data-query-result-comparison-owner="${draft.owner}"] [role="dialog"]`);
     return Array.from(document.querySelectorAll(appModalSelector)).every(node => node === owned);
   }
@@ -2516,7 +2529,7 @@ export function PostgresQueryTab({
                 disabled={locked} onClick={() => releasePinnedResult(item)}>×</button>
             </div>)}
             <button disabled={locked || pinState.items.length < 2} title={pinState.items.length < 2 ? comparisonText.requireTwo : comparisonText.notice}
-              onClick={openResultComparison}>{comparisonText.open}</button>
+              onClick={() => openResultComparison('pinned')}>{comparisonText.open}</button>
           </div>}
           {(hasResultNavigation || dataResult) && (
             <div className="postgres-result-actions">
@@ -2529,7 +2542,8 @@ export function PostgresQueryTab({
                 selected={pin ? undefined : selected} pins={pinState.items} selectedPin={pin}
                 disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
               {pin && <PinnedResultRename tabId={tab.id} pin={pin} disabled={locked} isCurrent={pinNavigationCurrent} onRename={renameSelectedPin}/>}
-              {archiveAvailable && <button disabled={locked} onClick={() => {
+              {multipleReturnedResults && <button disabled={locked} onClick={() => openResultComparison('returned')}>{comparisonText.returnedTitle}</button>}
+              {multipleReturnedResults && <button disabled={locked} onClick={() => {
                 if (outcome && resultScopeCurrent() && !document.querySelector(appModalSelector)) setArchiveOutcome(outcome);
               }}>{archiveText.open}</button>}
               {dataResult && <>
@@ -2654,7 +2668,7 @@ export function PostgresQueryTab({
         matches={value => !!visibleColumns && queryResultPresetMatches(value, resultSource, visibleColumns)}
         onApply={value => applyResultPreset(presetDraft, value)} onClose={() => closeResultPresets(presetDraft)} />}
       {comparisonDraft && <QueryResultComparisonDialog key={comparisonDraft.owner} owner={comparisonDraft.owner}
-        pins={comparisonDraft.pins} dialect="postgresql" isCurrent={() => comparisonCurrent(comparisonDraft)}
+        inputs={comparisonDraft.inputs} returned={comparisonDraft.returned} dialect="postgresql" isCurrent={() => comparisonCurrent(comparisonDraft)}
         onClose={() => closeResultComparison(comparisonDraft)} />}
       {filterDraft && <Modal title={filterText.title} wide onClose={() => closeResultFilter(filterDraft)} onEscape={event => {
         // 先交给内层条件草稿或值选择处理，候选面板的 Esc 不关闭外层窗口。
@@ -2703,7 +2717,7 @@ export function PostgresQueryTab({
         }}/>}
       {archiveOutcome && <ResultArchiveDialog outcome={archiveOutcome} tabId={tab.id} dialect="postgresql"
         identity={JSON.stringify([organizationScope, organizationExecution])} organizedView={archiveView}
-        isCurrent={() => archiveAvailable && archiveOutcome === outcome && !closeRef.current && same(scope)}
+        isCurrent={() => multipleReturnedResults && archiveOutcome === outcome && !closeRef.current && same(scope)}
         onClose={() => setArchiveOutcome(undefined)} />}
       {exportView && <ResultExportDialog result={exportView.result} tabId={tab.id} selected={exportView.selected} scope={exportView.scope}
         allowSql sqlDialect="postgresql" onClose={() => {
