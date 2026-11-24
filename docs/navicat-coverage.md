@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。「查找结果集」可从成功回执直接定位编辑器中的原语句，保留当前网格。macOS 源码 Electron 已核验 SQLite 和 PostgreSQL 恢复仅显示结果的编辑区、SQLite 保留固定快照、PostgreSQL 精确选择重复 SQL，以及 MySQL 8.4／MariaDB 11.4 的 `CALL` 多结果定位。Q02 继续为部分覆盖。
+
 2026-11-24 源码增量。「查找结果集」支持按表格结果、执行状态和执行错误筛选，并按回执记录的耗时降序排列。macOS 源码 Electron 已核验 SQLite 的 44 条回执跨页排序、空表格和固定快照，PostgreSQL 的执行状态筛选和错误原文定位，以及 MySQL 8.4／MariaDB 11.4 的 `CALL` 多结果分类。Q02 继续为部分覆盖。
 
 2026-11-24 源码增量。「查找结果集」和「结果来源 SQL」可将已核验的完整原语句另存为 UTF-8 SQL。macOS 源码 Electron 已在四种数据库读回实际文件，SQLite 另验超长 SQL 和切换回执后拒绝迟到选择，PostgreSQL 另验失败回执保留参数模板。查询历史与原文件绑定保持。Q02、Q03 继续为部分覆盖。

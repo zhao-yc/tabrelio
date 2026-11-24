@@ -123,7 +123,7 @@ import { PostgresNoticesPanel } from './PostgresNoticesPanel';
 import type { PostgresNoticeEntry } from '../../shared/postgresNotices';
 import { QueryContinueOnErrorNotice, confirmedQueryContinueRange, useQueryFailureNavigation } from './QueryContinueOnErrorNotice';
 import { queryContinueOnErrorZh as continueText } from '../locales/queryContinueOnError.zh-CN';
-import type { QueryFailure } from '../../shared/queryFailure';
+import type { QueryFailure, QueryFailureSourceRange } from '../../shared/queryFailure';
 import { QueryParameterReuseOwner, type QueryParameterReuseOwnerInput } from '../queryParameterReuseOwner';
 import type { QueryParameterReusePort } from '../queryParameterReusePort';
 import { SnippetsDialog } from './SnippetsDialog';
@@ -1421,12 +1421,17 @@ export function PostgresQueryTab({
     setResultSql(current => current === item ? undefined : current);
   }
 
-  /** 确认来源仍是当前结果，使用执行时的原模型范围，禁止按文本查找同文语句。 */
-  function locateResultSource() {
+  /** 成功结果使用独立的原模型范围，保留首错按钮绑定的定位目标。 */
+  function locateResultRange(range: QueryFailureSourceRange | undefined) {
     const locator = failureSource.current;
-    if (!receiptSource || selectedResultRef.current !== result || !pinNavigationCurrent() ||
-        !resultRanges.current.has(receiptSource) || !locator?.available() || !locator.bindRange(receiptSource.sourceRange)) return;
-    locateFailure();
+    if (!locator?.canLocateRange(range) || !pinNavigationCurrent() || files.isBusy()) return;
+    if (resultsOnly) flushSync(() => setResultsOnly(false));
+    if (failureSource.current !== locator) return;
+    editor.current?.layout();
+    if (locator.locateRange(range)) document.getElementById(layoutEditorId)?.scrollIntoView({block: 'nearest'});
+  }
+  function locateResultSource() {
+    if (receiptSource && selectedResultRef.current === result && resultRanges.current.has(receiptSource)) locateResultRange(receiptSource.sourceRange);
   }
 
   function resultDraftRange(index: number, item: QueryResult) {
@@ -2711,6 +2716,7 @@ export function PostgresQueryTab({
                   canRead: entry => entry.kind === 'current' ? canOpenResultDraft(entry.index, entry.result) : canOpenFailureDraft(entry.failure),
                   read: entry => failureSource.current?.readRange(entry.kind === 'current' ? resultDraftRange(entry.index, entry.result) : entry.failure.sourceRange, false),
                   open: onChooseQueryTarget ? entry => entry.kind === 'current' ? openResultDraft(entry.index, entry.result) : openFailureDraft(entry.failure) : undefined,
+                  locate: entry => locateResultRange(resultDraftRange(entry.index, entry.result)),
                 }}
                 selected={pin ? undefined : selected} pins={pinState.items} selectedPin={pin}
                 disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}

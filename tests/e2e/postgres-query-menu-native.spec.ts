@@ -332,6 +332,19 @@ test('PostgreSQL 成功结果查看实际 SQL 并定位原模型范围', async (
   await tab().getByRole('checkbox', {name: continueText.option, exact: true}).check(); await command('execute-all');
   await expect(receipt()).toContainText('第 1 条语句');
   const before = await history();
+  const navigator = page.getByRole('dialog', {name: resultNavText.open, exact: true});
+  const search = navigator.getByRole('combobox', {name: resultNavText.input, exact: true});
+  const locateOriginal = navigator.getByRole('button', {name: resultNavText.locateOriginal, exact: true});
+  const sourceModel = await inspectModel();
+  await tab().getByLabel(queryLayoutZh.placement, {exact: true}).selectOption('results');
+  await expect(editor()).toBeHidden();
+  await command('find-query-receipts'); await search.fill('@3');
+  await locateOriginal.click();
+  await expect(navigator).toBeHidden();
+  await expect(editor().getByRole('textbox')).toBeFocused();
+  await expect.poll(inspectModel).toMatchObject({sql: sourceModel.sql, identity: sourceModel.identity,
+    selected: duplicate, position: {lineNumber: 3}});
+  await expect(picker()).toHaveValue('0');
   await picker().selectOption('1');
   await expect(locate()).toBeEnabled();
   await locate().click();
@@ -350,6 +363,9 @@ test('PostgreSQL 成功结果查看实际 SQL 并定位原模型范围', async (
 
   await replaceDraft('SELECT 3 AS revised;');
   await expect(locate()).toBeDisabled();
+  await command('find-query-receipts'); await search.fill('@3');
+  await expect(locateOriginal).toBeDisabled();
+  await search.press('Escape');
   await view().click(); await expect.poll(originalSql).toEqual({sql: commandOnly, readOnly: true}); await close();
   expect(await history()).toEqual(before);
 

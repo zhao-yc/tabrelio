@@ -13,6 +13,8 @@ import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRo
 import { queryPinsZh as pinText } from '../../src/renderer/locales/queryPins.zh-CN';
 import { queryDuplicateZh as duplicateText } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { historyPagesZh as previewText } from '../../src/renderer/locales/historyPages.zh-CN';
+import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
+import { observeQueryFailureSource } from './query-failure-source-observer';
 import { navigationMenuItem } from './navigation-menu';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
@@ -61,6 +63,11 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
         { id, kind: 'query', title: '多结果查询', connectionId: id, database: 'main', sql },
       ] });
     }, sql);
+    await page.addInitScript(() => {
+      let environment: Record<string, unknown> = {globalAPI: true};
+      Object.defineProperty(window, 'MonacoEnvironment', {configurable: true, get: () => environment,
+        set: value => { environment = {...value, globalAPI: true}; }});
+    });
     await page.reload();
     await page.evaluate(() => {
       const copies: Record<string, string>[] = [];
@@ -86,6 +93,8 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     expect(originalHistory).toHaveLength(1);
     const dialog = page.getByRole('dialog', { name: text.open, exact: true });
     const search = dialog.getByRole('combobox', { name: text.input, exact: true });
+    const locateOriginal = dialog.getByRole('button', {name: text.locateOriginal, exact: true});
+    const observeEditor = () => page.evaluate(observeQueryFailureSource);
     const receiptType = dialog.getByRole('group', {name: text.type, exact: true});
     const receiptOrder = dialog.getByRole('group', {name: text.order, exact: true});
     const grid = tab.getByRole('grid');
@@ -143,6 +152,18 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await dialog.getByRole('button', {name: text.previous, exact: true}).click();
     await dialog.screenshot({path: info.outputPath('按执行耗时排序.png')});
     await search.press('Enter');
+    await expect(grid.getByRole('gridcell', {name: '39', exact: true})).toBeVisible();
+    const originalModel = await observeEditor();
+    await tab.getByRole('button', {name: queryLayoutZh.placement, exact: true}).click();
+    await page.getByRole('menuitem', {name: queryLayoutZh.results, exact: true}).click();
+    await expect(tab.locator('.query-layout-editor')).toBeHidden();
+    await trigger.click(); await search.fill('@42');
+    await expect(locateOriginal).toBeEnabled();
+    await dialog.screenshot({path: info.outputPath('从回执定位原语句.png')});
+    await locateOriginal.click();
+    await expect(dialog).toBeHidden();
+    await expect.poll(observeEditor).toMatchObject({source: originalModel.source, version: originalModel.version,
+      alternative: originalModel.alternative, focused: true, selections: [{text: 'SELECT 42 AS sample;'}]});
     await expect(grid.getByRole('gridcell', {name: '39', exact: true})).toBeVisible();
     await trigger.click(); await search.fill('#11'); await search.press('Enter');
     await expect(grid.getByRole('gridcell', {name: '11', exact: true})).toBeVisible();
@@ -321,6 +342,7 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await expect(openStatement).toBeDisabled();
     await trigger.click();
     await search.fill('#2');
+    await expect(locateOriginal).toBeDisabled();
     await expect(navigatorDraft).toBeDisabled();
     await expect(copyOriginal).toBeDisabled();
     await expect(saveOriginal).toBeDisabled();
@@ -381,6 +403,13 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await dialog.screenshot({ path: info.outputPath('按名称查找固定结果.png') });
     await search.press('Enter');
     await expect(grid.getByRole('gridcell', { name: '2', exact: true })).toBeVisible();
+    await trigger.click();
+    await expect(locateOriginal).toHaveCount(0);
+    await search.fill('@1');
+    await locateOriginal.click();
+    await expect.poll(observeEditor).toMatchObject({focused: true, selections: [{text: latestSql}]});
+    await expect(pinGroup.getByRole('button', {name: '固定 1 · 月度汇总', exact: true})).toHaveAttribute('aria-pressed', 'true');
+    await expect(grid.getByRole('gridcell', {name: '2', exact: true})).toBeVisible();
     const rowCheck = grid.getByRole('row').filter({ hasText: /^2$/ }).getByRole('checkbox');
     await rowCheck.check();
     await expect(rowCheck).toBeChecked();

@@ -215,6 +215,11 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     await expect(matches.last()).toContainText(resultNavText.failedStatement(2));
     await resultSearch.fill('#3'); await expect(matches).toHaveCount(1);
     await expect(matches).toContainText(resultNavText.statement(3));
+    await resultDialog.getByRole('button', {name: resultNavText.locateOriginal, exact: true}).click();
+    await expect(resultDialog).toBeHidden();
+    await expect.poll(state).toMatchObject({focused: true, selections: [{text: 'CALL nav_result_groups()'}]});
+    await expect(query.getByRole('gridcell', {name: '70', exact: true})).toBeVisible();
+    await resultNavigation.click(); await resultSearch.fill('#3');
     const beforeCallDraft = await settings();
     await resultDialog.getByRole('button', {name: draftText.resultStatement, exact: true}).click();
     await destination.getByLabel(draftText.targetConnection, {exact: true}).selectOption(sourceTab.connectionId);

@@ -34,6 +34,7 @@ interface Props {
     canRead(entry: CurrentEntry): boolean;
     read(entry: CurrentEntry): string | undefined;
     open?(entry: CurrentEntry): void;
+    locate?(entry: ResultEntry): void;
   };
   selected?: number;
   pins: readonly PinnedQueryResult[];
@@ -44,9 +45,11 @@ interface Props {
   onSelectPin(pin: PinnedQueryResult): void;
 }
 
-type CurrentEntry = { kind: 'current'; index: number; name?: string; statementOrdinal?: number; result: QueryResult } |
+type ResultEntry = { kind: 'current'; index: number; name?: string; statementOrdinal?: number; result: QueryResult };
+type CurrentEntry = ResultEntry |
   { kind: 'failure'; index: number; statementOrdinal: number; failure: QueryFailure; message: string };
 type Entry = CurrentEntry | { kind: 'pinned'; pin: PinnedQueryResult; name: string; result: QueryResult };
+type EntryAction = 'navigate' | 'draft' | 'locate';
 type Source = 'all' | 'current' | 'pinned';
 type ReceiptType = 'all' | 'rows' | 'status' | 'failure';
 type ReceiptOrder = 'original' | 'elapsed';
@@ -98,10 +101,15 @@ export function QueryResultNavigator(props: Props) {
   // 菜单和快捷键从同一入口进入，复用当前标签、模态和回执的检查。
   useImperativeHandle(control, () => ({ openReceipts: () => open(true) }));
 
-  function activateEntry(entry: Entry, action: 'navigate' | 'draft') {
+  function activateEntry(entry: Entry, action: EntryAction) {
     if (!owner || !opened || !owner.current()) return;
-    if (action === 'draft' ? entry.kind === 'pinned' || !props.statementSource?.open || !props.statementSource.canRead(entry)
-      : entry.kind === 'failure' && !executionErrors.canLocateFailure(entry.failure)) return;
+    if (action === 'navigate') {
+      if (entry.kind === 'failure' && !executionErrors.canLocateFailure(entry.failure)) return;
+    } else {
+      const source = props.statementSource;
+      if (entry.kind === 'pinned' || !source?.canRead(entry)) return;
+      if (action === 'draft' ? !source.open : entry.kind !== 'current' || !source.locate) return;
+    }
     // 关闭窗口后再核对查询归属和原列表，防止旧条目切到重跑后的同序号结果。
     flushSync(() => setOwner(undefined));
     const current = latest.current;
@@ -109,6 +117,10 @@ export function QueryResultNavigator(props: Props) {
         current.disabled || !current.isCurrent()) return;
     if (entry.kind === 'current' && current.results[entry.index] !== entry.result ||
         entry.kind === 'failure' && owner.failures[entry.index] !== entry.failure) return;
+    if (action === 'locate') {
+      if (entry.kind === 'current' && current.statementSource?.canRead(entry)) current.statementSource.locate?.(entry);
+      return;
+    }
     if (action === 'draft') {
       if (entry.kind !== 'pinned' && current.statementSource?.canRead(entry)) current.statementSource.open?.(entry);
       return;
@@ -145,7 +157,7 @@ export function QueryResultNavigator(props: Props) {
 
 function ResultList({ results, names, statementOrdinals, executionErrors, statementSource, selected, pins, selectedPin, startWithFailures, onActivate, capture, onClose }:
   Pick<Props, 'results' | 'names' | 'statementOrdinals' | 'executionErrors' | 'statementSource' | 'selected' | 'pins' | 'selectedPin'> & {
-    startWithFailures: boolean; onActivate(entry: Entry, action: 'navigate' | 'draft'): void;
+    startWithFailures: boolean; onActivate(entry: Entry, action: EntryAction): void;
     capture(entry: CurrentEntry, current: () => boolean): {sql: string; current(): boolean}; onClose(): void;
   }) {
   const { failures } = executionErrors;
@@ -212,7 +224,7 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
   const optionId = (item: Entry) => item.kind === 'pinned' ? `${listId}-pin-${item.pin.id}` : `${listId}-${item.kind}-${item.index}`;
   useEffect(() => { active.current?.scrollIntoView({ block: 'nearest' }); }, [entry]);
 
-  function activate(item: Entry, action: 'navigate' | 'draft' = 'navigate') {
+  function activate(item: Entry, action: EntryAction = 'navigate') {
     const dialog = input.current?.closest(appModalSelector);
     const surfaces = document.querySelectorAll(appModalSelector);
     if (!composing.current && dialog && surfaces[surfaces.length - 1] === dialog) onActivate(item, action);
@@ -224,6 +236,8 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
     const unavailable = item.kind === 'failure' ? draftText.failureStatementUnavailable : draftText.resultStatementUnavailable;
     const actionCurrent = () => !composing.current && currentEntry.current === item;
     return <>
+      {item.kind === 'current' && statementSource.locate && <button type="button" disabled={!canReadSource}
+        title={canReadSource ? undefined : text.originalUnavailable} onClick={() => activate(item, 'locate')}>{text.locateOriginal}</button>}
       {statementSource.open && <button type="button" disabled={!canReadSource} title={canReadSource ? available : unavailable} onClick={() => activate(item, 'draft')}>
         {item.kind === 'failure' ? draftText.failureStatement : draftText.resultStatement}</button>}
       <button type="button" disabled={!canReadSource} title={canReadSource ? undefined : text.originalUnavailable} onClick={event => {

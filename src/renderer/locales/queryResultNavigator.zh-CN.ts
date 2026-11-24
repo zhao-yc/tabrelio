@@ -3,6 +3,7 @@ export const queryResultNavigatorZh = {
   input: '搜索结果名称、结果序号、语句序号、字段名或 SQL',
   placeholder: '名称、字段、SQL、#结果序号或 @语句序号',
   receiptHint: 'SQL 搜索仅覆盖结果附带的预览，长语句可能已截断。',
+  locateOriginal: '定位原语句',
   copyOriginal: '复制原语句',
   originalCopied: '已复制完整原语句',
   originalUnavailable: '原语句范围已失效或不可用。',

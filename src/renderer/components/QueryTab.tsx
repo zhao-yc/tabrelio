@@ -125,7 +125,7 @@ import { queryContinueOnErrorZh } from '../locales/queryContinueOnError.zh-CN';
 import { QueryWarningsDialog } from './QueryWarningsDialog';
 import { QueryWarningsViewIntent, sameQueryWarningsExecution, type QueryWarningsViewScope } from '../queryWarningsView';
 import { queryWarningsZh } from '../locales/queryWarnings.zh-CN';
-import type { QueryFailure } from '../../shared/queryFailure';
+import type { QueryFailure, QueryFailureSourceRange } from '../../shared/queryFailure';
 import { captureQueryFailureSource, type QueryFailureSourceLease, type QueryFailureSourceScope } from '../queryFailureSource';
 import { useQueryFailureMarkers } from '../useQueryFailureMarkers';
 import { queryFailureSourceZh as sourceLocationText } from '../locales/queryFailureSource.zh-CN';
@@ -2899,13 +2899,16 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if (!canOpenResultStatement || !sourceResult || menuResult.current !== resultSqlTarget) return;
     openResultDraft(resultIndex, sourceResult);
   }
-  /** 跳转只消费当前结果或计划的原范围，恢复编辑器但不改写正文或布局偏好。 */
-  function locateResultSource(): void {
-    if (!resultLocation || !sourceRange || !failureLocator || failureSource.current !== failureLocator ||
-        menuResult.current !== resultSqlTarget || !queryMenuCurrent() || fileSource.isBusy()) return;
+  /** 核验执行时的范围，恢复编辑器而保留当前网格和布局偏好。 */
+  function locateResultRange(range: QueryFailureSourceRange | null | undefined): void {
+    if (!failureLocator?.canLocateRange(range) || failureSource.current !== failureLocator || !pinNavigationCurrent()) return;
     if (resultsOnly) flushSync(() => setResultsOnly(false));
+    if (failureSource.current !== failureLocator) return;
     editor.current?.layout();
-    failureLocator.locateRange(sourceRange);
+    if (failureLocator.locateRange(range)) document.getElementById(layoutEditorId)?.scrollIntoView({block: 'nearest'});
+  }
+  function locateResultSource(): void {
+    if (resultLocation && menuResult.current === resultSqlTarget) locateResultRange(sourceRange);
   }
   /** 从仅显示结果定位错误时，先恢复原编辑器，再按已确认的原范围选中。 */
   function locateScriptFailure(failure: QueryFailure, precise = false): boolean {
@@ -3152,6 +3155,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
             ? canOpenResultDraft(entry.index, entry.result) : canOpenFailureDraft(entry.failure)),
           read: entry => failureLocator?.readRange(entry.kind === 'current' ? resultDraftRange(entry.index, entry.result) : entry.failure.sourceRange, false),
           open: onChooseQueryTarget ? entry => entry.kind === 'current' ? openResultDraft(entry.index, entry.result) : openFailureDraft(entry.failure) : undefined,
+          locate: entry => locateResultRange(resultDraftRange(entry.index, entry.result)),
         }}
         selected={pin ? undefined : resultIndex} pins={pins} selectedPin={pin}
         disabled={resultNavigationLocked}
