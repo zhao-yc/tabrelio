@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { Client, types } from 'pg';
 import { test, expect, desktop, page, dataDir, confirmOwnedDesktopExit, retainOwnedDesktopResources } from './desktop-fixture';
@@ -168,8 +168,31 @@ test('PostgreSQL 最小窗口可读，当前估算和实测计划直接对照基
     await expect(comparison).toContainText(basename(estimatedPath));
     await expect(estimatedDiff.nth(0)).toHaveText('Seq Scan');
     await expect(estimatedDiff.nth(1)).toHaveText('Limit');
-    await comparison.getByRole('button', {name: zh.dialogs.text001, exact: true}).click();
     expect(await receipts()).toEqual(beforeFileBaseline);
+    const reportPath = join(dataDir, '当前计划差异.json');
+    await desktop.evaluate(({BrowserWindow, dialog}, input) => {
+      const window = BrowserWindow.getAllWindows()[0], originalSave = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        const options = args[1] as Electron.SaveDialogOptions;
+        if (args[0] !== window || options.defaultPath !== input.name || !options.filters?.[0]?.extensions.includes('json'))
+          throw Error('非本例计划差异报告保存请求');
+        dialog.showSaveDialog = originalSave;
+        return {canceled: false, filePath: input.reportPath};
+      }) as typeof originalSave;
+    }, {name: snapshotText.compareReportName, reportPath});
+    await findChange.fill('NODE TYPE');
+    await comparison.getByRole('combobox', {name: snapshotText.compareFilter, exact: true}).selectOption('changed');
+    await comparison.getByRole('button', {name: snapshotText.compareSwap, exact: true}).click();
+    const expectedPath = await comparison.getByRole('button', {pressed: true}).locator('small').textContent();
+    await comparison.getByRole('button', {name: snapshotText.compareReportExport, exact: true}).click();
+    await expect(comparison.getByText(/^已导出 \d+ 条计划差异记录$/)).toBeVisible();
+    const report: Array<Record<string, string | number | null>> = JSON.parse(await readFile(reportPath, 'utf8'));
+    expect(report.length).toBeGreaterThan(1);
+    expect(report.every(row => row.path === expectedPath && row.status === 'changed' && row.dialect === 'postgresql')).toBe(true);
+    expect(report.find(row => row.field === 'Node Type')).toMatchObject({left_value: 'Limit', right_value: 'Seq Scan'});
+    await page.screenshot({path: info.outputPath('PostgreSQL反向计划差异报告.png')});
+    await comparison.getByRole('button', {name: zh.dialogs.text001, exact: true}).click();
+    expect((await receipts()).history).toEqual(beforeFileBaseline.history);
     expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { finishPlanPicker: () => number }).finishPlanPicker())).toBe(4);
     expect((await observer.query('SELECT id, note FROM public.explain_layout ORDER BY id')).rows)
       .toEqual([{ id: 1, note: '原值' }, { id: 2, note: '第二行' }]);

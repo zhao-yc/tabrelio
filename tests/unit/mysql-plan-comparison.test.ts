@@ -5,6 +5,7 @@ import { capturePlanSnapshot, decodePlanSnapshot, encodePlanSnapshot } from '../
 import { explainSnapshotZh as text } from '../../src/shared/explainSnapshot.zh-CN';
 import { compareCurrentPlan, comparePlanSnapshots } from '../../src/shared/planSnapshotComparison';
 import { parseQueryAnalyzePlan } from '../../src/shared/queryAnalyze';
+import { snapshotPlanComparisonReport } from '../../src/renderer/planComparisonReport';
 
 function outcome(raw: string, dialect: ExplainDialect = 'mysql', analyzed = false, truncated = false): QueryOutcome {
   const version = dialect === 'mysql' ? '8.4.9' : '11.4.10-MariaDB';
@@ -39,6 +40,19 @@ it('MariaDB 实测比较可读取未知层及服务器精确计时，同一字�
   });
   expect(() => comparePlanSnapshots(left, capture(raw, 'mariadb'))).toThrow(text.mysqlCompareUnsupported);
   expect(() => compareCurrentPlan(left, outcome(raw, 'mysql'))).toThrow(text.mysqlCompareUnsupported);
+});
+
+it('计划差异报告保留预览上限外的字段和超过 1800 字符的原值', () => {
+  const leftValue = '值'.repeat(1801) + '旧尾部🚢', rightValue = '值'.repeat(1801) + '新尾部🚢';
+  const raw = (value: string, side: string) => JSON.stringify({query_block: {table: {
+    table_name: 'report_subject', ...Object.fromEntries(Array.from({length: 81}, (_, index) => [`option_${index}`, side])), long_field: value,
+  }}});
+  const comparison = comparePlanSnapshots(capture(raw(leftValue, 'old')), capture(raw(rightValue, 'new')));
+  const matches = comparison.nodes.filter(node => node.status === 'changed');
+  const report = snapshotPlanComparisonReport(matches, 'mysql', '基准文件', '当前计划');
+  expect(report.rows).toHaveLength(82);
+  expect(report.rows.at(-1)).toMatchObject({path: '$/query_block/table', status: 'changed', dialect: 'mysql',
+    left_source: '基准文件', right_source: '当前计划', field: 'long_field', left_value: leftValue, right_value: rightValue});
 });
 
 it('MySQL TREE 忽略原文行号，说明和原实测指标分别比较', () => {

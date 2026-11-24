@@ -39,6 +39,7 @@ export function LivePlanFileActions({ outcome, complete, busy, isCurrent, onFile
   const [error, setError] = useState('');
   const baselines = useContext(PlanBaselines);
   const operation = useRef<'save' | object | null>(null), alive = useRef(false);
+  const reportBusy = useRef(false);
   const latest = useRef({ busy, isCurrent, baselines }); latest.current = { busy, isCurrent, baselines };
   useLayoutEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const plan = outcome.sqliteExplain ?? outcome.analysis ?? outcome.explain;
@@ -135,9 +136,9 @@ export function LivePlanFileActions({ outcome, complete, busy, isCurrent, onFile
       <button disabled={!pinned} onClick={() => pinnedAction('remove')}>{text.pinnedClear}</button>
     </ActionMenu>}
     <ErrorBox message={error}/>
-    {comparison && createPortal(<Modal title={title} onClose={() => setComparison(undefined)} wide>
+    {comparison && createPortal(<Modal title={title} onClose={() => { if (!reportBusy.current) setComparison(undefined); }} wide>
       <div className="explain-snapshot-dialog"><PlanComparisonView comparison={comparison.value} dialect={dialect} tree={outcome.analysis?.format === 'tree'}
-        left={comparison.left} right={comparison.right} rightIsCurrent/></div>
+        left={comparison.left} right={comparison.right} rightIsCurrent onFileBusyChange={value => { reportBusy.current = value; }}/></div>
     </Modal>, document.body)}
   </>;
 }

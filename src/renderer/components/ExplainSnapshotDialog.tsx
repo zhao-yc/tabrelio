@@ -58,7 +58,8 @@ export function ExplainSnapshotDialog({ onClose }: { onClose(): void }) {
       <button disabled={!!busy} onClick={close}>{text.close}</button></div>
     <ErrorBox message={error}/>{loaded && <><p role="status">{text.opened(loaded.name)}</p><p className="muted small">{loaded.snapshot.kind === 'dbark.sqlite-explain-snapshot' ? text.sqlite : loaded.snapshot.kind === 'dbark.analyze-snapshot' ? text.actual : text.estimated}</p>
       {comparison ? <PlanComparisonView comparison={comparison.value} dialect={loaded.snapshot.dialect} tree={loaded.snapshot.format === 'tree'}
-        left={loaded.name + ' · ' + loaded.snapshot.serverVersion} right={comparison.name + ' · ' + comparison.version}/> :
+        left={loaded.name + ' · ' + loaded.snapshot.serverVersion} right={comparison.name + ' · ' + comparison.version}
+        fileBusy={!!busy} onFileBusyChange={fileBusy}/> :
         <div className="explain-snapshot-plan">
           {loaded.snapshot.kind === 'dbark.sqlite-explain-snapshot' ? <SqliteExplainPlanView outcome={loaded.outcome} fileSnapshot={loaded.snapshot} busy={!!busy} fileActions onFileBusyChange={fileBusy}/> :
             loaded.snapshot.kind === 'dbark.analyze-snapshot' ? <QueryAnalyzeView plan={loaded.outcome.analysis!} outcome={loaded.outcome} fileSnapshot={loaded.snapshot} busy={!!busy} fileActions saveAs onFileBusyChange={fileBusy}/> :

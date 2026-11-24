@@ -2,7 +2,7 @@ import type { QueryOutcome } from './contracts';
 import type { PlanSnapshotDocument } from './explainSnapshot';
 import { explainSnapshotZh as text } from './explainSnapshot.zh-CN';
 import { explainNodeLimitWarning, parseExplainPlan, planValueAtPath, readExplainJson, type ExplainDialect } from './explain';
-import { comparePlanNodes, displayJsonPlanField, orderPlanField, ordinalPlanPaths, ordinalPlanPathOrder, type PlanComparison, type PlanComparisonSourceNode } from './planComparison';
+import { comparePlanNodes, readJsonPlanField, orderPlanField, ordinalPlanPaths, ordinalPlanPathOrder, type PlanComparison, type PlanComparisonSourceNode } from './planComparison';
 import { parseQueryAnalyzePlan } from './queryAnalyze';
 
 /** JSON 节点只比较自己的字段，子树在其自身路径上单独计入差异。 */
@@ -60,7 +60,7 @@ function completeResult(raw: string, result?: RawPlanResult): boolean {
 
 function compareRaw(left: RawPlan, right: RawPlan, dialect: ExplainDialect, format: 'json' | 'tree'): PlanComparison {
   if (format === 'tree') return comparePlanNodes(treeNodes(left.raw, left.version), treeNodes(right.raw, right.version), value => value, ordinalPlanPathOrder);
-  return comparePlanNodes(jsonNodes(left.raw, dialect, left.version), jsonNodes(right.raw, dialect, right.version), displayJsonPlanField);
+  return comparePlanNodes(jsonNodes(left.raw, dialect, left.version), jsonNodes(right.raw, dialect, right.version), readJsonPlanField);
 }
 
 /** 两种服务端的指标含义不同，且估算、实测与文本格式分别校验。 */

@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createConnection, type RowDataPacket } from 'mysql2/promise';
 import { test, expect, desktop, page, dataDir, confirmOwnedDesktopExit, retainOwnedDesktopResources } from './desktop-fixture';
@@ -140,9 +140,27 @@ test('MySQL 系列估算、实测及离线快照可通过真实窗口对照基�
     await offline.getByRole('button', { name: text.choose, exact: true }).click();
     await offline.getByRole('button', { name: text.compareChoose, exact: true }).click();
     await expect(offline.getByRole('region', { name: planComparisonTitles[dialect], exact: true })).toContainText(basename(currentFile));
-    await offline.getByRole('button', { name: text.close, exact: true }).click();
     expect(await receipts()).toEqual(beforeActual);
     expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { restorePlanPicker: () => unknown }).restorePlanPicker())).toEqual({ opens: 5, saves: 1 });
+    const reportPath = join(dataDir, '离线计划差异.json');
+    await desktop.evaluate(({BrowserWindow, dialog}, input) => {
+      const window = BrowserWindow.getAllWindows()[0], originalSave = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        const options = args[1] as Electron.SaveDialogOptions;
+        if (args[0] !== window || options.defaultPath !== input.name || !options.filters?.[0]?.extensions.includes('json'))
+          throw Error('非本例离线计划差异报告');
+        dialog.showSaveDialog = originalSave;
+        return {canceled: false, filePath: input.reportPath};
+      }) as typeof originalSave;
+    }, {name: text.compareReportName, reportPath});
+    await offline.getByRole('searchbox', {name: text.compareFind, exact: true}).fill('ACCESS_TYPE');
+    await offline.getByRole('button', {name: text.compareReportExport, exact: true}).click();
+    await expect(offline.getByText(/^已导出 \d+ 条计划差异记录$/)).toBeVisible();
+    const report: Array<Record<string, string | number | null>> = JSON.parse(await readFile(reportPath, 'utf8'));
+    expect(report.every(row => row.path === tablePath && row.dialect === dialect)).toBe(true);
+    expect(report.find(row => row.field === 'access_type')).toMatchObject({left_value: 'ALL', right_value: 'const'});
+    await offline.getByRole('button', { name: text.close, exact: true }).click();
+    expect((await receipts()).history).toEqual(beforeActual.history);
     expect((await observer.query<RowDataPacket[]>('SELECT id,label FROM plan_subject ORDER BY id'))[0]).toEqual([{ id: 1, label: '基准行' }, { id: 2, label: '第二行' }]);
     await confirmOwnedDesktopExit(info);
   } catch (error) {
