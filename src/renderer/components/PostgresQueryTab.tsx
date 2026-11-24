@@ -1154,6 +1154,8 @@ export function PostgresQueryTab({
   const organizationScope = JSON.stringify([tab.connectionId, version, scope.database]);
   const organizationExecution = pin ? undefined : resultExecution.current;
   const restoredOrganization = resultOrganizationCache.restore(resultSource, organizationScope, organizationExecution, resultContext, visibleColumns, 'postgresql');
+  const findMemory = useMemo(() => resultOrganizationCache.findMemory(resultSource, organizationScope, organizationExecution),
+    [resultOrganizationCache, resultSource, organizationScope, organizationExecution]);
   if (restoredOrganization) {
     organization.filter.invalidate(); organization.sorter.invalidate();
     organization.filter = restoredOrganization.filter; organization.sorter = restoredOrganization.sorter;
@@ -2311,7 +2313,7 @@ export function PostgresQueryTab({
     return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); definition.dispose(); syntaxCheck.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery, state.standardConformingStrings]);
   const renderResultGrid = (target?: GridFindTarget, marks?: ReadonlySet<string>) => result && displayResult ? (
-    <ResultsGrid zoomable columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding}
+    <ResultsGrid zoomable columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding} findMemory={findMemory}
       insertSql={rowSql?.insert} updateSql={rowSql?.update} deleteSql={rowSql?.delete} primaryKeySql={rowSql?.select}
       onOpenRowSql={rowSql ? (kind, sql) => {
         if (resultCurrent() && !document.querySelector(appModalSelector))

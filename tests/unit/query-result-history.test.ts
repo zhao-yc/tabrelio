@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { QueryResultHistory, prepareQueryResultOrganization, queryResultHistoryLimits, type QueryResultOrganization } from '../../src/renderer/queryResultHistory';
 import { QueryResultOrganizationCache } from '../../src/renderer/queryResultOrganizationCache';
+import type { QueryResultFindSettings } from '../../src/renderer/queryResultFind';
 import type { QueryResult } from '../../src/shared/contracts';
 
 const empty = (): QueryResultOrganization => ({ expression: { mode: 'AND', children: [] }, sort: [] });
@@ -69,6 +70,33 @@ describe('当前结果排序筛选的有界撤销历史', () => {
 });
 
 describe('每组查询结果的已应用整理配置', () => {
+  it('查找条件属于原结果和执行，本次固定快照的查找可单独清除', () => {
+    const cache = new QueryResultOrganizationCache();
+    const { source } = fixture(), { source: pin } = fixture();
+    const settings: QueryResultFindSettings = {
+      query: '9007199254740993', sensitive: true, columnKey: 'id', mode: 'whole',
+      checkedOnly: true, highlightAll: true, incremental: false,
+    };
+    const activate = (result: QueryResult, execution: string | undefined, scope = 'connection:1') => {
+      cache.restore(result, scope, execution, [result], result.columns);
+      return cache.findMemory(result, scope, execution)!;
+    };
+    const original = activate(source, 'run:1');
+    original.remember(settings);
+    const pinned = activate(pin, undefined);
+    pinned.remember({ ...settings, query: '2' });
+    expect(original.read()).toBeUndefined();
+    const restoredOriginal = activate(source, 'run:1');
+    original.clear();
+    expect(restoredOriginal.read()).toEqual(settings);
+    expect(activate(source, 'run:2').read()).toBeUndefined();
+    const restoredPin = activate(pin, undefined);
+    expect(restoredPin.read()?.query).toBe('2');
+    restoredPin.clear();
+    expect(restoredPin.read()).toBeUndefined();
+    expect(activate(source, 'run:1', 'connection:2').read()).toBeUndefined();
+  });
+
   it('按结果身份恢复原精度和排序，新结果及连接修订使用原返回顺序', () => {
     const cache = new QueryResultOrganizationCache();
     const {source: first} = fixture(), {source: second} = fixture();

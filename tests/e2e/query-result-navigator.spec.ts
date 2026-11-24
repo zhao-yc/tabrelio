@@ -7,6 +7,7 @@ import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultKeywordZh as keywordText } from '../../src/renderer/locales/queryResultKeyword.zh-CN';
+import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { queryPinsZh as pinText } from '../../src/renderer/locales/queryPins.zh-CN';
 import { queryDuplicateZh as duplicateText } from '../../src/renderer/locales/queryDuplicate.zh-CN';
@@ -245,6 +246,12 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await keyword.press('Enter');
     await expect(tab.getByRole('search', { name: keywordText.input, exact: true }).getByRole('status'))
       .toHaveText(keywordText.counts(1, 1));
+    const openFind = () => tab.getByRole('button', { name: findText.open, exact: true }).click();
+    const findInput = tab.getByRole('textbox', { name: findText.input, exact: true });
+    const findStatus = tab.locator('.query-result-find-status').getByRole('status');
+    await openFind();
+    await findInput.fill('2');
+    await expect(findStatus).toHaveText(findText.count(1, -1));
     await trigger.click();
     await search.fill('#44');
     await search.press('Enter');
@@ -301,6 +308,10 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await expect(grid.getByRole('gridcell', {name: '2', exact: true})).toBeVisible();
     await expect(keyword).toHaveValue('2');
     await expect(grid.getByRole('columnheader', {name: /^sample/})).toHaveCSS('width', '208px');
+    await openFind();
+    await expect(findInput).toHaveValue('2');
+    await expect(findStatus).toHaveText(findText.count(1, -1));
+    await tab.getByRole('button', { name: findText.close, exact: true }).click();
     await openFilter();
     await expect(filter.getByLabel(`${filterText.input} 1`, {exact: true})).toHaveValue('3');
     await filter.getByRole('button', {name: filterText.cancel, exact: true}).click();

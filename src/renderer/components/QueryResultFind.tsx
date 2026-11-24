@@ -1,7 +1,7 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { DataGridHandle } from 'react-data-grid';
 import type { DataRow, QueryResult, ResultColumn } from '../../shared/contracts';
-import { isTextResultFind, QueryResultFindScan, type QueryResultFindMatch, type QueryResultFindMode, type QueryResultFindPhase, type QueryResultFindProgress } from '../queryResultFind';
+import { isTextResultFind, QueryResultFindScan, type QueryResultFindMatch, type QueryResultFindMemory, type QueryResultFindMode, type QueryResultFindPhase, type QueryResultFindProgress } from '../queryResultFind';
 import { QueryResultRegexWorkerClient } from '../queryResultRegexWorkerClient';
 import { queryResultFindZh as text } from '../locales/queryResultFind.zh-CN';
 import { gridFindDirection, gridFindModalBlocked } from '../gridFindKeys';
@@ -16,7 +16,7 @@ import '../queryResultFind.css';
 interface Run { owner: object; rowScope?: ResultCheckedRows | null; scan: QueryResultFindScan; timer?: ReturnType<typeof setTimeout>; index: number; }
 export interface QueryResultFindHit { scan: QueryResultFindScan; match: QueryResultFindMatch; }
 export interface QueryResultFindControl { openColumn(key: string): boolean; }
-interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; checkedRows?: ResultCheckedRows; grid: RefObject<DataGridHandle | null>; control?: Ref<QueryResultFindControl>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; onMatchingRows(indices: ReadonlySet<number>, checked: boolean): void; onShowMatchingRows?(indices: ReadonlySet<number>): void; onStageFindFilter?(rule: QueryResultFilterRule): void; findFilterSource?: QueryResult; filterDialect?: SortDialect; children: ReactNode; }
+interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; checkedRows?: ResultCheckedRows; grid: RefObject<DataGridHandle | null>; control?: Ref<QueryResultFindControl>; memory?: QueryResultFindMemory; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; onMatchingRows(indices: ReadonlySet<number>, checked: boolean): void; onShowMatchingRows?(indices: ReadonlySet<number>): void; onStageFindFilter?(rule: QueryResultFilterRule): void; findFilterSource?: QueryResult; filterDialect?: SortDialect; children: ReactNode; }
 const regexErrors: Partial<Record<QueryResultFindPhase, string>> = text.regexErrors;
 const findOpeners = new WeakMap<Element, (target: HTMLElement) => boolean>();
 
@@ -39,13 +39,14 @@ export function escapeTargetsQueryResultFind(event: KeyboardEvent, root: HTMLEle
 }
 
 /** 查找栏与快捷键仅包住当前结果网格；私有代次负责取消。 */
-export function QueryResultFind({ owner, rows, columns, checkedRows, grid, control, isCurrent, onHit, onHighlights, onMatchingRows, onShowMatchingRows, onStageFindFilter, findFilterSource, filterDialect, children }: Props) {
+export function QueryResultFind({ owner, rows, columns, checkedRows, grid, control, memory, isCurrent, onHit, onHighlights, onMatchingRows, onShowMatchingRows, onStageFindFilter, findFilterSource, filterDialect, children }: Props) {
   const latest = useRef({ owner, rows, columns, isCurrent }); latest.current = { owner, rows, columns, isCurrent };
   const alive = useRef(true), run = useRef<Run | undefined>(undefined), input = useRef<HTMLInputElement>(null);
   const region = useRef<HTMLDivElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
   const modeSelect = useRef<HTMLSelectElement>(null);
   const panel = useRef<object | undefined>(undefined), mountOwner = useRef<object | undefined>({});
+  const rescanOnOpen = useRef<object | undefined>(undefined);
   const [opened, setOpened] = useState<{ owner: object; token: object }>();
   const [query, setQuery] = useState(''), [sensitive, setSensitive] = useState(false);
   const [columnKey, setColumnKey] = useState<string>();
@@ -64,7 +65,10 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
   function cancel() { const previous = run.current; if (!previous) return; previous.scan.cancel(); clearTimeout(previous.timer); run.current = undefined; }
   useEffect(() => { alive.current = true; mountOwner.current ??= {}; return () => { alive.current = false; mountOwner.current = undefined; cancel(); panel.current = undefined; }; }, []);
   useEffect(() => () => { if (run.current?.owner === owner) cancel(); }, [owner]);
-  useEffect(() => { if (opened?.owner === owner && panel.current === opened.token && own()) input.current?.focus(); }, [opened, owner]);
+  useEffect(() => {
+    if (opened?.owner === owner && panel.current === opened.token && own())
+      (usesText ? input.current : modeSelect.current)?.focus();
+  }, [opened, owner]);
   const visible = opened?.owner === owner && panel.current === opened.token;
   // 渲染本身也观察撤销，忙碌/模态等恢复后旧代次仍保持stopped。
   const active = visible && view && view.run === run.current && view.run.scan.current() ? view : undefined;
@@ -104,6 +108,16 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
   useLayoutEffect(() => {
     if (checkedOnly && run.current && run.current.rowScope !== checkedScope && panelCurrent()) start(query, sensitive, columnKey, mode);
   }, [checkedOnly, checkedScope, visible]);
+  useLayoutEffect(() => {
+    if (!opened || rescanOnOpen.current !== opened.token || !panelCurrent()) return;
+    rescanOnOpen.current = undefined;
+    if (incremental && (!usesText || query)) start(query, sensitive, columnKey, mode);
+  }, [opened, visible]);
+  useLayoutEffect(() => {
+    if (!composingInput.current && panelCurrent())
+      memory?.remember({ query, sensitive, columnKey, mode, checkedOnly, highlightAll, incremental });
+  }, [memory, visible, query, sensitive, columnKey, mode, checkedOnly, highlightAll, incremental, composing]);
+
   /** 列标题带入实际列键。只有切列才撤销旧命中，普通再次打开保留当前定位。 */
   function open(key?: string): boolean {
     if (!own() || !grid.current || !region.current || gridFindModalBlocked(region.current, true)) return false;
@@ -113,7 +127,27 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
       (usesText ? input.current : modeSelect.current)?.focus({ preventScroll: true });
       return true;
     }
-    cancel(); composingInput.current = false; setComposing(false); onHit(undefined); panel.current = {}; setOpened({ owner, token: panel.current }); setView(undefined); setQuery(''); setColumnKey(key); setMode('contains'); setCheckedOnly(false);
+    const saved = memory?.read();
+    // 列已移除时舍弃旧查找，避免把单列查找悄悄扩大到所有可见列。
+    const restored = saved && (saved.columnKey === undefined || columns.some(column => column.key === saved.columnKey)) ? saved : undefined;
+    cancel();
+    composingInput.current = false;
+    setComposing(false);
+    onHit(undefined);
+    const token = {};
+    panel.current = token;
+    rescanOnOpen.current = restored ? token : undefined;
+    setOpened({ owner, token });
+    setView(undefined);
+    setQuery(restored?.query ?? '');
+    setColumnKey(key ?? restored?.columnKey);
+    setMode(key !== undefined && restored?.mode === 'field' ? 'contains' : restored?.mode ?? 'contains');
+    setCheckedOnly(restored?.checkedOnly ?? false);
+    if (memory) {
+      setSensitive(restored?.sensitive ?? false);
+      setHighlightAll(restored?.highlightAll ?? false);
+      setIncremental(restored?.incremental ?? true);
+    }
     return true;
   }
   useImperativeHandle(control, () => ({ openColumn: open }));
@@ -134,6 +168,7 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
   function close() {
     if (!alive.current || latest.current.owner !== owner || !visible || panel.current !== opened?.token || run.current !== view?.run) return;
     if (toolbar.current?.contains(document.activeElement)) grid.current?.element?.focus({ preventScroll: true });
+    memory?.clear();
     cancel(); panel.current = undefined; setOpened(undefined); setView(undefined); onHit(undefined);
   }
   /** 只滚动并标记坐标，不调用setActivePosition或行选择，不改变复制/导出所选行。 */

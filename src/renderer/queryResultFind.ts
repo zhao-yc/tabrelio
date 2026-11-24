@@ -5,6 +5,22 @@ import type { QueryResultRegexWorkerClient } from './queryResultRegexWorkerClien
 import { tableFindPattern } from './tableFindPattern';
 
 export const queryResultFindLimits = { queryUnits: 256, chunkUnits: 8192, batchUnits: 32768, batchCells: 256, hits: 5000 } as const;
+
+export interface QueryResultFindSettings {
+  query: string;
+  sensitive: boolean;
+  columnKey?: string;
+  mode: QueryResultFindMode;
+  checkedOnly: boolean;
+  highlightAll: boolean;
+  incremental: boolean;
+}
+
+export interface QueryResultFindMemory {
+  read(): QueryResultFindSettings | undefined;
+  remember(settings: QueryResultFindSettings): void;
+  clear(): void;
+}
 export interface QueryResultFindMatch { readonly row: number; readonly column: number; }
 type RegexFailure = 'regex-invalid' | 'regex-timeout' | 'regex-budget' | 'regex-worker';
 export type QueryResultFindPhase = 'searching' | 'complete' | 'limited' | 'invalid' | 'stopped' | RegexFailure;

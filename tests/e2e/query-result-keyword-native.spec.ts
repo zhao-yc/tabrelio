@@ -4,6 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import { queryResultKeywordZh as text } from '../../src/renderer/locales/queryResultKeyword.zh-CN';
+import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { postgresTableFindZh as checkedText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -11,7 +13,7 @@ import type { NetworkConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
-test('查询结果按关键字筛选、切回时恢复各组关键字和排序，并导出显示行', async ({}, info) => {
+test('查询结果切回时恢复各组筛选、排序和查找条件，并导出显示行', async ({}, info) => {
   const dialect = process.env.DBARK_QUERY_KEYWORD_DIALECT;
   test.skip(!dialect, '需要显式启用关键字筛选专项');
   const local = dialect === 'sqlite';
@@ -102,6 +104,43 @@ test('查询结果按关键字筛选、切回时恢复各组关键字和排序�
     await search.getByRole('button', { name: text.clear, exact: true }).click();
     await page.keyboard.press('ControlOrMeta+Shift+PageUp');
     await expect(cells).toHaveText(['Target C', 'target A']);
+    const openFind = () => query.getByRole('button', { name: findText.open, exact: true }).click();
+    const findInput = query.getByRole('textbox', { name: findText.input, exact: true });
+    const findColumn = query.getByRole('combobox', { name: findText.columns, exact: true });
+    const findStatus = query.locator('.query-result-find-status').getByRole('status');
+    await openFind();
+    await findColumn.selectOption({ label: findText.columnOption('label', 2) });
+    await query.getByRole('checkbox', { name: findText.sensitive, exact: true }).check();
+    await findInput.fill('Target');
+    await expect(findStatus).toHaveText(findText.count(1, -1));
+    await findInput.press('Enter');
+    await expect(findStatus).toHaveText(findText.count(1, 0));
+
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(cells).toHaveText(['archive A', 'active B']);
+    await expect(findInput).toBeHidden();
+    await openFind();
+    await expect(findInput).toHaveValue('');
+    await query.getByRole('checkbox', { name: findText.incremental, exact: true }).uncheck();
+    await query.getByRole('checkbox', { name: checkedText.checkedOnly, exact: true }).check();
+    await findInput.fill('archive');
+    await expect(findStatus).toHaveText(findText.checkedEmpty);
+    await grid.getByRole('row').filter({ hasText: 'archive A' }).getByRole('checkbox').check();
+    await expect(findStatus).toHaveText(findText.awaitingSearch);
+
+    await page.keyboard.press('ControlOrMeta+Shift+PageUp');
+    await openFind();
+    await expect(findInput).toHaveValue('Target');
+    await expect(findColumn.locator('option:checked')).toHaveText(findText.columnOption('label', 2));
+    await expect(query.getByRole('checkbox', { name: findText.sensitive, exact: true })).toBeChecked();
+    await expect(findStatus).toHaveText(findText.count(1, -1));
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await openFind();
+    await expect(findInput).toHaveValue('archive');
+    await expect(query.getByRole('checkbox', { name: findText.incremental, exact: true })).not.toBeChecked();
+    await expect(query.getByRole('checkbox', { name: checkedText.checkedOnly, exact: true })).toBeChecked();
+    await expect(findStatus).toHaveText(findText.checkedEmpty);
+    await page.keyboard.press('ControlOrMeta+Shift+PageUp');
     await page.keyboard.press('ControlOrMeta+Shift+PageDown');
     await expect(input).toHaveValue('');
     await expect(cells).toHaveText(['archive A', 'active B']);
@@ -138,6 +177,8 @@ test('查询结果按关键字筛选、切回时恢复各组关键字和排序�
     await execute();
     await expect(input).toHaveValue('');
     await expect(cells).toHaveText(['target A', 'other', 'Target C']);
+    await openFind();
+    await expect(findInput).toHaveValue('');
     await page.keyboard.press('ControlOrMeta+Shift+PageDown');
     await expect(input).toHaveValue('');
     await expect(cells).toHaveText(['archive A', 'active B']);
