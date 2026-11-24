@@ -203,6 +203,16 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
       const entry = matches.filter({hasText: new RegExp(`^${resultNavText.result(ordinal)}`)});
       await expect(entry).toContainText(resultNavText.statement(3));
     }
+    const receiptType = resultDialog.getByRole('group', {name: resultNavText.type, exact: true});
+    await receiptType.getByRole('button', {name: resultNavText.types.rows, exact: true}).click();
+    await expect(matches).toHaveCount(2);
+    await receiptType.getByRole('button', {name: resultNavText.types.status, exact: true}).click();
+    await expect(matches).toHaveCount(1);
+    await expect(matches).toContainText(resultNavText.result(4));
+    await receiptType.getByRole('button', {name: resultNavText.types.all, exact: true}).click();
+    await resultDialog.getByRole('button', {name: resultNavText.orders.elapsed, exact: true}).click();
+    await resultSearch.fill('');
+    await expect(matches.last()).toContainText(resultNavText.failedStatement(2));
     await resultSearch.fill('#3'); await expect(matches).toHaveCount(1);
     await expect(matches).toContainText(resultNavText.statement(3));
     const beforeCallDraft = await settings();

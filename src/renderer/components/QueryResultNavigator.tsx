@@ -48,8 +48,17 @@ type CurrentEntry = { kind: 'current'; index: number; name?: string; statementOr
   { kind: 'failure'; index: number; statementOrdinal: number; failure: QueryFailure; message: string };
 type Entry = CurrentEntry | { kind: 'pinned'; pin: PinnedQueryResult; name: string; result: QueryResult };
 type Source = 'all' | 'current' | 'pinned';
+type ReceiptType = 'all' | 'rows' | 'status' | 'failure';
+type ReceiptOrder = 'original' | 'elapsed';
 
 const pageSize = 40;
+
+/** 使用结果自带的耗时，失败回执和无有效耗时的结果排在末尾。 */
+function recordedElapsed(entry: Entry): number | undefined {
+  if (entry.kind === 'failure') return undefined;
+  const ms = entry.result.elapsedMs;
+  return Number.isFinite(ms) && ms >= 0 ? ms : undefined;
+}
 
 /** 导航绑定打开时的结果与固定列表，选中后走查询页原有的来源切换。 */
 export function QueryResultNavigator(props: Props) {
@@ -142,6 +151,10 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
   const { failures } = executionErrors;
   const [query, setQuery] = useState(''), [source, setSource] = useState<Source>('all');
   const [includeFailures, setIncludeFailures] = useState(failures.length > 0 && (startWithFailures || !results.length && !pins.length));
+  const [receiptType, setReceiptType] = useState<ReceiptType>('all');
+  const [order, setOrder] = useState<ReceiptOrder>('original');
+  const showFailures = receiptType === 'failure' || receiptType === 'all' && includeFailures;
+  const showReceiptLabels = showFailures || receiptType !== 'all';
   const input = useRef<HTMLInputElement>(null), active = useRef<HTMLButtonElement>(null), listId = useId();
   const composing = useRef(false);
   const entries = useMemo<Entry[]>(() => {
@@ -150,7 +163,7 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
       const ordinal = statementOrdinals?.length === results.length ? statementOrdinals[index] : undefined;
       return { kind: 'current', index, name: names[index], statementOrdinal: ordinal && ordinal > 0 && Number.isSafeInteger(ordinal) ? ordinal : undefined, result };
     });
-    if (includeFailures && failures.length) {
+    if (showFailures && failures.length) {
       current.push(...failures.map((failure, index): CurrentEntry => {
         const message = truncateQueryScriptMessage(failure.message);
         return { kind: 'failure', index, statementOrdinal: failure.statementOrdinal, failure,
@@ -160,7 +173,7 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
       if (current.every(entry => entry.statementOrdinal !== undefined)) current.sort((left, right) => left.statementOrdinal! - right.statementOrdinal!);
     }
     return [...pins.map((pin): Entry => ({ kind: 'pinned', pin, name: pin.label, result: pin.result })), ...current];
-  }, [results, names, statementOrdinals, pins, includeFailures, failures]);
+  }, [results, names, statementOrdinals, pins, showFailures, failures]);
   // 插入失败条目后，列表位置会变化。用原结果身份定位初始高亮。
   const [position, setPosition] = useState(() => Math.max(0, entries.findIndex(entry =>
     entry.kind === 'pinned' ? entry.pin === selectedPin : entry.kind === 'current' && !selectedPin && entry.index === selected)));
@@ -170,8 +183,12 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
     const ordinalOnly = value.startsWith('#') && Number.isFinite(ordinal);
     const statement = /^@(\d+)$/.exec(value);
     const statementOrdinal = statement ? Number(statement[1]) : undefined;
-    return entries.filter(entry => {
+    const filtered = entries.filter(entry => {
       if (source !== 'all' && (entry.kind === 'pinned' ? source !== 'pinned' : source !== 'current')) return false;
+      if (receiptType === 'failure' && entry.kind !== 'failure') return false;
+      if (receiptType === 'rows' || receiptType === 'status') {
+        if (entry.kind === 'failure' || (entry.result.columns.length > 0) !== (receiptType === 'rows')) return false;
+      }
       if (statementOrdinal !== undefined) return entry.kind !== 'pinned' && entry.statementOrdinal === statementOrdinal;
       if (entry.kind === 'failure') return !ordinalOnly && entry.message.toLowerCase().includes(value);
       if (!value || entry.kind === 'current' && entry.index + 1 === ordinal) return true;
@@ -180,7 +197,9 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
         entry.kind === 'pinned' && entry.pin.originalLabel?.toLowerCase().includes(value) || result.postgresCommand?.toLowerCase().includes(value) ||
         result.statement.toLowerCase().includes(value) || result.columns.some(column => column.name.toLowerCase().includes(value)));
     });
-  }, [entries, query, source]);
+    // 排序只改变导航顺序，序号和原语句操作仍使用执行时的结果身份。
+    return order === 'elapsed' ? filtered.sort((left, right) => (recordedElapsed(right) ?? -1) - (recordedElapsed(left) ?? -1)) : filtered;
+  }, [entries, query, source, receiptType, order]);
   const current = Math.min(position, Math.max(matches.length - 1, 0));
   const page = Math.floor(current / pageSize);
   const pageCount = Math.ceil(matches.length / pageSize);
@@ -237,15 +256,26 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
             if (!event.repeat) activate(entry);
           }
         }}/>
-      {pins.length > 0 && (results.length > 0 || includeFailures && failures.length > 0) && <div className="open-tab-search-sort" role="group" aria-label={text.source}>
+      {pins.length > 0 && (results.length > 0 || failures.length > 0) && <div className="open-tab-search-sort" role="group" aria-label={text.source}>
         {(['all', 'current', 'pinned'] as const).map(kind => <button key={kind} type="button" aria-pressed={source === kind}
           onClick={() => { setSource(kind); setPosition(0); input.current?.focus(); }}>{text.sources[kind]}</button>)}
       </div>}
-      {!!failures.length && <label className="check"><input type="checkbox" checked={includeFailures}
-        onChange={event => { setIncludeFailures(event.target.checked); setSource('all'); setPosition(0); input.current?.focus(); }}/>{text.includeFailures}</label>}
-      <p role="status">{includeFailures ? text.receiptCount(matches.length, entries.length) : text.count(matches.length, entries.length)}</p>
-      <p className="muted small">{includeFailures ? text.errorHint : text.receiptHint}</p>
-      <div id={listId} className="open-tab-search-list" role="listbox" aria-label={includeFailures ? text.receipts : text.list}>
+      <div className="open-tab-search-options query-result-navigator-controls">
+        <div className="open-tab-search-sort" role="group" aria-label={text.type}>
+          {(['all', 'rows', 'status', 'failure'] as const).map(value => <button key={value} type="button" aria-pressed={receiptType === value}
+            onClick={() => { setReceiptType(value); setPosition(0); }}>{text.types[value]}</button>)}
+        </div>
+        <div className="open-tab-search-sort" role="group" aria-label={text.order}>
+          {(['original', 'elapsed'] as const).map(value => <button key={value} type="button" aria-pressed={order === value}
+            onClick={() => { setOrder(value); setPosition(0); }}>{text.orders[value]}</button>)}
+        </div>
+        {failures.length > 0 && receiptType === 'all' && <label className="check"><input type="checkbox" checked={includeFailures}
+          onChange={event => { setIncludeFailures(event.target.checked); setSource('all'); setPosition(0); input.current?.focus(); }}/>{text.includeFailures}</label>}
+      </div>
+      <p role="status">{showReceiptLabels ? text.receiptCount(matches.length, entries.length) : text.count(matches.length, entries.length)}</p>
+      <p className="muted small">{showFailures ? text.errorHint : text.receiptHint}</p>
+      {order === 'elapsed' && <p className="muted small">{text.elapsedHint}</p>}
+      <div id={listId} className="open-tab-search-list" role="listbox" aria-label={showReceiptLabels ? text.receipts : text.list}>
         {matches.slice(page * pageSize, (page + 1) * pageSize).map((item, row) => {
           if (item.kind === 'failure') {
             const id = optionId(item);
@@ -257,6 +287,7 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
             </button>;
           }
           const { result, name } = item, id = optionId(item);
+          const elapsed = recordedElapsed(item);
           const label = item.kind === 'pinned' ? item.pin.label : [text.result(item.index + 1), name].filter(Boolean).join(' · ');
           const selectedItem = item.kind === 'pinned' ? item.pin === selectedPin : !selectedPin && item.index === selected;
           // 摘要仅取有界回执前缀，不访问编辑器原文，且不截断UTF-16代理对。
@@ -267,7 +298,7 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
             <span className="open-tab-search-heading"><strong>{label}</strong></span>
             <span className="open-tab-search-meta">{[
               item.kind === 'pinned' && text.sources.pinned,
-              item.kind === 'pinned' && queryPinsZh.elapsed(result.elapsedMs),
+              elapsed !== undefined && queryPinsZh.elapsed(elapsed),
               item.kind === 'current' && item.statementOrdinal !== undefined && text.statement(item.statementOrdinal),
               result.columns.length ? text.rows(result.rows.length) : result.postgresCommand ?? text.status,
               result.affectedRows !== undefined && text.affected(result.affectedRows),
@@ -278,7 +309,7 @@ function ResultList({ results, names, statementOrdinals, executionErrors, statem
           </button>;
         })}
       </div>
-      {!matches.length && <p>{includeFailures ? text.noReceipts : text.empty}</p>}
+      {!matches.length && <p>{showReceiptLabels ? text.noReceipts : text.empty}</p>}
       {pageCount > 1 && <div className="open-tab-search-options">
         <button type="button" disabled={page === 0} onClick={() => setPosition((page - 1) * pageSize)}>{text.previous}</button>
         <span>{text.page(page + 1, pageCount)}</span>

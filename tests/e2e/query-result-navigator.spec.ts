@@ -35,7 +35,10 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
       const additional = number === 11 || number === 12 ? ', 100 AS layout_note, 200 AS layout_flag' : '';
       const moreRows = number === 11 ? [17, 13, 15] : number === 12 ? [18, 16, 14] : [];
       const union = moreRows.map(value => ` UNION ALL SELECT ${value}, 100, 200`).join('');
-      return `${title}SELECT ${number} AS ${column}${additional}${union}${comment};`;
+      const receiptSample = number === 39
+        ? ' FROM (WITH RECURSIVE n(i) AS (VALUES (0) UNION ALL SELECT i + 1 FROM n WHERE i < 200000) SELECT max(i) AS high FROM n) WHERE high = 200000'
+        : number === 40 ? ' WHERE 0' : '';
+      return `${title}SELECT ${number} AS ${column}${additional}${union}${receiptSample}${comment};`;
     }).join('\n');
     // 只替换文件选择器。连接、执行、缓存及结果切换仍使用正式应用。
     await desktop.evaluate(({ dialog }, file) => {
@@ -83,6 +86,8 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     expect(originalHistory).toHaveLength(1);
     const dialog = page.getByRole('dialog', { name: text.open, exact: true });
     const search = dialog.getByRole('combobox', { name: text.input, exact: true });
+    const receiptType = dialog.getByRole('group', {name: text.type, exact: true});
+    const receiptOrder = dialog.getByRole('group', {name: text.order, exact: true});
     const grid = tab.getByRole('grid');
     const columns = page.getByRole('dialog', {name: columnsText.title, exact: true});
     const openColumns = async () => (await navigationMenuItem(tab, {name: columnsText.open, exact: true})).click();
@@ -119,6 +124,26 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await expect(resultBody).toBeFocused();
     await page.keyboard.press('ControlOrMeta+Shift+PageDown');
     await expect(grid.getByRole('gridcell', {name: '1', exact: true})).toBeVisible();
+    await trigger.click();
+    await receiptType.getByRole('button', {name: text.types.rows, exact: true}).click();
+    await search.fill('@40');
+    await expect(dialog.getByRole('option')).toHaveCount(1);
+    await expect(dialog.getByRole('option')).toContainText(text.rows(0));
+    await search.fill('');
+    await receiptOrder.getByRole('button', {name: text.orders.elapsed, exact: true}).click();
+    await expect(dialog.getByRole('option').first()).toContainText(text.result(39));
+    const durations = async () => (await dialog.getByRole('option').allTextContents()).map(value =>
+      Number(/执行耗时 ([\d.]+) ms/.exec(value)?.[1]));
+    const firstPage = await durations();
+    await dialog.getByRole('button', {name: text.next, exact: true}).click();
+    const sorted = [...firstPage, ...await durations()];
+    expect(sorted).toHaveLength(44);
+    expect(sorted.every(Number.isFinite)).toBe(true);
+    expect(sorted).toEqual(sorted.slice().sort((left, right) => right - left));
+    await dialog.getByRole('button', {name: text.previous, exact: true}).click();
+    await dialog.screenshot({path: info.outputPath('按执行耗时排序.png')});
+    await search.press('Enter');
+    await expect(grid.getByRole('gridcell', {name: '39', exact: true})).toBeVisible();
     await trigger.click(); await search.fill('#11'); await search.press('Enter');
     await expect(grid.getByRole('gridcell', {name: '11', exact: true})).toBeVisible();
     await openColumns();
@@ -350,6 +375,8 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await expect(dialog.getByRole('option')).toHaveCount(0);
     await dialog.getByRole('button', { name: text.sources.pinned, exact: true }).click();
     await expect(search).toBeFocused();
+    await receiptType.getByRole('button', {name: text.types.rows, exact: true}).click();
+    await receiptOrder.getByRole('button', {name: text.orders.elapsed, exact: true}).click();
     await expect(dialog.getByRole('option')).toHaveCount(1);
     await dialog.screenshot({ path: info.outputPath('按名称查找固定结果.png') });
     await search.press('Enter');
