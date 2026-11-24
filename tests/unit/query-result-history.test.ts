@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { QueryResultHistory, prepareQueryResultOrganization, queryResultHistoryLimits, type QueryResultOrganization } from '../../src/renderer/queryResultHistory';
+import { QueryResultOrganizationCache } from '../../src/renderer/queryResultOrganizationCache';
 import type { QueryResult } from '../../src/shared/contracts';
 
 const empty = (): QueryResultOrganization => ({ expression: { mode: 'AND', children: [] }, sort: [] });
@@ -64,5 +65,39 @@ describe('当前结果排序筛选的有界撤销历史', () => {
     for (let i = 0; i < 12; i++) history.record(binding, { expression: { mode: 'AND', children: Array.from({ length: 24 }, () => ({ column: 'id', operator: 'eq', value: String(i) + 'x'.repeat(4000), enabled: false })) }, sort: [] });
     let count = 0; while (history.target(binding, -1)) { history.commit(history.target(binding, -1)!); count++; }
     expect(count).toBeGreaterThan(0); expect(count).toBeLessThan(6); expect(history.limited).toBe(false);
+  });
+});
+
+describe('每组查询结果的已应用整理配置', () => {
+  it('按结果身份恢复原精度和排序，新结果及连接修订使用原返回顺序', () => {
+    const cache = new QueryResultOrganizationCache();
+    const {source: first} = fixture(), {source: second} = fixture();
+    const activate = (source: QueryResult, scope = 'connection:1', execution = 'run:1') => cache.restore(source, scope, execution, [source], source.columns);
+    expect(activate(first)).toBeUndefined();
+    cache.remember(first, 'connection:1', 'run:1', sorted('ASC'));
+    expect(activate(second)).toBeUndefined();
+    cache.remember(second, 'connection:1', 'run:1', {expression: {mode: 'AND', children: [{column: 'id', operator: 'eq', value: '0'}]}, sort: sorted('DESC').sort});
+    const firstView = activate(first)!;
+    expect(firstView.sorter.view(firstView.sortBinding)?.result.rows).toEqual([first.rows[1], first.rows[0]]);
+    expect(activate(first)).toBeUndefined();
+    const emptyView = activate(second)!;
+    expect(emptyView.sorter.view(emptyView.sortBinding)?.result.rows).toEqual([]);
+    expect(activate(structuredClone(first))).toBeUndefined();
+    expect(activate(first, 'connection:1', 'run:2')).toBeUndefined();
+    expect(activate(first, 'connection:2')).toBeUndefined();
+    expect(activate(second)).toBeUndefined();
+  });
+
+  it('清空规则和丢弃失效列配置后，旧规则不会在再次切回时出现', () => {
+    const cache = new QueryResultOrganizationCache(), {source} = fixture();
+    const activate = (visible = source.columns) => cache.restore(source, 'connection', undefined, [source], visible);
+    const leave = () => cache.restore(undefined, 'connection', 'run:2', [], undefined);
+    activate(); cache.remember(source, 'connection', undefined, sorted('DESC')); leave();
+    expect(activate([source.columns[1]])).toBeUndefined(); leave();
+    expect(activate()).toBeUndefined();
+    cache.remember(source, 'connection', undefined, sorted('ASC')); leave();
+    expect(activate()).toBeDefined();
+    cache.remember(source, 'connection', undefined, empty()); leave();
+    expect(activate()).toBeUndefined();
   });
 });

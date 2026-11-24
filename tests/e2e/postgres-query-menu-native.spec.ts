@@ -11,6 +11,8 @@ import type { ConnectionProfile } from '../../src/shared/contracts';
 import type { UiCommandId } from '../../src/shared/uiCommands';
 import { queryResultNavigatorZh as resultNavText } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
 import { queryResultColumnsZh as resultColumnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
+import { queryResultFilterZh as organizationFilterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { queryResultSortZh as organizationSortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
 import { savedQueryOrganizationZh as groupText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
@@ -628,7 +630,10 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await page.locator('.tab-strip').getByText('另一 PostgreSQL 查询', {exact: true}).click(); await expect(choice()).not.toBeChecked();
     await page.locator('.tab-strip').getByText('原 PostgreSQL 查询', {exact: true}).click(); await expect(choice()).toBeChecked();
 
-    await replaceDraft('SELECT 10 AS layout_key, 100 AS layout_note; SELECT 20 AS layout_key, 200 AS layout_note;');
+    await replaceDraft([
+      'SELECT 10 AS layout_key, 100 AS layout_note UNION ALL SELECT 13, 100 UNION ALL SELECT 11, 100;',
+      'SELECT 21 AS layout_key, 200 AS layout_note UNION ALL SELECT 22, 200 UNION ALL SELECT 20, 200;',
+    ].join('\n'));
     await command('execute-all');
     const layoutGrid = tab().getByRole('grid');
     const noteHeader = layoutGrid.getByRole('columnheader', {name: /^layout_note/});
@@ -638,20 +643,42 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
       await columns.getByRole('button', {name: resultColumnsText.apply, exact: true}).click();
       await expect(columns).toBeHidden();
     };
+    const applyOrganization = async (upper: number, direction: 'ASC' | 'DESC') => {
+      await tab().getByRole('button', {name: organizationFilterText.open, exact: true}).click();
+      const filter = page.getByRole('dialog', {name: organizationFilterText.title, exact: true});
+      await filter.getByRole('button', {name: organizationFilterText.add, exact: true}).click();
+      await filter.getByLabel(`${organizationFilterText.operator} 1`, {exact: true}).selectOption('lt');
+      await filter.getByLabel(`${organizationFilterText.input} 1`, {exact: true}).fill(String(upper));
+      await filter.getByRole('button', {name: organizationFilterText.apply, exact: true}).click();
+      await expect(filter).toBeHidden();
+      await tab().getByRole('button', {name: organizationSortText.panelTitle, exact: true}).click();
+      const sort = page.getByRole('dialog', {name: organizationSortText.panelTitle, exact: true});
+      await sort.getByRole('button', {name: organizationSortText.panelAdd, exact: true}).click();
+      await sort.getByLabel(organizationSortText.panelDirection(1), {exact: true}).selectOption(direction);
+      await sort.getByRole('button', {name: organizationSortText.panelApply, exact: true}).click();
+      await expect(sort).toBeHidden();
+    };
+    const layoutValues = () => layoutGrid.getByRole('gridcell').filter({hasText: /^(10|11|13|20|21|22)$/});
     await expect(layoutGrid.getByRole('gridcell', {name: '10', exact: true})).toBeVisible();
     const afterLayoutExecution = await history();
     await openColumns(); await columns.getByLabel(resultColumnsText.visible(2), {exact: true}).uncheck(); await applyColumns();
     await expect(noteHeader).toHaveCount(0);
+    await applyOrganization(12, 'DESC');
+    await expect(layoutValues()).toHaveText(['11', '10']);
     await resultChoice.selectOption('1');
     await expect(layoutGrid.getByRole('gridcell', {name: '20', exact: true})).toBeVisible();
     await openColumns(); await columns.getByLabel(resultColumnsText.width(2), {exact: true}).fill('215'); await applyColumns();
+    await applyOrganization(22, 'ASC');
     await resultChoice.selectOption('0'); await expect(noteHeader).toHaveCount(0);
+    await expect(layoutValues()).toHaveText(['11', '10']);
     await resultChoice.selectOption('1'); await expect(noteHeader).toHaveCSS('width', '215px');
+    await expect(layoutValues()).toHaveText(['20', '21']);
     expect(await history()).toEqual(afterLayoutExecution);
     await command('execute-all');
     await expect.poll(async () => (await history()).length).toBe(afterLayoutExecution.length + 1);
     await expect(resultChoice).toHaveValue('0');
     await expect(noteHeader).toBeVisible();
+    await expect(layoutValues()).toHaveText(['10', '13', '11']);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
   await quitDesktop();

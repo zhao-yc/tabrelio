@@ -76,6 +76,7 @@ import { captureQueryResultCellFilter, queryResultCellFilterNode, type CellFilte
 import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture, type QueryResultSelectedFilterMode } from '../queryResultSelectedFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { prepareQueryResultOrganization, QueryResultHistory } from '../queryResultHistory';
+import { QueryResultOrganizationCache } from '../queryResultOrganizationCache';
 import { queryResultHistoryZh as historyText } from '../locales/queryResultHistory.zh-CN';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
@@ -311,7 +312,8 @@ export function PostgresQueryTab({
   const [activeDetailRow, setActiveDetailRow] = useState<{ binding: QueryRowDetailsBinding; index: number }>();
   const [rowDetail, setRowDetail] = useState<QueryRowDetailsView>();
   const [organization] = useState(() => ({ filter: new QueryResultFilter('postgresql'), sorter: new QueryResultSort('postgresql') }));
-  const { filter: resultFilter, sorter: resultSorter } = organization;
+  const [resultOrganizationCache] = useState(() => new QueryResultOrganizationCache());
+  const resultExecution = useRef<string>(undefined);
   const [, refreshResult] = useState(0);
   const [sortDraft, setSortDraft] = useState<SortDraft>();
   const sortDraftRef = useRef<SortDraft | undefined>(undefined);
@@ -701,6 +703,7 @@ export function PostgresQueryTab({
           if (range && locator?.bindRange(range)) {
             failureSource.current = locator; retainLocator = true;
           }
+          resultExecution.current = owner.taskId;
           setOutcome(result);
           if (result.failure) setError(result.failure.message);
         }
@@ -1148,10 +1151,22 @@ export function PostgresQueryTab({
   const visibleColumns = currentLayout?.columns ?? resultSource?.columns;
   const frozenKeys = useMemo(() => resultSource && layout ? frozenQueryResultKeys(resultSource.columns, layout) : undefined,
     [resultSource, layout]);
+  const organizationScope = JSON.stringify([tab.connectionId, version, scope.database]);
+  const organizationExecution = pin ? undefined : resultExecution.current;
+  const restoredOrganization = resultOrganizationCache.restore(resultSource, organizationScope, organizationExecution, resultContext, visibleColumns, 'postgresql');
+  if (restoredOrganization) {
+    organization.filter.invalidate(); organization.sorter.invalidate();
+    organization.filter = restoredOrganization.filter; organization.sorter = restoredOrganization.sorter;
+  }
+  const { filter: resultFilter, sorter: resultSorter } = organization;
   const filterBinding = resultFilter.bind(resultSource, resultContext, visibleColumns);
   const filterView = resultFilter.view(filterBinding);
   const sortBinding = resultSorter.bind(filterView?.result ?? resultSource, resultContext, visibleColumns);
   const sortView = resultSorter.view(sortBinding);
+  useLayoutEffect(() => {
+    resultOrganizationCache.remember(resultSource, organizationScope, organizationExecution,
+      filterView && sortView ? {expression: filterView.expression, sort: sortView.rules} : undefined);
+  }, [resultOrganizationCache, resultSource, organizationScope, organizationExecution, filterView, sortView]);
   const historyBinding = resultHistory.bind(resultSource, visibleColumns ?? [], resultContext,
     filterView && sortView ? { expression: filterView.expression, sort: sortView.rules } : undefined, filterBinding);
   const organizedResult = sortView?.result ?? filterView?.result ?? result;

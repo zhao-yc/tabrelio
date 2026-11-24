@@ -4,6 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { queryResultNavigatorZh as text } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
 import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
+import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { queryPinsZh as pinText } from '../../src/renderer/locales/queryPins.zh-CN';
 import { queryDuplicateZh as duplicateText } from '../../src/renderer/locales/queryDuplicate.zh-CN';
@@ -28,7 +30,9 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
       const column = number === 44 ? 'UniqueOutput' : 'sample';
       const comment = number === 44 ? ` /* ${'x'.repeat(66000)}完整原语句尾部🚢 */` : number === 41 ? ' /* navigator_receipt_🧭 */' : '';
       const additional = number === 11 || number === 12 ? ', 100 AS layout_note, 200 AS layout_flag' : '';
-      return `${title}SELECT ${number} AS ${column}${additional}${comment};`;
+      const moreRows = number === 11 ? [17, 13, 15] : number === 12 ? [18, 16, 14] : [];
+      const union = moreRows.map(value => ` UNION ALL SELECT ${value}, 100, 200`).join('');
+      return `${title}SELECT ${number} AS ${column}${additional}${union}${comment};`;
     }).join('\n');
     // 只替换文件选择器。连接、执行、缓存及结果切换仍使用正式应用。
     await desktop.evaluate(({ dialog }, file) => {
@@ -68,6 +72,28 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
       await columns.getByRole('button', {name: columnsText.apply, exact: true}).click();
       await expect(columns).toBeHidden();
     };
+    const filter = tab.getByRole('region', {name: filterText.title, exact: true});
+    const openFilter = async () => (await navigationMenuItem(tab, {name: filterText.open, exact: true})).click();
+    const applyFilter = async (upper: number) => {
+      await openFilter();
+      await filter.getByRole('button', {name: filterText.add, exact: true}).click();
+      await filter.getByLabel(`${filterText.column} 1`, {exact: true}).selectOption('c0');
+      await filter.getByLabel(filterText.sqliteType(1), {exact: true}).selectOption('integer');
+      await filter.getByLabel(`${filterText.operator} 1`, {exact: true}).selectOption('lt');
+      await filter.getByLabel(`${filterText.input} 1`, {exact: true}).fill(String(upper));
+      await filter.getByRole('button', {name: filterText.apply, exact: true}).click();
+      await expect(filter).toBeHidden();
+    };
+    const applySort = async (direction: 'ASC' | 'DESC') => {
+      await (await navigationMenuItem(tab, {name: sortText.panelTitle, exact: true})).click();
+      const sort = tab.getByRole('region', {name: sortText.panelTitle, exact: true});
+      await sort.getByRole('button', {name: sortText.panelAdd, exact: true}).click();
+      await sort.getByLabel(sortText.panelField(1), {exact: true}).selectOption('c0');
+      await sort.getByLabel(sortText.panelDirection(1), {exact: true}).selectOption(direction);
+      await sort.getByRole('button', {name: sortText.panelApply, exact: true}).click();
+      await expect(sort).toBeHidden();
+    };
+    const sampleValues = () => grid.getByRole('gridcell').filter({hasText: /^(11|12|13|14|15|16|17|18)$/});
     const resultBody = tab.locator('.query-layout-results > .result-body');
     await grid.getByRole('gridcell', {name: '1', exact: true}).focus();
     await page.keyboard.press('ControlOrMeta+Shift+PageUp');
@@ -85,6 +111,8 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await columns.getByLabel(columnsText.width(3), {exact: true}).fill('240');
     await columns.getByLabel(heightText.label, {exact: true}).selectOption('56');
     await applyColumns();
+    await applyFilter(17); await applySort('DESC');
+    await expect(sampleValues()).toHaveText(['15', '13', '11']);
     await page.keyboard.press('ControlOrMeta+Shift+PageDown');
     await expect(grid.getByRole('gridcell', {name: '12', exact: true})).toBeVisible();
     const note = grid.getByRole('columnheader', {name: /^layout_note/});
@@ -94,8 +122,10 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await columns.getByLabel(columnsText.width(2), {exact: true}).fill('190');
     await columns.getByLabel(heightText.label, {exact: true}).selectOption('24');
     await applyColumns();
+    await applyFilter(18); await applySort('ASC');
     await page.keyboard.press('ControlOrMeta+Shift+PageUp');
     await expect(grid.getByRole('gridcell', {name: '11', exact: true})).toBeVisible();
+    await expect(sampleValues()).toHaveText(['15', '13', '11']);
     await expect(note).toHaveCount(0);
     await expect(grid).toHaveClass(/grid-row-height-56/);
     await expect(grid.getByRole('columnheader').filter({hasText: /sample|layout_flag/}).first()).toContainText('layout_flag');
@@ -103,6 +133,7 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await expect(flag).toHaveClass(/rdg-cell-frozen-start/);
     await page.keyboard.press('ControlOrMeta+Shift+PageDown');
     await expect(grid.getByRole('gridcell', {name: '12', exact: true})).toBeVisible();
+    await expect(sampleValues()).toHaveText(['12', '14', '16']);
     await expect(note).toHaveCSS('width', '190px');
     await expect(grid).toHaveClass(/grid-row-height-24/);
     await tab.locator('.monaco-editor').getByRole('textbox').focus();
@@ -207,6 +238,7 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await openColumns();
     await columns.getByLabel(columnsText.width(1), {exact: true}).fill('208');
     await applyColumns();
+    await applyFilter(3);
     await trigger.click();
     await search.fill('#44');
     await search.press('Enter');
@@ -262,6 +294,9 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await renamedPin.click();
     await expect(grid.getByRole('gridcell', {name: '2', exact: true})).toBeVisible();
     await expect(grid.getByRole('columnheader', {name: /^sample/})).toHaveCSS('width', '208px');
+    await openFilter();
+    await expect(filter.getByLabel(`${filterText.input} 1`, {exact: true})).toHaveValue('3');
+    await filter.getByRole('button', {name: filterText.cancel, exact: true}).click();
     await trigger.click();
     await expect(dialog.getByRole('option', { selected: true })).toContainText('上月对账基准📌');
     await search.fill('月度汇总');

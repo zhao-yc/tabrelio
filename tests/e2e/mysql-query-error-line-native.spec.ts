@@ -7,6 +7,8 @@ import { queryContinueOnErrorZh as continuing } from '../../src/renderer/locales
 import { queryWarningsZh } from '../../src/renderer/locales/queryWarnings.zh-CN';
 import { queryResultNavigatorZh as resultNavText } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
 import { queryResultColumnsZh as resultColumnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
+import { queryResultFilterZh as resultFilterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { queryResultSortZh as resultSortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryPartialOutcomeZh } from '../../src/renderer/locales/queryPartialOutcome.zh-CN';
 import { currentStatementZh } from '../../src/renderer/locales/currentStatement.zh-CN';
@@ -181,7 +183,7 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     await expect(query.getByRole('gridcell', {name: '70', exact: true})).toBeVisible();
     expect(await history()).toEqual(beforeResultNavigation);
 
-    await execute('SELECT 80 AS layout_key, 800 AS layout_note; SELECT 81 AS layout_key, 810 AS layout_note;');
+    await execute('SELECT 80 AS layout_key, 800 AS layout_note UNION ALL SELECT 84, 800 UNION ALL SELECT 82, 800; SELECT 81 AS layout_key, 810 AS layout_note;');
     const layoutHistory = await history();
     const noteHeader = query.getByRole('columnheader', {name: /^layout_note/});
     const columns = page.getByRole('dialog', {name: resultColumnsText.title, exact: true});
@@ -191,11 +193,27 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
       await expect(columns).toBeHidden();
     };
     await openColumns(); await columns.getByLabel(resultColumnsText.visible(2), {exact: true}).uncheck(); await applyColumns();
+    await (await navigationMenuItem(query, {name: resultFilterText.open, exact: true})).click();
+    const filter = query.getByRole('region', {name: resultFilterText.title, exact: true});
+    await filter.getByRole('button', {name: resultFilterText.add, exact: true}).click();
+    await filter.getByLabel(`${resultFilterText.operator} 1`, {exact: true}).selectOption('lt');
+    await filter.getByLabel(`${resultFilterText.input} 1`, {exact: true}).fill('84');
+    await filter.getByRole('button', {name: resultFilterText.apply, exact: true}).click();
+    await expect(filter).toBeHidden();
+    await (await navigationMenuItem(query, {name: resultSortText.panelTitle, exact: true})).click();
+    const sort = query.getByRole('region', {name: resultSortText.panelTitle, exact: true});
+    await sort.getByRole('button', {name: resultSortText.panelAdd, exact: true}).click();
+    await sort.getByLabel(resultSortText.panelDirection(1), {exact: true}).selectOption('DESC');
+    await sort.getByRole('button', {name: resultSortText.panelApply, exact: true}).click();
+    await expect(sort).toBeHidden();
+    const organizedCells = query.getByRole('gridcell').filter({hasText: /^(80|82|84)$/});
+    await expect(organizedCells).toHaveText(['82', '80']);
     await page.keyboard.press('ControlOrMeta+Shift+PageDown');
     await expect(query.getByRole('gridcell', {name: '81', exact: true})).toBeVisible();
     await openColumns(); await columns.getByLabel(resultColumnsText.width(2), {exact: true}).fill('215'); await applyColumns();
     await page.keyboard.press('ControlOrMeta+Shift+PageUp');
     await expect(query.getByRole('gridcell', {name: '80', exact: true})).toBeVisible();
+    await expect(organizedCells).toHaveText(['82', '80']);
     await expect(noteHeader).toHaveCount(0);
     await page.keyboard.press('ControlOrMeta+Shift+PageDown'); await expect(noteHeader).toHaveCSS('width', '215px');
     expect(await history()).toEqual(layoutHistory);

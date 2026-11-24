@@ -45,6 +45,7 @@ import { captureQueryResultCellFilter, queryResultCellFilterNode, type CellFilte
 import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture, type QueryResultSelectedFilterMode } from '../queryResultSelectedFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { QueryResultHistory, prepareQueryResultOrganization } from '../queryResultHistory';
+import { QueryResultOrganizationCache } from '../queryResultOrganizationCache';
 import { queryResultHistoryZh as historyText } from '../locales/queryResultHistory.zh-CN';
 import { captureQueryResultMemory, queryResultMemoryMatches, type QueryResultMemory } from '../queryResultMemory';
 import { captureQueryResultPreset, prepareQueryResultPresetLayout, queryResultPresetMatches } from '../queryResultPresetLayout';
@@ -381,7 +382,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const [resultInsertSource, setResultInsertSource] = useState<ResultInsertSourceIntent | null>(null), resultInsertRef = useRef<ResultInsertSourceIntent | null>(null);
   const resultInsertActivity = useRef(0), resultInsertBusy = useRef<WorkspaceBusyLease | undefined>(undefined);
   const resultSorterRef = useRef(new QueryResultSort()), resultFilterRef = useRef(new QueryResultFilter());
-  const resultSorter = resultSorterRef.current, resultFilter = resultFilterRef.current;
+  const [resultOrganizationCache] = useState(() => new QueryResultOrganizationCache());
   const resultHistory = useRef(new QueryResultHistory()).current;
   const resultMemoryRef = useRef<QueryResultMemory | undefined>(undefined), resultMemory = resultMemoryRef.current;
   type FilterLease={binding:QueryResultFilterBinding;view:QueryResultFilterView;sortBinding:QueryResultSortBinding;sortView:QueryResultSortView;seed?:QueryResultFilterGroup};
@@ -1503,11 +1504,23 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const resultModal=!!objectDefinition||!!warningsDialog||!!comparisonLease||!!statisticsLease||!!presetLease||!!closeRequest||!!exportResult||!!archiveOutcome||!!activeOrigins||!!activeMysqlOrigins||!!recordEdit||!!recordRelation||!!mysqlRelation||!!mysqlBatch||!!queryRowSql||save||!!resultSqlPreview||!!snippets||parameterSource!==null||streamExportSource!==null||!!sqliteFullExport||sessionObjects||recovery||!!databaseSwitchDialog;
   const failureLocator = failureSource.current;
   useQueryFailureMarkers(failureLocator, outcome);
+  const organizationScope = JSON.stringify([tab.connectionId, connectionVersion]);
+  const organizationExecution = pin ? undefined : task.current;
+  const restoredOrganization = resultOrganizationCache.restore(viewSource, organizationScope, organizationExecution, resultContext, visibleColumns);
+  if (restoredOrganization) {
+    resultFilterRef.current.invalidate(); resultSorterRef.current.invalidate();
+    resultFilterRef.current = restoredOrganization.filter; resultSorterRef.current = restoredOrganization.sorter;
+  }
+  const resultSorter = resultSorterRef.current, resultFilter = resultFilterRef.current;
   // SQLite筛选明确选择原存储类，先筛选再排序；所有消费者共用同一最终视图与租约。
   const filterBinding=resultFilter.bind(viewSource,resultContext,visibleColumns);
   const filterView=resultFilter.view(filterBinding);
   const sortBinding = resultSorter.bind(filterView?.result ?? viewSource, resultContext, visibleColumns);
   const sortView = resultSorter.view(sortBinding);
+  useLayoutEffect(() => {
+    resultOrganizationCache.remember(viewSource, organizationScope, organizationExecution,
+      filterView && sortView ? {expression: filterView.expression, sort: sortView.rules} : undefined);
+  }, [resultOrganizationCache, viewSource, organizationScope, organizationExecution, filterView, sortView]);
   const historyBinding = resultHistory.bind(viewSource, visibleColumns, resultContext, filterView && sortView ? { expression: filterView.expression, sort: sortView.rules } : undefined, filterBinding);
   const displayedView=useMemo(()=>queryResultFilteredSortView(filterView,sortView),[filterView,sortView]);
   const organizedResult = displayedView?.result ?? sourceResult;
