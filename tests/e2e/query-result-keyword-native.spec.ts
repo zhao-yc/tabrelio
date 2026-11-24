@@ -191,7 +191,7 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     const scope = archive.getByLabel(archiveText.dataScope, { exact: true });
     await expect(scope).toHaveValue('original');
     await scope.selectOption('organized');
-    async function writeArchive(format: 'zip' | 'xlsx') {
+    async function writeArchive(format: 'zip' | 'xlsx' | 'json') {
       const path = join(directory, `organized.${format}`);
       await desktop.evaluate(({ dialog, BrowserWindow }, target) => {
         const original = dialog.showSaveDialog;
@@ -203,7 +203,8 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
         }) as typeof original;
       }, { path, format });
       await archive.getByLabel(archiveText.format, { exact: true }).selectOption(format);
-      await archive.getByRole('button', { name: format === 'zip' ? archiveText.start : archiveText.startExcel, exact: true }).click();
+      const start = { zip: archiveText.start, xlsx: archiveText.startExcel, json: archiveText.startJson }[format];
+      await archive.getByRole('button', { name: start, exact: true }).click();
       await expect(archive.getByRole('status')).toHaveText(archiveText.done(2, 3));
       return path;
     }
@@ -224,6 +225,17 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     })).toEqual([
       [['id', 'label'], ['3', 'Target C'], ['1', 'target A']],
       [['id', 'label'], ['5', 'active B']],
+    ]);
+    const json = JSON.parse(await readFile(await writeArchive('json'), 'utf8'));
+    await expect(archive.getByLabel(archiveText.encoding, { exact: true })).toHaveCount(0);
+    expect(json).toMatchObject({ format: 'DBArk-returned-query-results', version: 1, results: [
+      { sourceOrdinal: 1, rowsWritten: 2, truncated: false },
+      { sourceOrdinal: 2, rowsWritten: 1, truncated: false },
+    ] });
+    expect(json.results.map((item: { rows: { label: string }[] }) => item.rows.map(({ label }) => label)))
+      .toEqual([['Target C', 'target A'], ['active B']]);
+    expect(json.results[1].columns).toEqual([
+      { position: 1, name: 'id', exportName: 'id' }, { position: 2, name: 'label', exportName: 'label' },
     ]);
     await archive.getByRole('button', { name: zh.common.close, exact: true }).click();
 

@@ -6,6 +6,7 @@ import iconv from 'iconv-lite';
 import { parse } from 'csv-parse/sync';
 import type { ResultExportOptions, TaskEvent } from '../../src/shared/contracts';
 import { ResultFileTasks, type ResultFileIO } from '../../src/engine/resultFileTasks';
+import { validateCommand } from '../../src/shared/validation';
 import { decodeQueryCsvZip } from '../helpers/queryCsvZip';
 
 const folders: string[] = [];
@@ -33,6 +34,55 @@ function deferred() {
 }
 
 describe('独立结果文件任务', () => {
+  it('批量 JSON 保留原序号、列重名、精确值、空结果和截断状态', async () => {
+    const path = await destination(), { result } = options(path);
+    const entries = [{ sourceOrdinal: 2, label: '原始 🧭', result },
+      { sourceOrdinal: 5, result: { ...result, rows: [], truncated: false } }];
+    const request = { fileToken: 'selected', taskId: 'archive', format: 'json', encoding: 'utf8', entries } as const;
+    expect(() => validateCommand('files.exportResultArchive', request)).not.toThrow();
+    for (const extra of [{ encoding: 'utf16le' }, { csvDelimiter: ',' }, { filePath: path }, { sql: 'SELECT 1' }])
+      expect(() => validateCommand('files.exportResultArchive', { ...request, ...extra })).toThrow();
+    await expect(new ResultFileTasks(() => {}).runArchive({ ...request, filePath: path })).resolves.toEqual({ rows: 1, sets: 2 });
+    const text = await readFile(path, 'utf8'), bundle = JSON.parse(text);
+    expect(bundle).toMatchObject({ format: 'DBArk-returned-query-results', version: 1, results: [
+      { sourceOrdinal: 2, label: '原始 🧭', rowsWritten: 1, truncated: true },
+      { sourceOrdinal: 5, rowsWritten: 0, truncated: false, rows: [] },
+    ] });
+    const [first, second] = bundle.results;
+    expect(first.columns.slice(0, 4)).toEqual([
+      { position: 1, name: '值', exportName: '值' }, { position: 2, name: '值', exportName: '值 [3]' },
+      { position: 3, name: '值 [2]', exportName: '值 [2]' }, { position: 4, name: '__proto__', exportName: '__proto__' },
+    ]);
+    expect(second.columns).toEqual(first.columns);
+    expect(first.rows[0]['值']).toBeNull();
+    expect(Object.hasOwn(first.rows[0], '__proto__')).toBe(true);
+    expect(first.rows[0]['__proto__']).toBe('原型');
+    expect(first.rows[0]['数字']).toBe('18446744073709551615');
+    expect(first.rows[0]['二进制']).toEqual({ type: 'binary', base64: 'AAH/' });
+    expect(first.rows[0]['空串']).toBe('');
+    expect(text.indexOf('"2":"二"')).toBeLessThan(text.indexOf('"1":"一"'));
+  });
+  it('批量 JSON 在同步阶段取消时保留原目标并清理暂存', async () => {
+    const path = await destination(), entered = deferred(), release = deferred();
+    const events: TaskEvent[] = [];
+    const io = disk({ open: async partial => {
+      const file = await open(partial, 'wx');
+      return { write: (buffer, offset, length) => file.write(buffer, offset, length), close: () => file.close(),
+        sync: async () => { entered.resolve(); await release.promise; await file.sync(); } };
+    } });
+    const tasks = new ResultFileTasks(event => events.push(event), io);
+    const running = tasks.runArchive({ filePath: path, fileToken: 'selected', taskId: 'archive', format: 'json', encoding: 'utf8',
+      entries: [{ sourceOrdinal: 1, result: options(path).result }] });
+    const cancelled = expect(running).rejects.toThrow('已取消');
+    await entered.promise;
+    tasks.cancel('archive');
+    release.resolve();
+    await cancelled;
+    expect(await readFile(path, 'utf8')).toBe('原文件');
+    expect(await readdir(folders.at(-1)!)).toEqual(['result']);
+    expect(events.at(-1)?.status).toBe('cancelled');
+    expect(tasks.has('archive')).toBe(false);
+  });
   it('批量 ZIP 保留原结果序号、截断状态和空集标题，保留原值协议', async () => {
     const path = await destination();
     const { result } = options(path);

@@ -156,7 +156,7 @@ import { connectionOrganizationGetSchema, connectionOrganizationApplySchema } fr
 import { savedQueryOrganizationGetSchema, savedQueryOrganizationApplySchema } from './savedQueryOrganization';
 import { savedQueryRebindSchema } from './savedQueryRebind';
 import type { Command, ResultExportData } from './contracts';
-import { resultArchiveMaxSets, validateResultExportData } from './resultExport';
+import { resultArchiveFormats, resultArchiveMaxSets, validateResultExportData } from './resultExport';
 import { assertResultExcelData, validateResultArchiveOptions } from './resultExcel';
 import { resultExcelZh } from './resultExcel.zh-CN';
 import { assertResultSqlData, assertResultSqlEncoding, resultSqlTargetSchema, resultSqlSelectionSchema, resultSqlStorageSchema } from './resultSql';
@@ -799,7 +799,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     }
   }),
   'files.exportResultArchive': z.object({
-    fileToken: id, taskId: id, format: z.enum(['zip', 'xlsx']).optional(),
+    fileToken: id, taskId: id, format: z.enum(resultArchiveFormats).optional(),
     encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
     entries: z.array(z.object({ sourceOrdinal: z.number().int().positive(), label: z.string().max(80).optional(), result: z.custom<ResultExportData>() }).strict()).min(1).max(resultArchiveMaxSets),
   }).strict().superRefine((value, context) => {

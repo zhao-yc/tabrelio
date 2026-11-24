@@ -1471,7 +1471,7 @@ test('SQLite 查询复制与粘贴跨标签保留原生类型和精确值', asyn
   expect(pageErrors).toEqual([]);
 });
 
-test('批量导出已返回结果写入 ZIP 和 XLSX 且不会重跑 SQL', async ({}, info) => {
+test('批量导出已返回结果写入 ZIP、XLSX 和 JSON 且不会重跑 SQL', async ({}, info) => {
   await seed(`/* NAME: 精确原值 */ SELECT 9223372036854775807 AS v, X'00ff' AS v;
     /* NAME: 不导出 */ SELECT '跳过';
     /* NAME: 空结果 */ SELECT name FROM subject WHERE id = 0;`);
@@ -1486,7 +1486,7 @@ test('批量导出已返回结果写入 ZIP 和 XLSX 且不会重跑 SQL', async
   await modal.getByRole('checkbox', { name: /结果 2 · 不导出/ }).uncheck();
   await info.attach('SQLite批量导出已返回结果', { body: await page.screenshot(), contentType: 'image/png' });
   const output = join(dataDir, '多结果.zip');
-  async function chooseDestination(path: string, format: 'zip' | 'xlsx') {
+  async function chooseDestination(path: string, format: 'zip' | 'xlsx' | 'json') {
     await desktop.evaluate(({ dialog, BrowserWindow }, { path, format }) => {
       const original = dialog.showSaveDialog;
       dialog.showSaveDialog = (async (...args: unknown[]) => {
@@ -1527,6 +1527,17 @@ test('批量导出已返回结果写入 ZIP 和 XLSX 且不会重跑 SQL', async
   expect(book.worksheets[1].getCell('B2').text).toBe('\\B:AP8=');
   expect(book.worksheets[2].rowCount).toBe(1);
   expect(book.worksheets[2].getCell('A1').text).toBe('name');
+  const jsonPath = join(dataDir, '多结果.json');
+  await modal.getByLabel(archiveText.format, { exact: true }).selectOption('json');
+  await chooseDestination(jsonPath, 'json');
+  await modal.getByRole('button', { name: archiveText.startJson, exact: true }).click();
+  await expect(modal.getByRole('status')).toHaveText(archiveText.done(2, 1));
+  expect(JSON.parse(readFileSync(jsonPath, 'utf8'))).toMatchObject({
+    format: 'DBArk-returned-query-results', version: 1, results: [
+      { sourceOrdinal: 1, label: '精确原值', rows: [{ v: '9223372036854775807', 'v [2]': { type: 'binary', base64: 'AP8=' } }] },
+      { sourceOrdinal: 3, label: '空结果', columns: [{ position: 1, name: 'name', exportName: 'name' }], rows: [] },
+    ],
+  });
   expect(await executions()).toEqual(before);
   expect(pageErrors).toEqual([]);
 });

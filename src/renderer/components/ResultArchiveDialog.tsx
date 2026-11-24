@@ -3,7 +3,7 @@ import type { QueryFileEncoding, QueryOutcome, QueryResult } from '../../shared/
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
 import { validateResultArchiveOptions } from '../../shared/resultExcel';
 import { resultExcelZh } from '../../shared/resultExcel.zh-CN';
-import { resultArchiveMaxSets, resultExportLimits, type ResultArchiveFormat } from '../../shared/resultExport';
+import { resultArchiveFormats, resultArchiveMaxSets, resultExportLimits, type ResultArchiveFormat } from '../../shared/resultExport';
 import { queryResultTitle, validQueryResultTitle } from '../../shared/queryResultTitle';
 import { errorMessage, invoke, uid } from '../lib';
 import { resultArchiveZh as text } from '../locales/resultArchive.zh-CN';
@@ -24,6 +24,12 @@ interface Props {
   isCurrent(): boolean;
   onClose(): void;
 }
+
+const archiveFormats = {
+  zip: { name: text.zip, notice: text.notice, fileName: text.fileName, start: text.start },
+  xlsx: { name: text.xlsx, notice: text.excelNotice, fileName: text.excelFileName, start: text.startExcel },
+  json: { name: text.json, notice: text.jsonNotice, fileName: text.jsonFileName, start: text.startJson },
+};
 
 /** 文件选择和写入绑定到同一次明确操作；旧标签回执不能写入或替换另一份结果。 */
 export function ResultArchiveDialog({ outcome, tabId, dialect, identity, organizedView, isCurrent, onClose }: Props) {
@@ -82,10 +88,10 @@ export function ResultArchiveDialog({ outcome, tabId, dialect, identity, organiz
         const projected = view.columns === view.result.columns ? resultExportData(view.result) : projectQueryResultRows(view.result, view.columns);
         return { sourceOrdinal: choice.sourceOrdinal, ...(choice.label ? { label: choice.label } : {}), result: projected };
       });
-      const options = format === 'xlsx' ? { format, encoding: 'utf8' as const } : { format, encoding, ...csvExportOptions('csv', delimiter) };
+      const options = format === 'zip' ? { format, encoding, ...csvExportOptions('csv', delimiter) } : { format, encoding: 'utf8' as const };
       validateResultArchiveOptions({ ...options, entries });
       const snapshot = structuredClone(entries);
-      const file = await invoke('files.choose', { purpose: 'export', format, suggestedName: format === 'xlsx' ? text.excelFileName : text.fileName });
+      const file = await invoke('files.choose', { purpose: 'export', format, suggestedName: archiveFormats[format].fileName });
       if (!file) return;
       if (!current() || !lease.owns()) throw Error(text.stale);
       const taskId = task.current = uid();
@@ -115,7 +121,7 @@ export function ResultArchiveDialog({ outcome, tabId, dialect, identity, organiz
   const close = () => { if (!occupied.current) onClose(); };
   return <Modal title={text.title} onClose={close} wide>
     <div className="modal-content">
-      <p>{format === 'xlsx' ? text.excelNotice : text.notice}</p>
+      <p>{archiveFormats[format].notice}</p>
       <p>{scope === 'organized' ? text.organizedScope : text.scope}</p>
       <fieldset disabled={busy || stale}><legend>{text.selection}</legend>
         <div className="inline-field"><button type="button" onClick={() => setSelected(new Set(choices.map(choice => choice.sourceOrdinal)))}>{text.selectAll}</button>
@@ -134,8 +140,8 @@ export function ResultArchiveDialog({ outcome, tabId, dialect, identity, organiz
         }}><option value="original">{text.original}</option><option value="organized">{text.organized}</option></select></Field>
         <Field label={text.format}><select aria-label={text.format} value={format} disabled={busy || stale} onChange={event => {
           const value = event.target.value;
-          if (value === 'zip' || value === 'xlsx') { setFormat(value); setError(''); setDone(undefined); }
-        }}><option value="zip">{text.zip}</option><option value="xlsx">{text.xlsx}</option></select></Field>
+          if (value === 'zip' || value === 'xlsx' || value === 'json') { setFormat(value); setError(''); setDone(undefined); }
+        }}>{resultArchiveFormats.map(format => <option key={format} value={format}>{archiveFormats[format].name}</option>)}</select></Field>
         {format === 'zip' && <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={busy || stale} onChange={event => setEncoding(event.target.value as QueryFileEncoding)}>
           <option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option>
         </select></Field>}
@@ -148,7 +154,7 @@ export function ResultArchiveDialog({ outcome, tabId, dialect, identity, organiz
     <footer className="modal-footer"><span className="grow"/>
       {(phase === 'writing' || phase === 'cancelling') && <button type="button" disabled={phase === 'cancelling'} onClick={() => void cancel()}>{phase === 'cancelling' ? text.cancelling : text.cancel}</button>}
       <button type="button" disabled={busy} onClick={close}>{zh.common.close}</button>
-      <button type="button" className="primary" disabled={busy || stale || !selected.size} onClick={() => void save()}>{phase === 'writing' || phase === 'cancelling' ? text.saving : format === 'xlsx' ? text.startExcel : text.start}</button>
+      <button type="button" className="primary" disabled={busy || stale || !selected.size} onClick={() => void save()}>{phase === 'writing' || phase === 'cancelling' ? text.saving : archiveFormats[format].start}</button>
     </footer>
   </Modal>;
 }

@@ -1,6 +1,6 @@
 import type { CellValue, ResultExportData } from './contracts';
 import { EXCEL_LIMITS, excelWorksheetNames } from './excelTransfer';
-import { resultExportColumns, validateResultArchive, validateResultExportData, type ResultArchiveEntry, type ResultArchiveOptions } from './resultExport';
+import { resultArchiveFormats, resultExportColumns, validateResultArchive, validateResultExportData, type ResultArchiveEntry, type ResultArchiveOptions } from './resultExport';
 import { resultExcelZh as text } from './resultExcel.zh-CN';
 import { binaryCellFileBytes } from './binaryCellFiles';
 
@@ -52,9 +52,11 @@ export function resultArchiveSheetNames(entries: readonly ResultArchiveEntry[]):
   return excelWorksheetNames(['结果清单', ...entries.map(entry => entry.label ?? `结果 ${entry.sourceOrdinal}`)]);
 }
 
-/** CSV ZIP 继续兼容原请求；XLSX 先验证整份工作簿和每张工作表，再选择或打开文件。 */
+/** CSV ZIP 兼容原请求，JSON 固定 UTF-8，XLSX 须先通过各工作表的预检。 */
 export function validateResultArchiveOptions(input: Pick<ResultArchiveOptions, 'format' | 'encoding' | 'csvDelimiter' | 'entries'>): number {
-  if (input.format !== undefined && input.format !== 'zip' && input.format !== 'xlsx') throw Error('已返回结果包格式无效');
+  if (input.format !== undefined && !resultArchiveFormats.includes(input.format)) throw Error('已返回结果包格式无效');
+  if (input.format === 'json' && (input.encoding !== 'utf8' || Object.hasOwn(input, 'csvDelimiter')))
+    throw Error('多结果 JSON 使用 UTF-8，CSV 分隔符仅用于 CSV ZIP');
   const rows = validateResultArchive(input.entries);
   if (input.format === 'xlsx') {
     if (input.encoding !== 'utf8') throw Error(text.utf8Only);

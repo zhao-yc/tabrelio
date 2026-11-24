@@ -1,5 +1,5 @@
-import type { ResultExportOptions, TaskEvent } from '../shared/contracts';
-import { resultExportColumns, validateResultExportData, type ResultArchiveOptions } from '../shared/resultExport';
+import type { DataRow, ResultExportOptions, TaskEvent } from '../shared/contracts';
+import { resultArchiveJsonFormat, resultArchiveJsonVersion, resultExportColumns, validateResultExportData, type ResultArchiveEntry, type ResultArchiveOptions } from '../shared/resultExport';
 import { csvCell, csvHeader, encodingName } from './files';
 import { assertRegularExportTarget, AtomicFile, nativeAtomicFileIO, type AtomicFileIO } from './atomicFile';
 import { assertResultSqlData, assertResultSqlEncoding, resultSqlHeader, resultSqlLimits, resultSqlSelectionSchema, type ResultSqlTarget } from '../shared/resultSql';
@@ -17,6 +17,31 @@ import { queryStreamExportLimits } from '../shared/queryStreamExport';
 
 export type ResultFileIO = AtomicFileIO;
 interface FileTask { cancelled: boolean; committing: boolean; done: Promise<void>; finish(): void; }
+
+/** 按列描述写键，整数形式列名也沿用输出顺序；原型同名键作为普通文本写出。 */
+function jsonResultRow(row: DataRow, columns: ReturnType<typeof resultExportColumns>): string {
+  return '{' + columns.map(column => JSON.stringify(column.exportName) + ':' + JSON.stringify(row[column.key])).join(',') + '}';
+}
+
+/** 采集位置来自原结果。逐行写入，零行结果也有完整的列描述。 */
+async function writeResultJsonArchive(file: AtomicFile, entries: readonly ResultArchiveEntry[], rowWritten: () => void): Promise<void> {
+  const header = JSON.stringify({ format: resultArchiveJsonFormat, version: resultArchiveJsonVersion });
+  await file.write(header.slice(0, -1) + ',"results":[\n');
+  for (const [index, { sourceOrdinal, label, result }] of entries.entries()) {
+    const columns = resultExportColumns(result.columns);
+    const metadata = {
+      sourceOrdinal, label, columns: columns.map(({ name, exportName }, position) => ({ position: position + 1, name, exportName })),
+      rowsWritten: result.rows.length, truncated: result.truncated,
+    };
+    await file.write((index ? ',\n' : '') + JSON.stringify(metadata).slice(0, -1) + ',"rows":[\n');
+    for (const [position, row] of result.rows.entries()) {
+      await file.write((position ? ',\n' : '') + jsonResultRow(row, columns));
+      rowWritten();
+    }
+    await file.write('\n]}');
+  }
+  await file.write('\n]}\n');
+}
 
 /** 结果文件任务完全独立于数据库连接；取消和退出都等待文件关闭及临时文件清理。 */
 export class ResultFileTasks {
@@ -53,6 +78,10 @@ export class ResultFileTasks {
       rows = count;
       this.emit({ taskId: input.taskId, status: 'running', progress: Math.floor(rows / Math.max(1, total) * 98), rows, message: `已写入 ${rows}/${total} 行` });
     };
+    const rowWritten = () => {
+      rows++;
+      if (rows % 250 === 0) onProgress(rows);
+    };
     try {
       if (input.format === 'xlsx') {
         await assertRegularExportTarget(input.filePath);
@@ -60,22 +89,25 @@ export class ResultFileTasks {
         this.emit({ taskId: input.taskId, status: 'completed', progress: 100, rows, message: `已导出 ${input.entries.length} 个结果集` });
         return { rows, sets: input.entries.length };
       }
-      await prepareQueryCsvZip(input.filePath, check);
+      if (input.format === 'json') await assertRegularExportTarget(input.filePath);
+      else await prepareQueryCsvZip(input.filePath, check);
       file = await AtomicFile.create(input.filePath, encoding, check, onCommitStart, this.io, queryStreamExportLimits.fileBytes);
-      const archive = new QueryCsvArchive(file, input.encoding, check, delimiter, 'returned');
-      for (const [index, { sourceOrdinal, label, result }] of input.entries.entries()) {
-        const ordinal = index + 1;
-        const columns = resultExportColumns(result.columns).map((column, position) => ({ ...column, position: position + 1 }));
-        await archive.start({ resultOrdinal: ordinal, rowResultOrdinal: ordinal }, columns, { sourceOrdinal, label, truncated: result.truncated });
-        await archive.text(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n');
-        for (const row of result.rows) {
-          await archive.text(columns.map(column => csvCell(row[column.key], delimiter)).join(delimiter) + '\r\n');
-          rows++;
-          if (rows % 250 === 0) onProgress(rows);
+      if (input.format === 'json') await writeResultJsonArchive(file, input.entries, rowWritten);
+      else {
+        const archive = new QueryCsvArchive(file, input.encoding, check, delimiter, 'returned');
+        for (const [index, { sourceOrdinal, label, result }] of input.entries.entries()) {
+          const ordinal = index + 1;
+          const columns = resultExportColumns(result.columns).map((column, position) => ({ ...column, position: position + 1 }));
+          await archive.start({ resultOrdinal: ordinal, rowResultOrdinal: ordinal }, columns, { sourceOrdinal, label, truncated: result.truncated });
+          await archive.text(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n');
+          for (const row of result.rows) {
+            await archive.text(columns.map(column => csvCell(row[column.key], delimiter)).join(delimiter) + '\r\n');
+            rowWritten();
+          }
+          await archive.end(result.rows.length);
         }
-        await archive.end(result.rows.length);
+        await archive.complete();
       }
-      await archive.complete();
       await file.commit();
       this.emit({ taskId: input.taskId, status: 'completed', progress: 100, rows, message: `已导出 ${input.entries.length} 个结果集` });
       return { rows, sets: input.entries.length };
@@ -137,7 +169,7 @@ export class ResultFileTasks {
         if (markup) await write(markup.row(columns.map(column => row[column.key])));
         else await write(sqlRow ? sqlRow(row, count) : input.format === 'csv'
           ? columns.map(column => csvCell(row[column.key], delimiter)).join(delimiter) + '\r\n'
-          : (count ? ',\n' : '') + '{' + columns.map(column => JSON.stringify(column.exportName) + ':' + JSON.stringify(row[column.key])).join(',') + '}');
+          : (count ? ',\n' : '') + jsonResultRow(row, columns));
         count++;
         if (count % 250 === 0) this.emit({ taskId: input.taskId, status: 'running', progress: Math.floor(count / input.result.rows.length * 98), rows: count, message: `已写入 ${count}/${input.result.rows.length} 行` });
       }
