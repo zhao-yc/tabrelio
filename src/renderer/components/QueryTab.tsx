@@ -245,7 +245,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const [sessionId, setSessionId] = useState(''); const sessionRef = useRef(''); const pendingSession = useRef<Promise<string> | null>(null);
   const [busy, setBusy] = useState(false); const busyRef = useRef(false); const task = useRef(''); const [transaction, setTransaction] = useState(false);
   const cancelledQuery=useRef('');
-  const explainSource = useRef('');
+  const explainSource = useRef<{ sql: string; currentStatement?: { offset: number } }>({ sql: '' });
   const [outcome, setOutcome] = useState<QueryOutcome | null>(null); const [stream, setStream] = useState<QueryResult[]>([]); const [resultIndex, setResultIndex] = useState(0);
   const [error, setError] = useState(''); const [save, setSave] = useState(false); const [queryName, setQueryName] = useState('');
   const [completionStatus,setCompletionStatus]=useState<SqlCompletionStatus>('idle');const connectionVersion=useWorkspace(state=>state.connectionVersions[tab.connectionId]??0);
@@ -955,7 +955,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
   /** 独立入口只捕获当前模型，不读取选区或tab.sql代替正文，也不改原执行快捷键。 */
   async function executeCurrentStatement(action: 'execute' | 'explain-current' = 'execute') {
-    if (action === 'explain-current' && !sqlite) return;
+    if (action === 'explain-current' && (resultsOnly || editor.current?.getSelections()?.length !== 1)) return;
     if (!alive.current || busyRef.current || useWorkspace.getState().activeJobs[tab.id] || closeRequestRef.current || fileSource.isBusy() || formatting.current || useWorkspace.getState().queryFileOpenings?.[tab.id] || document.querySelector(appModalSelector)) return;
     let intent: CurrentStatementIntent | undefined;
     try {
@@ -1157,6 +1157,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if (sqlite && (!['execute', 'explain', 'explain-text', 'explain-current'].includes(mode) || parameters && (mode !== 'execute' || currentIntent !== parameterForm?.intent) || analysisIntent || collectWarningDetails)) { locator?.dispose(); setError(sqliteZh.unsupported); return false; }
     if (busyRef.current) { locator?.dispose(); return false; }
     if (!source.trim()) { locator?.dispose(); setError(zh.query.text001); return false; }
+    const currentStatement = mode === 'explain-text' ? explainSource.current.currentStatement :
+      (mode === 'execute' || mode === 'explain-current') && currentIntent && !currentIntent.selectionOnly ? { offset: currentIntent.offset } : undefined;
     const changed = parameters && (sqlite || parameterForm) ? (sqlite ? parameterZh.sqliteSourceChanged : parameterZh.currentSourceChanged) : undefined;
     if (parameters && (sqlite || parameterForm)) { try { assertParameterForm(parameterForm, true); if (source !== (parameterForm!.intent?.source ?? parameterForm!.source)) throw Error(changed); } catch (reason) { locator?.dispose(); setError(errorMessage(reason)); return false; } }
     clearFailureSource(); let retainLocator = false;
@@ -1179,11 +1181,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       if (mode === 'analyze') analysisIntent!.assertCurrent();
       if(cancelledQuery.current===task.current)throw new Error(queryContextZh.cancelledBeforeSend);
       currentIntent?.assertCurrent();
-      const input = { sessionId: session, sql: source, taskId: task.current, maxRows: settings.resultLimit, ...(sqlite && sqliteStatementTimeoutMs > 0 ? {sqliteStatementTimeoutMs} : {}), ...((mode === 'execute' || mode === 'explain-current') && currentIntent && !currentIntent.selectionOnly ? { currentStatement: { offset: currentIntent.offset } } : {}), ...(mode === 'execute' && continueAfterError && (!sqlite || !currentIntent || currentIntent.selectionOnly) ? { continueOnError: true as const } : {}), ...(mode === 'execute' && collectWarningDetails === true ? { collectWarnings: true as const } : {}),
+      const input = { sessionId: session, sql: source, taskId: task.current, maxRows: settings.resultLimit, ...(sqlite && sqliteStatementTimeoutMs > 0 ? {sqliteStatementTimeoutMs} : {}), ...(currentStatement ? { currentStatement } : {}), ...(mode === 'execute' && continueAfterError && (!sqlite || !currentIntent || currentIntent.selectionOnly) ? { continueOnError: true as const } : {}), ...(mode === 'execute' && collectWarningDetails === true ? { collectWarnings: true as const } : {}),
         ...(mode === 'execute' && !sqlite && collectStatus ? { collectStatus: true as const } : {}),
         ...(mode === 'execute' && !sqlite && collectStages ? { collectStages: true as const } : {}) };
-      // 文本计划复用首次捕获的 SQL，切换展示不会读取后来编辑的草稿。
-      if (mode === 'explain' || mode === 'explain-text') explainSource.current = source;
+      // 文本计划复用首次捕获的 SQL 及原光标偏移，切换展示不会读取后来编辑的草稿。
+      if (mode === 'explain' || mode === 'explain-current') explainSource.current = { sql: source, currentStatement };
       const result = parameters ? await invoke('query.executeParameterized', { ...input, parameters,
         ...(parameterForm?.sqliteNavicatParameters ? {sqliteNavicatParameters: true as const} : {}),
         ...(currentIntent && parameterForm?.confirmedRange ? {currentStatement: {offset: currentIntent.offset, confirmedRange: parameterForm.confirmedRange}} : {}) }) : mode === 'execute' ? await invoke('query.execute', input) : mode === 'analyze' ? await invoke('query.analyze', { ...input, acknowledged: true, expectedDatabase: analysisIntent!.database }) : await invoke('query.explain', { ...input, format: mode === 'explain-text' ? 'text' : 'auto' });
@@ -2810,11 +2812,15 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.69,
       run: () => { if (active) openStatementNavigation(searchEditor, 'save'); },
     });
+    const plan = searchEditor.addAction({ id: 'dbark-explain-current:' + uid(), label: uiCommandLabels['explain-current'],
+      precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.71,
+      run: () => { if (active && editor.current === searchEditor) return executeCurrentStatement('explain-current'); },
+    });
     const adjacent = (['previous', 'next'] as const).map((direction, index) => searchEditor.addAction({
       id: `dbark-${direction}-statement:${uid()}`, label: uiCommandLabels[`${direction}-statement`], precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.66 + index / 100,
       run: () => { if (active) openStatementNavigation(searchEditor, direction); },
     }));
-    return () => { active = false; action.dispose(); positions.forEach(item => item.dispose()); select.dispose(); duplicate.dispose(); format.dispose(); copy.dispose(); quote.dispose(); save.dispose(); adjacent.forEach(item => item.dispose()); };
+    return () => { active = false; action.dispose(); positions.forEach(item => item.dispose()); select.dispose(); duplicate.dispose(); format.dispose(); copy.dispose(); quote.dispose(); save.dispose(); plan.dispose(); adjacent.forEach(item => item.dispose()); };
   }, [searchEditor, queryMenuKey, connection, navigationView?.busy, tab.sql, resultsOnly]);
   const menuResult = useRef<{ result?: QueryResult; revision: number }>({ revision: 0 });
   if (menuResult.current.result !== sourceResult) menuResult.current = { result: sourceResult, revision: menuResult.current.revision + 1 };
@@ -2972,6 +2978,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction(sqlQuotedCopyAction)?.run(); } },
     'sql-copy-current-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'copy') },
     'save-current-statement': { enabled: canNavigateFromCursor && !navigationSaving, run: () => openStatementNavigation(editor.current, 'save') },
+    'explain-current': { enabled: canNavigateFromCursor, run: () => executeCurrentStatement('explain-current') },
     'save-sql-selection': { enabled: canNavigateFromCursor && hasSingleSelection,
       run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction('save-sql-selection')?.run(); } },
     'sql-copy-current-statement-quoted': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'quote') },
@@ -3067,7 +3074,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 <button aria-label={parameterZh.open} disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={() => openParameters()}><Braces size={14}/>{parameterZh.open}</button>
 {!sqlite && <button disabled={busy || !connection || !!closeRequest} onClick={openTransactionSettings}>{queryTransactionSettingsZh.open}</button>}
 <button disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={() => void execute('explain')}><Gauge size={15}/>{zh.query.text014}</button>
-{sqlite && <button disabled={!canNavigateFromCursor} title={sqliteExplainZh.currentHint} onClick={() => void executeCurrentStatement('explain-current')}><Gauge size={15}/>{sqliteExplainZh.current}</button>}
+<button disabled={!canNavigateFromCursor} title={sqlite ? sqliteExplainZh.currentHint : undefined} onClick={() => void executeCurrentStatement('explain-current')}><Gauge size={15}/>{uiCommandLabels['explain-current']}</button>
 {!sqlite && <button disabled={busy || !connection || !!closeRequest} onClick={() => void openAnalyze()}><Gauge size={15}/>{queryAnalyzeZh.open}</button>}</ActionMenuSection>
         <ActionMenuSection label={menuText.files}>{fileActions}
 {tab.fileSourceBinding && <button disabled={busy || fileSource.busy} title={queryFilesZh.librarySave} aria-label={queryFilesZh.librarySave} onClick={() => { invalidateResultSelection(); setQueryName(tab.title); setSave(true); }}>{queryFilesZh.librarySave}</button>}</ActionMenuSection>
@@ -3252,7 +3259,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         }} />}
       {matchView.active && <QueryResultMatchView active={matchView.active} disabled={!selectionBinding || busy || !!activeColumnLease}
         onClear={() => changeMatchView()}/>}
-      <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>{!pin && outcome?.sqliteExplain ? <SqliteExplainPlanView key={task.current} outcome={outcome} busy={busy} isCurrent={queryMenuCurrent} fileActions/> : !pin && outcome?.analysis ? <QueryAnalyzeView key={task.current} plan={outcome.analysis} outcome={outcome} fileActions busy={busy} isFileCurrent={queryMenuCurrent}/> : !pin && outcome?.explain ? <ExplainPlanView key={task.current} outcome={outcome} fileActions fileBusy={busy} busy={busy || !sessionId} isFileCurrent={queryMenuCurrent} onText={() => void runQuery(explainSource.current, 'explain-text')}/> : result?.columns.length ? <div className="query-result-with-details">
+      <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>{!pin && outcome?.sqliteExplain ? <SqliteExplainPlanView key={task.current} outcome={outcome} busy={busy} isCurrent={queryMenuCurrent} fileActions/> : !pin && outcome?.analysis ? <QueryAnalyzeView key={task.current} plan={outcome.analysis} outcome={outcome} fileActions busy={busy} isFileCurrent={queryMenuCurrent}/> : !pin && outcome?.explain ? <ExplainPlanView key={task.current} outcome={outcome} fileActions fileBusy={busy} busy={busy || !sessionId} isFileCurrent={queryMenuCurrent} onText={() => void runQuery(explainSource.current.sql, 'explain-text')}/> : result?.columns.length ? <div className="query-result-with-details">
       <PostgresTableFindPanel host={{ className: 'query-result-grid', inert: !!(recordEdit?.cell || mysqlRelation?.cell) }} request={activeReplace?.fields ? activeReplace.panel : undefined} scope={selectionBinding ?? visibleColumns}
         enabled={!!activeReplace?.fields} writable={!!activeReplace?.fields} rows={replaceRows} replacementRows={sqliteReplaceRows} columns={visibleColumns}
         replaceSelection={activeReplace?.fields ? resultSelection.checkedRows(activeReplace.binding) ?? null : undefined}

@@ -569,12 +569,14 @@ export function PostgresQueryTab({
   }
   /** 查询和计划都捕获原模型版本，实际分析只接受已经确认的原令牌。 */
   function run(
-    mode: 'normal' | 'selection' | 'current' | 'all' | 'explain' | 'analyzePreview' = 'normal',
+    mode: 'normal' | 'selection' | 'current' | 'all' | 'explain' | 'explain-current' | 'analyzePreview' = 'normal',
     values?: QueryParameter[],
     parameter?: ParameterOwner,
     sqlOverride?: string,
     confirmed?: AnalyzeOwner,
   ) {
+    const currentPlan = mode === 'explain-current';
+    const explaining = mode === 'explain' || currentPlan;
     if (confirmed) {
       const current = useWorkspace.getState();
       if (analyzeRef.current !== confirmed || phase.current || closeRef.current || !same(confirmed.scope) ||
@@ -607,10 +609,11 @@ export function PostgresQueryTab({
     // 「执行选区」在实际派发时重新读取原选区，空选区或多选区不得降级为整份执行。
     if (mode === 'selection' && (!model || !selection || selection.isEmpty() || editor.current?.getSelections()?.length !== 1)) return;
     if (mode === 'current' && !selection) return;
+    if (currentPlan && (resultsOnly || state.transactionFailed || !model || !selection || editor.current?.getSelections()?.length !== 1)) return;
     let sql = confirmed?.source ?? sqlOverride ?? original,
       offset: number | undefined;
     if (!confirmed && !sqlOverride && !values && selection && mode !== 'all') {
-      if (mode === 'current' || (mode === 'explain' || mode === 'analyzePreview') && selection.isEmpty()) offset = model!.getOffsetAt(selection.getPosition());
+      if (mode === 'current' || currentPlan || (explaining || mode === 'analyzePreview') && selection.isEmpty()) offset = model!.getOffsetAt(selection.getPosition());
       else if (!selection.isEmpty()) sql = model!.getValueInRange(selection);
     }
     if (values) sql = parameter!.source;
@@ -619,10 +622,10 @@ export function PostgresQueryTab({
       return;
     }
     clearFailureSource();
-    const locator = parameter?.failureSource ?? (!sqlOverride && !confirmed && mode !== 'explain' && mode !== 'analyzePreview'
+    const locator = parameter?.failureSource ?? (!sqlOverride && !confirmed && !explaining && mode !== 'analyzePreview'
       ? captureFailureSource(sql, mode === 'all' || mode === 'current') : undefined);
     if (parameter) parameter.failureSource = undefined;
-    const continuing = !sqlOverride && !confirmed && mode !== 'explain' && mode !== 'analyzePreview' &&
+    const continuing = !sqlOverride && !confirmed && !explaining && mode !== 'analyzePreview' &&
       (parameter ? parameter.continueOnError : continueOnError);
     const modelVersion = model?.getVersionId(),
       job = acquireWorkspaceBusy(tab.id),
@@ -635,6 +638,13 @@ export function PostgresQueryTab({
         sent: false,
       };
     phase.current = owner;
+    // 会话准备时若原光标或选区变化，即使后来恢复也不能发送旧计划。
+    const watchPlanCursor = currentPlan ? editor.current?.onDidChangeCursorSelection(event => {
+      if (!owner.sent && (!selection?.equalsSelection(event.selection) || event.secondarySelections.length)) owner.valid = false;
+    }) : undefined;
+    const watchPlanTab = currentPlan ? useWorkspace.subscribe(state => {
+      if (!owner.sent && state.settings.activeTabId !== tab.id) owner.valid = false;
+    }) : undefined;
     parameterTask.current = owner.taskId;
     setBusy(true);
     setError('');
@@ -653,6 +663,7 @@ export function PostgresQueryTab({
           !owner.valid ||
           owner.cancelled ||
           !same(owner.scope) ||
+          (currentPlan && useWorkspace.getState().settings.activeTabId !== tab.id) ||
           editor.current?.getModel() !== model ||
           model?.getVersionId() !== modelVersion ||
           (confirmed && confirmed.sessionId !== id) ||
@@ -690,7 +701,7 @@ export function PostgresQueryTab({
               ...(continuing ? {continueOnError: true} : {}),
               maxRows: useWorkspace.getState().settings.resultLimit,
             })
-          : await invoke(mode === 'explain' ? 'postgres.explain' : 'query.execute', {
+          : await invoke(explaining ? 'postgres.explain' : 'query.execute', {
               sessionId: id,
               taskId: owner.taskId,
               sql,
@@ -717,6 +728,8 @@ export function PostgresQueryTab({
       } catch (reason) {
         if (alive.current && life.current === owner.life) setError(errorMessage(reason));
       } finally {
+        watchPlanCursor?.dispose();
+        watchPlanTab?.();
         if (!retainLocator) locator?.dispose();
         if (owner.cancel) await owner.cancel;
         const id = session.current?.id;
@@ -2298,6 +2311,7 @@ export function PostgresQueryTab({
     'next-query-result': { enabled: nextResult !== undefined && !locked, run: () => selectAdjacentQueryResult(layoutRoot.current, nextResult, selectCurrentResult) },
     stop: { enabled: canStop, run: stop },
     explain: { enabled: canPlan, run: () => run('explain') },
+    'explain-current': { enabled: canPlan && !resultsOnly, run: () => run('explain-current') },
     analyze: { enabled: canPlan, run: () => run('analyzePreview') },
     parameters: { enabled: canRun, run: () => openParameters() },
     format: { enabled: editable, run: formatQuery },
@@ -2394,6 +2408,11 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.69,
       run: () => { if (active && canNavigate && !resultsOnly) navigation.open('save'); },
     });
+    const planStatement = editorInstance.addAction({
+      id: `dbark-postgres-explain-current:${uid()}`, label: uiCommandLabels['explain-current'],
+      precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.71,
+      run: () => { if (active && editor.current === editorInstance) run('explain-current'); },
+    });
     const definition = editorInstance.addAction({
       id: `dbark-postgres-object-definition:${uid()}`, label: definitionText.entry,
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.8,
@@ -2404,7 +2423,7 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly', contextMenuGroupId: 'navigation', contextMenuOrder: 1.9,
       run: () => { if (active && editor.current === editorInstance && editorInstance.getModel() === menuModel) syntax.open(); },
     });
-    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); formatStatement.dispose(); copyStatement.dispose(); quoteStatement.dispose(); saveStatement.dispose(); definition.dispose(); syntaxCheck.dispose(); };
+    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); formatStatement.dispose(); copyStatement.dispose(); quoteStatement.dispose(); saveStatement.dispose(); planStatement.dispose(); definition.dispose(); syntaxCheck.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery, state.standardConformingStrings]);
   const renderResultGrid = (target?: GridFindTarget, marks?: ReadonlySet<string>) => result && displayResult ? (
     <ResultsGrid zoomable columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding} findMemory={findMemory} restoreCell={comparisonCell}

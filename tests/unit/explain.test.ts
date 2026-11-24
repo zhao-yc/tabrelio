@@ -60,6 +60,20 @@ describe('执行计划语句与原会话调度', () => {
     expect(explainStatement("SELECT 'a\\'; SELECT 2'", { noBackslashEscapes: false, ansiQuotes: false })).toContain('SELECT 2');
     expect(() => explainStatement("SELECT 'a\\'; SELECT 2'", { noBackslashEscapes: true, ansiQuotes: false })).toThrow();
   });
+  it('只为原光标命中的语句生成计划，忽略前置 SET 和后续语句', async () => {
+    const statement = "SELECT '船;🚢' AS marker";
+    const source = "SET @trace = 1;\r\nDELIMITER $$\r\n" + statement + '$$\r\nDELIMITER ;\r\nDELETE FROM other_table;';
+    const cursor = source.indexOf('marker');
+    const c = context();
+    await explainQuery(source, 'auto', c, cursor);
+    expect(c.run).toHaveBeenCalledExactlyOnceWith('EXPLAIN FORMAT=JSON ' + statement);
+    const m = context(); m.status = { dialect: 'mariadb', version: '11.4.13' };
+    await explainQuery(source, 'text', m, cursor);
+    expect(m.run).toHaveBeenCalledExactlyOnceWith('EXPLAIN ' + statement);
+    const blank = context();
+    await expect(explainQuery(source, 'auto', blank, source.indexOf('DELIMITER') + 1)).rejects.toThrow('光标所在位置');
+    expect(blank.run).not.toHaveBeenCalled();
+  });
   it('IPC 只接受自动/文本格式，不能请求 ANALYZE 或附加字段', () => {
     const input = { sessionId: 's', taskId: 't', sql: 'SELECT 1', maxRows: 1 };
     expect(commandSchemas['query.explain'].safeParse({ ...input, format: 'auto' }).success).toBe(true);

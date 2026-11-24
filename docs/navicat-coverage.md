@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。四种关系型数据库查询页可从原生菜单或编辑器右键查看光标所在整句的执行计划。MySQL 和 MariaDB 沿实际会话模式解析 `DELIMITER`，手动文本计划复用原脚本和光标。macOS 源码 Electron 已在四种数据库验证原生菜单、含相邻语句的脚本、局部选区和执行历史，MySQL／MariaDB 另验改稿后获取原句文本计划。Q07 继续为部分覆盖。[Navicat 查询编辑说明](https://www.navicat.com/en/products/query-editing?product=navicat-premium)
+
 2026-11-24 源码增量。矩形选区的右键菜单新增「另存选区为 PNG」，复用原图片生成器和选区导出窗口的保存流程。macOS 源码 Electron 已核对 SQLite 查询结果及表页草稿、MySQL／MariaDB／PostgreSQL 表页和零连接离线快照，确认图片可解码、选区变化后原目标不被替换。主进程回归覆盖保存位置的一次消费与主文档切换。D02、Q05 继续为部分覆盖。[Navicat 数据编辑器说明](https://www.navicat.com/en/products/data-editor-for-rdbms?product=navicat-premium)
 
 2026-11-24 源码增量。矩形选区的右键菜单可直接打开 TXT 保存对话框，按可见列顺序写入 UTF-8 制表符文本和列名。macOS 源码 Electron 已核对 SQLite 查询结果和草稿、MySQL／MariaDB／PostgreSQL 表页及零连接离线快照，涵盖精确值、BLOB、NULL、空文本及选择目标期间原选区改变时拒绝写盘。D02、Q05 继续为部分覆盖。[Navicat 数据编辑器说明](https://www.navicat.com/en/products/data-editor-for-rdbms?product=navicat-premium)

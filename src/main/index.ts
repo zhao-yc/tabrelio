@@ -1370,8 +1370,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         (command === 'query.executeParameterized' && Boolean(mysqlRange) !== Boolean(mysqlOwner && !sqlite && !postgres)))
       throw Error('当前语句参数操作需要原窗口、查询会话和有效的参数识别范围');
   }
-  if (command === 'query.explain' && input.currentStatement !== undefined && !broker.isSqliteSession(input.sessionId))
-    throw Error('此当前语句计划操作只用于原 SQLite 查询会话');
+  if (command === 'query.explain' && input.currentStatement !== undefined && !broker.isSqliteSession(input.sessionId)) {
+    const owner = sessions.get(input.sessionId)?.mysqlOwner;
+    if (shuttingDown || !owner || !columns || !columnsMain.sharesDocumentOwner(owner, columns))
+      throw Error('当前语句计划需要原窗口和查询会话');
+  }
   if ((command === 'query.parameterNames' || command === 'query.executeParameterized') &&
       input.sqliteNavicatParameters !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('此 Navicat 参数模式只用于原 SQLite 查询会话');
@@ -3955,7 +3958,7 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         if (payload.command.startsWith('postgres.queryBuilder.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
-        if ((payload.command === 'query.parameterNames' || payload.command === 'query.executeParameterized') &&
+        if ((payload.command === 'query.parameterNames' || payload.command === 'query.executeParameterized' || payload.command === 'query.explain') &&
             (input as {currentStatement?: unknown}).currentStatement !== undefined) columns = columnsMain.capture(event);
         if ((payload.command === 'table.page' || payload.command === 'sqlite.tablePage' || payload.command === 'postgres.table.page' ||
             payload.command === 'postgres.table.presets.open') && (input as { includeReadStatements?: true }).includeReadStatements)

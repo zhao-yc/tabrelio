@@ -774,7 +774,7 @@ export class Engine {
         const result = await explainQuery(input.sql, input.format ?? 'auto', {
           status: managed.status, mode, check: () => this.checkCancelled(task), reusable: () => !managed.broken && managed.serverStatus !== undefined,
           run: sql => this.streamQuery(task, sql, Math.min(input.maxRows, explainLimits.textRows), 0, { remainingRows: Math.min(input.maxRows, explainLimits.textRows), remainingBytes: 1024 * 1024, remainingResults: 1 }),
-        });
+        }, input.currentStatement?.offset);
         if (managed.serverStatus === undefined) { managed.broken = true; managed.connection.destroy(); }
         return { ...result, transactionOpen: managed.serverStatus === undefined ? undefined : Boolean(managed.serverStatus & 1) };
       }));

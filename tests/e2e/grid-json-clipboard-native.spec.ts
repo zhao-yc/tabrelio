@@ -19,6 +19,7 @@ import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { resultSqlZh } from '../../src/shared/resultSql.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
+import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -503,6 +504,48 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       await checkAliasFind();
     }
     expect(await tableSorts()).toEqual(tableSortsBeforeResult);
+    expect(await history()).toEqual(historyBefore);
+    // 前后故意放置不可执行的相邻语句，光标端只选中一个字符。计划必须分析中间整句。
+    const custom = dialect === 'mysql' || dialect === 'mariadb';
+    const script = ['SELECT * FROM missing_plan_previous;', ...(custom ? ['DELIMITER $$'] : []),
+      'SELECT * FROM json_subject WHERE id = 1' + (custom ? '$$' : ';'), ...(custom ? ['DELIMITER ;'] : []),
+      'SELECT * FROM missing_plan_next;'].join('\n');
+    const editor = query.locator('.monaco-editor').getByRole('textbox');
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    const write = async (sql: string) => {
+      await editor.focus();
+      await page.keyboard.press(modifier + '+A');
+      await page.keyboard.press('Backspace');
+      await page.keyboard.insertText(sql);
+      await expect.poll(() => page.evaluate(async () => {
+        const state = await window.dbark.invoke('settings.get', {});
+        return state.tabs.find(item => item.id === state.activeTabId)?.sql?.replaceAll('\r\n', '\n');
+      })).toBe(sql);
+    };
+    await write(script);
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
+    await page.keyboard.press('ArrowDown');
+    if (custom) await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Shift+ArrowRight');
+    const command = 'explain-current';
+    await expect.poll(() => desktop.evaluate(({ Menu }, id) => {
+      const menu = Menu.getApplicationMenu();
+      return menu?.getMenuItemById(id)?.enabled === true && menu.getMenuItemById('execute-selection')?.enabled === true;
+    }, command)).toBe(true);
+    await desktop.evaluate(({ Menu, BrowserWindow }, { id, label }) => {
+      const entry = Menu.getApplicationMenu()?.getMenuItemById(id);
+      const [window, extra] = BrowserWindow.getAllWindows();
+      if (!entry?.enabled || entry.label !== label || !window || extra) throw Error('当前语句计划菜单不可用');
+      entry.click(entry, window, {} as Electron.KeyboardEvent);
+    }, { id: command, label: uiCommandLabels[command] });
+    await expect(query.getByRole('treeitem').filter({ hasText: 'json_subject' }).first()).toBeVisible();
+    await expect(query.locator('.error-box')).toHaveCount(0);
+    if (custom) {
+      await write('SELECT * FROM missing_changed_draft;');
+      await (await navigationMenuItem(query, { name: '获取文本计划', exact: true })).click();
+      await expect(query.getByRole('grid')).toContainText('json_subject');
+      await expect(query.locator('.error-box')).toHaveCount(0);
+    }
     expect(await history()).toEqual(historyBefore);
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
     expect(pageErrors).toEqual([]);

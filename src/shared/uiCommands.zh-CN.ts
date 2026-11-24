@@ -47,6 +47,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'sql-format-preferences': 'SQL 格式化偏好',
   'sql-format-options': '按选项格式化 SQL',
   'parameters': '参数执行', 'explain': '执行计划', 'analyze': '实际执行分析', 'transaction-settings': '事务设置',
+  'explain-current': '查看当前语句执行计划',
   'object-definition': '查看对象结构',
   'syntax-check': '检查 SQL 语法',
   'statement-navigation': '语句导航',

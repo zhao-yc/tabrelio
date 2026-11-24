@@ -2,6 +2,7 @@ import type { NetworkConnectionStatus, QueryOutcome, QueryResult } from '../shar
 import type { SqlLexicalMode } from '../shared/queryParameters';
 import { explainLimits, parseExplainPlan, type ExplainPlan } from '../shared/explain';
 import { splitSql } from './sql';
+import { currentSqlStatement } from './currentStatement';
 
 export interface ExplainContext {
   status: NetworkConnectionStatus; mode: SqlLexicalMode;
@@ -16,9 +17,12 @@ export function explainCapability(status: NetworkConnectionStatus): boolean {
   return status.dialect === 'mysql' ? major > 5 || major === 5 && minor >= 6 : major > 10 || major === 10 && minor >= 2;
 }
 /** 扫描器沿用原会话模式及 DELIMITER；所有用户语句只允许被 EXPLAIN 包裹。 */
-export function explainStatement(sql: string, mode: SqlLexicalMode): string {
+export function explainStatement(sql: string, mode: SqlLexicalMode, offset?: number): string {
   if (typeof sql !== 'string' || Buffer.byteLength(sql) > 20 * 1024 * 1024) throw Error('执行计划 SQL 不能超过 20 MiB');
-  const statements = splitSql(sql, mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
+  // 当前语句沿实际会话词法扫描全文。只把命中的单条语句交给计划校验，前置 SET 和其他语句不发送。
+  const current = offset === undefined ? undefined : currentSqlStatement(sql, offset, mode);
+  if (offset !== undefined && !current) throw Error('光标所在位置没有可生成执行计划的语句');
+  const statements = splitSql(current?.sql ?? sql, mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
   if (statements.length !== 1) throw Error('执行计划一次只接受一条 SQL，请选中需要分析的语句');
   const statement = statements[0];
   if (/\/\*(?:!|M!)/i.test(statement)) throw Error('执行计划不接受可执行版本注释，请先展开注释为明确的 SQL');
@@ -34,8 +38,8 @@ function formatUnsupported(error: unknown): boolean {
   return code === 'ER_UNKNOWN_EXPLAIN_FORMAT';
 }
 /** 编辑器输入必须先验证语句边界和类型。 */
-export async function explainQuery(sql: string, format: 'auto' | 'text', context: ExplainContext): Promise<QueryOutcome> {
-  return executeExplainStatement(explainStatement(sql, context.mode), format, context);
+export async function explainQuery(sql: string, format: 'auto' | 'text', context: ExplainContext, offset?: number): Promise<QueryOutcome> {
+  return executeExplainStatement(explainStatement(sql, context.mode, offset), format, context);
 }
 
 /** 只接收已验证的单条语句或引擎从结构化设计生成的 SELECT。始终使用同一会话且不发送 ANALYZE。 */
