@@ -28,6 +28,7 @@ import { ResultExportDialog } from './ResultExportDialog';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
 import { QueryResultComparisonDialog } from './QueryResultComparisonDialog';
 import type { QueryResultComparisonSource } from '../queryResultComparison';
+import { QueryResultComparisonSettingsMemory } from '../queryResultComparisonSettings';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
@@ -64,6 +65,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   const [overlay, setOverlay] = useState<SnapshotOverlay>(), overlayRef = useRef<SnapshotOverlay | undefined>(undefined);
   const exportSelection = useMemo(() => new ResultExportSelection(), []);
   const [history] = useState(() => new QueryResultHistory());
+  const [comparisonSettings] = useState(() => new QueryResultComparisonSettingsMemory());
   const [rowDetails] = useState(() => new QueryRowDetails());
   const [activeDetail, setActiveDetail] = useState<{ scope: object; result: QueryResult; index: number }>();
   const [columnLayout, setColumnLayout] = useState<{ layout: QueryResultColumnLayout; columns: ResultColumn[] }>();
@@ -523,6 +525,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       </div>
     </Modal>}
     {overlay?.kind === 'compare' && <QueryResultComparisonDialog offline owner={overlay.owner} inputs={overlay.files} dialect={overlay.dialect}
+      settings={{ memory: comparisonSettings, scope: 'offline' }}
       isCurrent={() => comparisonCurrent(overlay)} onClose={() => closeOverlay(overlay)}/>}
     {overlay?.kind === 'columns' && <QueryResultColumnsDialog binding={overlay.binding} initial={overlay.initial} owner={overlay.owner}
       isCurrent={() => columnsCurrent(overlay)} onApply={layout => applyColumns(overlay, layout)} onClose={() => closeOverlay(overlay)}/>}

@@ -5,6 +5,7 @@ import { resultExcelZh } from '../../shared/resultExcel.zh-CN';
 import { pinLimits } from '../queryPins';
 import { alignQueryResultComparisonColumns, captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonValues, sameQueryResultComparisonColumnType, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonBaseline, type QueryResultComparisonCapture, type QueryResultComparisonColumnPair, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonSource, type QueryResultComparisonValue } from '../queryResultComparison';
 import { queryResultComparisonZh as text } from '../locales/queryResultComparison.zh-CN';
+import { sameQueryResultComparisonSettings, type QueryResultComparisonSettings, type QueryResultComparisonSettingsMemory } from '../queryResultComparisonSettings';
 import type { SortDialect } from '../queryResultSort';
 import { errorMessage, invoke, uid } from '../lib';
 import { UsageHelp, ErrorBox, Modal  } from './ui';
@@ -15,11 +16,11 @@ interface Props {
   dialect?: SortDialect;
   offline?: boolean;
   returned?: { preferredId: string; baseline?: QueryResultComparisonBaseline };
+  settings?: { memory: QueryResultComparisonSettingsMemory; scope: string };
   isCurrent(): boolean;
   onClose(): void;
 }
-type AlignmentMode = 'strict' | 'name' | 'manual';
-type Draft = { left: string; right: string; keys: readonly string[]; mode: AlignmentMode; pairs: readonly QueryResultComparisonColumnPair[] };
+type Draft = QueryResultComparisonSettings & { left: string; right: string };
 const emptyPair: QueryResultComparisonColumnPair = { left: '', right: '' };
 type Source = { input: QueryResultComparisonSource; id: string; key: string; label: string; result: QueryResult; columns: readonly ResultColumn[]; truncated: boolean };
 type Run = { draft: Draft; left: QueryResult; right: QueryResult; capture: QueryResultComparisonCapture; scan: QueryResultComparisonScan; timer?: ReturnType<typeof setTimeout> };
@@ -99,11 +100,12 @@ function ComparisonKeySearch({ query, disabled, onApply }: { query: string; disa
 }
 
 /** 对比原返回数据。选择来源和匹配键后，由同一套扫描器计算结果和差异报告。 */
-export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = false, returned, isCurrent, onClose }: Props) {
+export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = false, returned, settings, isCurrent, onClose }: Props) {
   const baseline = returned?.baseline;
-  const origin = useRef({ inputs, baselineInputs: baseline?.inputs, owner, dialect }).current;
-  const latest = useRef({ inputs, baselineInputs: baseline?.inputs, owner, dialect, isCurrent });
-  latest.current = { inputs, baselineInputs: baseline?.inputs, owner, dialect, isCurrent };
+  const ownerIdentity = { inputs, baselineInputs: baseline?.inputs, owner, dialect, memory: settings?.memory, scope: settings?.scope };
+  const origin = useRef(ownerIdentity).current;
+  const latest = useRef({ ...ownerIdentity, isCurrent });
+  latest.current = { ...ownerIdentity, isCurrent };
   const [prepared] = useState(() => {
     try {
       const right = sources(inputs, baseline ? 'current' : returned ? 'returned' : 'shared');
@@ -139,7 +141,8 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
     let valid = false;
     try {
       valid = latest.current.inputs === origin.inputs && latest.current.baselineInputs === origin.baselineInputs &&
-        latest.current.owner === origin.owner && latest.current.dialect === origin.dialect && latest.current.isCurrent() === true &&
+        latest.current.owner === origin.owner && latest.current.dialect === origin.dialect &&
+        latest.current.memory === origin.memory && latest.current.scope === origin.scope && latest.current.isCurrent() === true &&
         sameSources(inputs, prepared.right) && (!baseline || sameSources(baseline.inputs, prepared.left));
     } catch {}
     if (!valid) invalid.current = true;
@@ -173,8 +176,18 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
   /** 切源与键编辑同步撤销旧扫描及结果，选择新源后要求重新明确勾选键。 */
   function change(next: Draft): void {
     if (report.current || committed.current !== ticket || draftRef.current !== draft || !sourceCurrent()) return;
-    if (!prepared.left.some(source => source.key === next.left) || !prepared.right.some(source => source.key === next.right) || next.keys.length > 8 || new Set(next.keys).size !== next.keys.length) return;
-    if (next.keys.some(key => !columns.some(column => column.key === key && !queryResultComparisonKeyReason(column, dialect)))) return;
+    const left = prepared.left.find(source => source.key === next.left), right = prepared.right.find(source => source.key === next.right);
+    if (!left || !right || next.keys.length > 8 || new Set(next.keys).size !== next.keys.length) return;
+    if (next.keys.length) {
+      let keyColumns: readonly ResultColumn[] = columns;
+      if (next.mode !== draft.mode || next.pairs !== draft.pairs) {
+        try {
+          keyColumns = next.mode === 'name' ? alignQueryResultComparisonColumns(left.columns, right.columns, dialect).map(pair => left.columns[pair.left])
+            : next.mode === 'manual' ? left.columns.filter(column => next.pairs.some(pair => pair.left === column.key)) : left.columns;
+        } catch { return; }
+      }
+      if (next.keys.some(key => !keyColumns.some(column => column.key === key && !queryResultComparisonKeyReason(column, dialect)))) return;
+    }
     if (next.pairs !== draft.pairs) setCandidate(emptyPair);
     cancelRun(); draftRef.current = next; setDraft(next); setView({ processed: 0, total: 0 });
     resetResultFilters();
@@ -201,6 +214,7 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
           if (progress.done) {
             const result = run.scan.result(); if (!result || !currentQueryResultComparison(capture, left!, right!)) { invalid.current = true; throw Error(text.stale); }
             if (!environment() || active.current !== run) throw Error(text.stale);
+            settings?.memory.remember(settings.scope, dialect, left!.columns, right!.columns, draft);
             active.current = undefined; setView({ run, ...progress, result });
           } else { setView({ run, ...progress }); run.timer = setTimeout(tick, 0); }
         } catch (reason) { if (!currentQueryResultComparison(capture, left!, right!)) invalid.current = true; cancelRun(); if (alive.current) setView({ processed: 0, total: 0, error: errorMessage(reason) }); }
@@ -220,6 +234,7 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
   const valid = environment(), result = valid && view.run?.draft === draft && draftRef.current === draft ? view.result : undefined;
   const running = active.current !== undefined && active.current === view.run;
   const left = prepared.left.find(source => source.key === draft.left), right = prepared.right.find(source => source.key === draft.right);
+  const previousSettings = left && right && left !== right ? settings?.memory.read(settings.scope, dialect, left.columns, right.columns) : undefined;
   const alignment = useMemo(() => {
     if (draft.mode !== 'name' || !left || !right || left === right) return {};
     try { return { columns: alignQueryResultComparisonColumns(left.columns, right.columns, dialect).map(pair => left.columns[pair.left]) }; }
@@ -311,6 +326,8 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
         const mode = event.target.value;
         if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && (mode === 'strict' || mode === 'name' || mode === 'manual')) change({ ...draft, mode, keys: [], pairs: [] });
       }}><option value="strict">{text.strictAlignment}</option><option value="name">{text.alignByName}</option><option value="manual">{text.manualAlignment}</option></select></label>
+      {previousSettings && !sameQueryResultComparisonSettings(draft, previousSettings) && <button type="button"
+        disabled={!valid || running || !!reportPhase} onClick={() => change({ ...draft, ...previousSettings })}>{text.reuseSettings}</button>}
     </div>
     {draft.mode === 'name' && <p>{text.alignmentHint}</p>}
     {draft.mode === 'manual' && <fieldset disabled={manualDisabled}><legend>{text.manualAlignment}</legend>

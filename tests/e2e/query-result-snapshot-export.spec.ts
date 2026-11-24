@@ -64,7 +64,7 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
       return original(event, payload);
     });
     dialog.showOpenDialog = (async (parent: Electron.BrowserWindow, options: Electron.OpenDialogOptions) => {
-      const compare = state.dialogs.length === 4;
+      const compare = state.dialogs.length === 4 || state.dialogs.length === 6;
       if (parent !== window || options.title !== paths.openTitle || state.dialogs.length && !compare) reject('showOpenDialog');
       state.dialogs.push(compare ? 'compare' : 'open');
       return { canceled: false, filePaths: [compare ? paths.right : paths.source] };
@@ -304,6 +304,13 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     await info.attach('离线快照差异报告', { body: await page.screenshot(), contentType: 'image/png' });
     await comparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click();
     await expect(viewer).toBeVisible();
+    await viewer.getByRole('button', { name: text.compare, exact: true }).click();
+    await comparison.getByRole('button', { name: comparisonText.reuseSettings, exact: true }).click();
+    await expect(comparison.getByRole('checkbox', { name: comparisonText.key('label'), exact: true })).toBeChecked();
+    await expect(comparison.getByLabel(comparisonText.added, { exact: true })).toHaveCount(0);
+    await comparison.getByRole('button', { name: comparisonText.start, exact: true }).click();
+    await expect(comparison.getByLabel(comparisonText.added, { exact: true })).toHaveText('52');
+    await comparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click();
     expect(await readFile(right, 'utf8')).toBe(rightWire);
     expect(await readFile(source, 'utf8')).toBe(wire);
     expect(await settings()).toEqual(baseline);
@@ -312,7 +319,7 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     expect(pageErrors).toEqual([]);
     const audit = await observer.jsonValue();
     expect(audit.denied).toEqual([]);
-    expect(audit.dialogs).toEqual(['open', 'csv', 'rectangle', 'json', 'compare', 'report']);
+    expect(audit.dialogs).toEqual(['open', 'csv', 'rectangle', 'json', 'compare', 'report', 'compare']);
     expect(audit.engine).toEqual(Array(4).fill('files.exportResult'));
     expect(audit.requests.filter(command => command === 'files.exportResult')).toHaveLength(4);
   } finally {

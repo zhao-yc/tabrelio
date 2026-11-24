@@ -96,6 +96,7 @@ import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
 import { QueryResultPresetsDialog } from './QueryResultPresetsDialog';
 import { QueryResultComparisonDialog } from './QueryResultComparisonDialog';
 import { returnedQueryResultComparison, type QueryResultComparisonDraft } from '../queryResultComparison';
+import { QueryResultComparisonSettingsMemory } from '../queryResultComparisonSettings';
 import { QueryResultSnapshotActions, type QueryResultSnapshotOperation } from './QueryResultSnapshotActions';
 import { ExplainPlanView } from './ExplainPlanView';
 import { QueryAnalyzeView } from './QueryAnalyzeView';
@@ -308,6 +309,7 @@ export function PostgresQueryTab({
   const [snapshotBusy, setSnapshotBusy] = useState(false);
   const [resultSql, setResultSql] = useState<{ result: QueryResult; pinned: boolean; sourceSql?: string }>();
   const [comparisonDraft, setComparisonDraft] = useState<ComparisonDraft>();
+  const [comparisonSettings] = useState(() => new QueryResultComparisonSettingsMemory());
   const comparisonDraftRef = useRef<ComparisonDraft | undefined>(undefined);
   const comparisonOutcome = useRef(outcome);
   comparisonOutcome.current = outcome;
@@ -2675,6 +2677,7 @@ export function PostgresQueryTab({
         onApply={value => applyResultPreset(presetDraft, value)} onClose={() => closeResultPresets(presetDraft)} />}
       {comparisonDraft && <QueryResultComparisonDialog key={comparisonDraft.owner} owner={comparisonDraft.owner}
         inputs={comparisonDraft.inputs} returned={comparisonDraft.returned} dialect="postgresql" isCurrent={() => comparisonCurrent(comparisonDraft)}
+        settings={{ memory: comparisonSettings, scope: organizationScope }}
         onClose={() => closeResultComparison(comparisonDraft)} />}
       {filterDraft && <Modal title={filterText.title} wide onClose={() => closeResultFilter(filterDraft)} onEscape={event => {
         // 先交给内层条件草稿或值选择处理，候选面板的 Esc 不关闭外层窗口。

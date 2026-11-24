@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { DataRow, QueryResult, ResultColumn } from '../../src/shared/contracts';
 import { QueryResultComparisonDialog } from '../../src/renderer/components/QueryResultComparisonDialog';
 import { QueryResultComparisonScan, returnedQueryResultComparison } from '../../src/renderer/queryResultComparison';
+import { QueryResultComparisonSettingsMemory } from '../../src/renderer/queryResultComparisonSettings';
 import { snapshotQueryResult, type PinnedQueryResult } from '../../src/renderer/queryPins';
 import { queryResultComparisonZh as text } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 import { resultExcelZh } from '../../src/shared/resultExcel.zh-CN';
@@ -95,6 +96,33 @@ function many(count: number) {
 }
 
 describe('两份固定查询结果的真实只读对话框', () => {
+  it('相同列定义可恢复上一次成功的手动配对和匹配键，等待明确开始', async () => {
+    const pins = fixture(), memory = new QueryResultComparisonSettingsMemory();
+    const f = await mount(pins, { settings: { memory, scope: 'query:1' } });
+    await choose(text.alignmentMode, 'manual');
+    for (const column of ['id', 'nullable']) {
+      await choose(text.leftColumn, column);
+      await choose(text.rightColumn, column);
+      await click(text.addPair);
+    }
+    await compare();
+    expect(counts()).toEqual(['1', '1', '1', '1']);
+    expect(memory.read('query:2', undefined, pins[0].result.columns, pins[1].result.columns)).toBeUndefined();
+    const renamed = pins[1].result.columns.map(column => ({ ...column, name: '新' + column.name }));
+    expect(memory.read('query:1', undefined, pins[0].result.columns, renamed)).toBeUndefined();
+    await choose(text.right, 'middle');
+    await choose(text.alignmentMode, 'strict');
+    await click(text.reuseSettings);
+    expect(node(text.alignmentMode).value).toBe('manual');
+    expect(node(text.key('id')).checked).toBe(true);
+    await finish();
+    expect(hasCounts()).toBe(false);
+    await click(text.start);
+    await finish();
+    expect(counts()).toEqual(['0', '0', '0', '3']);
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+
   it('Excel 预检在选择文件前拒绝不能表示的值，仍可切回 JSON 保留原值', async () => {
     const pins = fixture();
     pins[2].result.rows[0].nullable = '含\u0000原值';

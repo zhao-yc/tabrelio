@@ -291,8 +291,10 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     await expect(leftBaseline.locator('option')).toHaveText(['固定 1']);
     await expect(rightCurrent.locator('option')).toHaveCount(2);
     await expect(rightCurrent).toHaveValue('1');
-    await baselineComparison.getByLabel(comparisonText.alignmentMode).selectOption('name');
-    await baselineComparison.getByRole('checkbox', { name: /^匹配键 / }).first().check();
+    await baselineComparison.getByRole('button', { name: comparisonText.reuseSettings, exact: true }).click();
+    await expect(baselineComparison.getByLabel(comparisonText.alignmentMode)).toHaveValue('name');
+    await expect(baselineComparison.getByRole('checkbox', { name: /^匹配键 / }).first()).toBeChecked();
+    await expect(baselineComparison.getByLabel(comparisonText.changed, { exact: true })).toHaveCount(0);
     await baselineComparison.getByRole('button', { name: comparisonText.start, exact: true }).click();
     await expect(baselineComparison.getByLabel(comparisonText.removed, { exact: true })).toHaveText('1');
     await expect(baselineComparison.getByLabel(comparisonText.changed, { exact: true })).toHaveText('2');
