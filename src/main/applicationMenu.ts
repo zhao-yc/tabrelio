@@ -82,7 +82,7 @@ export class ApplicationMenu {
       { label: text.favorites, submenu: [item('favorite-toggle'), item('favorites-manage', 'CmdOrCtrl+Shift+B'), separator, item('object-link', 'CmdOrCtrl+Shift+O')] },
       { label: text.tools, submenu: [
         { label: text.query, submenu: [
-          item('execute', 'CmdOrCtrl+Enter'), item('execute-selection'), item('execute-current'), item('execute-all'), item('stop'), separator,
+          item('execute', 'CmdOrCtrl+Enter'), item('execute-selection'), item('execute-current'), item('execute-current-next'), item('execute-all'), item('stop'), separator,
           item('format'), item('format-current-statement'), item('sql-format-options'), item('sql-format-preferences'), item('compact-sql'),
           item('select-current-statement'), item('open-current-statement-query'), item('previous-statement', 'CmdOrCtrl+Alt+PageUp'),
           item('next-statement', 'CmdOrCtrl+Alt+PageDown'), item('statement-navigation'),

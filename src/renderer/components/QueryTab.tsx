@@ -963,19 +963,35 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     return { tabId: tab.id, connectionId, connectionVersion: workspace.connectionVersions[connectionId] ?? 0, sessionId: sessionRef.current, draft: current?.sql, present: alive.current && !closeRequestRef.current && !fileSource.isBusy() && !workspace.queryFileOpenings?.[tab.id] && current?.kind === 'query' && workspace.connections.some(item => item.id === connectionId), active: workspace.settings.activeTabId === tab.id, modal: !!document.querySelector(appModalSelector) };
   }
   /** 独立入口只捕获当前模型，不读取选区或tab.sql代替正文，也不改原执行快捷键。 */
-  async function executeCurrentStatement(action: 'execute' | 'explain-current' = 'execute') {
-    if (action === 'explain-current' && (resultsOnly || editor.current?.getSelections()?.length !== 1)) return;
+  async function executeCurrentStatement(action: 'execute' | 'execute-and-advance' | 'explain-current' = 'execute') {
+    const advance = action === 'execute-and-advance';
+    if (action !== 'execute' && (resultsOnly || editor.current?.getSelections()?.length !== 1)) return;
     if (!alive.current || busyRef.current || useWorkspace.getState().activeJobs[tab.id] || closeRequestRef.current || fileSource.isBusy() || formatting.current || useWorkspace.getState().queryFileOpenings?.[tab.id] || document.querySelector(appModalSelector)) return;
     let intent: CurrentStatementIntent | undefined;
+    let watchSelection: monaco.IDisposable | undefined;
+    let selectionMoved = false;
     try {
       if (!editor.current) throw new Error(currentStatementZh.unavailable);
       intent = new CurrentStatementIntent(editor.current, currentStatementScope, changed => useWorkspace.subscribe(changed));
+      if (advance) {
+        const originalSelection = editor.current.getSelection();
+        watchSelection = editor.current.onDidChangeCursorSelection(event => {
+          if (!originalSelection?.equalsSelection(event.selection) || event.secondarySelections.length) selectionMoved = true;
+        });
+      }
       activeCurrentIntent.current = intent;
       const explain = action === 'explain-current';
-      await runQuery(intent.source, explain ? 'explain-current' : 'execute', undefined, intent,
+      const success = await runQuery(intent.source, explain ? 'explain-current' : 'execute', undefined, intent,
         captureFailureSource(intent.source, true), undefined, !explain && continueOnError, !explain && !sqlite && collectWarnings);
+      if (advance && success) {
+        // 等原任务状态渲染后，再由相邻语句入口按最新会话模式定位。
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        if (selectionMoved || activeCurrentIntent.current !== intent || busyRef.current) return;
+        try { intent.assertCurrent(); } catch { return; }
+        advanceStatementNavigation.current();
+      }
     } catch (reason) { setError(errorMessage(reason)); }
-    finally { intent?.dispose(); if (activeCurrentIntent.current === intent) activeCurrentIntent.current = null; }
+    finally { watchSelection?.dispose(); intent?.dispose(); if (activeCurrentIntent.current === intent) activeCurrentIntent.current = null; }
   }
   /** 参数识别只打开固定会话，不建立任务、不执行用户模板，也不清除已有结果。 */
   function openParameters(mode: 'selection-or-all' | 'current' = 'selection-or-all') {
@@ -2452,6 +2468,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function queryMenuCurrent(): boolean {
     return queryOwnerCurrent() && !document.querySelector(appModalSelector);
   }
+  const advanceStatementNavigation = useRef<() => void>(() => {});
+  useLayoutEffect(() => { advanceStatementNavigation.current = () => openStatementNavigation(editor.current, 'next-after-execution'); });
   const hasPaneResult = !!(result || outcome?.sqliteExplain || outcome?.analysis || outcome?.explain);
   /** 恢复编辑区时保留原模型、选区及偏好的结果位置。 */
   function focusQueryPane(pane: 'editor' | 'result'): boolean {
@@ -2474,11 +2492,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         dialect: connection.dialect, sql: queryViewFromEditor(editor.current, connection.dialect) });
     } catch (reason) { setError(errorMessage(reason)); }
   }
-  function queryOwnerCurrent(): boolean {
+  function queryOwnerCurrent(allowDatabaseRefresh = false): boolean {
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id);
     return alive.current && workspace.settings.activeTabId === tab.id && current?.kind === 'query'
-      && current.connectionId === tab.connectionId && current.database === tab.database
-      && JSON.stringify(current.databaseContext) === JSON.stringify(tab.databaseContext)
+      && current.connectionId === tab.connectionId
+      && (allowDatabaseRefresh || current.database === tab.database && JSON.stringify(current.databaseContext) === JSON.stringify(tab.databaseContext))
       && JSON.stringify(current.fileSourceBinding) === JSON.stringify(tab.fileSourceBinding)
       && JSON.stringify(current.sourceBinding) === JSON.stringify(tab.sourceBinding)
       && workspace.connections.find(profile => profile.id === tab.connectionId) === connection
@@ -2486,31 +2504,35 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       && !closeRequestRef.current;
   }
   /** 目录、选中和相邻跳转共用原分段规则，均不创建连接、会话或查询任务。 */
-  function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' | 'duplicate' | 'format' | 'copy' | 'quote' | 'save' = 'panel'): void {
+  function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' | 'duplicate' | 'format' | 'copy' | 'quote' | 'save' | 'next-after-execution' = 'panel'): void {
     const existing = navigationIntent.current;
-    if (!queryMenuCurrent() || !connection || connection.dialect === 'postgresql' || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || existing?.controller.busy || existing?.saving) return;
+    const afterExecution = action === 'next-after-execution';
+    if (!queryOwnerCurrent(afterExecution) || document.querySelector(appModalSelector) || !connection || connection.dialect === 'postgresql' || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || existing?.controller.busy || existing?.saving) return;
     const model = instance.getModel(); if (!model || model.isDisposed() || instance.getRawOptions().readOnly) return;
-    const oneShot = action !== 'panel', direction = action === 'previous' ? -1 : action === 'next' ? 1 : undefined;
+    const oneShot = action !== 'panel', direction = action === 'previous' ? -1 : action === 'next' || afterExecution ? 1 : undefined;
     const selections = oneShot ? instance.getSelections() : undefined;
     if (oneShot && (resultsOnly || selections?.length !== 1)) return;
     const originalSelection = selections?.[0];
     const offset = originalSelection ? model.getOffsetAt(originalSelection.getPosition()) : 0;
-    const noTarget = action === 'previous' ? navigationText.noPrevious : action === 'next' ? navigationText.noNext : navigationText.noCurrent;
+    const noTarget = direction === -1 ? navigationText.noPrevious : direction === 1 ? navigationText.noNext : navigationText.noCurrent;
     // 面板已经持有准确原模型的目录时，直接导航并保留搜索、分页和当前面板。
-    if (direction && existing?.model === model && existing.instance === instance && existing.result && existing.controller.current()) {
+    if (!afterExecution && direction && existing?.model === model && existing.instance === instance && existing.result && existing.controller.current()) {
       const range = adjacentNavigableStatement(existing.source, existing.result.statements, offset, direction);
       if (range) applyStatementRange(existing, range, false); else useWorkspace.getState().notify(noTarget);
       return;
     }
     closeSyntaxCheck(); closeStatementNavigation();
     const version = model.getVersionId(), profile = connection, originalSession = sessionRef.current;
-    const context = JSON.stringify([tab.connectionId, tab.database, tab.databaseContext, tab.sourceBinding, tab.fileSourceBinding]); let valid = true;
+    // 执行后的库状态会异步从未知恢复，定位只依赖同一物理会话的词法模式及原草稿。
+    const contextKey = (draft: WorkspaceTab) => JSON.stringify([draft.connectionId,
+      ...(afterExecution ? [] : [draft.database, draft.databaseContext]), draft.sourceBinding, draft.fileSourceBinding]);
+    const context = contextKey(tab); let valid = true;
     const binding: NonNullable<typeof navigationIntent.current> = { id: uid(), source: model.getValue(), dialect: profile.dialect, model, instance, controller: undefined as unknown as StatementNavigationController };
     const current = () => {
       if (!valid) return false;
       const state = useWorkspace.getState(), now = state.settings.tabs.find(value => value.id === tab.id);
       const okay = alive.current && navigationIntent.current === binding && state.settings.activeTabId === tab.id && now?.kind === 'query'
-        && JSON.stringify([now.connectionId, now.database, now.databaseContext, now.sourceBinding, now.fileSourceBinding]) === context
+        && contextKey(now) === context
         && state.connections.find(value => value.id === profile.id) === profile && (state.connectionVersions[profile.id] ?? 0) === connectionVersion
         && sessionRef.current === originalSession && !closeRequestRef.current && !busyRef.current && !state.activeJobs[tab.id] && !fileSource.isBusy()
         && !document.querySelector(appModalSelector) && editor.current === instance && instance.getModel() === model && !model.isDisposed() && model.getVersionId() === version;
@@ -2947,6 +2969,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     execute: { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void execute(); } },
     'execute-selection': { enabled: canExecuteSelection, run: () => { void execute('selection-only'); } },
     'execute-current': { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void executeCurrentStatement(); } },
+    'execute-current-next': { enabled: canNavigateFromCursor, run: () => executeCurrentStatement('execute-and-advance') },
     'execute-all': { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void execute('all'); } },
     stop: { enabled: queryRunning, run: () => { void cancelCurrentQuery().catch(reason => setError(errorMessage(reason))); } },
     format: { enabled: !busy && !closeRequest && !fileSource.busy, run: async () => { await formatQuery(); } },
@@ -3079,6 +3102,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       items={[
         { key: 'execute', content: (<div className="query-execute-split"><button className="primary" disabled={busy || !connection} onClick={() => void execute()}><Play size={14}/>{zh.query.text010}<kbd>⌘ / Ctrl ↵</kbd></button><ActionMenu label={menuText.executeOptions} disabled={busy || !connection} contextKey={queryMenuKey} isCurrent={queryMenuCurrent}><button disabled={busy || !connection} title={menuText.selectedOrScriptHint} onClick={() => void execute()}>{menuText.selectedOrScript}</button><button disabled={!canExecuteSelection} title={currentStatementZh.selectionHint} onClick={() => void execute('selection-only')}>{currentStatementZh.selectionOnly}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} title={currentStatementZh.hint} aria-label={currentStatementZh.action} onClick={() => void executeCurrentStatement()}><Play size={14}/>{currentStatementZh.action}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={() => openParameters('current')}>{parameterZh.currentOpen}</button><button disabled={busy} onClick={() => void execute('all')}>{zh.query.text011}</button></ActionMenu></div>), overflow: (<ActionMenuSection label={menuText.executeOptions}><button className="primary" disabled={busy || !connection} onClick={() => void execute()}><Play size={14}/>{zh.query.text010}<kbd>⌘ / Ctrl ↵</kbd></button>
 <button disabled={!canExecuteSelection} title={currentStatementZh.selectionHint} onClick={() => void execute('selection-only')}>{currentStatementZh.selectionOnly}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} title={currentStatementZh.hint} aria-label={currentStatementZh.action} onClick={() => void executeCurrentStatement()}><Play size={14}/>{currentStatementZh.action}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={() => openParameters('current')}>{parameterZh.currentOpen}</button>
+<button disabled={!canNavigateFromCursor} onClick={() => void executeCurrentStatement('execute-and-advance')}>{uiCommandLabels['execute-current-next']}</button>
 <button disabled={busy} onClick={() => void execute('all')}>{zh.query.text011}</button></ActionMenuSection>) },
         { key: 'stop', content: (<button disabled={!queryRunning} onClick={() => void cancelCurrentQuery().catch(reason => setError(errorMessage(reason)))}><Square size={13}/>{zh.common.stop}</button>) },
         { key: 'format', content: (<button disabled={busy} title={sqlFormattingZh.hint} aria-label={sqlFormattingZh.action} onClick={() => formatQuery()}><AlignLeft size={15}/>{sqlFormattingZh.button}</button>) },

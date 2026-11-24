@@ -575,7 +575,7 @@ export function PostgresQueryTab({
   }
   /** 查询和计划都捕获原模型版本，实际分析只接受已经确认的原令牌。 */
   function run(
-    mode: 'normal' | 'selection' | 'current' | 'all' | 'explain' | 'explain-current' | 'analyzePreview' | 'analyze-current' = 'normal',
+    mode: 'normal' | 'selection' | 'current' | 'current-next' | 'all' | 'explain' | 'explain-current' | 'analyzePreview' | 'analyze-current' = 'normal',
     values?: QueryParameter[],
     parameter?: ParameterOwner,
     sqlOverride?: string,
@@ -585,6 +585,7 @@ export function PostgresQueryTab({
     const analyzing = mode === 'analyzePreview' || currentAnalyze;
     const currentPlan = mode === 'explain-current' || currentAnalyze;
     const explaining = mode === 'explain' || mode === 'explain-current';
+    const advancing = mode === 'current-next';
     if (confirmed) {
       const current = useWorkspace.getState();
       if (analyzeRef.current !== confirmed || phase.current || closeRef.current || !same(confirmed.scope) ||
@@ -611,17 +612,19 @@ export function PostgresQueryTab({
       setError(text.unknown);
       return;
     }
-    const model = editor.current?.getModel(),
-      selection = editor.current?.getSelection(),
+    const instance = editor.current,
+      model = instance?.getModel(),
+      selection = instance?.getSelection(),
       original = model?.getValue() ?? source();
     // 「执行选区」在实际派发时重新读取原选区，空选区或多选区不得降级为整份执行。
     if (mode === 'selection' && (!model || !selection || selection.isEmpty() || editor.current?.getSelections()?.length !== 1)) return;
     if (mode === 'current' && !selection) return;
-    if (currentPlan && (resultsOnly || state.transactionFailed || !model || !selection || editor.current?.getSelections()?.length !== 1)) return;
+    if ((currentPlan || advancing) && (resultsOnly || !model || !selection || instance?.getSelections()?.length !== 1)) return;
+    if (currentPlan && state.transactionFailed) return;
     let sql = confirmed?.source ?? sqlOverride ?? original,
       offset: number | undefined;
     if (!confirmed && !sqlOverride && !values && selection && mode !== 'all') {
-      if (mode === 'current' || currentPlan || (explaining || analyzing) && selection.isEmpty()) offset = model!.getOffsetAt(selection.getPosition());
+      if (mode === 'current' || advancing || currentPlan || (explaining || analyzing) && selection.isEmpty()) offset = model!.getOffsetAt(selection.getPosition());
       else if (!selection.isEmpty()) sql = model!.getValueInRange(selection);
     }
     if (values) sql = parameter!.source;
@@ -648,12 +651,17 @@ export function PostgresQueryTab({
         sent: false,
       };
     phase.current = owner;
-    // 会话准备时若原光标或选区变化，即使后来恢复也不能发送旧计划。
-    const watchPlanCursor = currentPlan ? editor.current?.onDidChangeCursorSelection(event => {
-      if (!owner.sent && (!selection?.equalsSelection(event.selection) || event.secondarySelections.length)) owner.valid = false;
+    let canAdvance = advancing;
+    // 投递前撤销旧意图，投递后只取消跳转，保留已执行语句的正常回执。
+    const watchCursor = currentPlan || advancing ? instance?.onDidChangeCursorSelection(event => {
+      if (selection?.equalsSelection(event.selection) && !event.secondarySelections.length) return;
+      if (!owner.sent) owner.valid = false;
+      canAdvance = false;
     }) : undefined;
-    const watchPlanTab = currentPlan ? useWorkspace.subscribe(state => {
-      if (!owner.sent && state.settings.activeTabId !== tab.id) owner.valid = false;
+    const watchTab = currentPlan || advancing ? useWorkspace.subscribe(state => {
+      if (state.settings.activeTabId === tab.id) return;
+      if (!owner.sent) owner.valid = false;
+      canAdvance = false;
     }) : undefined;
     parameterTask.current = owner.taskId;
     setBusy(true);
@@ -673,7 +681,7 @@ export function PostgresQueryTab({
           !owner.valid ||
           owner.cancelled ||
           !same(owner.scope) ||
-          (currentPlan && useWorkspace.getState().settings.activeTabId !== tab.id) ||
+          ((currentPlan || advancing) && useWorkspace.getState().settings.activeTabId !== tab.id) ||
           editor.current?.getModel() !== model ||
           model?.getVersionId() !== modelVersion ||
           (confirmed && confirmed.sessionId !== id) ||
@@ -744,8 +752,6 @@ export function PostgresQueryTab({
       } catch (reason) {
         if (alive.current && life.current === owner.life) setError(errorMessage(reason));
       } finally {
-        watchPlanCursor?.dispose();
-        watchPlanTab?.();
         if (!retainLocator) locator?.dispose();
         if (owner.cancel) await owner.cancel;
         const id = session.current?.id;
@@ -764,6 +770,16 @@ export function PostgresQueryTab({
             setParameterOwner(undefined);
           }
         }
+        try {
+          if (canAdvance && succeeded && !owner.cancelled) {
+            // 等编辑器从任务的只读状态恢复，定位仍沿会话最新的字符串模式。
+            await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+            if (canAdvance && owner.valid && !owner.cancelled && same(owner.scope) && life.current === owner.life &&
+                !phase.current && resultExecution.current === owner.taskId && session.current?.id === id && editor.current === instance &&
+                instance?.getModel() === model && model?.getVersionId() === modelVersion)
+              advanceStatementNavigation.current();
+          }
+        } finally { watchCursor?.dispose(); watchTab?.(); }
       }
     })();
   }
@@ -2292,6 +2308,8 @@ export function PostgresQueryTab({
   }, (instance, ranges, output) =>
     duplicateQuery(output?.mode ?? 'statement', instance, ranges, output),
   (instance, range) => { if (instance === editor.current) formatQuery('format', range); });
+  const advanceStatementNavigation = useRef<() => void>(() => {});
+  useLayoutEffect(() => { advanceStatementNavigation.current = () => navigation.open('next'); });
   const standardStrings = session.current && !busy && same(session.current.scope) ? state.standardConformingStrings : undefined;
   const syntax = usePostgresSyntaxCheck(() => {
     const target = commandEditor(), draft = currentTab(), original = session.current;
@@ -2327,6 +2345,7 @@ export function PostgresQueryTab({
     execute: { enabled: canRun, run: () => run() },
     'execute-selection': { enabled: canRun && editorSelection.single, run: () => run('selection') },
     'execute-current': { enabled: canRun, run: () => run('current') },
+    'execute-current-next': { enabled: canRun && canNavigate && !resultsOnly, run: () => run('current-next') },
     'execute-all': { enabled: canRun, run: () => run('all') },
     'statement-navigation': { enabled: canNavigate, run: () => navigation.open() },
     'syntax-check': { enabled: editable && !syntax.busy, run: syntax.open },
@@ -2541,6 +2560,9 @@ export function PostgresQueryTab({
             </button>
             <button disabled={!canRun} onClick={() => run('current')}>
               {text.current}
+            </button>
+            <button disabled={!canRun || !canNavigate || resultsOnly} onClick={() => run('current-next')}>
+              {uiCommandLabels['execute-current-next']}
             </button>
             <button disabled={!canNavigate} onClick={() => navigation.open()}>
               {navigationText.entry}

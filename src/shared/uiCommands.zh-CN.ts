@@ -40,7 +40,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'sql-editor-fold-all': '折叠当前编辑器中的全部块', 'sql-editor-unfold-all': '展开当前编辑器中的全部块',
   'editor-word-wrap': '自动换行', 'editor-line-numbers': '显示行号', 'editor-match-brackets': '高亮匹配括号', 'editor-local-references': '高亮局部 SQL 引用', 'editor-sql-folding': '按 SQL 语句折叠', 'editor-indent': '编辑器缩进', 'favorite-toggle': '添加／取消当前对象收藏',
   'favorites-manage': '管理收藏与分组', 'object-link': '粘贴对象链接', 'execute': '执行查询',
-  'execute-selection': '仅执行选区', 'execute-current': '执行当前语句', 'execute-all': '执行整个脚本', 'stop': '停止', 'format': '格式化 SQL',
+  'execute-selection': '仅执行选区', 'execute-current': '执行当前语句', 'execute-current-next': '执行当前语句并跳到下一条', 'execute-all': '执行整个脚本', 'stop': '停止', 'format': '格式化 SQL',
   'compact-sql': '压缩 SQL',
   'format-current-statement': '格式化当前语句',
   'sql-find-selection': '在选区内查找', 'sql-replace-selection': '在选区内替换',

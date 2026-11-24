@@ -4186,13 +4186,33 @@ test('PostgreSQL 原生查询菜单严格执行选区、当前语句、全部，
   expect(history.some(entry => entry.sql === script)).toBe(true);
   expect(history.some(entry => entry.sql === script.split('\n')[0])).toBe(true);
 
-  await editor().getByRole('textbox').focus();
-  await page.keyboard.press('ControlOrMeta+A');
-  await page.keyboard.insertText('SELECT pg_sleep(20) /* tabrelio_menu_cancel */;');
   const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
   await observer.connect();
   try {
-    await command('execute');
+    const caret = () => editor().evaluate(element => {
+      const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+      const point = instance?.getPosition();
+      if (!point) throw Error('缺少原查询光标');
+      return [point.lineNumber, point.column];
+    });
+    await replaceDraft("SELECT '已完成' AS step, pg_advisory_xact_lock(62308916)::text;\nSELECT '不得自动跳转';");
+    await modelSelection(1, 8);
+    await observer.query('SELECT pg_advisory_lock(62308916)');
+    try {
+      await command('execute-current-next');
+      await expect.poll(async () => Number((await observer.query(`SELECT count(*) AS n FROM pg_stat_activity
+        WHERE pid <> pg_backend_pid() AND datname=current_database() AND wait_event='advisory'`)).rows[0].n)).toBe(1);
+      await modelSelection(2, 1);
+      await modelSelection(1, 8);
+    } finally { await observer.query('SELECT pg_advisory_unlock(62308916)'); }
+    await expect(rows).toContainText('已完成');
+    await idle();
+    await expect.poll(caret).toEqual([1, 8]);
+
+    await replaceDraft("SELECT pg_sleep(20) /* tabrelio_menu_cancel */;\nSELECT '取消后不得跳转';");
+    await modelSelection(1, 8);
+    await command('execute-current-next');
     const active = async () => Number((await observer.query(
       "SELECT count(*) AS n FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND state = 'active' AND query LIKE $1",
       ['%tabrelio_menu_cancel%'],
@@ -4203,6 +4223,7 @@ test('PostgreSQL 原生查询菜单严格执行选区、当前语句、全部，
     await idle();
     await expect.poll(active).toBe(0);
     await expect.poll(() => enabled('stop')).toBe(false);
+    await expect.poll(caret).toEqual([1, 8]);
   } finally { await observer.end(); }
   await expect(tab().getByRole('button', {name: postgresZh.execute, exact: true})).toBeEnabled();
   expect(pageErrors).toEqual([]);

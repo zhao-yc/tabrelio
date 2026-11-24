@@ -676,6 +676,48 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       await expect(locate).toBeDisabled();
       expect(await history()).toEqual(historyAfterAnalysis);
     }
+    const firstStep = "SELECT '步进第一句' AS step_result";
+    const failedStep = 'SELECT * FROM tabrelio_step_missing';
+    const lastStep = "SELECT '步进最后一句' AS step_result";
+    const stepScript = [...(custom ? ['DELIMITER $$'] : []), firstStep + (custom ? '$$' : ';'),
+      ...(custom ? ['DELIMITER ;'] : []), failedStep + ';', lastStep + ';'].join('\n');
+    await write(stepScript);
+    const place = (statement: string, delta = 0) => editor.evaluate((element, {statement, delta}) => {
+      const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+      const model = instance?.getModel();
+      if (!model) throw Error('缺少查询编辑器');
+      const offset = model.getValue().indexOf(statement) + delta;
+      instance!.setPosition(model.getPositionAt(offset));
+      return offset;
+    }, {statement, delta});
+    async function step() {
+      const id = 'execute-current-next';
+      await expect.poll(() => desktop.evaluate(({Menu}, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.enabled === true, id)).toBe(true);
+      await desktop.evaluate(({Menu, BrowserWindow}, {id, label}) => {
+        const item = Menu.getApplicationMenu()?.getMenuItemById(id);
+        const [owner, extra] = BrowserWindow.getAllWindows();
+        if (!item?.enabled || item.label !== label || !owner || extra) throw Error('逐句执行原生菜单不可用');
+        item.click(item, owner, {} as Electron.KeyboardEvent);
+      }, {id, label: uiCommandLabels[id]});
+    }
+    const stepsBefore = await history();
+    await place(firstStep, 8);
+    await step();
+    await expect(query.getByRole('grid')).toContainText('步进第一句');
+    await expect.poll(async () => (await selection()).start).toBe((await selection()).sql.indexOf(failedStep));
+    const afterFirst = (await history()).filter(entry => !stepsBefore.some(before => before.id === entry.id));
+    expect(afterFirst).toHaveLength(1);
+    expect(afterFirst[0].sql.trim().replace(/;$/, '')).toBe(firstStep);
+    await step();
+    await expect(query.locator('.error-box')).toBeVisible();
+    await expect.poll(async () => (await selection()).start).toBe((await selection()).sql.indexOf(failedStep));
+    const endOffset = await place(lastStep, 9);
+    await step();
+    await expect(query.getByRole('grid')).toContainText('步进最后一句');
+    await expect.poll(async () => (await selection()).start).toBe(endOffset);
+    expect((await selection()).sql.replaceAll('\r\n', '\n')).toBe(stepScript);
+
     const namedQuery = '-- NAME: Summary/Today\nSELECT amount FROM json_subject WHERE id = 1;';
     const workbookSql = [namedQuery, '/* NAME: SUMMARY?TODAY */',
       'SELECT amount FROM json_subject WHERE id = 0;', 'SELECT label FROM json_subject WHERE id = 2;'].join('\n');
