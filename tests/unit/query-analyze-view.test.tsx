@@ -4,6 +4,7 @@ import type { QueryAnalyzePlan } from '../../src/shared/queryAnalyze';
 import { QueryAnalyzeView } from '../../src/renderer/components/QueryAnalyzeView';
 import { QueryAnalyzeConfirmDialog } from '../../src/renderer/components/QueryAnalyzeConfirmDialog';
 import { queryAnalyzeZh as t } from '../../src/renderer/locales/queryAnalyze.zh-CN';
+import { explainZh } from '../../src/renderer/locales/explain.zh-CN';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 
 // 只隔离与确认授权无关的 Monaco；真实 React 组件、Modal 和事件委派保持运行。
@@ -98,11 +99,16 @@ it('MariaDB 的包含关系和累计耗时语义独立说明，缺失指标不�
 });
 
 it('结果 A→B→A 重新初始化阅读状态，旧折叠及原文回调不操作新结果', async () => {
-  const plan = fixture(), f = await mount(<QueryAnalyzeView plan={plan}/>);
+  const plan = fixture(), locate = vi.fn();
+  const f = await mount(<QueryAnalyzeView plan={plan} sourceLocation={{ available: true, locate }}/>);
   const oldCollapse = props(button(t.collapse)).onClick, oldRaw = props(button(t.raw)).onClick;
+  const oldLocate = props(button(explainZh.locate)).onClick;
+  await click(explainZh.locate); expect(locate).toHaveBeenCalledTimes(1);
   await click(t.collapse); expect(tree()).toHaveLength(1);
   await f.render(<QueryAnalyzeView plan={{ ...fixture(), raw: '新计划' }}/>); await f.render(<QueryAnalyzeView plan={plan}/>);
-  await act(async () => { oldCollapse(); oldRaw(); }); expect(tree()).toHaveLength(4);
+  await act(async () => { oldCollapse(); oldRaw(); oldLocate(); }); expect(tree()).toHaveLength(4);
+  expect(locate).toHaveBeenCalledTimes(1);
+  expect(document.querySelectorAll('button').some(node => node.textContent === explainZh.locate)).toBe(false);
   expect(button(t.tree).getAttribute('aria-pressed')).toBe('true'); expect(f.invoke).not.toHaveBeenCalled();
 });
 

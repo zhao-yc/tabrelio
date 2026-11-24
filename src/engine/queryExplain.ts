@@ -17,7 +17,7 @@ export function explainCapability(status: NetworkConnectionStatus): boolean {
   return status.dialect === 'mysql' ? major > 5 || major === 5 && minor >= 6 : major > 10 || major === 10 && minor >= 2;
 }
 /** 扫描器沿用原会话模式及 DELIMITER；原文位置有歧义时可生成计划，但不发布范围。 */
-function planSource(sql: string, mode: SqlLexicalMode, offset?: number) {
+export function explainPlanSource(sql: string, mode: SqlLexicalMode, offset?: number) {
   if (typeof sql !== 'string' || Buffer.byteLength(sql) > 20 * 1024 * 1024) throw Error('执行计划 SQL 不能超过 20 MiB');
   // 当前语句沿实际会话词法扫描全文。只把命中的单条语句交给计划校验，前置 SET 和其他语句不发送。
   const current = offset === undefined ? undefined : currentSqlStatement(sql, offset, mode);
@@ -36,7 +36,7 @@ function planSource(sql: string, mode: SqlLexicalMode, offset?: number) {
 
 /** 仅返回通过计划类型检查的单条语句。 */
 export function explainStatement(sql: string, mode: SqlLexicalMode, offset?: number): string {
-  return planSource(sql, mode, offset).statement;
+  return explainPlanSource(sql, mode, offset).statement;
 }
 /** 仅格式能力错误回退；取消、权限、断线和普通 SQL 错误不会重发。 */
 function formatUnsupported(error: unknown): boolean {
@@ -46,7 +46,7 @@ function formatUnsupported(error: unknown): boolean {
 }
 /** 编辑器输入必须先验证语句边界和类型。 */
 export async function explainQuery(sql: string, format: 'auto' | 'text', context: ExplainContext, offset?: number): Promise<QueryOutcome> {
-  const { statement, sourceRange } = planSource(sql, context.mode, offset);
+  const { statement, sourceRange } = explainPlanSource(sql, context.mode, offset);
   const outcome = await executeExplainStatement(statement, format, context);
   return sourceRange ? { ...outcome, explainSourceRange: sourceRange } : outcome;
 }

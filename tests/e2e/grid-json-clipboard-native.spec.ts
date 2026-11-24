@@ -21,6 +21,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { explainZh } from '../../src/renderer/locales/explain.zh-CN';
+import { queryAnalyzeZh as analyzeText } from '../../src/renderer/locales/queryAnalyze.zh-CN';
 import { parseTabularText } from '../../src/renderer/gridClipboard';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
@@ -597,6 +598,32 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       await expect(locate).toBeDisabled();
     }
     expect(await history()).toEqual(historyBefore);
+    if (!local) {
+      const actualSql = [statement + ';', statement + '  ;', 'SELECT 3;'].join('\n');
+      await write(actualSql);
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
+      await page.keyboard.press('ArrowDown');
+      if (custom) await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowRight' : 'Shift+End');
+      await (await navigationMenuItem(query, { name: analyzeText.open, exact: true })).click();
+      const confirm = page.getByRole('dialog', { name: analyzeText.title, exact: true });
+      await confirm.getByRole('checkbox', { name: analyzeText.acknowledge, exact: true }).check();
+      await confirm.getByRole('button', { name: analyzeText.confirm, exact: true }).click();
+      const actualPlan = query.getByRole('region', { name: analyzeText.view, exact: true });
+      await expect(actualPlan.getByRole('treeitem').first()).toBeVisible();
+      const historyAfterAnalysis = await history();
+      expect(historyAfterAnalysis).toHaveLength(historyBefore.length + 1);
+      await expect(locate).toBeEnabled();
+      await locate.click();
+      const located = await selection();
+      expect(located.sql.replaceAll('\r\n', '\n')).toBe(actualSql);
+      expect(located.selected).toBe(statement);
+      expect(located.start).toBe(located.sql.lastIndexOf(statement));
+      await write('SELECT 2;');
+      await expect(locate).toBeDisabled();
+      await write(actualSql);
+      await expect(locate).toBeDisabled();
+      expect(await history()).toEqual(historyAfterAnalysis);
+    }
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

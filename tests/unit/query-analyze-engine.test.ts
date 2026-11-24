@@ -65,8 +65,12 @@ describe('实际执行分析的明确确认和一次发送边界', () => {
   });
 
   it('沿用原会话 DELIMITER 和转义，不按另一种 sql_mode 重切后重发', async () => {
-    const custom = context(); await analyzeQuery("DELIMITER $$\nSELECT 'a;'$$", true, custom);
-    expect(custom.run).toHaveBeenCalledExactlyOnceWith("EXPLAIN ANALYZE FORMAT=TREE SELECT 'a;'");
+    const custom = context(), statement = "SELECT '船🚢;'";
+    const source = 'DELIMITER $$\r\n  ' + statement + '  $$';
+    const outcome = await analyzeQuery(source, true, custom);
+    const start = source.indexOf(statement);
+    expect(outcome.analysisSourceRange).toEqual({ start, end: start + statement.length });
+    expect(custom.run).toHaveBeenCalledExactlyOnceWith('EXPLAIN ANALYZE FORMAT=TREE ' + statement);
     const ordinary = context(); await analyzeQuery("SELECT 'a\\'; SELECT 2'", true, ordinary);
     expect(ordinary.run).toHaveBeenCalledExactlyOnceWith("EXPLAIN ANALYZE FORMAT=TREE SELECT 'a\\'; SELECT 2'");
     const escaped = context(); escaped.mode = { ...mode, noBackslashEscapes: true };

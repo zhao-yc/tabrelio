@@ -106,7 +106,7 @@ interface Session {
   completion?: Promise<unknown>;
   originsReading?: boolean;
   queryRecord?: PostgresQueryRecordSource;
-  analysis?: { token: string; sql: string; expiresAt: number };
+  analysis?: { token: string; sql: string; sourceRange: NonNullable<QueryOutcome['analysisSourceRange']>; expiresAt: number };
   closing?: Promise<void>;
 }
 interface Task {
@@ -1894,18 +1894,19 @@ export class PostgresEngine {
       case 'postgres.analyzePreview':
         return this.session(input.sessionId, async s => {
           if (s.managed.state().transactionFailed) throw Error('PostgreSQL事务已失败，请先明确回滚');
-          const { source, sql } = postgresAnalyzeSql(input.sql, s.managed.standardStrings, input.currentStatement?.offset);
+          const { source, sql, sourceRange } = postgresAnalyzeSql(input.sql, s.managed.standardStrings, input.currentStatement?.offset);
           const token = randomUUID();
-          s.analysis = { token, sql, expiresAt: Date.now() + 120000 };
+          s.analysis = { token, sql, sourceRange, expiresAt: Date.now() + 120000 };
           return { source, token };
         });
       case 'postgres.analyze':
-        return this.session(input.sessionId, s => {
+        return this.session(input.sessionId, async s => {
           const permit = s.analysis;
           if (!permit || permit.token !== input.token || input.acknowledged !== true || permit.expiresAt <= Date.now())
             throw Error('PostgreSQL实际分析确认已失效，请重新预览');
           s.analysis = undefined;
-          return this.execute(s, input, false, permit.sql);
+          const outcome = await this.execute(s, input, false, permit.sql);
+          return outcome.analysis ? { ...outcome, analysisSourceRange: permit.sourceRange } : outcome;
         }, true, true);
       case 'postgres.analyzeDiscard': {
         const s = this.sessions.get(input.sessionId);

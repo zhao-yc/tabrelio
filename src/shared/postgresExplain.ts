@@ -12,7 +12,11 @@ function planStatement(source: string, standardStrings: boolean, offset?: number
   const statements = offset === undefined ? splitPostgresSql(source, standardStrings)
     : [currentPostgresStatement(source, offset, standardStrings)];
   if (statements.length !== 1) throw Error('PostgreSQL执行计划只接受一条语句，请选择单条语句');
-  return statements[0];
+  const statement = statements[0];
+  return { ...statement, sourceRange: {
+    start: statement.start + statement.sql.length - statement.sql.trimStart().length,
+    end: statement.start + statement.sql.trimEnd().length,
+  } };
 }
 
 /** 估算入口可使用无绑定值的通用计划。 */
@@ -26,10 +30,7 @@ export function postgresExplainSql(source: string, options: { standardStrings: b
   // 实际数据库投递另用扩展协议，服务端也拒绝包含多条命令的请求。
   const sql = 'EXPLAIN (ANALYZE FALSE, VERBOSE TRUE' + (generic ? ', GENERIC_PLAN TRUE' : '') +
     ', FORMAT ' + (format === 'text' ? 'TEXT' : 'JSON') + ')\n' + statement.sql;
-  return { sql, generic, sourceRange: {
-    start: statement.start + statement.sql.length - statement.sql.trimStart().length,
-    end: statement.start + statement.sql.trimEnd().length,
-  } };
+  return { sql, generic, sourceRange: statement.sourceRange };
 }
 
 /** 确认弹窗冻结实际发送的单条 SQL。原语句和计划命令分开，不能嵌套执行 EXPLAIN。 */
@@ -37,7 +38,8 @@ export function postgresAnalyzeSql(source: string, standardStrings: boolean, off
   const statement = planStatement(source, standardStrings, offset);
   if (!supported.has(statement.keyword)) throw Error('当前 PostgreSQL 语句类型不支持实际执行分析');
   if (statement.parameters.length) throw Error('实际执行分析需要完整的参数值，请使用已有的 EXECUTE 语句或无占位符的 SQL');
-  return { source: statement.sql, sql: 'EXPLAIN (ANALYZE TRUE, VERBOSE TRUE, BUFFERS TRUE, FORMAT JSON)\n' + statement.sql };
+  return { source: statement.sql, sourceRange: statement.sourceRange,
+    sql: 'EXPLAIN (ANALYZE TRUE, VERBOSE TRUE, BUFFERS TRUE, FORMAT JSON)\n' + statement.sql };
 }
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);

@@ -938,7 +938,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 明确确认后仅交付冻结来源一次；所有await仍核同一个模型及物理会话。 */
   async function confirmAnalyze(intent: QueryAnalyzeIntent) {
     if (analyzeIntent.current !== intent || busyRef.current) return;
-    try { intent.beginSend(); setAnalyzeDialog(null); await runQuery(intent.source, 'analyze', undefined, undefined, undefined, intent); }
+    try {
+      intent.beginSend();
+      // 先移除确认窗口，再捕获仍与确认意图一致的主编辑器选区。
+      flushSync(() => setAnalyzeDialog(null));
+      intent.assertCurrent();
+      await runQuery(intent.source, 'analyze', undefined, undefined, captureFailureSource(intent.source), intent);
+    }
     catch (reason) { if (alive.current) setError(errorMessage(reason)); }
     finally { if (analyzeIntent.current === intent) closeAnalyze(intent); else intent.dispose(); }
   }
@@ -1201,7 +1207,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         if (failures.length && locator?.bindRange(failures[0].sourceRange)) { failureSource.current = locator; retainLocator = true; }
       } else if (result.failure?.sourceRange && locator?.bindRange(result.failure.sourceRange)) { failureSource.current = locator; retainLocator = true; }
       if (!retainLocator && locator && (result.mysqlResultSourceRanges?.length || result.sqliteResultReceipts?.length || result.sqliteExplain?.sourceRange ||
-          result.explainSourceRange && locator.bindRange(result.explainSourceRange))) {
+          result.explainSourceRange && locator.bindRange(result.explainSourceRange) ||
+          result.analysisSourceRange && locator.bindRange(result.analysisSourceRange))) {
         // 同一原模型租约可保留成功结果的位置，即使其后失败语句没有可靠范围。
         failureSource.current = locator;
         retainLocator = true;
@@ -2833,7 +2840,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const resultSqlTarget = menuResult.current;
   const canShowResultSql = !!sourceResult?.statement.trim() && !busy && !queryRunning && (!!pin || !!outcome && !outcome.explain && !outcome.analysis);
   const sqlitePlanRange = pin ? undefined : outcome?.sqliteExplain?.sourceRange;
-  const networkPlanRange = pin ? undefined : outcome?.explainSourceRange;
+  const networkPlanRange = pin ? undefined : outcome?.analysisSourceRange ?? outcome?.explainSourceRange;
   const mysqlSourceRange = !sqlite && !pin && !queryRunning && sourceResult === outcome?.results[resultIndex]
     ? outcome?.mysqlResultSourceRanges?.[resultIndex] : undefined;
   const sourceRange = sqliteReceipt?.sourceRange ?? sqlitePlanRange ?? networkPlanRange ?? mysqlSourceRange;
@@ -3266,7 +3273,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         }} />}
       {matchView.active && <QueryResultMatchView active={matchView.active} disabled={!selectionBinding || busy || !!activeColumnLease}
         onClear={() => changeMatchView()}/>}
-      <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>{!pin && outcome?.sqliteExplain ? <SqliteExplainPlanView key={task.current} outcome={outcome} busy={busy} isCurrent={queryMenuCurrent} fileActions/> : !pin && outcome?.analysis ? <QueryAnalyzeView key={task.current} plan={outcome.analysis} outcome={outcome} fileActions busy={busy} isFileCurrent={queryMenuCurrent}/> : !pin && outcome?.explain ? <ExplainPlanView key={task.current} outcome={outcome} fileActions fileBusy={busy} busy={busy || !sessionId} isFileCurrent={queryMenuCurrent} sourceLocation={outcome.explainSourceRange ? { available: resultLocation, locate: locateResultSource } : undefined} onText={() => void runQuery(explainSource.current.sql, 'explain-text')}/> : result?.columns.length ? <div className="query-result-with-details">
+      <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>{!pin && outcome?.sqliteExplain ? <SqliteExplainPlanView key={task.current} outcome={outcome} busy={busy} isCurrent={queryMenuCurrent} fileActions/> : !pin && outcome?.analysis ? <QueryAnalyzeView key={task.current} plan={outcome.analysis} outcome={outcome} fileActions busy={busy} isFileCurrent={queryMenuCurrent}
+        sourceLocation={outcome.analysisSourceRange ? { available: resultLocation, locate: locateResultSource } : undefined}/> : !pin && outcome?.explain ? <ExplainPlanView key={task.current} outcome={outcome} fileActions fileBusy={busy} busy={busy || !sessionId} isFileCurrent={queryMenuCurrent} sourceLocation={outcome.explainSourceRange ? { available: resultLocation, locate: locateResultSource } : undefined} onText={() => void runQuery(explainSource.current.sql, 'explain-text')}/> : result?.columns.length ? <div className="query-result-with-details">
       <PostgresTableFindPanel host={{ className: 'query-result-grid', inert: !!(recordEdit?.cell || mysqlRelation?.cell) }} request={activeReplace?.fields ? activeReplace.panel : undefined} scope={selectionBinding ?? visibleColumns}
         enabled={!!activeReplace?.fields} writable={!!activeReplace?.fields} rows={replaceRows} replacementRows={sqliteReplaceRows} columns={visibleColumns}
         replaceSelection={activeReplace?.fields ? resultSelection.checkedRows(activeReplace.binding) ?? null : undefined}

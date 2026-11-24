@@ -20,6 +20,8 @@ describe('PostgreSQL估算计划', () => {
     const start = source.lastIndexOf(statement);
     expect(postgresExplainSql(source, { ...options, offset: start + 2 }).sourceRange)
       .toEqual({ start, end: start + statement.length });
+    expect(postgresAnalyzeSql(source, true, start + 2).sourceRange)
+      .toEqual({ start, end: start + statement.length });
   });
   it('只编译选区或光标位置的原语句，保留注释、引号及转义边界', () => {
     const source = "SELECT 0; /* 外 /* 内 */ */ SELECT $标签$含;号$标签$; DELETE FROM items;";

@@ -193,6 +193,7 @@ interface AnalyzeOwner {
   scope: Scope;
   model: monaco.editor.ITextModel;
   version: number;
+  failureSource?: QueryFailureSourceLease;
 }
 interface SortDraft { binding: QueryResultSortBinding; view: QueryResultSortView; }
 interface FilterDraft { binding: QueryResultFilterBinding; view: QueryResultFilterView; sortView: QueryResultSortView; seed?: QueryResultFilterGroup; }
@@ -483,7 +484,10 @@ export function PostgresQueryTab({
     const current = analyzeRef.current;
     analyzeRef.current = undefined;
     setAnalyze(undefined);
-    if (discard && current) void invoke('postgres.analyzeDiscard', { sessionId: current.sessionId, token: current.token }).catch(() => {});
+    if (discard && current) {
+      current.failureSource?.dispose();
+      void invoke('postgres.analyzeDiscard', { sessionId: current.sessionId, token: current.token }).catch(() => {});
+    }
   }
 
   /** 参数弹窗绑定准确的模型和活动标签，选区正文无需与整份脚本相等。 */
@@ -587,7 +591,6 @@ export function PostgresQueryTab({
         setError(queryAnalyzeZh.changed);
         return;
       }
-      clearAnalyze(false);
     } else if (values) {
       if (
         !parameter ||
@@ -600,6 +603,7 @@ export function PostgresQueryTab({
         throw Error(text.changed);
     } else if (!commandEditor()) return;
     if (session.current && !state.transactionKnown) {
+      if (confirmed) clearAnalyze();
       setError(text.unknown);
       return;
     }
@@ -621,9 +625,11 @@ export function PostgresQueryTab({
       setError(text.noSql);
       return;
     }
-    clearFailureSource();
-    const locator = parameter?.failureSource ?? (!sqlOverride && !confirmed && mode !== 'analyzePreview'
-      ? captureFailureSource(sql, mode === 'all' || mode === 'current' || offset !== undefined) : undefined);
+    if (mode !== 'analyzePreview') clearFailureSource();
+    // 预览保存原选区的基址；确认只转移同一租约，与弹窗关闭时的光标无关。
+    const locator = confirmed ? confirmed.failureSource : parameter?.failureSource ??
+      (!sqlOverride ? captureFailureSource(sql, mode === 'all' || mode === 'current' || offset !== undefined) : undefined);
+    if (confirmed) clearAnalyze(false);
     if (parameter) parameter.failureSource = undefined;
     const continuing = !sqlOverride && !confirmed && !explaining && mode !== 'analyzePreview' &&
       (parameter ? parameter.continueOnError : continueOnError);
@@ -676,8 +682,9 @@ export function PostgresQueryTab({
           if (model && modelVersion !== undefined && !model.isDisposed() && model.getVersionId() === modelVersion &&
               owner.valid && !owner.cancelled && same(owner.scope) && !closeRef.current &&
               editor.current?.getModel() === model && useWorkspace.getState().settings.activeTabId === tab.id) {
-            const intent = { ...preview, sessionId: id, scope: owner.scope, model, version: modelVersion };
+            const intent = { ...preview, sessionId: id, scope: owner.scope, model, version: modelVersion, failureSource: locator };
             analyzeRef.current = intent;
+            retainLocator = true;
             setAnalyze(intent);
           } else void invoke('postgres.analyzeDiscard', { sessionId: id, token: preview.token }).catch(() => {});
           return;
@@ -717,7 +724,8 @@ export function PostgresQueryTab({
           noticeRanges.current = new Set(messages);
           const sources = result.postgresResultSources?.filter(item => confirmedQueryContinueRange(sql, item)) ?? [];
           resultRanges.current = new Set(sources);
-          const range = failures[0]?.sourceRange ?? messages[0]?.sourceRange ?? sources[0]?.sourceRange ?? result.explainSourceRange;
+          const range = failures[0]?.sourceRange ?? messages[0]?.sourceRange ?? sources[0]?.sourceRange ??
+            result.analysisSourceRange ?? result.explainSourceRange;
           if (range && locator?.bindRange(range)) {
             failureSource.current = locator; retainLocator = true;
           }
@@ -1001,6 +1009,7 @@ export function PostgresQueryTab({
     return () => {
       alive.current = false;
       clearFailureSource(); parameters.current?.failureSource?.dispose();
+      analyzeRef.current?.failureSource?.dispose();
       parameterReuse.current?.dispose(); parameterReuse.current = null;
       sessionSettingRef.current?.intent.dispose();
       duplicateIntent.current?.dispose();
@@ -1082,14 +1091,18 @@ export function PostgresQueryTab({
   const multipleReturnedResults = !pin && !!returnedOutcome && results.filter(item => item.columns.length).length > 1;
   const baselineAvailable = pinState.items.length > 0 && !!returnedOutcome?.results.some(item => item.columns.length);
   const returnedExecution = resultExecution.current;
-  const planRange = pin ? undefined : outcome?.explainSourceRange;
+  const planRange = pin ? undefined : outcome?.analysisSourceRange ?? outcome?.explainSourceRange;
   const planLocator = failureSource.current;
   const planLocation = !!planRange && !locked && !!planLocator?.canLocateRange(planRange, false);
   /** 计划原语句与本次执行和原模型绑定，旧控件不能选中后继计划的范围。 */
   function locatePlanSource(): void {
-    if (!planLocation || failureSource.current !== planLocator || comparisonOutcome.current !== outcome ||
-        resultExecution.current !== returnedExecution) return;
-    locateFailure();
+    if (!planRange || !planLocator || !planLocation || !planLocator.canLocateRange(planRange) ||
+        failureSource.current !== planLocator || comparisonOutcome.current !== outcome ||
+        resultExecution.current !== returnedExecution || pinStateRef.current.selected) return;
+    if (resultsOnly) flushSync(() => setResultsOnly(false));
+    if (failureSource.current !== planLocator || pinStateRef.current.selected) return;
+    editor.current?.layout();
+    planLocator.locateRange(planRange);
   }
   const resultSources = outcome?.postgresResultSources;
   const resultStatementOrdinals = useMemo(() => resultSources?.map(source => source.statementOrdinal), [resultSources]);
@@ -2743,7 +2756,9 @@ export function PostgresQueryTab({
           {matchView.active && <QueryResultMatchView active={matchView.active} disabled={locked || !binding}
             onClear={() => changeMatchView()}/>}
           <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>
-            {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions isFileCurrent={planFileCurrent} onFileBusyChange={setFileBusy} /> :
+            {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked}
+              sourceLocation={planRange ? { available: planLocation, locate: locatePlanSource } : undefined}
+              fileActions isFileCurrent={planFileCurrent} onFileBusyChange={setFileBusy} /> :
               !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked}
                 sourceLocation={planRange ? { available: planLocation, locate: locatePlanSource } : undefined}
                 fileActions isFileCurrent={planFileCurrent} onFileBusyChange={setFileBusy} /> : result ? (

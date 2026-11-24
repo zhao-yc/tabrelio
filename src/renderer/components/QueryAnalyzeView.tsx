@@ -4,6 +4,7 @@ import type { QueryAnalyzeMetric, QueryAnalyzeNode, QueryAnalyzePlan } from '../
 import type { QueryOutcome } from '../../shared/contracts';
 import type { AnalyzeSnapshotDocument } from '../../shared/explainSnapshot';
 import { explainSnapshotZh as snapshotText } from '../../shared/explainSnapshot.zh-CN';
+import { explainZh as planText } from '../locales/explain.zh-CN';
 import { queryAnalyzeZh as t } from '../locales/queryAnalyze.zh-CN';
 import { ExplainSnapshotSaveButton } from './ExplainSnapshotSaveButton';
 import { LivePlanFileActions } from './LivePlanFileActions';
@@ -19,6 +20,7 @@ function metricValue(metric: QueryAnalyzeMetric): string { return metric.value +
 /** 文件入口只接收当前计划对应结果；未启用时保持纯只读展示。 */
 export interface QueryAnalyzeViewProps {
   plan: QueryAnalyzePlan; outcome?: QueryOutcome; fileSnapshot?: AnalyzeSnapshotDocument;
+  sourceLocation?: { available: boolean; locate(): void };
   fileActions?: boolean; busy?: boolean; saveAs?: boolean; isFileCurrent?(): boolean; onFileBusyChange?(busy: boolean): void;
 }
 /** 新结果即换代，A→B→A不能继承旧计划的所选节点或折叠状态。 */
@@ -30,7 +32,7 @@ export function QueryAnalyzeView(props: QueryAnalyzeViewProps) {
 }
 
 /** 这里只阅读已经返回的分析结果；展开、选择及切换原文都不会执行 SQL 或调用 IPC。 */
-function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, fileActions = false, busy = false, saveAs = false, isFileCurrent, onFileBusyChange }: QueryAnalyzeViewProps) {
+function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, sourceLocation, fileActions = false, busy = false, saveAs = false, isFileCurrent, onFileBusyChange }: QueryAnalyzeViewProps) {
   const postgres = plan.dialect === 'postgresql';
   const [view, setView] = useState<'tree' | 'raw'>(plan.nodes.length ? 'tree' : 'raw');
   const [selected, setSelected] = useState(plan.nodes[0]?.id ?? '');
@@ -80,6 +82,9 @@ function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, fileActions = fals
   return <section className="query-analyze-view" aria-label={t.view}>
     <div className="query-analyze-toolbar" role="group" aria-label={t.view}>
       <button aria-pressed={view === 'tree'} onClick={() => { if (alive.current) setView('tree'); }}>{t.tree}</button><button aria-pressed={view === 'raw'} onClick={() => { if (alive.current) setView('raw'); }}>{t.raw}</button>
+      {sourceLocation && <button disabled={busy || !sourceLocation.available}
+        title={sourceLocation.available ? undefined : planText.locateUnavailable}
+        onClick={() => { if (alive.current && !busy && sourceLocation.available) sourceLocation.locate(); }}>{planText.locate}</button>}
       <PlanOutputCopyButton raw={plan.raw} busy={busy} truncated={plan.rawTruncated || !!result?.truncated}
         isCurrent={() => alive.current && (isFileCurrent?.() ?? true)}/>
       {fileActions && (outcome && outcome.analysis === plan ? (!fileSnapshot && !saveAs ?
