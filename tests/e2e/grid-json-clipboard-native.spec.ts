@@ -77,6 +77,7 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       // 第二个独立配置只指向本例授权的隔离端点。
       return profile ? window.dbark.invoke('connections.save', { ...profile, name: '独立副本目标' }) : undefined;
     }, { profile, table, sql, database });
+    await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
     await page.reload();
     await page.evaluate(() => {
       const packets: Record<string, string>[] = [];
@@ -507,8 +508,9 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     expect(await history()).toEqual(historyBefore);
     // 前后故意放置不可执行的相邻语句，光标端只选中一个字符。计划必须分析中间整句。
     const custom = dialect === 'mysql' || dialect === 'mariadb';
+    const statement = 'SELECT * FROM json_subject WHERE id = 1';
     const script = ['SELECT * FROM missing_plan_previous;', ...(custom ? ['DELIMITER $$'] : []),
-      'SELECT * FROM json_subject WHERE id = 1' + (custom ? '$$' : ';'), ...(custom ? ['DELIMITER ;'] : []),
+      statement + (custom ? '$$' : ';'), ...(custom ? ['DELIMITER ;'] : []),
       'SELECT * FROM missing_plan_next;'].join('\n');
     const editor = query.locator('.monaco-editor').getByRole('textbox');
     const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -540,11 +542,38 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     }, { id: command, label: uiCommandLabels[command] });
     await expect(query.getByRole('treeitem').filter({ hasText: 'json_subject' }).first()).toBeVisible();
     await expect(query.locator('.error-box')).toHaveCount(0);
-    if (custom) {
-      await write('SELECT * FROM missing_changed_draft;');
+    const locate = query.getByRole('button', { name: '定位计划原语句', exact: true });
+    const selection = () => editor.evaluate(element => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+      const model = instance?.getModel(), range = instance?.getSelection();
+      if (!model || !range) throw Error('无法核对计划定位后的原编辑器和选区');
+      return { sql: model.getValue(), selected: model.getValueInRange(range), start: model.getOffsetAt(range.getStartPosition()) };
+    });
+    const locateAndCheck = async () => {
+      await expect(locate).toBeEnabled();
+      await locate.click();
+      const located = await selection();
+      expect(located.sql.replaceAll('\r\n', '\n')).toBe(script);
+      expect(located.selected).toBe(statement);
+      expect(located.start).toBe(located.sql.indexOf(statement));
+    };
+    if (!local) await locateAndCheck();
+    const textPlan = async () => {
       await (await navigationMenuItem(query, { name: '获取文本计划', exact: true })).click();
       await expect(query.getByRole('grid')).toContainText('json_subject');
       await expect(query.locator('.error-box')).toHaveCount(0);
+    };
+    if (custom) {
+      await textPlan();
+      await locateAndCheck();
+    }
+    if (!local) {
+      await write('SELECT * FROM missing_changed_draft;');
+      await expect(locate).toBeDisabled();
+      if (custom) await textPlan();
+      await write(script);
+      await expect(locate).toBeDisabled();
     }
     expect(await history()).toEqual(historyBefore);
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);

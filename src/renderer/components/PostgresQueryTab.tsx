@@ -622,8 +622,8 @@ export function PostgresQueryTab({
       return;
     }
     clearFailureSource();
-    const locator = parameter?.failureSource ?? (!sqlOverride && !confirmed && !explaining && mode !== 'analyzePreview'
-      ? captureFailureSource(sql, mode === 'all' || mode === 'current') : undefined);
+    const locator = parameter?.failureSource ?? (!sqlOverride && !confirmed && mode !== 'analyzePreview'
+      ? captureFailureSource(sql, mode === 'all' || mode === 'current' || offset !== undefined) : undefined);
     if (parameter) parameter.failureSource = undefined;
     const continuing = !sqlOverride && !confirmed && !explaining && mode !== 'analyzePreview' &&
       (parameter ? parameter.continueOnError : continueOnError);
@@ -717,7 +717,7 @@ export function PostgresQueryTab({
           noticeRanges.current = new Set(messages);
           const sources = result.postgresResultSources?.filter(item => confirmedQueryContinueRange(sql, item)) ?? [];
           resultRanges.current = new Set(sources);
-          const range = failures[0]?.sourceRange ?? messages[0]?.sourceRange ?? sources[0]?.sourceRange;
+          const range = failures[0]?.sourceRange ?? messages[0]?.sourceRange ?? sources[0]?.sourceRange ?? result.explainSourceRange;
           if (range && locator?.bindRange(range)) {
             failureSource.current = locator; retainLocator = true;
           }
@@ -1082,6 +1082,15 @@ export function PostgresQueryTab({
   const multipleReturnedResults = !pin && !!returnedOutcome && results.filter(item => item.columns.length).length > 1;
   const baselineAvailable = pinState.items.length > 0 && !!returnedOutcome?.results.some(item => item.columns.length);
   const returnedExecution = resultExecution.current;
+  const planRange = pin ? undefined : outcome?.explainSourceRange;
+  const planLocator = failureSource.current;
+  const planLocation = !!planRange && !locked && !!planLocator?.canLocateRange(planRange, false);
+  /** 计划原语句与本次执行和原模型绑定，旧控件不能选中后继计划的范围。 */
+  function locatePlanSource(): void {
+    if (!planLocation || failureSource.current !== planLocator || comparisonOutcome.current !== outcome ||
+        resultExecution.current !== returnedExecution) return;
+    locateFailure();
+  }
   const resultSources = outcome?.postgresResultSources;
   const resultStatementOrdinals = useMemo(() => resultSources?.map(source => source.statementOrdinal), [resultSources]);
   const receiptSource = pin ? undefined : resultSources?.[selected];
@@ -2735,7 +2744,9 @@ export function PostgresQueryTab({
             onClear={() => changeMatchView()}/>}
           <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>
             {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions isFileCurrent={planFileCurrent} onFileBusyChange={setFileBusy} /> :
-              !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions isFileCurrent={planFileCurrent} onFileBusyChange={setFileBusy} /> : result ? (
+              !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked}
+                sourceLocation={planRange ? { available: planLocation, locate: locatePlanSource } : undefined}
+                fileActions isFileCurrent={planFileCurrent} onFileBusyChange={setFileBusy} /> : result ? (
               result.columns.length ? (
                 <div className="query-result-with-details">
                   <div className="query-result-grid" inert={!!recordEdit?.cell}>

@@ -717,7 +717,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       finally { intent?.dispose(); if (activeCurrentIntent.current === intent) activeCurrentIntent.current = null; }
       return;
     }
-    const source = querySource(mode === 'all'), locator = mode === 'explain' ? undefined : captureFailureSource(source, mode === 'all');
+    const source = querySource(mode === 'all'), locator = captureFailureSource(source, mode === 'all');
     await runQuery(source, mode === 'explain' ? 'explain' : 'execute', undefined, undefined, locator, undefined, mode !== 'explain' && continueOnError, !sqlite && mode !== 'explain' && collectWarnings);
   }
   /** 事务默认值绑定原标签和物理会话来源，SQL正文变化不撤销设置。 */
@@ -1161,7 +1161,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       (mode === 'execute' || mode === 'explain-current') && currentIntent && !currentIntent.selectionOnly ? { offset: currentIntent.offset } : undefined;
     const changed = parameters && (sqlite || parameterForm) ? (sqlite ? parameterZh.sqliteSourceChanged : parameterZh.currentSourceChanged) : undefined;
     if (parameters && (sqlite || parameterForm)) { try { assertParameterForm(parameterForm, true); if (source !== (parameterForm!.intent?.source ?? parameterForm!.source)) throw Error(changed); } catch (reason) { locator?.dispose(); setError(errorMessage(reason)); return false; } }
-    clearFailureSource(); let retainLocator = false;
+    // 文本计划仍对应上一份原计划。仅转移原模型租约，不能在后来相同的文本上重新签发。
+    if (mode === 'explain-text') {
+      locator = failureSource.current;
+      failureSource.current = undefined;
+    } else clearFailureSource();
+    let retainLocator = false;
     setInterruptedStatus(undefined);
     invalidateResultSelection(); busyRef.current = true; setBusy(true); setQueryRunning(true); setError(''); setSelectedPin(''); setShowPinSql(null); setOutcome(null); setStream([]); setResultIndex(0); task.current = uid();cancelledQuery.current=''; useWorkspace.getState().setBusy(tab.id, true);
     let warningReceipt: { scope: QueryWarningsViewScope; valid: boolean } | undefined;
@@ -1195,7 +1200,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         scriptFailureRanges.current = new Set(failures);
         if (failures.length && locator?.bindRange(failures[0].sourceRange)) { failureSource.current = locator; retainLocator = true; }
       } else if (result.failure?.sourceRange && locator?.bindRange(result.failure.sourceRange)) { failureSource.current = locator; retainLocator = true; }
-      if (!retainLocator && locator && (result.mysqlResultSourceRanges?.length || result.sqliteResultReceipts?.length || result.sqliteExplain?.sourceRange)) {
+      if (!retainLocator && locator && (result.mysqlResultSourceRanges?.length || result.sqliteResultReceipts?.length || result.sqliteExplain?.sourceRange ||
+          result.explainSourceRange && locator.bindRange(result.explainSourceRange))) {
         // 同一原模型租约可保留成功结果的位置，即使其后失败语句没有可靠范围。
         failureSource.current = locator;
         retainLocator = true;
@@ -2827,9 +2833,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const resultSqlTarget = menuResult.current;
   const canShowResultSql = !!sourceResult?.statement.trim() && !busy && !queryRunning && (!!pin || !!outcome && !outcome.explain && !outcome.analysis);
   const sqlitePlanRange = pin ? undefined : outcome?.sqliteExplain?.sourceRange;
+  const networkPlanRange = pin ? undefined : outcome?.explainSourceRange;
   const mysqlSourceRange = !sqlite && !pin && !queryRunning && sourceResult === outcome?.results[resultIndex]
     ? outcome?.mysqlResultSourceRanges?.[resultIndex] : undefined;
-  const sourceRange = sqliteReceipt?.sourceRange ?? sqlitePlanRange ?? mysqlSourceRange;
+  const sourceRange = sqliteReceipt?.sourceRange ?? sqlitePlanRange ?? networkPlanRange ?? mysqlSourceRange;
   const resultLocation = !busy && !resultModal && !!sourceRange && !!failureLocator?.canLocateRange(sourceRange);
   function resultDraftRange(index: number, item: QueryResult) {
     if (returnedOutcome?.results[index] !== item) return;
@@ -3259,7 +3266,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         }} />}
       {matchView.active && <QueryResultMatchView active={matchView.active} disabled={!selectionBinding || busy || !!activeColumnLease}
         onClear={() => changeMatchView()}/>}
-      <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>{!pin && outcome?.sqliteExplain ? <SqliteExplainPlanView key={task.current} outcome={outcome} busy={busy} isCurrent={queryMenuCurrent} fileActions/> : !pin && outcome?.analysis ? <QueryAnalyzeView key={task.current} plan={outcome.analysis} outcome={outcome} fileActions busy={busy} isFileCurrent={queryMenuCurrent}/> : !pin && outcome?.explain ? <ExplainPlanView key={task.current} outcome={outcome} fileActions fileBusy={busy} busy={busy || !sessionId} isFileCurrent={queryMenuCurrent} onText={() => void runQuery(explainSource.current.sql, 'explain-text')}/> : result?.columns.length ? <div className="query-result-with-details">
+      <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>{!pin && outcome?.sqliteExplain ? <SqliteExplainPlanView key={task.current} outcome={outcome} busy={busy} isCurrent={queryMenuCurrent} fileActions/> : !pin && outcome?.analysis ? <QueryAnalyzeView key={task.current} plan={outcome.analysis} outcome={outcome} fileActions busy={busy} isFileCurrent={queryMenuCurrent}/> : !pin && outcome?.explain ? <ExplainPlanView key={task.current} outcome={outcome} fileActions fileBusy={busy} busy={busy || !sessionId} isFileCurrent={queryMenuCurrent} sourceLocation={outcome.explainSourceRange ? { available: resultLocation, locate: locateResultSource } : undefined} onText={() => void runQuery(explainSource.current.sql, 'explain-text')}/> : result?.columns.length ? <div className="query-result-with-details">
       <PostgresTableFindPanel host={{ className: 'query-result-grid', inert: !!(recordEdit?.cell || mysqlRelation?.cell) }} request={activeReplace?.fields ? activeReplace.panel : undefined} scope={selectionBinding ?? visibleColumns}
         enabled={!!activeReplace?.fields} writable={!!activeReplace?.fields} rows={replaceRows} replacementRows={sqliteReplaceRows} columns={visibleColumns}
         replaceSelection={activeReplace?.fields ? resultSelection.checkedRows(activeReplace.binding) ?? null : undefined}

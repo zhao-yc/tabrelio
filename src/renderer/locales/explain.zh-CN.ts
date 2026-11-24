@@ -3,6 +3,7 @@ export const explainZh = {
   title: '可视化执行计划', tree: '树形计划', raw: '原始输出', table: '计划结果表格', text: '获取文本计划',
   estimates: '优化器估计值，成本不是毫秒。',
   unavailable: '不可用', missing: '当前节点未提供此指标', empty: '当前计划无法生成树，请查看原始输出或获取文本计划。',
+  locate: '定位计划原语句', locateUnavailable: '原查询正文或编辑器已变化，请重新生成计划后定位。',
   source: '计划来源', node: '计划节点', access: '访问方式', rows: '估计扫描行数', produced: '估计连接输出行数', filtered: '过滤后比例', cost: '成本', index: '使用索引',
   postgresRows: '估计输出行数',
   details: '节点详情', path: 'JSON 路径', detailHint: '数值保留原精度，完整内容请查看原始输出。',

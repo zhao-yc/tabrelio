@@ -65,10 +65,13 @@ describe('执行计划语句与原会话调度', () => {
     const source = "SET @trace = 1;\r\nDELIMITER $$\r\n" + statement + '$$\r\nDELIMITER ;\r\nDELETE FROM other_table;';
     const cursor = source.indexOf('marker');
     const c = context();
-    await explainQuery(source, 'auto', c, cursor);
+    const plan = await explainQuery(source, 'auto', c, cursor);
+    const start = source.indexOf(statement);
+    expect(plan.explainSourceRange).toEqual({ start, end: start + statement.length });
     expect(c.run).toHaveBeenCalledExactlyOnceWith('EXPLAIN FORMAT=JSON ' + statement);
     const m = context(); m.status = { dialect: 'mariadb', version: '11.4.13' };
-    await explainQuery(source, 'text', m, cursor);
+    const text = await explainQuery(source, 'text', m, cursor);
+    expect(text.explainSourceRange).toEqual(plan.explainSourceRange);
     expect(m.run).toHaveBeenCalledExactlyOnceWith('EXPLAIN ' + statement);
     const blank = context();
     await expect(explainQuery(source, 'auto', blank, source.indexOf('DELIMITER') + 1)).rejects.toThrow('光标所在位置');

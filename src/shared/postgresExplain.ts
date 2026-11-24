@@ -26,7 +26,10 @@ export function postgresExplainSql(source: string, options: { standardStrings: b
   // 实际数据库投递另用扩展协议，服务端也拒绝包含多条命令的请求。
   const sql = 'EXPLAIN (ANALYZE FALSE, VERBOSE TRUE' + (generic ? ', GENERIC_PLAN TRUE' : '') +
     ', FORMAT ' + (format === 'text' ? 'TEXT' : 'JSON') + ')\n' + statement.sql;
-  return { sql, generic };
+  return { sql, generic, sourceRange: {
+    start: statement.start + statement.sql.length - statement.sql.trimStart().length,
+    end: statement.start + statement.sql.trimEnd().length,
+  } };
 }
 
 /** 确认弹窗冻结实际发送的单条 SQL。原语句和计划命令分开，不能嵌套执行 EXPLAIN。 */

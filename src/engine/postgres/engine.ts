@@ -964,13 +964,13 @@ export class PostgresEngine {
     }
   }
   /** 读取原会话的估算计划，服务器解析门保证只发送单条 EXPLAIN。 */
-  private async explain(task: Task, input: Input): Promise<{ result: QueryResult; plan: NonNullable<QueryOutcome['explain']> }> {
+  private async explain(task: Task, input: Input): Promise<{ result: QueryResult; plan: NonNullable<QueryOutcome['explain']>; sourceRange: NonNullable<QueryOutcome['explainSourceRange']> }> {
     const connection = task.session.managed;
     if (!Number.isInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > 100000 ||
         ![undefined, 'auto', 'text'].includes(input.format)) throw Error('PostgreSQL执行计划参数无效');
     if (connection.state().transactionFailed) throw Error('PostgreSQL事务已失败，请先明确回滚');
     const format = input.format === 'text' ? 'text' : 'json';
-    const { sql, generic } = postgresExplainSql(input.sql, { standardStrings: connection.standardStrings,
+    const { sql, generic, sourceRange } = postgresExplainSql(input.sql, { standardStrings: connection.standardStrings,
       version: connection.version, format: input.format ?? 'auto', offset: input.currentStatement?.offset });
     task.sent = true;
     // 通用计划不能绑定空值，否则优化器可能折叠条件。先由同一会话 Parse 原字节，再无值读取。
@@ -985,7 +985,7 @@ export class PostgresEngine {
     const raw = this.planOutput(result);
     const plan = parsePostgresExplain(raw, connection.version, format, result.truncated);
     if (generic) plan.warnings.unshift('使用通用估算计划，位置参数未绑定具体值');
-    return { result, plan };
+    return { result, plan, sourceRange };
   }
 
   /** 只接受服务端确认的单列计划；超限时保留实际命令回执与截断标记。 */
@@ -1053,6 +1053,7 @@ export class PostgresEngine {
       sourceRange: NonNullable<QueryOutcome['failure']>['sourceRange'],
       errorRange: NonNullable<QueryOutcome['failure']>['errorRange'],
       explain: QueryOutcome['explain'],
+      explainSourceRange: QueryOutcome['explainSourceRange'],
       analysis: QueryOutcome['analysis'];
     this.emit({ taskId: task.id, status: 'running', progress: 0, message: analysisSql ? '正在实际执行分析'
       : estimate ? '正在读取PostgreSQL估算计划' : '正在执行PostgreSQL脚本' });
@@ -1087,9 +1088,10 @@ export class PostgresEngine {
         : undefined;
       let boundSql: string | undefined;
       if (estimate) {
-        const { result, plan } = await this.explain(task, input);
+        const { result, plan, sourceRange } = await this.explain(task, input);
         results.push(result);
         explain = plan;
+        explainSourceRange = sourceRange;
       }
       if (analysisSql) {
         if (session.managed.state().transactionFailed) throw Error('PostgreSQL事务已失败，请先明确回滚');
@@ -1262,6 +1264,7 @@ export class PostgresEngine {
       elapsedMs: performance.now() - started,
       transactionOpen: session.managed.state().transactionOpen,
       ...(explain ? { explain } : {}),
+      ...(explainSourceRange ? { explainSourceRange } : {}),
       ...(analysis ? { analysis } : {}),
       ...(failure ? { failure } : {}),
       ...(report ? {scriptReport: report} : {}),

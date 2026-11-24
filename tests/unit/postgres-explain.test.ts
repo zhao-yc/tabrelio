@@ -14,6 +14,13 @@ describe('PostgreSQL估算计划', () => {
       expect(() => validateCommand(command, { ...input, currentStatement: { offset: 2, text: 'SELECT 2' } })).toThrow();
     }
   });
+  it('从重复语句中返回原光标命中的准确 UTF-16 范围', () => {
+    const statement = "SELECT '船🚢;'";
+    const source = statement + ';\r\n  ' + statement + '  ;';
+    const start = source.lastIndexOf(statement);
+    expect(postgresExplainSql(source, { ...options, offset: start + 2 }).sourceRange)
+      .toEqual({ start, end: start + statement.length });
+  });
   it('只编译选区或光标位置的原语句，保留注释、引号及转义边界', () => {
     const source = "SELECT 0; /* 外 /* 内 */ */ SELECT $标签$含;号$标签$; DELETE FROM items;";
     expect(postgresExplainSql(source, { ...options, offset: source.indexOf('含') }).sql)

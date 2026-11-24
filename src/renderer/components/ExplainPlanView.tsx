@@ -24,7 +24,7 @@ function displayTitle(node: ExplainNode): string {
 }
 
 /** 展示有界的真实计划；所有视图切换都读取已有结果，只有明确的文本按钮会发送请求。 */
-type ExplainPlanViewProps = { outcome: QueryOutcome; onText?(): void; busy: boolean; fileBusy?: boolean; fileActions?: boolean; fileSnapshot?: ExplainSnapshotDocument; saveAs?: boolean; isFileCurrent?(): boolean; onFileBusyChange?(busy: boolean): void };
+type ExplainPlanViewProps = { outcome: QueryOutcome; onText?(): void; sourceLocation?: { available: boolean; locate(): void }; busy: boolean; fileBusy?: boolean; fileActions?: boolean; fileSnapshot?: ExplainSnapshotDocument; saveAs?: boolean; isFileCurrent?(): boolean; onFileBusyChange?(busy: boolean): void };
 export function ExplainPlanView({ outcome, ...props }: ExplainPlanViewProps) {
   const owner = useRef({ outcome, plan: outcome.explain, generation: 0 });
   // 父查询保留组件时仍以真实结果对象换代；A→B→A不能复活旧节点和查找闭包。
@@ -33,7 +33,7 @@ export function ExplainPlanView({ outcome, ...props }: ExplainPlanViewProps) {
 }
 
 /** 交互状态只归属于本轮结果；本地阅读永远不产生新的数据库请求。 */
-function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSnapshot, saveAs, isFileCurrent, onFileBusyChange }: ExplainPlanViewProps) {
+function OwnedExplainPlan({ outcome, onText, sourceLocation, busy, fileBusy, fileActions, fileSnapshot, saveAs, isFileCurrent, onFileBusyChange }: ExplainPlanViewProps) {
   const plan = outcome.explain!;
   const postgres = plan.dialect === 'postgresql';
   const rowLabel = postgres ? t.postgresRows : t.rows;
@@ -108,6 +108,9 @@ function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSn
     <div className="explain-toolbar" role="group" aria-label={t.title}>
       {(['tree', 'raw', 'table'] as const).map(mode => <button key={mode} aria-pressed={view === mode} onClick={() => setView(mode)}>{t[mode]}</button>)}
       {onText && <button disabled={busy} onClick={() => { if (alive.current && !busy) onText(); }}>{t.text}</button>}
+      {sourceLocation && <button disabled={busy || !sourceLocation.available}
+        title={sourceLocation.available ? undefined : t.locateUnavailable}
+        onClick={() => { if (alive.current && !busy && sourceLocation.available) sourceLocation.locate(); }}>{t.locate}</button>}
       {fileActions && (plan.format === 'json' && !fileSnapshot && !saveAs ?
         <LivePlanFileActions outcome={outcome} complete={!!plan.nodes.length && !plan.rawTruncated && !!result && !result.truncated}
           busy={fileBusy ?? busy} isCurrent={() => alive.current && (isFileCurrent?.() ?? true)} onFileBusyChange={onFileBusyChange}/> :
