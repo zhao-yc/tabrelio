@@ -81,6 +81,7 @@ export class ApplicationMenu {
           item('select-current-statement'), item('open-current-statement-query'), item('previous-statement', 'CmdOrCtrl+Alt+PageUp'),
           item('next-statement', 'CmdOrCtrl+Alt+PageDown'), item('statement-navigation'),
           item('previous-query-error', 'Alt+Shift+F8'), item('next-query-error', 'Alt+F8'), item('find-query-receipts', 'CmdOrCtrl+Shift+F8'),
+          item('previous-query-result', 'CmdOrCtrl+Shift+PageUp'), item('next-query-result', 'CmdOrCtrl+Shift+PageDown'),
           item('syntax-check'), item('object-definition'), item('parameters'), item('explain'), item('analyze'), item('transaction-settings'),
         ] },
         { label: text.transfer, submenu: [item('import'), item('export')] }, separator,

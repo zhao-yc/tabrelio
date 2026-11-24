@@ -36,6 +36,21 @@ export function queryResultHost(root: HTMLElement | null, target: EventTarget | 
   if (host && root.contains(host)) return host;
 }
 
+/** 固定快照在本次结果之外。向前或向后进入结果时，从对应的首尾开始。 */
+export function adjacentQueryResultIndex(count: number, current: number | undefined, direction: -1 | 1): number | undefined {
+  if (!count || count === 1 && current !== undefined) return;
+  if (current === undefined || current < 0 || current >= count) return direction === 1 ? 0 : count - 1;
+  return (current + direction + count) % count;
+}
+
+/** 网格可能随结果切换卸载，结果区的焦点先交还给同一标签内的稳定容器。 */
+export function selectAdjacentQueryResult(root: HTMLElement | null, index: number | undefined, select: (index: number) => boolean): void {
+  if (index === undefined) return;
+  const body = root?.querySelector<HTMLElement>('.query-layout-results > .result-body');
+  const focused = body?.contains(body.ownerDocument.activeElement);
+  if (select(index) && focused) body?.focus({ preventScroll: true });
+}
+
 /** 只有数据网格或它自己的替换面板接收结果替换，编辑格和其它输入保留原键盘行为。 */
 function resultReplaceTarget(target: HTMLElement): boolean {
   if (target.closest('.pg-table-find')) return true;

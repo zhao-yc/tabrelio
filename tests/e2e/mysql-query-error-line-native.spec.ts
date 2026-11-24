@@ -6,6 +6,7 @@ import { queryFailureSourceZh as text } from '../../src/renderer/locales/queryFa
 import { queryContinueOnErrorZh as continuing } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 import { queryWarningsZh } from '../../src/renderer/locales/queryWarnings.zh-CN';
 import { queryResultNavigatorZh as resultNavText } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryPartialOutcomeZh } from '../../src/renderer/locales/queryPartialOutcome.zh-CN';
 import { currentStatementZh } from '../../src/renderer/locales/currentStatement.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
@@ -170,6 +171,13 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     await expect(matches).toContainText(resultNavText.statement(3));
     await resultSearch.press('Enter');
     await expect(query.getByRole('gridcell', {name: '72', exact: true})).toBeVisible();
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(query.locator('.query-result-tabs button[aria-pressed="true"]')).toHaveText(`${zh.query.text017}4`);
+    await expect(query.getByRole('grid')).toHaveCount(0);
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(query.getByRole('gridcell', {name: '73', exact: true})).toBeVisible();
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(query.getByRole('gridcell', {name: '70', exact: true})).toBeVisible();
     expect(await history()).toEqual(beforeResultNavigation);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

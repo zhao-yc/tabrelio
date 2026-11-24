@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 支持用原生菜单或 `Ctrl／⌘+Shift+PageUp／PageDown` 循环切换本次执行的全部返回结果，包括存储过程的多个行集和执行状态。Q02 继续为部分覆盖。
+
 2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 支持在当前查询页从原生菜单或 `Ctrl／⌘+Shift+F8` 打开执行回执查找，直接包含本次错误，并在混合列表中保留当前结果的初始高亮。Q02 继续为部分覆盖。
 
 2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的查找结果集可包含本次执行的失败回执，按语句序号或错误文本查找，并沿用原模型定位。原文失效时仍可查看本次失败详情。Q02 继续为部分覆盖。

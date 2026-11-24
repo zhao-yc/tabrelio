@@ -587,7 +587,14 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await expect(resultDialog.getByRole('option')).toContainText(resultNavText.result(2));
     await expect(resultDialog.getByRole('option')).toContainText(resultNavText.statement(3));
     await resultSearch.press('Enter');
-    await expect(tab().getByLabel('PostgreSQL结果集', {exact: true})).toHaveValue('1');
+    const resultChoice = tab().getByLabel('PostgreSQL结果集', {exact: true});
+    await expect(resultChoice).toHaveValue('1');
+    await command('next-query-result');
+    await expect(resultChoice).toHaveValue('2');
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(resultChoice).toHaveValue('0');
+    await command('previous-query-result');
+    await expect(resultChoice).toHaveValue('2');
     expect(await history()).toEqual(beforeLocate); expect(await records()).toEqual([1, 2, 3]);
     expect(beforeLocate[0].success).toBe(false);
     await page.screenshot({path: info.outputPath('PostgreSQL遇错继续摘要.png')});

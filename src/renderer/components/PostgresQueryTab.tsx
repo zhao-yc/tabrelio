@@ -18,7 +18,7 @@ import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { QueryResultNavigator, type QueryResultNavigatorControl } from './QueryResultNavigator';
 import { PinnedResultRename } from './PinnedResultRename';
 import { ResultSqlDialog } from './ResultSqlDialog';
-import { focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
+import { adjacentQueryResultIndex, focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace, selectAdjacentQueryResult } from '../queryResultShortcut';
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
@@ -2191,6 +2191,8 @@ export function PostgresQueryTab({
   });
   const resultNavigator = useRef<QueryResultNavigatorControl>(null);
   const hasResultNavigation = results.length > 1 || pinState.items.length > 0 || failureNavigation.failures.length > 0;
+  const previousResult = adjacentQueryResultIndex(results.length, pin ? undefined : selected, -1);
+  const nextResult = adjacentQueryResultIndex(results.length, pin ? undefined : selected, 1);
   const commands: Partial<Record<UiCommandId, UiCommandHandler>> = {
     execute: { enabled: canRun, run: () => run() },
     'execute-selection': { enabled: canRun && editorSelection.single, run: () => run('selection') },
@@ -2206,6 +2208,8 @@ export function PostgresQueryTab({
     'previous-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(-1) },
     'next-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(1) },
     'find-query-receipts': { enabled: hasResultNavigation && !locked, run: () => resultNavigator.current?.openReceipts() },
+    'previous-query-result': { enabled: previousResult !== undefined && !locked, run: () => selectAdjacentQueryResult(layoutRoot.current, previousResult, selectCurrentResult) },
+    'next-query-result': { enabled: nextResult !== undefined && !locked, run: () => selectAdjacentQueryResult(layoutRoot.current, nextResult, selectCurrentResult) },
     stop: { enabled: canStop, run: stop },
     explain: { enabled: canPlan, run: () => run('explain') },
     analyze: { enabled: canPlan, run: () => run('analyzePreview') },

@@ -39,6 +39,7 @@ export const navigationZh = {
     ['执行光标所在语句', 'Ctrl / ⌘ + Shift + Enter 或编辑器内 Ctrl / ⌘ + Shift + R'],
     ['停止当前查询', 'Windows 用 Ctrl + T，macOS 用 ⌘ + .'],
     ['切换查询结果（第 1 至 10 组）', 'Alt + 1…9、0（macOS 在结果区按 Option + 数字）'],
+    ['切换上一组／下一组查询结果', 'Ctrl / ⌘ + Shift + PageUp / PageDown'],
     ['在 SQL 编辑器与当前结果之间切换焦点', 'F6'],
     ['定位上一处／下一处执行错误', 'Alt / Option + Shift + F8 ／ Alt / Option + F8'],
     ['查找当前查询的执行回执', 'Ctrl / ⌘ + Shift + F8'],

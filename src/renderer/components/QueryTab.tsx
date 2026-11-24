@@ -6,7 +6,7 @@ import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { QueryResultNavigator, type QueryResultNavigatorControl } from './QueryResultNavigator';
 import { PinnedResultRename } from './PinnedResultRename';
 import { ResultSqlDialog } from './ResultSqlDialog';
-import { focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
+import { adjacentQueryResultIndex, focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace, selectAdjacentQueryResult } from '../queryResultShortcut';
 import { sqliteStatementTimeoutMaximumMs, validSqliteStatementTimeout } from '../../shared/sqliteStatementTimeout';
 import { appDialogSelector, appModalSelector } from '../modalSelectors';
 import { StatementNavigationController, type StatementNavigationView } from '../statementNavigationController';
@@ -2778,6 +2778,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const resultNavigator = useRef<QueryResultNavigatorControl>(null);
   const hasResultNavigation = results.length > 1 || pins.length > 0 || failureNavigation.failures.length > 0;
   const resultNavigationLocked = busy || queryRunning || resultModal || fileSource.busy;
+  const previousResult = adjacentQueryResultIndex(results.length, pin ? undefined : resultIndex, -1);
+  const nextResult = adjacentQueryResultIndex(results.length, pin ? undefined : resultIndex, 1);
+  function navigateResult(index: number | undefined) {
+    if (pinNavigationCurrent()) selectAdjacentQueryResult(layoutRoot.current, index, selectCurrentResult);
+  }
   useUiCommandScope(`tab:${tab.id}`, {
     execute: { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void execute(); } },
     'execute-selection': { enabled: canExecuteSelection, run: () => { void execute('selection-only'); } },
@@ -2804,6 +2809,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'previous-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(-1) },
     'next-query-error': { enabled: failureNavigation.count > 0, run: () => failureNavigation.move(1) },
     'find-query-receipts': { enabled: hasResultNavigation && !resultNavigationLocked, run: () => resultNavigator.current?.openReceipts() },
+    'previous-query-result': { enabled: previousResult !== undefined && !resultNavigationLocked, run: () => navigateResult(previousResult) },
+    'next-query-result': { enabled: nextResult !== undefined && !resultNavigationLocked, run: () => navigateResult(nextResult) },
     'syntax-check': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !syntaxView?.busy, run: () => openSyntaxCheck() },
     'object-definition': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !objectDefinition, run: () => openObjectStructure() },
     replace: { enabled: (!!searchEditor || canReplaceResult) && !closeRequest && !fileSource.busy,
@@ -2842,11 +2849,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const parameterDialog = parameterFormRef.current;
   const recoveryDialog=recovery&&<Modal title={queryContextZh.title} onClose={()=>setRecovery(false)}><form onSubmit={event=>{event.preventDefault();if(sessionRef.current||busyRef.current)return;rememberDatabase({state:'known',database:sqlite?'main':recoveryDatabase||null});setRecovery(false);setError('');}}><div className="modal-content"><p className="muted small">{sqlite ? sqliteZh.recoveryHint : queryContextZh.hint}</p><Field label={queryContextZh.database}><input autoFocus readOnly={sqlite} value={sqlite ? 'main' : recoveryDatabase} maxLength={256} onChange={event=>setRecoveryDatabase(event.target.value)}/></Field></div><footer className="modal-footer"><span className="grow"/><button type="button" onClick={()=>setRecovery(false)}>{zh.common.cancel}</button><button className="primary" type="submit" disabled={busy}>{queryContextZh.confirm}</button></footer></form></Modal>;
   /** 鼠标和快捷键都清理原结果的选区与快照视图，再显示本次执行的目标结果。 */
-  function selectCurrentResult(index: number): void {
+  function selectCurrentResult(index: number): boolean {
+    if (!results[index]) return false;
     invalidateResultSelection();
     setResultIndex(index);
     setSelectedPin('');
     setShowPinSql(null);
+    return true;
   }
 
   function pinNavigationCurrent(): boolean {

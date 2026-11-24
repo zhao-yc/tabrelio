@@ -59,6 +59,13 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     const dialog = page.getByRole('dialog', { name: text.open, exact: true });
     const search = dialog.getByRole('combobox', { name: text.input, exact: true });
     const grid = tab.getByRole('grid');
+    const resultBody = tab.locator('.query-layout-results > .result-body');
+    await grid.getByRole('gridcell', {name: '1', exact: true}).focus();
+    await page.keyboard.press('ControlOrMeta+Shift+PageUp');
+    await expect(grid.getByRole('gridcell', {name: '44', exact: true})).toBeVisible();
+    await expect(resultBody).toBeFocused();
+    await page.keyboard.press('ControlOrMeta+Shift+PageDown');
+    await expect(grid.getByRole('gridcell', {name: '1', exact: true})).toBeVisible();
     await tab.locator('.monaco-editor').getByRole('textbox').focus();
     await page.keyboard.press('ControlOrMeta+Shift+F8');
     await expect(search).toBeFocused();
@@ -207,6 +214,11 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await expect(renamedPin).toHaveAttribute('aria-pressed', 'true');
     await expect(renamedPin).toHaveAttribute('title', /执行耗时 .* ms\nSELECT 2 AS sample/);
     await expect(rowCheck).toBeChecked();
+    await page.keyboard.press('ControlOrMeta+Shift+PageUp');
+    await expect(grid.getByRole('gridcell', {name: '后续执行值', exact: true})).toBeVisible();
+    await expect(renamedPin).toHaveAttribute('aria-pressed', 'false');
+    await renamedPin.click();
+    await expect(grid.getByRole('gridcell', {name: '2', exact: true})).toBeVisible();
     await trigger.click();
     await expect(dialog.getByRole('option', { selected: true })).toContainText('上月对账基准📌');
     await search.fill('月度汇总');
