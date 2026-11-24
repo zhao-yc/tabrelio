@@ -1,11 +1,13 @@
 import { createRequire } from 'node:module';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { LocalStore } from '../../src/main/storage';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { sqlBlockCommentZh as messages } from '../../src/renderer/locales/sqlBlockComment.zh-CN';
 import { sqlQuotedCopyZh as quotedText } from '../../src/renderer/locales/sqlQuotedCopy.zh-CN';
+import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { editorIndentationZh as indentationText } from '../../src/renderer/locales/editorIndentation.zh-CN';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
@@ -647,7 +649,7 @@ for (const dialect of ['mysql', 'postgresql'] as const) {
 }
 
 for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
-  test(`${dialect} 从两处菜单复制当前语句，保留分隔符并拒绝过期光标`, async () => {
+  test(`${dialect} 从两处菜单复制和另存当前语句，保留分隔符并拒绝过期光标`, async () => {
     const custom = dialect === 'mysql' || dialect === 'mariadb';
     const body = String.raw`SELECT '船🚢', "字段", '\n',` + '\n  7';
     const statement = body + (custom ? '' : ';');
@@ -725,6 +727,74 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     await expect.poll(copies).toEqual([expected, script, script]);
     await expect(plainDialog).toHaveCount(0);
     expect(await model()).toMatchObject({sql: initial.sql, line, empty: true});
+
+    const firstFile = join(dataDir, '菜单导出.sql'), secondFile = join(dataDir, '右键导出.sql'), staleFile = join(dataDir, '过期光标.sql');
+    // 替换本轮系统选择器的返回时机，保留正式 IPC 和主进程原子写入。
+    await desktop.evaluate(({ dialog }) => {
+      const original = dialog.showSaveDialog;
+      const picker = {
+        count: 0,
+        finish: undefined as ((result: Electron.SaveDialogReturnValue) => void) | undefined,
+        restore: () => { dialog.showSaveDialog = original; },
+      };
+      Object.assign(globalThis, { currentStatementPicker: picker });
+      dialog.showSaveDialog = (async (_window: Electron.BaseWindow, options: Electron.SaveDialogOptions) => {
+        if (options.defaultPath !== '当前语句.sql' || options.filters?.[0]?.extensions.join() !== 'sql' || picker.finish)
+          throw Error('当前语句保存选择器收到意外输入');
+        picker.count += 1;
+        return new Promise<Electron.SaveDialogReturnValue>(resolve => { picker.finish = resolve; });
+      }) as typeof dialog.showSaveDialog;
+    });
+    const finishPicker = async (count: number, path?: string) => {
+      await expect.poll(() => desktop.evaluate(() => Reflect.get(globalThis, 'currentStatementPicker').count)).toBe(count);
+      await desktop.evaluate((_electron, filePath) => {
+        const picker = Reflect.get(globalThis, 'currentStatementPicker');
+        const finish = picker.finish;
+        picker.finish = undefined;
+        finish({canceled: !filePath, filePath: filePath ?? ''});
+      }, path);
+    };
+    try {
+      const save = 'save-current-statement';
+      await box.focus();
+      await model(line);
+      await nativeQueryCommand(save, false);
+      await finishPicker(1, firstFile);
+      await expect.poll(() => readFile(firstFile).catch(() => undefined)).toEqual(Buffer.from(script, 'utf8'));
+      await expect(page.getByText(navigationText.saveCurrent.saved('菜单导出.sql'), {exact: true})).toBeVisible();
+      expect(await model()).toMatchObject({sql: initial.sql, line, column: 4, empty: true});
+
+      await box.focus();
+      const savePoint = await model(line);
+      await page.mouse.click(savePoint.x, savePoint.y, {button: 'right'});
+      await page.locator('.monaco-menu-container:visible').getByRole('menuitem', {name: uiCommandLabels[save], exact: true}).click({delay: 120});
+      await finishPicker(2, secondFile);
+      await expect.poll(() => readFile(secondFile).catch(() => undefined)).toEqual(Buffer.from(script, 'utf8'));
+      await expect(page.getByText(navigationText.saveCurrent.saved('右键导出.sql'), {exact: true})).toBeVisible();
+
+      await box.focus();
+      await model(line);
+      await nativeQueryCommand(save, false);
+      await expect.poll(() => desktop.evaluate(() => Reflect.get(globalThis, 'currentStatementPicker').count)).toBe(3);
+      await model(1);
+      await finishPicker(3, staleFile);
+      await expect(page.getByText(navigationText.saveCurrent.stale, {exact: true})).toBeVisible();
+      expect(existsSync(staleFile)).toBe(false);
+      expect(await model()).toMatchObject({sql: initial.sql, line: 1, column: 4, empty: true});
+
+      await nativeQueryCommand(save, false);
+      await finishPicker(4);
+      await nativeQueryCommand(save, false);
+      await finishPicker(5, staleFile);
+      await expect.poll(() => readFile(staleFile, 'utf8').catch(() => undefined)).toBe("SELECT '前置';");
+    } finally {
+      await desktop.evaluate(() => {
+        const picker = Reflect.get(globalThis, 'currentStatementPicker');
+        picker.finish?.({canceled: true, filePath: ''});
+        picker.restore();
+        Reflect.deleteProperty(globalThis, 'currentStatementPicker');
+      });
+    }
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
     expect(pageErrors).toEqual([]);

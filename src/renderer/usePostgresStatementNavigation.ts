@@ -8,7 +8,7 @@ import type { StatementNavigationPanelProps } from './components/StatementNaviga
 import { statementNavigationZh as text } from './locales/statementNavigation.zh-CN';
 import { invoke } from './lib';
 import { useWorkspace } from './store';
-import { extractStatementSelection, type StatementQueryOutput } from './statementNavigationExtract';
+import { extractStatementSelection, saveCurrentStatement, type StatementQueryOutput } from './statementNavigationExtract';
 import { openSqlStatementCopy } from './sqlQuotedCopy';
 
 interface Target {
@@ -21,8 +21,9 @@ interface Owner extends Target {
   source: string;
   controller?: StatementNavigationController;
   ranges?: NavigableStatement[];
+  saving?: boolean;
 }
-type Action = 'panel' | 'select' | 'previous' | 'next' | 'duplicate' | 'format' | 'copy' | 'quote';
+type Action = 'panel' | 'select' | 'previous' | 'next' | 'duplicate' | 'format' | 'copy' | 'quote' | 'save';
 interface Navigation {
   open(action?: Action): void;
   panel?: StatementNavigationPanelProps;
@@ -63,7 +64,7 @@ export function usePostgresStatementNavigation(capture: () => Target | undefined
   }
   function open(action: Action = 'panel') {
     const target = capture();
-    if (!target || owner.current?.controller?.busy) return;
+    if (!target || owner.current?.controller?.busy || owner.current?.saving) return;
     const { instance, model } = target;
     const single = action === 'panel' ? undefined : instance.getSelections();
     if (action !== 'panel' && single?.length !== 1) return;
@@ -75,14 +76,25 @@ export function usePostgresStatementNavigation(capture: () => Target | undefined
       const range = direction
         ? adjacentNavigableStatement(original.source, ranges, offset, direction, 'postgresql')
         : ranges[currentNavigableStatement(original.source, ranges, offset, 'postgresql')];
-      if (range && action === 'duplicate') void openDraft(original.instance, [range]);
+      if (action === 'save') {
+        // 原生对话框返回前仍使用本次光标和原文，失效后禁止写盘。
+        original.saving = true;
+        const save = range && original.controller && saveCurrentStatement(original.controller, range);
+        if (save) {
+          setBusy(true);
+          void save.finally(() => { if (owner.current === original) close(); });
+        } else {
+          close();
+          if (!range) useWorkspace.getState().notify(text.noCurrent);
+        }
+      } else if (range && action === 'duplicate') void openDraft(original.instance, [range]);
       else if (range && action === 'format') formatStatement(original.instance, range);
       else if (range && (action === 'quote' || action === 'copy')) openSqlStatementCopy(original.instance, original.source, range, action === 'copy' ? 'plain' : 'quoted');
       else if (range) apply(original, range, action === 'select');
       else useWorkspace.getState().notify(direction === -1 ? text.noPrevious : direction === 1 ? text.noNext : text.noCurrent);
     }
     const previous = owner.current;
-    if (selection && previous?.ranges && previous.model === model && previous.controller?.current()) {
+    if (action !== 'save' && selection && previous?.ranges && previous.model === model && previous.controller?.current()) {
       useRanges(previous, previous.ranges);
       return;
     }
@@ -113,12 +125,13 @@ export function usePostgresStatementNavigation(capture: () => Target | undefined
       decorate: result => { original.ranges = result.statements; },
       clear: () => { original.ranges = undefined; },
       changed: next => {
-        if (owner.current !== original) return;
+        if (owner.current !== original || original.saving) return;
         setBusy(next.busy);
         if (action === 'panel') { setView(next); return; }
         const result = next.result;
         if (!result) return;
         const ready = result.status === 'ready' && current();
+        if (ready && action === 'save') { useRanges(original, result.statements); return; }
         close();
         if (ready) useRanges(original, result.statements);
         else if (result.status === 'blocked' && result.reason !== 'stale')

@@ -14,6 +14,11 @@ export const statementNavigationZh = {
   copyChecked: '复制勾选语句', openChecked: '在新查询中打开勾选语句', clearChecked: '清除勾选',
   openSeparately: '每条勾选语句单独打开', separateHint: (limit: number) => `按脚本顺序建立独立查询，一次最多 ${limit} 条。`,
   saveChecked: '另存勾选语句', scriptEncoding: '勾选语句文件编码', scriptFile: '勾选语句.sql',
+  saveCurrent: {
+    fileName: '当前语句.sql',
+    saved: (name: string) => `已另存当前语句到 ${name}`,
+    stale: '原查询或光标已变化，请重新选择要保存的语句。',
+  },
   saved: (name: string) => `已另存勾选语句到 ${name}`,
   library: '保存勾选语句到查询库', libraryName: '查询名称', librarySave: '保存新查询', libraryCancel: '取消命名',
   librarySaved: (name: string) => `已保存命名查询「${name}」`,

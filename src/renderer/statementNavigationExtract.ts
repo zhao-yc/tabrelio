@@ -35,6 +35,12 @@ export function extractStatementSelection(controller: StatementNavigationControl
 
 export { openQueryTabBatch as openStatementDraftBatch } from './store';
 
+/** 只保存光标所在的已签发语句，沿用目录导出的分隔符和文件写入规则。 */
+export function saveCurrentStatement(controller: StatementNavigationController, range: NavigableStatement): Promise<void> | undefined {
+  return controller.extract([range], (source, dialect, current) =>
+    saveStatements(() => statementDraftSql(source, [range], dialect), 'utf8', current, text.saveCurrent));
+}
+
 /** 只新建查询库条目，不接管或修改原编辑器的文件与查询来源。 */
 export async function saveStatementQuery(candidate: Omit<WorkspaceTab, 'id'>, name: string, group?: SavedQueryGroupTarget): Promise<void> {
   const context = savedQueryOriginContext(candidate.database, candidate.databaseContext);
@@ -43,13 +49,14 @@ export async function saveStatementQuery(candidate: Omit<WorkspaceTab, 'id'>, na
 }
 
 /** 原生选择器返回后仍需核对原目录。文件授权与写入沿用主进程的 SQL 保存边界。 */
-async function saveStatements(read: () => string, encoding: QueryFileEncoding, current: () => boolean): Promise<void> {
+async function saveStatements(read: () => string, encoding: QueryFileEncoding, current: () => boolean,
+  file: { fileName: string; stale: string; saved(name: string): string } = { fileName: text.scriptFile, stale: text.reasons.stale, saved: text.saved }): Promise<void> {
   try {
     const sql = read();
-    const selected = await invoke('files.choose', { purpose: 'export', format: 'sql', suggestedName: text.scriptFile });
+    const selected = await invoke('files.choose', { purpose: 'export', format: 'sql', suggestedName: file.fileName });
     if (!selected) return;
-    if (!current()) throw Error(text.reasons.stale);
+    if (!current()) throw Error(file.stale);
     await invoke('files.writeQuery', { fileToken: selected.token, encoding, sql });
-    useWorkspace.getState().notify(text.saved(selected.name));
+    useWorkspace.getState().notify(file.saved(selected.name));
   } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
 }

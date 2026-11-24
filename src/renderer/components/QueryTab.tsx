@@ -11,7 +11,7 @@ import { sqliteStatementTimeoutMaximumMs, validSqliteStatementTimeout } from '..
 import { appDialogSelector, appModalSelector } from '../modalSelectors';
 import { StatementNavigationController, type StatementNavigationView } from '../statementNavigationController';
 import { StatementNavigationPanel } from './StatementNavigationPanel';
-import { extractStatementSelection, openStatementDraftBatch, saveStatementQuery, type StatementQueryOutput, type StatementSelectionDestination } from '../statementNavigationExtract';
+import { extractStatementSelection, openStatementDraftBatch, saveCurrentStatement, saveStatementQuery, type StatementQueryOutput, type StatementSelectionDestination } from '../statementNavigationExtract';
 import { StatementNavigationWorkerClient } from '../statementNavigationWorkerClient';
 import StatementNavigationWorker from '../statementNavigation.worker?worker';
 import { adjacentNavigableStatement, currentNavigableStatement, type NavigableStatement, type StatementNavigationResult } from '../../shared/statementNavigation';
@@ -325,7 +325,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     setHasSingleSelection(singleSelection);
   }, []);
   const [navigationView, setNavigationView] = useState<StatementNavigationView | null>(null), [navigationCursor, setNavigationCursor] = useState(0);
-  const navigationIntent = useRef<{ id: string; controller: StatementNavigationController; source: string; dialect: 'mysql' | 'mariadb' | 'sqlite'; model: monaco.editor.ITextModel; instance: monaco.editor.IStandaloneCodeEditor; result?: Extract<StatementNavigationResult, { status: 'ready' }> } | null>(null);
+  const [navigationSaving, setNavigationSaving] = useState(false);
+  const navigationIntent = useRef<{ id: string; controller: StatementNavigationController; source: string; dialect: 'mysql' | 'mariadb' | 'sqlite'; model: monaco.editor.ITextModel; instance: monaco.editor.IStandaloneCodeEditor; result?: Extract<StatementNavigationResult, { status: 'ready' }>; saving?: boolean } | null>(null);
   useEffect(() => () => { navigationIntent.current?.controller.dispose(); navigationIntent.current = null; }, []);
   useLayoutEffect(() => { navigationIntent.current?.controller.observe(); });
   const [syntaxView, setSyntaxView] = useState<SqlSyntaxCheckView | null>(null);
@@ -2464,8 +2465,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       && !closeRequestRef.current;
   }
   /** 目录、选中和相邻跳转共用原分段规则，均不创建连接、会话或查询任务。 */
-  function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' | 'duplicate' | 'format' | 'copy' | 'quote' = 'panel'): void {
-    if (!queryMenuCurrent() || !connection || connection.dialect === 'postgresql' || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || navigationIntent.current?.controller.busy) return;
+  function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' | 'duplicate' | 'format' | 'copy' | 'quote' | 'save' = 'panel'): void {
+    const existing = navigationIntent.current;
+    if (!queryMenuCurrent() || !connection || connection.dialect === 'postgresql' || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || existing?.controller.busy || existing?.saving) return;
     const model = instance.getModel(); if (!model || model.isDisposed() || instance.getRawOptions().readOnly) return;
     const oneShot = action !== 'panel', direction = action === 'previous' ? -1 : action === 'next' ? 1 : undefined;
     const selections = oneShot ? instance.getSelections() : undefined;
@@ -2474,7 +2476,6 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const offset = originalSelection ? model.getOffsetAt(originalSelection.getPosition()) : 0;
     const noTarget = action === 'previous' ? navigationText.noPrevious : action === 'next' ? navigationText.noNext : navigationText.noCurrent;
     // 面板已经持有准确原模型的目录时，直接导航并保留搜索、分页和当前面板。
-    const existing = navigationIntent.current;
     if (direction && existing?.model === model && existing.instance === instance && existing.result && existing.controller.current()) {
       const range = adjacentNavigableStatement(existing.source, existing.result.statements, offset, direction);
       if (range) applyStatementRange(existing, range, false); else useWorkspace.getState().notify(noTarget);
@@ -2508,10 +2509,21 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       changed: view => {
         if (!alive.current || navigationIntent.current !== binding) return;
         if (!oneShot) { setNavigationView(view); return; }
-        if (view.busy || !view.result) return;
+        if (view.busy || !view.result || binding.saving) return;
         const result = view.result;
         const range = result.status === 'ready' && current()
           ? direction ? adjacentNavigableStatement(binding.source, result.statements, offset, direction) : result.statements[currentNavigableStatement(binding.source, result.statements, offset)] : undefined;
+        if (range && action === 'save') {
+          // 原生对话框返回前保留原目录的失效监听，期间不重复打开选择器。
+          binding.saving = true;
+          const save = saveCurrentStatement(binding.controller, range);
+          if (save) {
+            setNavigationSaving(true);
+            void save.finally(() => { if (navigationIntent.current === binding) closeStatementNavigation(); });
+          }
+          else closeStatementNavigation();
+          return;
+        }
         closeStatementNavigation();
         if (range && action === 'duplicate') void duplicateQuery('statement', binding.instance, [range]);
         else if (range && action === 'format') void formatQuery('format', range);
@@ -2546,7 +2558,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     binding.instance.focus();
   }
   /** 只释放本轮目录和监听，旧清理不能关闭继任面板。 */
-  function closeStatementNavigation(): void { const binding = navigationIntent.current; navigationIntent.current = null; binding?.controller.dispose(); setNavigationView(null); }
+  function closeStatementNavigation(): void {
+    const binding = navigationIntent.current;
+    navigationIntent.current = null;
+    binding?.controller.dispose();
+    setNavigationView(null);
+    setNavigationSaving(false);
+  }
   /** 检查始终绑定原查询来源。SQLite 可打开当前标签的会话进行准备，不执行正文。 */
   function openSyntaxCheck(instance = editor.current): void {
     if (!queryMenuCurrent() || !connection || connection.dialect === 'postgresql' || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || syntaxIntent.current?.controller.busy) return;
@@ -2788,11 +2806,15 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 6,
       run: () => { if (active) openStatementNavigation(searchEditor, 'quote'); },
     });
+    const save = searchEditor.addAction({ id: 'dbark-save-current-statement:' + uid(), label: uiCommandLabels['save-current-statement'],
+      precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.69,
+      run: () => { if (active) openStatementNavigation(searchEditor, 'save'); },
+    });
     const adjacent = (['previous', 'next'] as const).map((direction, index) => searchEditor.addAction({
       id: `dbark-${direction}-statement:${uid()}`, label: uiCommandLabels[`${direction}-statement`], precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.66 + index / 100,
       run: () => { if (active) openStatementNavigation(searchEditor, direction); },
     }));
-    return () => { active = false; action.dispose(); positions.forEach(item => item.dispose()); select.dispose(); duplicate.dispose(); format.dispose(); copy.dispose(); quote.dispose(); adjacent.forEach(item => item.dispose()); };
+    return () => { active = false; action.dispose(); positions.forEach(item => item.dispose()); select.dispose(); duplicate.dispose(); format.dispose(); copy.dispose(); quote.dispose(); save.dispose(); adjacent.forEach(item => item.dispose()); };
   }, [searchEditor, queryMenuKey, connection, navigationView?.busy, tab.sql, resultsOnly]);
   const menuResult = useRef<{ result?: QueryResult; revision: number }>({ revision: 0 });
   if (menuResult.current.result !== sourceResult) menuResult.current = { result: sourceResult, revision: menuResult.current.revision + 1 };
@@ -2949,6 +2971,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'sql-copy-quoted': { enabled: !!searchEditor && hasSingleSelection && !resultsOnly && !busy && !closeRequest && !fileSource.busy,
       run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction(sqlQuotedCopyAction)?.run(); } },
     'sql-copy-current-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'copy') },
+    'save-current-statement': { enabled: canNavigateFromCursor && !navigationSaving, run: () => openStatementNavigation(editor.current, 'save') },
     'sql-copy-current-statement-quoted': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'quote') },
     'sql-clipboard-stack': { enabled: !!searchEditor && !resultsOnly && !busy && !closeRequest && !fileSource.busy,
       run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction(sqlClipboardStackAction)?.run(); } },

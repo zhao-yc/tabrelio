@@ -2309,6 +2309,7 @@ export function PostgresQueryTab({
       run: () => { focusQueryPane(editor.current?.hasTextFocus() ? 'result' : 'editor'); } },
     'sql-copy-quoted': { enabled: editable && !resultsOnly && editorSelection.single, run: () => editorAction(sqlQuotedCopyAction) },
     'sql-copy-current-statement': { enabled: canNavigate && !resultsOnly, run: () => navigation.open('copy') },
+    'save-current-statement': { enabled: canNavigate && !resultsOnly, run: () => navigation.open('save') },
     'sql-copy-current-statement-quoted': { enabled: canNavigate && !resultsOnly, run: () => navigation.open('quote') },
     'sql-clipboard-stack': { enabled: editable && !resultsOnly, run: () => editorAction(sqlClipboardStackAction) },
     'sql-selection-to-snippet': { enabled: editable && editorSelection.single, run: () => openSnippets(true) },
@@ -2387,6 +2388,11 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 6,
       run: () => { if (active && canNavigate && !resultsOnly) navigation.open('quote'); },
     });
+    const saveStatement = editorInstance.addAction({
+      id: `dbark-postgres-save-current-statement:${uid()}`, label: uiCommandLabels['save-current-statement'],
+      precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.69,
+      run: () => { if (active && canNavigate && !resultsOnly) navigation.open('save'); },
+    });
     const definition = editorInstance.addAction({
       id: `dbark-postgres-object-definition:${uid()}`, label: definitionText.entry,
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.8,
@@ -2397,7 +2403,7 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly', contextMenuGroupId: 'navigation', contextMenuOrder: 1.9,
       run: () => { if (active && editor.current === editorInstance && editorInstance.getModel() === menuModel) syntax.open(); },
     });
-    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); formatStatement.dispose(); copyStatement.dispose(); quoteStatement.dispose(); definition.dispose(); syntaxCheck.dispose(); };
+    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); formatStatement.dispose(); copyStatement.dispose(); quoteStatement.dispose(); saveStatement.dispose(); definition.dispose(); syntaxCheck.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery, state.standardConformingStrings]);
   const renderResultGrid = (target?: GridFindTarget, marks?: ReadonlySet<string>) => result && displayResult ? (
     <ResultsGrid zoomable columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding} findMemory={findMemory} restoreCell={comparisonCell}
