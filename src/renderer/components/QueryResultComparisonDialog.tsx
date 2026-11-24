@@ -1,5 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CellValue, QueryResult, ResultColumn } from '../../shared/contracts';
+import { assertResultExcelData } from '../../shared/resultExcel';
+import { resultExcelZh } from '../../shared/resultExcel.zh-CN';
 import { pinLimits } from '../queryPins';
 import { alignQueryResultComparisonColumns, captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonValues, sameQueryResultComparisonColumnType, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonBaseline, type QueryResultComparisonCapture, type QueryResultComparisonColumnPair, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonSource, type QueryResultComparisonValue } from '../queryResultComparison';
 import { queryResultComparisonZh as text } from '../locales/queryResultComparison.zh-CN';
@@ -24,6 +26,12 @@ type Run = { draft: Draft; left: QueryResult; right: QueryResult; capture: Query
 type View = { run?: Run; processed: number; total: number; result?: QueryResultComparisonResult; error?: string };
 type Filter = 'all' | 'differences' | QueryResultComparisonRow['kind'];
 const resultFilters: readonly Filter[] = ['differences', 'all', 'added', 'removed', 'changed', 'equal'];
+const reportFormats = {
+  json: { label: 'JSON', fileName: text.reportName },
+  csv: { label: 'CSV', fileName: text.reportCsvName },
+  xlsx: { label: resultExcelZh.format, fileName: text.reportExcelName },
+};
+type ReportFormat = keyof typeof reportFormats;
 
 /** 自有数据字段是唯一读取入口，来源或列字段上的访问器不能在界面渲染时执行。 */
 function own(value: unknown, key: PropertyKey): unknown {
@@ -121,6 +129,7 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
   const [keySearchError, setKeySearchError] = useState('');
   const active = useRef<Run | undefined>(undefined), last = useRef<Run | undefined>(undefined), alive = useRef(true), invalid = useRef(false), closed = useRef(false);
   const report = useRef<{ taskId: string; writing: boolean } | undefined>(undefined);
+  const [reportFormat, setReportFormat] = useState<ReportFormat>('json');
   const [reportPhase, setReportPhase] = useState<'choosing' | 'writing'>(), [reportStatus, setReportStatus] = useState(''), [reportError, setReportError] = useState('');
   const committed = useRef<object | undefined>(undefined), ticket = {};
 
@@ -259,16 +268,18 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
   /** 文件框打开前冻结整个筛选范围，返回后再核原来源。 */
   async function exportReport(): Promise<void> {
     if (!indexed.length || !view.run || !resultCurrent()) return;
-    const run = view.run, operation = { taskId: uid(), writing: false };
+    const run = view.run, format = reportFormat, operation = { taskId: uid(), writing: false };
     const current = () => report.current === operation && last.current === run && draftRef.current === run.draft && environment();
     setReportError(''); setReportStatus('');
     try {
       const data = snapshotQueryResultComparisonReport(run.capture, indexed.map(({ row }) => row));
+      // Excel 额外字符和单行预算在打开保存框前验证，避免选择目标后才发现格式不兼容。
+      if (format === 'xlsx') assertResultExcelData(data);
       report.current = operation; setReportPhase('choosing');
-      const file = await invoke('files.choose', { purpose: 'export', format: 'json', suggestedName: text.reportName });
+      const file = await invoke('files.choose', { purpose: 'export', format, suggestedName: reportFormats[format].fileName });
       if (!file || !current() || !sourceCurrent()) return;
       operation.writing = true; setReportPhase('writing');
-      const saved = await invoke('files.exportResult', { fileToken: file.token, taskId: operation.taskId, format: 'json', encoding: 'utf8', result: data });
+      const saved = await invoke('files.exportResult', { fileToken: file.token, taskId: operation.taskId, format, encoding: 'utf8', result: data });
       if (current()) setReportStatus(text.reportSaved(saved.rows));
     } catch (reason) {
       if (alive.current && (!report.current || current())) setReportError(errorMessage(reason));
@@ -353,6 +364,12 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
     {reportPhase && <p role="status">{reportPhase === 'choosing' ? text.reportChoosing : text.reportWriting}</p>}
     {reportStatus && <p role="status">{reportStatus}</p>}<ErrorBox message={reportError}/>
   </div><footer className="modal-footer"><button disabled={!valid || running || !!reportPhase || !draft.keys.length || draft.left === draft.right} onClick={start}>{text.start}</button><button disabled={!valid || !running} onClick={() => stop(view.run)}>{text.stop}</button><span className="grow"/>
+    {result && <label>{text.reportFormat} <select aria-label={text.reportFormat} value={reportFormat} disabled={!!reportPhase} onChange={event => {
+      const format = event.target.value as ReportFormat;
+      if (Object.hasOwn(reportFormats, format) && resultCurrent()) {
+        setReportFormat(format); setReportStatus(''); setReportError('');
+      }
+    }}>{Object.entries(reportFormats).map(([value, option]) => <option key={value} value={value}>{option.label}</option>)}</select></label>}
     {reportPhase === 'writing' ? <button onClick={cancelReport}>{text.reportCancel}</button> : result &&
       <button disabled={!!reportPhase || !indexed.length} title={text.reportScope} onClick={() => void exportReport()}>{text.exportReport}</button>}
     <button disabled={!!reportPhase} onClick={close}>{text.close}</button></footer></Modal></div>;

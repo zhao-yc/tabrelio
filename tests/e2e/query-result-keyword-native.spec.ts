@@ -1,5 +1,6 @@
 import { readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
+import { parse } from 'csv-parse/sync';
 import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
@@ -192,7 +193,7 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     const scope = archive.getByLabel(archiveText.dataScope, { exact: true });
     await expect(scope).toHaveValue('original');
     await scope.selectOption('organized');
-    async function chooseExportPath(path: string, format: 'zip' | 'xlsx' | 'json') {
+    async function chooseExportPath(path: string, format: 'zip' | 'xlsx' | 'json' | 'csv') {
       await desktop.evaluate(({ dialog, BrowserWindow }, target) => {
         const original = dialog.showSaveDialog;
         dialog.showSaveDialog = (async (...args: unknown[]) => {
@@ -312,6 +313,32 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
       { kind: 'changed', leftRow: 2, rightRow: 1, columnName: 'label', leftValue: 'other', rightValue: 'archive A' },
     ]);
     expect(report).toHaveLength(2);
+    const reportFormat = baselineComparison.getByLabel(comparisonText.reportFormat, { exact: true });
+    async function writeReport(format: 'csv' | 'xlsx') {
+      const path = join(directory, `筛选差异.${format}`);
+      await reportFormat.selectOption(format);
+      await chooseExportPath(path, format);
+      await baselineComparison.getByRole('button', { name: comparisonText.exportReport, exact: true }).click();
+      await expect(baselineComparison.getByText(comparisonText.reportSaved(2), { exact: true })).toBeVisible();
+      return path;
+    }
+    const csvRows = parse(await readFile(await writeReport('csv'), 'utf8'), { columns: true });
+    const expectedReportRows = [
+      { kind: 'changed', leftRow: '2', rightRow: '1', columnName: 'id' },
+      { kind: 'changed', leftRow: '2', rightRow: '1', columnName: 'label', leftValue: 'other', rightValue: 'archive A' },
+    ];
+    expect(csvRows).toHaveLength(2);
+    expect(csvRows).toMatchObject(expectedReportRows);
+    const excelReport = new ExcelJS.Workbook();
+    await excelReport.xlsx.readFile(await writeReport('xlsx'));
+    const sheet = excelReport.worksheets[0], fields = new Map<number, string>();
+    sheet.getRow(1).eachCell((cell, position) => fields.set(position, cell.text));
+    const xlsxRows: Record<string, string>[] = [];
+    sheet.eachRow((row, index) => {
+      if (index > 1) xlsxRows.push(Object.fromEntries(Array.from(fields, ([position, name]) => [name, row.getCell(position).text])));
+    });
+    expect(xlsxRows).toHaveLength(2);
+    expect(xlsxRows).toMatchObject(expectedReportRows);
     await baselineComparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click();
     await expect(cells).toHaveText(['archive A', 'active B']);
     expect(await history()).toEqual(beforeBaselineComparison);

@@ -5,6 +5,7 @@ import { QueryResultComparisonDialog } from '../../src/renderer/components/Query
 import { QueryResultComparisonScan, returnedQueryResultComparison } from '../../src/renderer/queryResultComparison';
 import { snapshotQueryResult, type PinnedQueryResult } from '../../src/renderer/queryPins';
 import { queryResultComparisonZh as text } from '../../src/renderer/locales/queryResultComparison.zh-CN';
+import { resultExcelZh } from '../../src/shared/resultExcel.zh-CN';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
@@ -94,6 +95,28 @@ function many(count: number) {
 }
 
 describe('两份固定查询结果的真实只读对话框', () => {
+  it('Excel 预检在选择文件前拒绝不能表示的值，仍可切回 JSON 保留原值', async () => {
+    const pins = fixture();
+    pins[2].result.rows[0].nullable = '含\u0000原值';
+    const f = await mount(pins);
+    await compare();
+    await choose(text.reportFormat, 'xlsx');
+    await click(text.exportReport);
+    expect(f.invoke).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain(resultExcelZh.characters);
+    const invoke = vi.fn(async (command: string, input: { result?: { rows: DataRow[] } }) => {
+      if (command === 'files.choose') return { token: 'ram', name: '差异.json' };
+      if (command === 'files.exportResult') return { rows: input.result!.rows.length };
+      throw Error('测试只允许报告选择和导出');
+    });
+    (window as any).dbark = { invoke };
+    await choose(text.reportFormat, 'json');
+    await click(text.exportReport);
+    const exported = invoke.mock.calls.find(([command]) => command === 'files.exportResult')?.[1];
+    expect(exported).toMatchObject({ format: 'json', encoding: 'utf8' });
+    expect(exported?.result?.rows).toContainEqual(expect.objectContaining({ columnKey: 'nullable', rightValue: '含\u0000原值' }));
+  });
+
   it('匹配键与变化列取交集，差异报告包含超过一页的全部命中', async () => {
     const pins = many(200);
     pins[2].result.rows = pins[2].result.rows.map((row, index) =>
@@ -169,6 +192,7 @@ describe('两份固定查询结果的真实只读对话框', () => {
     await click(text.exportReport);
     await act(async () => { old(); });
     expect(node(text.filter).disabled).toBe(true);
+    expect(node(text.reportFormat).disabled).toBe(true);
     expect(button(text.close).disabled).toBe(true);
     expect(invoke).toHaveBeenCalledExactlyOnceWith('files.choose', { purpose: 'export', format: 'json', suggestedName: text.reportName });
     f.invalidate();
