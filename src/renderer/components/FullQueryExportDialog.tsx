@@ -36,6 +36,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   const validTxt = format !== 'txt' || txtExportOptionsSchema.safeParse(txtOptions).success;
   const markup = dataMarkupText(format);
   const workbook = format === 'xlsx';
+  const postgresJson = !sqlite && format === 'json';
   const insert = format === 'sql', fixedEncoding = insert || format === 'xlsx' || !!markup;
   const [encoding, setEncoding] = useState<PostgresQueryExportInput['encoding']>('utf8');
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
@@ -137,7 +138,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
     allowSqliteNavicat={sqlite} initialSqliteNavicatParameters={parameterGroup?.sqliteNavicatParameters}
     loadNames={sqliteNavicatParameters => sqlite ? invoke('sqlite.queryExportParameterNames', {sql: source.sql,
       ...(workbook ? {workbook: true as const} : {}), ...(sqliteNavicatParameters ? {sqliteNavicatParameters} : {})})
-      : Promise.resolve(postgresExportParameterNames(source.sql, workbook))}
+      : Promise.resolve(postgresExportParameterNames(source.sql, format))}
     onClose={() => setEditingParameters(false)} onExecute={(values, sqliteNavicatParameters) => {
       if (!current()) throw Error(text.changed);
       setParameterGroup({values: values.map(value => ({...value})), sqliteNavicatParameters});
@@ -146,7 +147,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
 
   return <Modal title={text.title} wide onClose={() => { if (!picking.current && !task.current) onClose(); }}>
     <div className="modal-content">
-      <p>{source.database} · {workbook ? text.workbookScope : text.scope}</p>
+      <p>{source.database} · {workbook ? text.workbookScope : postgresJson ? postgresQueryExportZh.jsonScope : text.scope}</p>
       {source.fromCurrentStatement && <p className="muted small">{text.currentSource}</p>}
       <pre className="result-sql-preview" aria-label={text.source}>{source.sql.slice(0, 4000)}</pre>
       {source.sql.length > 4000 && <p>{text.sourcePrefix}</p>}
@@ -157,6 +158,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
         <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option>{dataFileFormats.map(value => <option key={value} value={value}>{dataFileText(value)?.format}</option>)}
       </select></Field>
       {sqlite && format === 'json' && <p>{sqliteQueryExportZh.formatHint}</p>}
+      {postgresJson && <p>{postgresQueryExportZh.jsonHint}</p>}
       {workbook && <p>{text.workbookHint}</p>}
       {dataFileText(format) && <p>{dataFileText(format)?.hint}</p>}
       <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={fixedEncoding ? 'utf8' : encoding} disabled={!!pending || fixedEncoding}

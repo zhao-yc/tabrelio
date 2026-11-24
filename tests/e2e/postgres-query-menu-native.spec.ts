@@ -993,7 +993,9 @@ for (const parameterStyle of ['位置', '命名'] as const) test('PostgreSQL 完
     const body = parameterStyle === '位置' ? ' $7 ' : ' [$body] ';
     const sql = 'SELECT ' + id + '::bigint AS id, ' + amount + '::numeric(60,38) AS amount, ' + note + '::text AS note, ' +
       bytes + '::bytea AS bytes, ' + nil + "::text AS nullable, '" + literal + "' AS literal, $$" + body +
-      '$$ AS body FROM generate_series(1,130) AS g WHERE g <= ' + limit + '::int AND ' + id + '::bigint > 0;';
+      "$$ AS body, current_setting('transaction_isolation') AS isolation FROM generate_series(1,130) AS g WHERE g <= " +
+      limit + '::int AND ' + id + '::bigint > 0;';
+    const isolation = (await observer.query('SHOW default_transaction_isolation')).rows[0].default_transaction_isolation;
     const value = "导出参数原文😀'; SELECT '文本内容\n第二行", decimal = '0.12345678901234567890123456789012345678';
     await replaceDraft(sql);
     await tab().getByRole('button', {name: fullExportText.open, exact: true}).click();
@@ -1029,7 +1031,7 @@ for (const parameterStyle of ['位置', '命名'] as const) test('PostgreSQL 完
     await expect(dialog.getByText(fullExportText.done(129), {exact: true})).toBeVisible();
     const parsed = JSON.parse(await readFile(path, 'utf8'));
     expect(parsed.results[0].rows).toEqual(Array.from({length: 129}, () => ({id: '9007199254740993', amount: decimal,
-      note: value, bytes: {type: 'binary', base64: 'AP8='}, nullable: null, literal, body})));
+      note: value, bytes: {type: 'binary', base64: 'AP8='}, nullable: null, literal, body, isolation})));
     await page.screenshot({path: info.outputPath('PostgreSQL参数完整导出.png')});
     await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
     await expect.poll(sessions).toEqual(originalSessions);
@@ -1052,7 +1054,10 @@ for (const parameterStyle of ['位置', '命名'] as const) test('PostgreSQL 完
   await quitDesktop();
 });
 
-test('PostgreSQL 完整查询工作簿共用快照、命名参数并保护目标文件', async ({}, info) => {
+for (const format of ['xlsx', 'json'] as const)
+test(`PostgreSQL 完整查询${format === 'xlsx' ? '工作簿' : '多结果 JSON'}共用快照、命名参数并保护目标文件`, async ({}, info) => {
+  const workbookFormat = format === 'xlsx';
+  const outputKind = workbookFormat ? '工作簿' : '多结果 JSON';
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   test.setTimeout(90_000);
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
@@ -1062,32 +1067,35 @@ test('PostgreSQL 完整查询工作簿共用快照、命名参数并保护目标
   const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
   await observer.connect();
   try {
-    await observer.query(`CREATE TABLE public.query_workbook (id bigint PRIMARY KEY, note text);
-      INSERT INTO public.query_workbook VALUES (9223372036854775807, '原快照');`);
-    await prepare({id: '', name: '隔离 PostgreSQL 查询工作簿', dialect: 'postgresql', group: '', color: '#123456',
+    const relation = 'public.query_export_' + format;
+    await observer.query(`CREATE TABLE ${relation} (id bigint PRIMARY KEY, note text);
+      INSERT INTO ${relation} VALUES (9223372036854775807, '原快照');`);
+    await prepare({id: '', name: '隔离 PostgreSQL 查询' + outputKind, dialect: 'postgresql', group: '', color: '#123456',
       host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, [
       'SELECT [$id]::bigint AS value, pg_advisory_xact_lock(62308915)::text AS barrier;',
-      "SELECT id AS value, note AS value, decode('00ff','hex') AS bytes FROM public.query_workbook CROSS JOIN generate_series(1,205) AS g WHERE id=[$id]::bigint ORDER BY g;",
+      ...(workbookFormat ? [] : ['-- NAME: 月报/明细']),
+      `SELECT id AS value, note AS value, decode('00ff','hex') AS bytes FROM ${relation} CROSS JOIN generate_series(1,205) AS g WHERE id=[$id]::bigint ORDER BY g;`,
       'SELECT [$last_note]::text AS note, [$id]::bigint AS id;',
+      ...(workbookFormat ? [] : ['-- NAME: 空结果', 'SELECT 1 AS empty WHERE false;']),
     ].join('\n'));
     await mkdir(info.outputDir, {recursive: true});
-    const output = info.outputPath('PostgreSQL 完整查询工作簿.xlsx');
-    await desktop.evaluate(({dialog, BrowserWindow}, filePath) => {
+    const output = info.outputPath(`PostgreSQL 完整查询${outputKind}.${format}`);
+    await desktop.evaluate(({dialog, BrowserWindow}, {filePath, format}) => {
       const original = dialog.showSaveDialog;
       let count = 0;
       dialog.showSaveDialog = (async (...args: unknown[]) => {
         if (++count > 4 || args[0] !== BrowserWindow.getAllWindows()[0] ||
-            !(args.at(-1) as Electron.SaveDialogOptions).filters?.some(filter => filter.extensions.includes('xlsx')))
-          throw Error('仅允许本例的 XLSX 选择器');
+            !(args.at(-1) as Electron.SaveDialogOptions).filters?.some(filter => filter.extensions.includes(format)))
+          throw Error('仅允许本例的导出文件选择器');
         return {canceled: false, filePath};
       }) as typeof original;
       Object.assign(globalThis, {restorePgQueryWorkbookPicker: () => { dialog.showSaveDialog = original; return count; }});
-    }, output);
+    }, {filePath: output, format});
     const modal = page.getByRole('dialog', {name: fullExportText.title, exact: true});
     const open = async () => {
       await tab().getByRole('button', {name: fullExportText.open, exact: true}).click();
-      await modal.getByRole('combobox', {name: zh.resultExport.format, exact: true}).selectOption('xlsx');
-      await expect(modal.getByText(fullExportText.workbookHint, {exact: true})).toBeVisible();
+      await modal.getByRole('combobox', {name: zh.resultExport.format, exact: true}).selectOption(format);
+      await expect(modal.getByText(workbookFormat ? fullExportText.workbookHint : fullExportText.jsonHint, {exact: true})).toBeVisible();
     };
     const start = async () => {
       await modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
@@ -1107,32 +1115,48 @@ test('PostgreSQL 完整查询工作簿共用快照、命名参数并保护目标
     await observer.query('SELECT pg_advisory_lock(62308915)');
     try {
       await start(); await waitForCursor();
-      await observer.query("UPDATE public.query_workbook SET note='并发已提交'");
+      await observer.query(`UPDATE ${relation} SET note='并发已提交'`);
     } finally { await observer.query('SELECT pg_advisory_unlock(62308915)'); }
     await expect(modal.getByRole('status')).toContainText(fullExportText.done(207));
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(output);
-    expect(workbook.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['结果 1', 2], ['结果 2', 206], ['结果 3', 2]]);
-    expect(workbook.worksheets[0].getCell('A2').text).toBe('9223372036854775807');
-    expect(['A206', 'B1', 'B206', 'C206'].map(cell => workbook.worksheets[1].getCell(cell).text))
-      .toEqual(['9223372036854775807', 'value [2]', '原快照', '\\B:AP8=']);
-    expect(['A1', 'A2', 'B2'].map(cell => workbook.worksheets[2].getCell(cell).text))
-      .toEqual(['note', '只用于第三条查询', '9223372036854775807']);
-    await modal.screenshot({path: info.outputPath('PostgreSQL 完整查询工作簿.png')});
+    if (workbookFormat) {
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(output);
+      expect(workbook.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['结果 1', 2], ['结果 2', 206], ['结果 3', 2]]);
+      expect(workbook.worksheets[0].getCell('A2').text).toBe('9223372036854775807');
+      expect(['A206', 'B1', 'B206', 'C206'].map(cell => workbook.worksheets[1].getCell(cell).text))
+        .toEqual(['9223372036854775807', 'value [2]', '原快照', '\\B:AP8=']);
+      expect(['A1', 'A2', 'B2'].map(cell => workbook.worksheets[2].getCell(cell).text))
+        .toEqual(['note', '只用于第三条查询', '9223372036854775807']);
+    } else {
+      const json = JSON.parse(await readFile(output, 'utf8'));
+      expect(json).toMatchObject({format: 'DBArk-query-results', version: 1});
+      expect(json.results).toHaveLength(4);
+      for (const [index, result] of json.results.entries())
+        expect(result).toMatchObject({resultOrdinal: index + 1, statementOrdinal: index + 1, rowResultOrdinal: index + 1});
+      expect(json.results[0].rows[0].value).toBe('9223372036854775807');
+      expect(json.results[1].label).toBe('月报/明细');
+      expect(json.results[1].rows).toEqual(Array.from({length: 205}, () => ({
+        value: '9223372036854775807', 'value [2]': '原快照', bytes: {type: 'binary', base64: 'AP8='},
+      })));
+      expect(json.results[2].rows).toEqual([{note: '只用于第三条查询', id: '9223372036854775807'}]);
+      expect(json.results[3]).toMatchObject({label: '空结果', columns: [{name: 'empty'}], rows: []});
+    }
+    await modal.screenshot({path: info.outputPath('PostgreSQL 完整查询' + outputKind + '.png')});
     const original = await readFile(output);
 
     await close();
-    await replaceDraft("SELECT '先完成'; SELECT repeat('x',32768)");
+    await replaceDraft(workbookFormat ? "SELECT '先完成'; SELECT repeat('x',32768)"
+      : "SELECT '先完成', set_config('standard_conforming_strings','off',false); SELECT 2");
     await open(); await start();
-    await expect(modal.getByRole('alert')).toContainText('32767');
+    await expect(modal.getByRole('alert')).toContainText(workbookFormat ? '32767' : '字符串模式变化');
     expect(await readFile(output)).toEqual(original);
 
     await close();
-    await replaceDraft("SELECT '先完成'; WITH changed AS (UPDATE public.query_workbook SET note='意外修改' RETURNING id) SELECT id FROM changed");
+    await replaceDraft(`SELECT '先完成'; WITH changed AS (UPDATE ${relation} SET note='意外修改' RETURNING id) SELECT id FROM changed`);
     await open(); await start();
     await expect(modal.getByRole('alert')).toBeVisible();
     expect(await readFile(output)).toEqual(original);
-    expect((await observer.query('SELECT note FROM public.query_workbook')).rows[0].note).toBe('并发已提交');
+    expect((await observer.query(`SELECT note FROM ${relation}`)).rows[0].note).toBe('并发已提交');
 
     await close();
     await replaceDraft("SELECT '先完成'; SELECT pg_advisory_xact_lock(62308915)::text AS barrier;");

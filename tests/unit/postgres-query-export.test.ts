@@ -8,6 +8,7 @@ import { postgresParameterBindings } from '../../src/engine/postgres/parameters'
 import { postgresParameterPlan, postgresQueryParameterSource } from '../../src/shared/postgresParameters';
 import { splitPostgresSql } from '../../src/shared/postgresSql';
 import { postgresCurrentQueryExportSource, postgresExportParameterNames, postgresQueryExportStatements, postgresQueryInsertColumnsForResult } from '../../src/shared/postgresQueryExport';
+import { queryStreamExportLimits } from '../../src/shared/queryStreamExport';
 
 const base = {connectionId: 'pg', database: 'postgres', fileToken: 'choice', taskId: 'task', format: 'csv', encoding: 'utf8'} as const;
 const queryPlan = (sql: string, offset?: number) => postgresParameterPlan(postgresQueryParameterSource(sql, true, offset));
@@ -18,12 +19,13 @@ it('导出参数名称只按词法识别，忽略 dollar 正文、注释和字�
     expect(() => postgresExportParameterNames(sql)).toThrow();
 });
 
-it('工作簿按语句校验位置编号，同编号复用且总页数有界', () => {
-  expect(postgresExportParameterNames('SELECT $1, $$; $9$$; WITH d AS (SELECT $1, $2) SELECT * FROM d; SELECT 1', true).names)
+it.each([['xlsx', 64], ['json', queryStreamExportLimits.results]] as const)('%s 按语句校验位置编号，同编号复用且结果数有界', (format, limit) => {
+  expect(postgresExportParameterNames('SELECT $1, $$; $9$$; WITH d AS (SELECT $1, $2) SELECT * FROM d; SELECT 1', format).names)
     .toEqual(['p1', 'p2']);
-  for (const sql of ['SELECT $1, $2; SELECT $2', 'SELECT 1; UPDATE t SET x=2', 'SELECT 1;'.repeat(65),
+  expect(postgresQueryExportStatements('SELECT 1;'.repeat(limit), true, format).statements).toHaveLength(limit);
+  for (const sql of ['SELECT $1, $2; SELECT $2', 'SELECT 1; UPDATE t SET x=2', 'SELECT 1;'.repeat(limit + 1),
     "SELECT 1; SELECT 'a\\'; SELECT $1; -- '"])
-    expect(() => postgresExportParameterNames(sql, true)).toThrow();
+    expect(() => postgresExportParameterNames(sql, format)).toThrow();
 });
 
 it('命名模板保留原范围，重复名同序绑定，字符串、数组、嵌套注释和 dollar 正文各守原义', () => {
@@ -41,17 +43,17 @@ it('命名模板保留原范围，重复名同序绑定，字符串、数组、�
   expect(queryPlan(full).statements).toHaveLength(3);
 });
 
-it('命名工作簿按首见顺序收集全局参数，各条语句独立排位', () => {
+it.each(['xlsx', 'json'] as const)('%s 按首见顺序收集全局命名参数，各条语句独立排位', format => {
   const source = 'SELECT [$id]::int; SELECT [$note]::text, [$id]::int, [$note]::text; SELECT 1';
-  expect(postgresExportParameterNames(source, true).names).toEqual(['id', 'note']);
-  const plan = postgresQueryExportStatements(source, true, true);
+  expect(postgresExportParameterNames(source, format).names).toEqual(['id', 'note']);
+  const plan = postgresQueryExportStatements(source, true, format);
   expect(plan.statements.map(part => part.names)).toEqual([['id'], ['note', 'id'], []]);
   expect(plan.statements[1].sql).toBe(' SELECT  $1 ::text,  $2 ::int,  $1 ::text');
   for (const mixed of ['SELECT [$id], $1', 'SELECT [$p1]; SELECT $1'])
-    expect(() => postgresExportParameterNames(mixed, true)).toThrow('混用');
+    expect(() => postgresExportParameterNames(mixed, format)).toThrow('混用');
   const over = 'SELECT ' + Array.from({length: 201}, (_, i) => '[$p' + i + ']').join(',');
   expect(() => queryPlan(over)).toThrow('200');
-  expect(() => postgresExportParameterNames("SELECT 'a\\'; SELECT [$id]; -- '", true)).toThrow();
+  expect(() => postgresExportParameterNames("SELECT 'a\\'; SELECT [$id]; -- '", format)).toThrow();
 });
 
 it('当前 PostgreSQL 导出只截取两种模式一致的原查询', () => {
@@ -117,10 +119,11 @@ it.each(['SELECT 1; SELECT 2', 'DELETE FROM records', 'SELECT $1', 'SELECT [$id]
   expect(query).not.toHaveBeenCalled();
 });
 
-it.each(['SELECT 1; SELECT $2', 'SELECT 1; DELETE FROM records', 'SELECT 1;'.repeat(65)])('工作簿在开始事务前校验全部语句', async sql => {
+it.each([['xlsx', 64], ['json', queryStreamExportLimits.results]] as const)('%s 在开始事务前校验全部语句', async (format, limit) => {
   const query = vi.fn();
   const connection = {query, standardStrings: true} as unknown as PostgresConnection;
-  await expect(exportPostgresQuery({...base, format: 'xlsx', sql, filePath: join(tmpdir(), 'pg-workbook-preflight.xlsx')},
-    action => action(connection), () => {}, () => {}, () => {})).rejects.toThrow();
+  for (const sql of ['SELECT 1; SELECT $2', 'SELECT 1; DELETE FROM records', 'SELECT 1;'.repeat(limit + 1)])
+    await expect(exportPostgresQuery({...base, format, sql, filePath: join(tmpdir(), 'pg-export-preflight.' + format)},
+      action => action(connection), () => {}, () => {}, () => {})).rejects.toThrow();
   expect(query).not.toHaveBeenCalled();
 });

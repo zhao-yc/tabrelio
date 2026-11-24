@@ -1,3 +1,5 @@
+import { queryStreamExportLimits } from '../../shared/queryStreamExport';
+
 export const postgresQueryExportZh = {
   open: '执行并导出完整结果',
   openCurrent: '导出当前语句的完整结果',
@@ -7,6 +9,8 @@ export const postgresQueryExportZh = {
   sourcePrefix: '显示 SQL 前 4000 个 UTF-16 单元',
   scope: '将在独立的只读会话执行一条 SELECT 或 WITH 查询。读取当前数据库的已提交数据，连接内的临时表和会话设置不随查询转移。',
   workbookScope: '将在独立的只读会话执行 1 至 64 条 SELECT 或 WITH 查询。所有工作表共用同一个已提交数据快照，临时表和会话设置不随查询转移。',
+  jsonScope: `将在独立的只读会话执行 1 至 ${queryStreamExportLimits.results} 条 SELECT 或 WITH 查询。所有结果共用同一个已提交数据快照，临时表和会话设置不随查询转移。`,
+  jsonHint: 'JSON 按语句顺序保留每组结果及其列，沿用语句头的 NAME: 名称。空结果也保留。同名参数共用一个值。各条查询的位置参数从 $1 连续编号，同编号共用一个值。',
   workbookHint: '每条查询按顺序写入一张工作表，页签名沿用语句头的 NAME: 注释。空结果保留标题。同名参数共用一个值。使用位置参数时，各条查询从 $1 连续编号，同编号共用一个值。',
   insertFormat: 'PostgreSQL INSERT SQL',
   insertDatabase: 'INSERT 目标 schema',

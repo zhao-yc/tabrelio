@@ -56,7 +56,7 @@ async function closeExportCursor(connection: PostgresConnection) {
   if (closed.postgresCommand !== 'CLOSE') throw Error('PostgreSQL 未确认游标关闭');
 }
 
-/** 工作簿的全部游标顺序共用一个只读快照，文件在游标和物理会话收尾后发布。 */
+/** 多结果导出顺序共用一个只读快照，在游标、事务和物理会话收尾后才发布文件。 */
 export async function exportPostgresQuery(input: PostgresQueryExportRequest,
   connect: (action: (connection: PostgresConnection) => Promise<void>) => Promise<void>,
   check: () => void, publish: () => void, progress: (rows: number) => void): Promise<PostgresQueryExportOutput> {
@@ -69,16 +69,21 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
   try {
     await connect(async connection => {
       check();
-      const workbook = format === 'xlsx';
-      const source = postgresQueryExportStatements(sql, connection.standardStrings, workbook);
+      const standardStrings = connection.standardStrings;
+      const source = postgresQueryExportStatements(sql, standardStrings, format);
       const bindings = postgresParameterBindings(source.names, parameters);
-      const valuesFor = (names: readonly string[]) => bindings && names.map(name => bindings.get(name));
-      const beginSql = workbook ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' : 'BEGIN READ ONLY';
+      function openCursor(part: typeof source.statements[number]) {
+        // 前一条查询可能改变会话字符串模式，后续游标必须沿已预检的分句和绑定解释。
+        if (connection.standardStrings !== standardStrings) throw Error('PostgreSQL 字符串模式变化，请重新导出');
+        return openExportCursor(connection, part.sql, bindings && part.names.map(name => bindings.get(name)));
+      }
+      const sharedSnapshot = format === 'xlsx' || source.statements.length > 1;
+      const beginSql = sharedSnapshot ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' : 'BEGIN READ ONLY';
       const begun = await connection.query(beginSql, undefined, {rows: 0, bytes: 1024});
       if (begun.postgresCommand !== 'BEGIN' || !connection.state().transactionKnown || !connection.state().transactionOpen)
         throw Error('PostgreSQL 未确认只读事务');
       check();
-      if (workbook) {
+      if (format === 'xlsx') {
         const sheetNames = excelWorksheetNames(source.statements.map((part, index) =>
           queryResultTitle(part.statement.sql, 'postgresql') ?? (source.statements.length === 1 ? '数据' : `结果 ${index + 1}`)));
         const destination = atomic = await AtomicFile.create(filePath, 'utf8', check, publish, nativeAtomicFileIO,
@@ -86,7 +91,7 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
         async function* sheets(): AsyncGenerator<ExcelExportSheet> {
           for (const [index, part] of source.statements.entries()) {
             check();
-            await openExportCursor(connection, part.sql, valuesFor(part.names));
+            await openCursor(part);
             const batches = queryExportBatches(connection, check);
             const first = await batches.next();
             if (first.done) throw Error('PostgreSQL Excel 导出缺少列描述');
@@ -104,27 +109,31 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
         }
         ({rows} = await exportExcelWorkbook({filePath, sheets: sheets(), deferredAtomicFile: destination,
           checkCancelled: check, onCommitStart: publish, onProgress: progress}));
-      } else {
-        const insertSettings = format === 'sql' ? await readPostgresSqlExportSettings(connection) : undefined;
+      } else if (format === 'sql') {
+        const insertSettings = await readPostgresSqlExportSettings(connection);
         check();
-        const part = source.statements[0];
-        await openExportCursor(connection, part.sql, valuesFor(part.names));
+        await openCursor(source.statements[0]);
         const batches = queryExportBatches(connection, check);
-        if (format === 'sql') {
-          const first = await batches.next();
-          if (first.done || !insertTarget || !insertSettings) throw Error('PostgreSQL INSERT 导出缺少列描述或目标');
-          const target = postgresIdentifier(insertTarget.schema) + '.' + postgresIdentifier(insertTarget.table);
-          const names = postgresQueryInsertColumnsForResult(insertTarget, first.value.columns.map(column => column.name));
-          const columns = names.map(name => ({name, identityAlways: false}));
-          const destination = atomic = await AtomicFile.create(filePath, 'utf8', check, publish, nativeAtomicFileIO, queryStreamExportLimits.fileBytes);
-          const write = (chunk: string) => destination.write(chunk);
-          await writePostgresSqlPreamble(insertSettings, write, '完整查询 INSERT 导出');
-          rows = await writePostgresSqlRows(target, columns, queryExportRows(first.value, batches), write, progress);
-          await write('COMMIT;\n');
-        } else {
-          const output = file = await createQueryStreamFile({filePath, format, encoding, csvDelimiter, txtOptions,
-            resultSelection: queryExportSelectsRowResult(format) ? {kind: 'row-result', ordinal: 1} : {kind: 'all'},
-            checkCancelled: check, onCommitStart: publish});
+        const first = await batches.next();
+        if (first.done || !insertTarget || !insertSettings) throw Error('PostgreSQL INSERT 导出缺少列描述或目标');
+        const target = postgresIdentifier(insertTarget.schema) + '.' + postgresIdentifier(insertTarget.table);
+        const names = postgresQueryInsertColumnsForResult(insertTarget, first.value.columns.map(column => column.name));
+        const columns = names.map(name => ({name, identityAlways: false}));
+        const destination = atomic = await AtomicFile.create(filePath, 'utf8', check, publish, nativeAtomicFileIO, queryStreamExportLimits.fileBytes);
+        const write = (chunk: string) => destination.write(chunk);
+        await writePostgresSqlPreamble(insertSettings, write, '完整查询 INSERT 导出');
+        rows = await writePostgresSqlRows(target, columns, queryExportRows(first.value, batches), write, progress);
+        await write('COMMIT;\n');
+        check();
+        await closeExportCursor(connection);
+      } else {
+        const output = file = await createQueryStreamFile({filePath, format, encoding, csvDelimiter, txtOptions,
+          resultSelection: queryExportSelectsRowResult(format) ? {kind: 'row-result', ordinal: 1} : {kind: 'all'},
+          checkCancelled: check, onCommitStart: publish});
+        for (const [index, part] of source.statements.entries()) {
+          check();
+          await openCursor(part);
+          const batches = queryExportBatches(connection, check);
           const first = await batches.next();
           if (first.done) throw Error('PostgreSQL 导出缺少列描述');
           const result = first.value;
@@ -132,16 +141,17 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
             ...column, position: index + 1, type: result.columns[index].type,
           }));
           const title = format === 'json' ? queryResultTitle(part.statement.sql, 'postgresql') : undefined;
-          await output.write({kind: 'rows-start', resultOrdinal: 1, statementOrdinal: 1, rowResultOrdinal: 1, columns: headers,
+          const resultOrdinal = index + 1;
+          await output.write({kind: 'rows-start', resultOrdinal, statementOrdinal: resultOrdinal, rowResultOrdinal: resultOrdinal, columns: headers,
             ...(title ? {title} : {})});
           for await (const values of queryExportRows(result, batches)) {
-            await output.write({kind: 'row', resultOrdinal: 1, values});
+            await output.write({kind: 'row', resultOrdinal, values});
             if (++rows % 256 === 0) progress(rows);
           }
-          await output.write({kind: 'rows-end', resultOrdinal: 1});
+          await output.write({kind: 'rows-end', resultOrdinal});
+          check();
+          await closeExportCursor(connection);
         }
-        check();
-        await closeExportCursor(connection);
       }
       check();
       const ended = await connection.query('COMMIT', undefined, {rows: 0, bytes: 1024});

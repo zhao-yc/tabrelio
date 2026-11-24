@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。PostgreSQL 完整 JSON 导出支持 1 至 200 条查询，多条查询共用独立只读会话的同一可重复读快照。macOS 源码 Electron 已在 PostgreSQL 18.6 保存并读回，核对异构结果、空结果、语句名称、参数复用和并发提交隔离。后续语句触发只读错误、字符串模式改变或用户取消时保留原文件。单查询 JSON、CSV 和工作簿通过回归。Q05、R01 继续为部分覆盖。
+
 2026-11-24 源码增量。MySQL、MariaDB 和 PostgreSQL 的完整查询 JSON 将本次语句头的 `NAME:` 作为行结果的 `label`。MySQL 和 MariaDB 的 CSV ZIP 清单保留同一字段，ZIP 成员名继续按结果序号生成。macOS 源码 Electron 已通过保存和读回，核对名称、精确数值及 MySQL／MariaDB 的空结果和无名结果。SQLite 的工作簿导出通过回归。Q05 继续为部分覆盖。
 
 2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的完整查询 Excel 工作簿沿用本次语句头的 `NAME:` 结果名称，按 Excel 规则清理及去重。macOS 源码 Electron 已在四种数据库保存并读回，核对工作表顺序、非法字符、大小写重名、空结果列标题和精确数值。Q05 继续为部分覆盖。[Navicat 结果命名语法](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html)

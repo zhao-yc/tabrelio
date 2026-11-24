@@ -7,6 +7,7 @@ import { currentPostgresStatement, splitPostgresParameterSql } from './postgresS
 import { postgresParameterPlan } from './postgresParameters';
 import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
 import { EXCEL_LIMITS } from './excelTransfer';
+import { queryStreamExportLimits } from './queryStreamExport';
 
 const parameters = z.array(z.object({name: z.string(), type: z.enum(queryParameterTypes), value: z.string().optional()}).strict())
   .max(200).superRefine((values, context) => {
@@ -62,18 +63,19 @@ export function postgresCurrentQueryExportSource(source: string, offset: number)
   return source.slice(primary.start, end);
 }
 
-/** 保留每条原查询，为独立游标准备有序绑定，工作簿内同名或同编号复用输入。 */
-export function postgresQueryExportStatements(sql: string, standardStrings: boolean, workbook = false) {
+/** 多结果格式按语句绑定参数，同名或同编号复用输入。 */
+export function postgresQueryExportStatements(sql: string, standardStrings: boolean, format?: PostgresQueryExportInput['format']) {
+  const limit = format === 'xlsx' ? EXCEL_LIMITS.maxSheets : format === 'json' ? queryStreamExportLimits.results : 1;
   const statements = splitPostgresParameterSql(sql, standardStrings);
-  if (workbook ? statements.length < 1 || statements.length > EXCEL_LIMITS.maxSheets : statements.length !== 1)
-    throw Error(workbook ? '完整 Excel 导出需要 1 至 64 条查询' : '完整导出需要一条 SELECT 或 WITH 查询');
+  if (!statements.length || statements.length > limit)
+    throw Error(limit === 1 ? '完整导出需要一条 SELECT 或 WITH 查询' : `完整 ${format === 'xlsx' ? 'Excel' : 'JSON'} 导出需要 1 至 ${limit} 条查询`);
   if (statements.some(part => !['SELECT', 'WITH'].includes(part.keyword))) throw Error('完整导出只接受 SELECT 或 WITH 查询');
   return postgresParameterPlan(statements);
 }
 
 /** 表单的两种候选字符串模式须同意原范围、绑定 SQL 和参数顺序，独立连接再按实际模式复核。 */
-export function postgresExportParameterNames(sql: string, workbook = false): QueryParameterNames {
-  const ordinary = postgresQueryExportStatements(sql, true, workbook), escaped = postgresQueryExportStatements(sql, false, workbook);
+export function postgresExportParameterNames(sql: string, format?: PostgresQueryExportInput['format']): QueryParameterNames {
+  const ordinary = postgresQueryExportStatements(sql, true, format), escaped = postgresQueryExportStatements(sql, false, format);
   if (ordinary.statements.length !== escaped.statements.length || ordinary.statements.some((part, index) => {
     const alternative = escaped.statements[index];
     return part.statement.start !== alternative.statement.start || part.statement.end !== alternative.statement.end ||
