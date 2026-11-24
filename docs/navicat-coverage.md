@@ -1,6 +1,6 @@
 # Navicat 全功能覆盖目标
 
-2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的可编辑网格可将矩形选区设为空字符串。沿用单格文本类型规则，表页整批暂存，可写查询结果先预览。D02 继续为部分覆盖。[Navicat 表格编辑说明](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
+2026-11-24 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的可编辑网格可将矩形选区设为空字符串。沿用单格文本类型规则，表页整批暂存，可写查询结果先预览。macOS 源码 Electron 已验四种数据库的查询结果入口。MySQL、MariaDB 和 PostgreSQL 的预览标明空字符串，独立连接核对预览和取消期间记录不变，确认后仅目标字段写入空文本。D02 继续为部分覆盖。[Navicat 表格编辑说明](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
 
 2026-11-24 源码增量。四种关系型数据库的查询编辑器在原生「编辑 → 行操作」和右键菜单提供增减缩进，沿用当前缩进偏好、选区和撤销行为。Q01 继续为部分覆盖。[Navicat 编辑器快捷键](https://www.navicat.com/manual/online_manual/en/navicat_18/mac_manual/hot_keys.html)
 

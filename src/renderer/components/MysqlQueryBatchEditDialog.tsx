@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CommandMap, RowChange, SqlPreview } from '../../shared/contracts';
+import type { CellValue, CommandMap, RowChange, SqlPreview } from '../../shared/contracts';
 import { mysqlQueryBatchLimits, type MysqlQueryBatchEditInput, type MysqlQueryRecordRef } from '../../shared/mysqlQueryRelation';
 import { cellPreview, cellText, errorMessage, invoke, qualifiedName, uid } from '../lib';
 import { collectChanges, type DraftRow } from '../dataChanges';
 import { gridRangeFillZh } from '../locales/gridRangeFill.zh-CN';
+import { gridCellValueZh } from '../locales/gridCellValue.zh-CN';
 import { mysqlQueryBatchEditZh as text } from '../locales/mysqlQueryBatchEdit.zh-CN';
 import { mysqlQueryBatchChanges, type MysqlQueryBatchInput } from '../mysqlQueryBatchEdit';
 import { useWorkspace } from '../store';
@@ -23,6 +24,11 @@ type Target = { connectionId: string; database: string; table: string; queryReco
 type Preview = { target: Target; changes: RowChange[]; plan: SqlPreview & { previewId: string };
   primaryKey: string[]; rows: { change: RowChange; position: number }[] };
 type BatchRecord = CommandMap['mysql.queryBatchEdit']['output'];
+
+/** 预览要显式区分空文本和 NULL，避免两边都看起来没有值。 */
+function previewValue(value: CellValue | undefined): string {
+  return value === '' ? gridCellValueZh.emptyValue : cellPreview(value);
+}
 
 /** 单次预览绑定原执行和完整变更，提交失败保留差异及回执，禁止重放。 */
 export function MysqlQueryBatchEditDialog({ request, operation, displayRows, isCurrent, onDone }: Props) {
@@ -122,7 +128,7 @@ export function MysqlQueryBatchEditDialog({ request, operation, displayRows, isC
             const values = Object.entries(change.values);
             if (!values.length) return [<tr key={position}><td>{position}</td><td colSpan={2}>{text.copyOmitted}</td></tr>];
             return values.map(([column, value]) => <tr key={JSON.stringify([position, column])}><td>{position}</td><td>{column}</td>
-              {change.kind === 'update' && <td>{cellPreview(change.before[column])}</td>}<td>{cellPreview(value)}</td></tr>);
+              {change.kind === 'update' && <td>{previewValue(change.before[column])}</td>}<td>{previewValue(value)}</td></tr>);
           })}</tbody>
         </table></div>
         <details><summary>{text.sql}</summary><pre>{preview.plan.sql}</pre></details>

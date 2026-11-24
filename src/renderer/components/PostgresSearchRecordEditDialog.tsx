@@ -13,6 +13,7 @@ import type { PageTextPatch } from '../pageFindReplace';
 import { postgresBatchDuplicateChanges, postgresBatchDuplicatePlan } from '../postgresRecordDuplicate';
 import { PostgresBatchEditDialog } from './PostgresBatchEditDialog';
 import type { GridRangeFillInput } from '../gridRangeFill';
+import { gridCellValueZh } from '../locales/gridCellValue.zh-CN';
 import type { ClipboardCell } from '../gridClipboard';
 import { useWorkspace } from '../store';
 import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './PostgresInlineCellEditor';
@@ -270,7 +271,8 @@ export function PostgresSearchRecordEditDialog(props: Props) {
         {duplicating && <strong>{queryText.duplicateRow(index + 1)}</strong>}
         <dl>{change.fields.map(field => <div key={field.column}>
           <dt>{page.columns.find(column => column.key === field.column)?.name}</dt>
-          <dd>{'value' in field.value ? field.value.value : field.value.mode.toUpperCase()}</dd>
+          <dd>{field.value.mode === 'text' && field.value.value === '' ? gridCellValueZh.emptyValue
+            : 'value' in field.value ? field.value.value : field.value.mode.toUpperCase()}</dd>
         </div>)}</dl>
       </div>)}
       {preview && <><pre>{preview.statements.join(';\n')}</pre><label>

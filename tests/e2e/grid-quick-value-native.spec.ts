@@ -1,6 +1,8 @@
 import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { createConnection, type RowDataPacket } from 'mysql2/promise';
+import { Client } from 'pg';
 import type { Locator } from '@playwright/test';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
@@ -8,6 +10,7 @@ import { pasteGridRangeClipboard } from './grid-cell-range-clipboard';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 import { gridQuickValueZh as text } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridCellEditZh } from '../../src/renderer/locales/gridCellEdit.zh-CN';
+import { gridCellValueZh } from '../../src/renderer/locales/gridCellValue.zh-CN';
 import { gridRangeFillZh as rangeText } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
 import { sqliteTableEditZh as sqliteText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
@@ -25,6 +28,25 @@ import { encodeSqliteClipboard } from '../../src/renderer/sqliteTableClipboard';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
+
+interface StoredRow { id: string; scope: string; label: string | null; uuid_value: string | null }
+
+/** 用独立连接读回承诺的值与原主键，避免把查询网格缓存当作已提交结果。 */
+async function readStoredRows(profile: NetworkConnectionProfile | PostgresConnectionProfile): Promise<StoredRow[]> {
+  const config = { host: profile.host, port: profile.port, database: profile.database, user: profile.user, password: profile.password };
+  if (profile.dialect === 'postgresql') {
+    const client = new Client({ ...config, connectionTimeoutMillis: 3000 });
+    try {
+      await client.connect();
+      return (await client.query<StoredRow>('SELECT id, scope, label, uuid_value FROM public.update_subject ORDER BY id, scope')).rows;
+    } finally { await client.end(); }
+  }
+  const client = await createConnection({ ...config, connectTimeout: 3000, supportBigNumbers: true, bigNumberStrings: true });
+  try {
+    const [rows] = await client.query<(RowDataPacket & StoredRow)[]>('SELECT id, scope, label, uuid_value FROM update_subject ORDER BY id, scope');
+    return rows.map(({ id, scope, label, uuid_value }) => ({ id, scope, label, uuid_value }));
+  } finally { await client.end(); }
+}
 
 test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, info) => {
   const dialect = process.env.DBARK_GRID_QUICK_VALUE_DIALECT;
@@ -355,7 +377,7 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
           [1, 'row A', second, 'text'], [2, '覆盖末行', null, 'null'], [3, '新增末行', null, 'null'],
         ]);
       } finally { check.close(); }
-    } else {
+    } else if (profile) {
       await writeFile(info.outputPath('已提交UUID.txt'), second);
       await page.locator('[data-workspace-tab-id="quick-fill-query"]').getByRole('button', { name: '选区填充查询', exact: true }).click();
       const query = page.locator('.query-tab:visible');
@@ -364,9 +386,12 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
       await execute.click();
       const firstResult = query.getByRole('gridcell', { name: 'row A', exact: true });
       const secondResult = query.getByRole('gridcell', { name: 'row B', exact: true });
-      await firstResult.click();
-      await page.keyboard.press('Shift+ArrowDown');
-      await expect(secondResult).toHaveClass(/grid-cell-in-range/);
+      async function selectTwoRows() {
+        await firstResult.click();
+        await page.keyboard.press('Shift+ArrowDown');
+        await expect(secondResult).toHaveClass(/grid-cell-in-range/);
+      }
+      await selectTwoRows();
       await page.keyboard.press('F2');
       const input = query.getByRole('region', { name: rangeText.open, exact: true })
         .getByRole('textbox', { name: rangeText.value, exact: true });
@@ -378,12 +403,45 @@ test('网格赋值和末页混合粘贴可撤销并集中提交', async ({}, inf
       });
       await expect(queryReview.getByText('查询草稿', { exact: true })).toHaveCount(2);
       await page.screenshot({ path: info.outputPath('查询键盘填充预览.png') });
-      await queryReview.getByRole('button', {
+      const back = queryReview.getByRole('button', {
         name: pg ? postgresResultOriginsZh.editBack : mysqlQueryBatchEditZh.cancel, exact: true,
-      }).click();
+      });
+      await back.click();
       await expect(queryReview).toBeHidden();
       await expect(firstResult).toBeVisible();
       await expect(secondResult).toBeVisible();
+
+      const original = await readStoredRows(profile);
+      expect(original.slice(0, 2).map(({ id, scope, label }) => [id, scope, label])).toEqual([
+        ['9007199254740993', 'A', 'row A'], ['9007199254740993', 'B', 'row B'],
+      ]);
+      const confirmation = queryReview.getByRole('checkbox', {
+        name: pg ? postgresResultOriginsZh.rangeConfirm(2) : mysqlQueryBatchEditZh.confirm, exact: true,
+      });
+      const submit = queryReview.getByRole('button', {
+        name: pg ? postgresTableZh.apply : mysqlQueryBatchEditZh.apply, exact: true,
+      });
+      async function previewEmptyText() {
+        await selectTwoRows();
+        await page.keyboard.press('Shift+F10');
+        await item(rangeText.empty).click();
+        await expect(queryReview.getByText(gridCellValueZh.emptyValue, { exact: true })).toHaveCount(2);
+        await expect(confirmation).toBeVisible();
+        await expect(submit).toBeDisabled();
+      }
+      await previewEmptyText();
+      expect(await readStoredRows(profile)).toEqual(original);
+      await page.screenshot({ path: info.outputPath('查询空字符串预览.png') });
+      await back.click();
+      await expect(queryReview).toBeHidden();
+      expect(await readStoredRows(profile)).toEqual(original);
+
+      // 取消后重新打开预览，仅提交原主键对应的矩形；其他行和同一行的 UUID 维持原状。
+      await previewEmptyText();
+      await confirmation.check();
+      await submit.click();
+      await expect(queryReview).toBeHidden();
+      expect(await readStoredRows(profile)).toEqual(original.map((row, index) => index < 2 ? { ...row, label: '' } : row));
     }
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
