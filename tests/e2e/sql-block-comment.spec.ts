@@ -6,6 +6,7 @@ import { LocalStore } from '../../src/main/storage';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { sqlBlockCommentZh as messages } from '../../src/renderer/locales/sqlBlockComment.zh-CN';
 import { sqlQuotedCopyZh as quotedText } from '../../src/renderer/locales/sqlQuotedCopy.zh-CN';
+import { editorIndentationZh as indentationText } from '../../src/renderer/locales/editorIndentation.zh-CN';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -735,6 +736,54 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     await expect(collapsed).toHaveCount(2);
     await page.locator('.tab-strip').getByText('另一个查询', { exact: true }).click();
     await show('other_body'); await expect(collapsed).toHaveCount(0);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+    expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+}
+
+for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
+  test(`${dialect} 行操作菜单增加或减少 SQL 缩进并可逐次撤销`, async () => {
+    const rows = ["SELECT '原值🚢';", 'SELECT 22;', 'SELECT 333;', 'SELECT 4444;'];
+    const sql = rows.join('\n');
+    await seed(dialect, sql);
+    const spaces = dialect === 'mysql' || dialect === 'sqlite';
+    const indent = spaces ? '    ' : '\t';
+    await nativeQueryCommand('editor-indent', false);
+    const preferences = page.getByRole('dialog', { name: indentationText.title, exact: true });
+    await preferences.getByLabel(indentationText.width, { exact: true }).fill('4');
+    await preferences.getByLabel(indentationText.style, { exact: true }).selectOption(spaces ? 'spaces' : 'tabs');
+    await preferences.getByRole('button', { name: indentationText.save, exact: true }).click();
+    await expect(preferences).toBeHidden();
+    const textbox = activeEditor().getByRole('textbox');
+    const model = (select = 'keep') => activeEditor().evaluate((element, select) => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+      const source = instance?.getModel();
+      if (!api || !instance || !source) throw Error('缺少原 SQL 模型');
+      if (select === 'backward') instance.setSelection(new api.Selection(3, 1, 1, 1));
+      if (select === 'two-cursors') instance.setSelections([new api.Selection(1, 1, 1, 1), new api.Selection(3, 1, 3, 1)]);
+      const { indentSize, insertSpaces } = source.getOptions();
+      return { sql: source.getValue(), indentSize, insertSpaces };
+    }, select);
+    await expect.poll(model).toEqual({ sql, indentSize: 4, insertSpaces: spaces });
+    await textbox.focus();
+    await model('backward');
+    const indented = [indent + rows[0], indent + rows[1], ...rows.slice(2)].join('\n');
+    const expectSql = (expected: string) => expect.poll(async () => (await model()).sql).toBe(expected);
+    await nativeQueryCommand('sql-indent-lines', true);
+    await expectSql(indented);
+    await activeEditor().locator('.view-line').filter({ hasText: 'SELECT 22;' }).click({ button: 'right' });
+    await page.locator('.monaco-menu-container:visible').getByRole('menuitem',
+      { name: uiCommandLabels['sql-outdent-lines'], exact: true }).click({ delay: 120 });
+    await expectSql(sql);
+    await textbox.focus();
+    await page.keyboard.press(modifier + '+z'); await expectSql(indented);
+    await page.keyboard.press(modifier + '+z'); await expectSql(sql);
+    await model('two-cursors');
+    await page.keyboard.press(modifier + '+BracketRight');
+    await expectSql([indent + rows[0], rows[1], indent + rows[2], rows[3]].join('\n'));
+    await page.keyboard.press(modifier + '+BracketLeft'); await expectSql(sql);
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
     expect(pageErrors).toEqual([]);

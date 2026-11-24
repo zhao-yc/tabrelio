@@ -1,5 +1,7 @@
 /** SQL 编辑器行操作在各入口使用相同的命令顺序。 */
-export const sqlLineCommandIds = ['sql-duplicate-lines', 'sql-move-lines-up', 'sql-move-lines-down', 'sql-delete-lines'] as const;
+export const sqlLineCommandIds = [
+  'sql-duplicate-lines', 'sql-move-lines-up', 'sql-move-lines-down', 'sql-delete-lines', 'sql-indent-lines', 'sql-outdent-lines',
+] as const;
 export const sqlEditorZoomCommandIds = ['sql-editor-zoom-in', 'sql-editor-zoom-out', 'sql-editor-zoom-reset'] as const;
 export const sqlEditorFoldCommandIds = ['sql-editor-fold-block', 'sql-editor-unfold-block', 'sql-editor-fold-all', 'sql-editor-unfold-all'] as const;
 export const sqlSelectionFindCommandIds = ['sql-find-selection', 'sql-replace-selection'] as const;

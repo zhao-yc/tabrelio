@@ -26,6 +26,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'sql-copy-current-statement-quoted': '带引号复制当前语句',
   'sql-toggle-comment': '切换行注释', 'sql-toggle-block-comment': '切换块注释',
   'sql-duplicate-lines': '向下复制行', 'sql-move-lines-up': '上移行', 'sql-move-lines-down': '下移行', 'sql-delete-lines': '删除行',
+  'sql-indent-lines': '增加缩进', 'sql-outdent-lines': '减少缩进',
   'toggle-theme': '切换明暗主题', 'focus-mode': '专注模式', 'editor-font': '编辑器字体',
   'focus-query-pane': '切换编辑器与结果焦点',
   'object-information': '对象信息',

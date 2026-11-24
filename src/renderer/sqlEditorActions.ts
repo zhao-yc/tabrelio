@@ -6,6 +6,8 @@ export const sqlTextActions = {
   'sql-move-lines-up': 'editor.action.moveLinesUpAction',
   'sql-move-lines-down': 'editor.action.moveLinesDownAction',
   'sql-delete-lines': 'editor.action.deleteLines',
+  'sql-indent-lines': 'editor.action.indentLines',
+  'sql-outdent-lines': 'editor.action.outdentLines',
 } as const;
 
 /** 行列及括号导航使用当前编辑器的原生动作。 */
