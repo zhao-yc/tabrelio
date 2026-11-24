@@ -9,7 +9,8 @@ import { zh } from '../locales/zh-CN';
 import { captureSqlClipboardSelection, sqlClipboardStack, sqlClipboardStackAction } from '../sqlClipboardStack';
 import { sqlClipboardStackZh as clipboardText } from '../locales/sqlClipboardStack.zh-CN';
 import { sqlQuotedCopyZh as quotedText } from '../locales/sqlQuotedCopy.zh-CN';
-import { quoteSqlForCode, sqlQuotedCopyAction, sqlQuotedCopyMaxUnits, sqlQuoteFormats, type SqlQuoteFormat } from '../sqlQuotedCopy';
+import { bindSqlQuotedStatementPreview, quoteSqlForCode, sqlQuotedCopyAction, sqlQuotedCopyMaxUnits, sqlQuotedStatementText, sqlQuoteFormats,
+  type SqlQuoteFormat, type SqlQuotedStatementSource } from '../sqlQuotedCopy';
 import { writeTableClipboardEvent } from '../gridClipboard';
 import { ErrorBox, Modal } from './ui';
 import { SqlSelectionFindDialog, sqlSelectionFindLimit } from './SqlSelectionFindDialog';
@@ -104,7 +105,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const insertSpaces = useWorkspace(state => readEditorInsertSpaces(state.settings.editorInsertSpaces));
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const contentRef = useRef<ReturnType<typeof editorContentBridge> | null>(null);
-  const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable; formatAction?: monaco.IDisposable; formatToken?: object; indentation?: ReturnType<typeof bindEditorIndentation> } | null>(null);
+  const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable; formatAction?: monaco.IDisposable; formatToken?: object;
+    indentation?: ReturnType<typeof bindEditorIndentation>; releaseQuotedStatement?: () => void } | null>(null);
   const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat, queryTabId, clipboardDisabled });
   const foldingAnsiQuotes = requestedDialect === 'mysql' || requestedDialect === 'mariadb' ? mysqlMode?.ansiQuotes : undefined;
   const foldingEscapes = requestedDialect === 'postgresql' ? postgresStandardStrings : requestedDialect === 'mysql' || requestedDialect === 'mariadb' ? mysqlMode?.noBackslashEscapes : undefined;
@@ -122,7 +124,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   }, [queryTabId, contentReady]);
   const queryEditor = !!onExecute;
   type ClipboardRequest = { intent: NonNullable<ReturnType<typeof captureSqlClipboardSelection>>; unsubscribe(): void } &
-    ({ kind: 'paste'; entries: readonly string[] } | { kind: 'quoted'; sql: string });
+    ({ kind: 'paste'; entries: readonly string[] } | { kind: 'quoted'; sql: string; currentStatement: boolean });
   const clipboardRequest = useRef<ClipboardRequest | null>(null), clipboardHost = useRef<HTMLDivElement>(null);
   const [clipboardDialog, setClipboardDialog] = useState<ClipboardRequest>(), [clipboardIndex, setClipboardIndex] = useState(0);
   const [selectionFind, setSelectionFind] = useState<{
@@ -150,7 +152,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   }
   function closeClipboard(): void { disposeClipboard(); setClipboardDialog(undefined); }
   /** 绑定打开时的标签、连接配置和编辑器，等待选择时不得切换目标。 */
-  function openClipboard(editor: monaco.editor.IStandaloneCodeEditor, kind: ClipboardRequest['kind'] = 'paste'): void {
+  function openClipboard(editor: monaco.editor.IStandaloneCodeEditor, kind: ClipboardRequest['kind'] = 'paste', statement?: SqlQuotedStatementSource): void {
     if (clipboardRequest.current || document.querySelector(appModalSelector)) return;
     const workspace = useWorkspace.getState(), tab = workspace.settings.tabs.find(item => item.id === propsRef.current.queryTabId);
     if (!tab) return;
@@ -164,16 +166,17 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     };
     if (!allowed()) return;
     editor.focus();
+    if (statement && editor.getModel()?.getValue() !== statement.source) { workspace.notify(quotedText.stale, true); return; }
     const intent = captureSqlClipboardSelection(editor, allowed);
     if (!intent) { workspace.notify(kind === 'paste' ? clipboardText.single : quotedText.select, true); return; }
     let sql: string | undefined;
     if (kind === 'quoted') {
-      try { sql = intent.selectedText(sqlQuotedCopyMaxUnits); }
-      catch { intent.dispose(); workspace.notify(quotedText.tooLarge, true); return; }
-      if (!sql) { intent.dispose(); workspace.notify(quotedText.select, true); return; }
+      try { sql = statement ? sqlQuotedStatementText(statement) : intent.selectedText(sqlQuotedCopyMaxUnits); }
+      catch { intent.dispose(); workspace.notify(statement ? quotedText.statementTooLarge : quotedText.tooLarge, true); return; }
+      if (!sql) { intent.dispose(); workspace.notify(statement ? quotedText.stale : quotedText.select, true); return; }
     }
     const owner = { intent, unsubscribe: useWorkspace.subscribe(intent.current) };
-    const request: ClipboardRequest = sql ? { ...owner, kind: 'quoted', sql } : { ...owner, kind: 'paste', entries: sqlClipboardStack.snapshot() };
+    const request: ClipboardRequest = sql ? { ...owner, kind: 'quoted', sql, currentStatement: !!statement } : { ...owner, kind: 'paste', entries: sqlClipboardStack.snapshot() };
     clipboardRequest.current = request;
     setClipboardIndex(0); setClipboardError(''); setClipboardDialog(request);
   }
@@ -262,7 +265,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     widgetRef.current?.indentation?.sync();
   }, [tabSize, insertSpaces]);
   // 真实卸载释放widget存活监听；单纯布局隐藏保留句柄，不能用已销毁实例恢复桥接。
-  useEffect(() => () => { const widget = widgetRef.current; widgetRef.current = null; if (widget) { widget.alive = false; widget.formatToken = undefined; widget.formatAction?.dispose(); widget.indentation?.dispose(); widget.disposal?.dispose(); } }, []);
+  useEffect(() => () => { const widget = widgetRef.current; widgetRef.current = null; if (widget) { widget.alive = false; widget.formatToken = undefined; widget.formatAction?.dispose(); widget.indentation?.dispose(); widget.releaseQuotedStatement?.(); widget.disposal?.dispose(); } }, []);
   const toggleCommentRef = useRef(onToggleComment); toggleCommentRef.current = onToggleComment;
   const toggleBlockCommentRef = useRef(onToggleBlockComment); toggleBlockCommentRef.current = onToggleBlockComment;
   const runRef = useRef(onExecute); runRef.current = onExecute;
@@ -618,10 +621,13 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const mounted: OnMount = editor => {
     // 已卸载组件的迟到挂载通知不得重新开放输入或调用父层。
     if (!aliveRef.current) { if (editor.getModel()) editor.updateOptions({ readOnly: true }); return; }
-    widgetRef.current?.formatAction?.dispose(); widgetRef.current?.indentation?.dispose(); widgetRef.current?.disposal?.dispose();
+    widgetRef.current?.formatAction?.dispose(); widgetRef.current?.indentation?.dispose(); widgetRef.current?.releaseQuotedStatement?.(); widgetRef.current?.disposal?.dispose();
     const widget: NonNullable<typeof widgetRef.current> = { editor, alive: true }; widgetRef.current = widget;
     widget.indentation = bindEditorIndentation(editor, () => editorIndentationOptions(optionsRef.current.tabSize, optionsRef.current.insertSpaces), () => aliveRef.current && widget.alive && widgetRef.current === widget);
-    widget.disposal = editor.onDidDispose(() => { widget.alive = false; widget.formatToken = undefined; widget.formatAction?.dispose(); widget.indentation?.dispose(); if (editorRef.current === editor) editorRef.current = null; });
+    if (propsRef.current.queryTabId) widget.releaseQuotedStatement = bindSqlQuotedStatementPreview(editor, statement => {
+      if (widget.alive && widgetRef.current === widget) openClipboard(editor, 'quoted', statement);
+    });
+    widget.disposal = editor.onDidDispose(() => { widget.alive = false; widget.formatToken = undefined; widget.formatAction?.dispose(); widget.indentation?.dispose(); widget.releaseQuotedStatement?.(); if (editorRef.current === editor) editorRef.current = null; });
     const bridge = attachContent(editor);
     editor.addAction({ id: 'dbark-run', label: zh.editor.text001, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter], run: () => runRef.current?.() });
     // 与原动作分开注册；按钮和快捷键最终进入同一个忙碌/模态守卫。
@@ -730,7 +736,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         onClick={() => pasteClipboard(clipboardDialog)}>{clipboardText.paste}</button></footer>
   </Modal></div>}{clipboardDialog?.kind === 'quoted' && <div ref={clipboardHost}><Modal title={quotedText.title} onClose={closeClipboard}>
     <div className="modal-content">
-      <p>{quotedText.hint}</p>
+      <p>{clipboardDialog.currentStatement ? quotedText.statementHint : quotedText.hint}</p>
       <label>{quotedText.format}<select aria-label={quotedText.format} value={quoteFormat} onChange={event => {
         const format = sqlQuoteFormats.find(value => value === event.target.value);
         if (format) setQuoteFormat(format);

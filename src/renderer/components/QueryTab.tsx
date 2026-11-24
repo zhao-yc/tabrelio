@@ -1,7 +1,7 @@
 import { queryViewFromEditor, type QueryViewDraft } from '../queryViewDraft';
 import { queryViewDraftZh as queryViewText } from '../locales/queryViewDraft.zh-CN';
 import { sqlClipboardStackAction } from '../sqlClipboardStack';
-import { sqlQuotedCopyAction } from '../sqlQuotedCopy';
+import { openSqlQuotedStatement, sqlQuotedCopyAction } from '../sqlQuotedCopy';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { QueryResultNavigator, type QueryResultNavigatorControl } from './QueryResultNavigator';
 import { PinnedResultRename } from './PinnedResultRename';
@@ -2452,7 +2452,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       && !closeRequestRef.current;
   }
   /** 目录、选中和相邻跳转共用原分段规则，均不创建连接、会话或查询任务。 */
-  function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' | 'duplicate' | 'format' = 'panel'): void {
+  function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' | 'duplicate' | 'format' | 'quote' = 'panel'): void {
     if (!queryMenuCurrent() || !connection || connection.dialect === 'postgresql' || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || navigationIntent.current?.controller.busy) return;
     const model = instance.getModel(); if (!model || model.isDisposed() || instance.getRawOptions().readOnly) return;
     const oneShot = action !== 'panel', direction = action === 'previous' ? -1 : action === 'next' ? 1 : undefined;
@@ -2503,6 +2503,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         closeStatementNavigation();
         if (range && action === 'duplicate') void duplicateQuery('statement', binding.instance, [range]);
         else if (range && action === 'format') void formatQuery('format', range);
+        else if (range && action === 'quote') openSqlQuotedStatement(binding.instance, binding.source, range);
         else if (range) applyStatementRange(binding, range, action === 'select');
         else if (result.status === 'ready') useWorkspace.getState().notify(noTarget);
         else if (result.reason !== 'stale') useWorkspace.getState().notify(navigationText.reasons[result.reason] ?? navigationText.unavailable, true);
@@ -2767,11 +2768,15 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'modification', contextMenuOrder: 8,
       run: () => { if (active) openStatementNavigation(searchEditor, 'format'); },
     });
+    const quote = searchEditor.addAction({ id: 'dbark-sql-copy-current-statement-quoted:' + uid(), label: uiCommandLabels['sql-copy-current-statement-quoted'],
+      precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 6,
+      run: () => { if (active) openStatementNavigation(searchEditor, 'quote'); },
+    });
     const adjacent = (['previous', 'next'] as const).map((direction, index) => searchEditor.addAction({
       id: `dbark-${direction}-statement:${uid()}`, label: uiCommandLabels[`${direction}-statement`], precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.66 + index / 100,
       run: () => { if (active) openStatementNavigation(searchEditor, direction); },
     }));
-    return () => { active = false; action.dispose(); positions.forEach(item => item.dispose()); select.dispose(); duplicate.dispose(); format.dispose(); adjacent.forEach(item => item.dispose()); };
+    return () => { active = false; action.dispose(); positions.forEach(item => item.dispose()); select.dispose(); duplicate.dispose(); format.dispose(); quote.dispose(); adjacent.forEach(item => item.dispose()); };
   }, [searchEditor, queryMenuKey, connection, navigationView?.busy, tab.sql, resultsOnly]);
   const menuResult = useRef<{ result?: QueryResult; revision: number }>({ revision: 0 });
   if (menuResult.current.result !== sourceResult) menuResult.current = { result: sourceResult, revision: menuResult.current.revision + 1 };
@@ -2927,6 +2932,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     }])),
     'sql-copy-quoted': { enabled: !!searchEditor && hasSingleSelection && !resultsOnly && !busy && !closeRequest && !fileSource.busy,
       run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction(sqlQuotedCopyAction)?.run(); } },
+    'sql-copy-current-statement-quoted': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'quote') },
     'sql-clipboard-stack': { enabled: !!searchEditor && !resultsOnly && !busy && !closeRequest && !fileSource.busy,
       run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction(sqlClipboardStackAction)?.run(); } },
     'sql-selection-to-snippet': { enabled: !!searchEditor && hasSingleSelection && !resultsOnly && !busy && !closeRequest && !fileSource.busy, run: () => createSnippetFromSelection() },

@@ -9,6 +9,7 @@ import { statementNavigationZh as text } from './locales/statementNavigation.zh-
 import { invoke } from './lib';
 import { useWorkspace } from './store';
 import { extractStatementSelection, type StatementQueryOutput } from './statementNavigationExtract';
+import { openSqlQuotedStatement } from './sqlQuotedCopy';
 
 interface Target {
   instance: monaco.editor.IStandaloneCodeEditor;
@@ -21,7 +22,7 @@ interface Owner extends Target {
   controller?: StatementNavigationController;
   ranges?: NavigableStatement[];
 }
-type Action = 'panel' | 'select' | 'previous' | 'next' | 'duplicate' | 'format';
+type Action = 'panel' | 'select' | 'previous' | 'next' | 'duplicate' | 'format' | 'quote';
 interface Navigation {
   open(action?: Action): void;
   panel?: StatementNavigationPanelProps;
@@ -76,6 +77,7 @@ export function usePostgresStatementNavigation(capture: () => Target | undefined
         : ranges[currentNavigableStatement(original.source, ranges, offset, 'postgresql')];
       if (range && action === 'duplicate') void openDraft(original.instance, [range]);
       else if (range && action === 'format') formatStatement(original.instance, range);
+      else if (range && action === 'quote') openSqlQuotedStatement(original.instance, original.source, range);
       else if (range) apply(original, range, action === 'select');
       else useWorkspace.getState().notify(direction === -1 ? text.noPrevious : direction === 1 ? text.noNext : text.noCurrent);
     }

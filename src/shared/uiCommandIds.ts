@@ -9,7 +9,7 @@ export const uiCommandIds = [
   'open-bound-sql-external', 'reveal-bound-sql-file', 'edit-bound-sql-external', 'external-sql-editor-preferences',
   'connections-transfer', 'connections-organize', 'find', 'replace', 'sql-goto-line', 'sql-goto-bracket', 'sql-select-bracket', 'sql-toggle-comment', 'sql-toggle-block-comment', 'sql-uppercase', 'sql-lowercase', 'toggle-theme', 'focus-mode',
   'focus-query-pane', 'object-information',
-  ...sqlLineCommandIds, 'sql-selection-to-snippet', 'sql-clipboard-stack', 'sql-copy-quoted',
+  ...sqlLineCommandIds, 'sql-selection-to-snippet', 'sql-clipboard-stack', 'sql-copy-quoted', 'sql-copy-current-statement-quoted',
   ...sqlSelectionFindCommandIds,
   'editor-font', ...sqlEditorZoomCommandIds, 'editor-word-wrap', 'editor-line-numbers', 'editor-match-brackets', 'editor-local-references', 'editor-sql-folding', 'editor-indent', 'favorite-toggle', 'favorites-manage', 'object-link',
   'execute', 'execute-selection', 'execute-current', 'execute-all', 'stop', 'format', 'format-current-statement', 'compact-sql', 'sql-format-options', 'sql-format-preferences', 'parameters', 'explain', 'analyze', 'object-definition', 'syntax-check', 'statement-navigation', 'select-current-statement', 'open-current-statement-query', 'previous-statement', 'next-statement',

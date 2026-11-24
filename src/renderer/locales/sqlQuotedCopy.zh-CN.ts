@@ -1,6 +1,8 @@
 export const sqlQuotedCopyZh = {
   title: '带引号复制 SQL',
   hint: '把选区转换为代码字符串。复制前可核对引号、反斜杠及换行的转义结果。',
+  statementHint: '把光标所在语句转换为代码字符串。复制前可核对引号、反斜杠及换行的转义结果。',
+  statementTooLarge: '当前语句超过 16,000 个 UTF-16 单元。可选择较短的范围后复制。',
   format: '字符串格式',
   formats: { javascript: 'JavaScript / TypeScript', python: 'Python', java: 'Java' },
   preview: '字符串预览',
