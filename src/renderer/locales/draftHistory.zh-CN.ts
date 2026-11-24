@@ -1,6 +1,7 @@
 export const draftHistoryZh = {
   undo: '撤销上一步', redo: '重做下一步',
   discardRow: '放弃当前记录草稿',
+  discardCell: '还原单元格原值',
   discardEntry: '放弃此记录草稿',
   discardRowHint: '恢复这一行的原值，或移除尚未提交的新增行。可撤销这一步。',
   postgresTitle: 'PostgreSQL 草稿历史',

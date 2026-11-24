@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DraftHistory, draftHistoryKey, draftHistoryLimits } from '../../src/renderer/draftHistory';
-import { collectChanges, newDraftRow, type DraftRow } from '../../src/renderer/dataChanges';
+import { collectChanges, discardDraftCell, newDraftRow, type DraftRow } from '../../src/renderer/dataChanges';
 import { assertRecordDraftCurrent, beginRecordDraft, type RecordContext } from '../../src/renderer/recordViews';
 
 /** 合成不可变页；没有IPC、连接或真实用户数据。 */
@@ -8,6 +8,19 @@ function row(id = '一', note = '原值'): DraftRow { const data = { id, note };
 function edit(rows: DraftRow[], value: string) { return rows.map((row, index) => index ? row : { ...row, data: { ...row.data, note: value } }); }
 
 describe('本页稀疏草稿编辑历史', () => {
+  it('只恢复命中字段的原字节，保留同一行其它修改及未命中行', () => {
+    const bytes = { type: 'binary' as const, base64: 'AP8=' };
+    const before = [{ ...row(), original: { id: '一', note: '', bytes }, data: { id: '一', note: null, bytes: { ...bytes, base64: '' } } }, row('二')];
+    const after = discardDraftCell(before, before[0], 'bytes');
+    expect(after[0].data).toEqual({ id: '一', note: null, bytes });
+    expect(after[0].data.bytes).not.toBe(bytes);
+    expect(after[1]).toBe(before[1]);
+    expect(collectChanges(after)).toEqual([{ kind: 'update', before: before[0].original, values: { note: null } }]);
+    expect(discardDraftCell(after, before[0], 'note')).toBe(after);
+    const history = new DraftHistory();
+    history.record(before, after);
+    expect(history.move(after, 'undo')).toEqual(before);
+  });
   it('多格一次原子撤销/重做，未变行与original保持，当前行身份不复用', () => {
     const history = new DraftHistory(), before = [row(), row('二')], after = [{ ...before[0], data: { ...before[0].data, note: '后值', extra: null } }, before[1]];
     history.record(before, after); expect(history.status.undo).toBe(1);

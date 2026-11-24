@@ -32,6 +32,21 @@ function unchanged(f: ReturnType<typeof fixture>, before: ReturnType<typeof capt
 }
 
 describe('SQLite 放弃当前记录草稿', () => {
+  it('还原单格的原生文本，保留同行其它草稿并可一步撤销', () => {
+    const f = fixture();
+    f.editor.save('original-0', [{ kind: 'null' }, cell('仍需保留')]);
+    const before = f.editor.view.rows;
+    expect(f.editor.discardCell(before[0], 0)).toBe(true);
+    const after = f.editor.view.rows;
+    expect(after[0].values).toEqual([cell('原0:0'), cell('仍需保留')]);
+    expect(after[1]).toBe(before[1]);
+    expect(f.editor.discardCell(before[0], 1)).toBe(false);
+    expect(f.editor.discardCell(after[0], 0)).toBe(false);
+    f.editor.undo();
+    expect(f.editor.view.rows).toBe(before);
+    expect(f.preview).not.toHaveBeenCalled();
+    expect(f.apply).not.toHaveBeenCalled();
+  });
   it('恢复已修改并标记删除的准确原行，一步撤销，另一条新增保持', () => {
     const f = fixture();
     f.save(0, '本地编辑');
@@ -60,11 +75,13 @@ describe('SQLite 放弃当前记录草稿', () => {
     await f.ready();
     const before = capture(f);
     expect(f.editor.discardRow(before.rows[0])).toBe(false);
+    expect(f.editor.discardCell(before.rows[0], 0)).toBe(false);
     unchanged(f, before);
     f.editor.closePreview();
     f.editor.inputOpen(true);
     const input = capture(f);
     expect(f.editor.discardRow(input.rows[0])).toBe(false);
+    expect(f.editor.discardCell(input.rows[0], 0)).toBe(false);
     unchanged(f, input);
   });
 });

@@ -10,6 +10,21 @@ export function draftRowChanged(row: DraftRow | undefined): boolean {
   return !!row && (row.inserted || !!row.original && (row.deleted || !rowEqual(row.original, row.data)));
 }
 
+/** 仅比较已有记录的准确字段值，保持 NULL、空字符串与字节的区别。 */
+export function draftCellChanged(row: DraftRow, key: string): boolean {
+  if (row.inserted || row.deleted || !row.original) return false;
+  const original = ownCell(row.original, key);
+  return original !== undefined && JSON.stringify(original) !== JSON.stringify(ownCell(row.data, key));
+}
+
+/** 单格恢复只替换准确行的指定字段，可用原草稿账本撤销。 */
+export function discardDraftCell(rows: DraftRow[], row: DraftRow, key: string): DraftRow[] {
+  if (!rows.includes(row) || !draftCellChanged(row, key)) return rows;
+  const original = row.original && ownCell(row.original, key);
+  if (original === undefined) return rows;
+  return rows.map(item => item === row ? { ...row, data: { ...row.data, [key]: structuredClone(original) } } : item);
+}
+
 /** 按原行对象定位。新增只移除本地行，已有行恢复读取时的完整原值及删除状态。 */
 export function discardDraftRow(rows: DraftRow[], row: DraftRow): DraftRow[] {
   const index = rows.indexOf(row);

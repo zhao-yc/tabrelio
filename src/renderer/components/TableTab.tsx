@@ -48,7 +48,7 @@ import { cellPreview, cellText, errorMessage, invoke, ownCell, rowEqual, uid } f
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceBusyLease, type WorkspaceTab } from '../store';
 import { SqlEditor } from './SqlEditor';
 import { ErrorBox, Modal, Spinner } from './ui';
-import { collectChanges, discardDraftRow, draftRowChanged, newDraftRow, type DraftRow } from '../dataChanges';
+import { collectChanges, discardDraftCell, discardDraftRow, draftCellChanged, draftRowChanged, newDraftRow, type DraftRow } from '../dataChanges';
 import { cellClipboardType, copyGridCells, copyGridCellValue, copyGridColumnNames, decodeClipboard, encodeClipboard, encodeGridCsv, encodeGridJson, maxClipboardCells, pasteCells, writeTableClipboardEvent } from '../gridClipboard';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
 import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.zh-CN';
@@ -2430,6 +2430,13 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       } }] : []),
       ...(!rectangle && (fieldEditor || canOpenCellEditor(row, key)) ? [{ label: fieldEditor ?? gridCellEditZh.open, run: () => {
         if (current() && canOpenCellEditor(row, key)) record.openCell(row.id, key);
+      } }] : []),
+      ...(!rectangle && historyAvailable() && draftCellChanged(row, key) ? [{ label: draftHistoryZh.discardCell, run: () => {
+        if (!current() || !historyAvailable()) return;
+        const next = discardDraftCell(rows, row, key);
+        if (next === rows) return;
+        try { setRows(next); setError(''); }
+        catch (reason) { setError(errorMessage(reason)); }
       } }] : []),
       ...(!rectangle && gridRecordCurrent() ? [{ label: gridRecordText.remove, run: () => {
         if (current()) removeGridRecord(row);

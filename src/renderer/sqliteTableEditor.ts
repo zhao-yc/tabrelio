@@ -383,6 +383,22 @@ export class SqliteTableEditor {
     if (!changed) return;
     return { count: changed, changes, check: current, stage: () => this.replaceRows(next), publish: () => this.emit() };
   }
+  /** 单格恢复仅接纳准确的未删除原行，读取数据库返回的原生类型。 */
+  canDiscardCell(row: SqliteDraftRow, column: number): boolean {
+    if (row.index === undefined || row.deleted || !this.rows.includes(row) || this.page.edit?.kind !== 'editable') return false;
+    const original = this.page.edit.rows[row.index]?.[column];
+    return original !== undefined && !sameDraftValue(original, row.values[column]);
+  }
+
+  discardCell(row: SqliteDraftRow, column: number): boolean {
+    if (!this.canEdit() || this.input || this.previewValue || !this.canDiscardCell(row, column)) return false;
+    if (row.index === undefined || this.page.edit?.kind !== 'editable') return false;
+    const values = [...row.values];
+    values[column] = structuredClone(this.page.edit.rows[row.index][column]);
+    this.replace(this.rows.map(item => item === row ? { ...row, values } : item));
+    return true;
+  }
+
   /** 原行必须属于本页当前草稿。保持原动态类型、完整原值和行编号。 */
   canDiscardRow(row: SqliteDraftRow | undefined): boolean {
     if (!row || !this.rows.includes(row) || this.page.edit?.kind !== 'editable') return false;

@@ -688,6 +688,23 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     setError('');
   }
 
+  /** 删除目标字段的暂存值，保留其它字段、原行版本和其它页的草稿。 */
+  function cellDraftAction(cell: QueryResultCopyCell) {
+    const column = cell.column, rowKey = page?.rowKeys?.[cell.index];
+    if (!rowKey || !column || page?.rows[cell.index] !== cell.row ||
+        !gridLayout.columns.some(item => item === column) || !draftHistoryCurrent()) return;
+    const entry = draft.find(item => item.rowKey === rowKey), change = entry?.change;
+    if (!entry || change?.kind !== 'update' || !change.fields.some(field => field.column === column.key)) return;
+    return { label: draftHistoryText.discardCell, run: () => {
+      if (!draftHistoryCurrent()) return;
+      const fields = change.fields.filter(field => field.column !== column.key);
+      const replacement = fields.length ? [{ ...entry, change: { ...change, fields } }] : [];
+      setChanges(draft.flatMap(item => item === entry ? replacement : [item]));
+      setMessage('');
+      setError('');
+    } };
+  }
+
   function moveDraftHistory(direction: 'undo' | 'redo') {
     if (!draftHistoryCurrent()) return;
     const next = history.move(direction);
@@ -2047,6 +2064,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         onFilterTableRange={cellMenuEnabled ? { members: openRangeFilter, bounds: captureRangeBounds } : undefined}
         onFillRange={canEditGrid ? fillGridRange : undefined}
         quickValueActions={{ allowed: (cell, kind) => !!quickValueTarget(cell, kind), apply: setQuickValue }}
+        cellDraftAction={canEditGrid ? cellDraftAction : undefined}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}
         canOpenCellEditor={canEditGrid ? cell => !!inlineEditTarget(cell) : undefined}
         cellReference={canEditGrid ? { label: referenceText.open, allowed: cell => !!gridReferenceTarget(cell), open: openGridReference } : undefined}

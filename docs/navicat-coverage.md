@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-24 源码增量。四种关系型数据库表页的单格菜单可还原当前字段的原值。macOS 源码 Electron 已核对 MySQL、MariaDB、PostgreSQL 和 SQLite 的单格还原、撤销及重做，同一行其他字段及其他行草稿保留，集中提交后回读核对了目标字段原值。D02 继续为部分覆盖。
+
 2026-11-24 源码增量。四种关系型数据库的可写查询结果可直接对单格使用置 NULL、置空字符串及生成 UUID，复用原行回查和预览事务。macOS 源码 Electron 已核对四种数据库预览前后只有命中格写入 SQL NULL，并在 MySQL、MariaDB 和 PostgreSQL 验证空字符串及 UUID 预览和计算列的菜单门禁。D02 继续为部分覆盖。
 
 2026-11-24 源码增量。四种关系型数据库的可编辑表页和可写查询结果可从网格菜单为矩形选区逐格生成 UUID v4。整组选区先核对字段类型及写入范围，沿用表页撤销和查询结果预览。macOS 源码 Electron 已验四种数据库表页的一步撤销，以及查询确认前后的数据库读回。D02 继续为部分覆盖。[Navicat 表格编辑说明](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
