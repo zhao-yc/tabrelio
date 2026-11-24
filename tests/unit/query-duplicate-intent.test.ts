@@ -12,6 +12,9 @@ it('按结果范围生成独立草稿，MySQL 系例程保留语句边界', () =
     const draft = resultStatementTargetDraft(tab, procedure, dialect);
     expect(draft).toMatchObject({ sourceTabId: tab.id, title: '多结果查询（结果语句）' });
     expect(new SqlScriptScanner(false, false).push(draft.sql, true)).toEqual([procedure]);
+    expect(resultStatementTargetDraft(tab, 'SELECT :value;', dialect, 'failure')).toEqual({
+      sourceTabId: tab.id, title: '多结果查询（失败语句）', sql: 'SELECT :value;',
+    });
   }
   expect(resultStatementTargetDraft(tab, 'SELECT $1;', 'postgresql').sql).toBe('SELECT $1;');
   expect(resultStatementTargetDraft(tab, 'SELECT :value;', 'sqlite').sql).toBe('SELECT :value;');

@@ -46,6 +46,7 @@ for (const name of selected) if (!declarations.has(name)) throw Error('缺少真
 if (!subscription || !notice || !parameterExecute || !resultTabs || buttons.size !== 3) throw Error('真实QueryTab窄适配入口不完整');
 const harnessCode = `function Harness({port}) {
  const tab=port.tab, settings=port.workspace.settings, connection={}, connectionVersion=0;
+ const onChooseQueryTarget=undefined;
  const collectStatus=false,collectStages=false,setInterruptedStatus=()=>{};
  const continueOnError=false,parameterContinueOnError={current:false},collectWarnings=false,parameterCollectWarnings={current:false};
  const parameterDialog=undefined;

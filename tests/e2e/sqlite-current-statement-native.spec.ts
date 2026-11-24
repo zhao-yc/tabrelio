@@ -8,6 +8,7 @@ import { sqliteSyntaxCheckZh as syntaxText } from '../../src/renderer/locales/sq
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { queryContinueOnErrorZh as continueText } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 import { queryResultNavigatorZh as resultNavText } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
+import { queryDuplicateZh as draftText } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 
 // 默认和--list只注册单个跳过项；原生App、NodeSQLite和文件观察均在显式专项内部加载。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -347,6 +348,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     await step(() => expect(locate).toBeDisabled());
     await step(() => expect(precise).toBeDisabled());
     await step(() => expect(locateResult()).toBeDisabled());
+    await step(() => expect(query().getByRole('button', {name: draftText.failureStatement, exact: true})).toBeDisabled());
     const resultNavigation = query().getByRole('button', {name: resultNavText.open, exact: true});
     const resultDialog = page.getByRole('dialog', {name: resultNavText.open, exact: true});
     const resultSearch = resultDialog.getByRole('combobox', {name: resultNavText.input, exact: true});
@@ -424,6 +426,20 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     await step(() => expect(resultDialog).toHaveCount(1));
     await step(() => resultSearch.press('Escape'));
     await step(() => expect(sqlInput).toBeFocused());
+    const beforeDraft = await settings();
+    const sourceTab = beforeDraft.tabs.find(item => item.id === beforeDraft.activeTabId)!;
+    const draftDialog = page.getByRole('dialog', {name: draftText.targetAction, exact: true});
+    const openFailedThird = query().getByRole('button', {name: draftText.failureStatementFor(3), exact: true});
+    await step(() => openFailedThird.click());
+    await step(() => expect(draftDialog.getByRole('button', {name: draftText.targetOpen, exact: true})).toBeDisabled());
+    await step(() => draftDialog.getByLabel(draftText.targetConnection, {exact: true}).selectOption(sourceTab.connectionId));
+    await step(() => draftDialog.getByRole('button', {name: draftText.targetOpen, exact: true}).click());
+    await step(() => expect.poll(async () => {
+      const current = await settings();
+      return current.tabs.find(item => item.id === current.activeTabId);
+    }).toMatchObject({sql: continuedStatements[2], connectionId: sourceTab.connectionId, title: sourceTab.title + draftText.failureStatementSuffix}));
+    await step(() => page.locator('.tab-strip').getByRole('button', {name: sourceTab.title, exact: true}).click());
+    await step(() => expect(query().getByRole('gridcell', {name: '后续🚢', exact: true})).toBeVisible());
     expect((await step(audit)).operations).toEqual(continuedFacts.operations);
     expect(await history()).toEqual(continuedHistory);
     expect(continuedHistory.find(entry => entry.sql === continuedSource)?.success).toBe(false);

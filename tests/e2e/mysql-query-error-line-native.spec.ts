@@ -13,6 +13,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryPartialOutcomeZh } from '../../src/renderer/locales/queryPartialOutcome.zh-CN';
 import { currentStatementZh } from '../../src/renderer/locales/currentStatement.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
+import { queryDuplicateZh as draftText } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import type { NetworkConnectionProfile } from '../../src/shared/contracts';
 
 test.skip(process.env.DBARK_MYSQL_ERROR_LINE_NATIVE !== '1', '仅在本轮隔离 MySQL 或 MariaDB 实例运行');
@@ -131,6 +132,10 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     await page.keyboard.press('Alt+Shift+F8');
     await expect.poll(async () => (await state()).selections?.[0]?.text).toBe(secondLine);
     await expect(navigator).toContainText(continuing.located(3, 2, 2));
+    const destination = page.getByRole('dialog', {name: draftText.targetAction, exact: true});
+    await report.getByRole('button', {name: draftText.failureStatementFor(3), exact: true}).click();
+    await expect(destination.getByRole('button', {name: draftText.targetOpen, exact: true})).toBeDisabled();
+    await destination.getByRole('button', {name: zh.common.cancel, exact: true}).click();
     expect(await history()).toEqual(beforeKey);
     await page.screenshot({path: info.outputPath('原查询报错行.png'), animations: 'disabled'});
     await (await toggle(continuing.option)).uncheck();
@@ -144,11 +149,25 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     await expect(form).toBeHidden();
     await expect.poll(async () => (await history()).length).toBe(beforeParameter + 1);
     await locate(line, parameterLine);
+    const openFailureDraft = query.getByRole('button', {name: draftText.failureStatement, exact: true});
+    const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+    const beforeDraft = await settings(), beforeDraftHistory = await history();
+    const sourceTab = beforeDraft.tabs.find(item => item.id === beforeDraft.activeTabId)!;
+    await openFailureDraft.click();
+    await destination.getByLabel(draftText.targetConnection, {exact: true}).selectOption(sourceTab.connectionId);
+    await destination.getByRole('button', {name: draftText.targetOpen, exact: true}).click();
+    await expect.poll(async () => {
+      const current = await settings();
+      return current.tabs.find(item => item.id === current.activeTabId);
+    }).toMatchObject({sql: template, connectionId: sourceTab.connectionId, database: account});
+    expect(await history()).toEqual(beforeDraftHistory);
+    await page.locator('.tab-strip').getByRole('button', {name: sourceTab.title, exact: true}).click();
     const entry = (await history()).find(item => item.sql === template);
     expect(entry?.success).toBe(false);
     expect(JSON.stringify(entry)).not.toContain('内部合成参数');
     expect(await query.locator('.error-box').innerText()).not.toContain(Buffer.from(sample).toString('hex'));
-    await write('SELECT 5;'); await expect(line).toBeDisabled(); await expect.poll(executionMarkers).toEqual([]);
+    await write('SELECT 5;'); await expect(line).toBeDisabled(); await expect(openFailureDraft).toBeDisabled();
+    await expect.poll(executionMarkers).toEqual([]);
 
     await observer.query('CREATE PROCEDURE nav_result_groups() BEGIN SELECT 71 AS nav_first; SELECT 72 AS nav_second; END');
     await (await toggle(continuing.option)).check();

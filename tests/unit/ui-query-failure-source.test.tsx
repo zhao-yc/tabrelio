@@ -8,6 +8,8 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { captureQueryFailureSource } from '../../src/renderer/queryFailureSource';
 import { CurrentStatementIntent } from '../../src/renderer/currentStatementIntent';
 import { QueryPartialOutcomeNotice } from '../../src/renderer/components/QueryPartialOutcomeNotice';
+import { resultStatementTargetDraft } from '../../src/renderer/queryDuplicateIntent';
+import { queryDuplicateZh as draftText } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { queryFailureSourceZh as text } from '../../src/renderer/locales/queryFailureSource.zh-CN';
 import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
@@ -25,6 +27,7 @@ function inspect(node: ts.Node) {
 }
 inspect(tree);
 const required = ['querySource', 'failureSourceScope', 'captureFailureSource', 'clearFailureSource', 'execute', 'currentStatementScope', 'executeCurrentStatement', 'openParameters', 'loadParameterNames', 'runQuery', 'handleQueryError', 'attachQueryEditor', 'submitParameterQuery', 'closeParameters'];
+required.push('belongsToExecution', 'canOpenFailureDraft', 'openFailureDraft', 'queryMenuCurrent');
 if (!notice || !parameterExecute || !parameterClose || !lifetime || required.some(name => !functions.has(name))) throw Error('真实定位入口不完整');
 const code = `function Harness({port}) {
  const collectStatus=false,collectStages=false,setInterruptedStatus=()=>{};
@@ -32,6 +35,7 @@ const code = `function Harness({port}) {
  const parameterDialog=undefined,parameterFormRef={current:null};
  const parameterReuse={current:null},parameterReusePort={current:null},parameterReuseOwner=()=>({begin:()=>null});
  const fileSource={busy:false,isBusy:()=>false},sqlite=port.sqlite??false;
+ const resultModal=false,connection={dialect:sqlite?'sqlite':'mysql'},onChooseQueryTarget=port.chooseTarget,queryOwnerCurrent=()=>true;
  const tab=port.tab,settings=port.workspace.settings,editor=useRef(port.editor),alive=useRef(true),busyRef=useRef(false),sessionRef=useRef('session'),pendingSession=useRef(null),task=useRef(''),cancelledQuery=useRef(''),explainSource=useRef(''),parameterSession=useRef('session'),failureSource=useRef(undefined),parameterFailureSource=useRef(undefined),closeRequestRef=useRef(undefined),activeCurrentIntent=useRef(null),fileModelAttached=useRef(false),formatting=useRef(null),duplicateIntent=useRef(null),closeIntent=useRef(null),closeBusy=useRef(null);
  const [outcome,setOutcome]=useState(null),[stream,setStream]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[parameterSource,setParameterSource]=useState(null),[,refreshFailureSource]=useState(0);
  const noop=()=>{},setQueryRunning=noop,setSelectedPin=noop,setShowPinSql=noop,setResultIndex=noop,setSessionId=noop,setTransaction=noop,setTransactionKnown=noop,setSearchEditor=noop;
@@ -40,12 +44,13 @@ const code = `function Harness({port}) {
  ${lifetime}
  const [,force]=useState(0);port.force=()=>force(value=>value+1);port.read=()=>({outcome,stream,busy,error,parameterSource,locator:failureSource.current,parameterLocator:parameterFailureSource.current});port.replace=attachQueryEditor;port.close=value=>{closeRequestRef.current=value;};
  const failureLocator=failureSource.current,onExecute=${parameterExecute},onClose=${parameterClose};
+ port.openFailureDraft=()=>openFailureDraft(outcome?.failure);
  return <><button onClick={()=>void execute()}>原选区执行</button><button onClick={()=>void execute('all')}>原全文执行</button><button onClick={()=>void executeCurrentStatement()}>原当前语句</button><button onClick={openParameters}>原打开参数</button><button onClick={()=>void loadParameterNames()}>原识别参数</button><button onClick={()=>onExecute(port.parameters)}>原确认参数</button><button onClick={onClose}>原取消参数</button>{${notice}}</>;
 }`;
 
 let doc: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined, Harness: React.ComponentType<{ port: any }>;
 const originalGlobals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
-beforeAll(async () => { doc = memoryDocument(); const create = doc.createElement.bind(doc); doc.createElement = name => { const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; }; node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; }; return node; }; ({ createRoot } = await import('react-dom/client')); Harness = runInNewContext(ts.transpileModule(code + ';Harness', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, { ...queryDialectVm(), appDialogSelector, appModalSelector, exports: {}, useEffect, useRef, useState, captureQueryFailureSource, CurrentStatementIntent, QueryPartialOutcomeNotice, zh, formatText, document: doc, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止额外依赖'); } }); });
+beforeAll(async () => { doc = memoryDocument(); const create = doc.createElement.bind(doc); doc.createElement = name => { const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; }; node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; }; return node; }; ({ createRoot } = await import('react-dom/client')); Harness = runInNewContext(ts.transpileModule(code + ';Harness', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, { ...queryDialectVm(), appDialogSelector, appModalSelector, exports: {}, useEffect, useRef, useState, captureQueryFailureSource, CurrentStatementIntent, QueryPartialOutcomeNotice, resultStatementTargetDraft, zh, formatText, document: doc, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止额外依赖'); } }); });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } doc.body.textContent = ''; });
 afterAll(() => { for (const [name, descriptor] of originalGlobals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
@@ -64,6 +69,31 @@ async function mount(port: any) { const host = doc.createElement('div'); doc.bod
 function button(label: string) { const node = doc.querySelectorAll('button').find(value => value.textContent === label); expect(node, label).toBeDefined(); return node!; }
 async function click(label: string) { expect(button(label).disabled).toBe(false); await act(async () => button(label).dispatchEvent(new MemoryEvent('click'))); }
 const executions = (port: any) => port.invoke.mock.calls.filter(([command]: string[]) => command === 'query.execute' || command === 'query.executeParameterized');
+
+it('失败草稿保留选区参数模板，重跑后的旧回调和编辑后的按钮不能复制', async () => {
+  const template = 'SELECT :secret;', sql = 'SELECT 1; ' + template + ' SELECT 2;';
+  const f = fixture(sql);
+  f.tab.title = '参数查询';
+  f.chooseTarget = vi.fn();
+  f.select(10, 10 + template.length);
+  f.invoke.mockImplementation(async (command: string) => command === 'query.executeParameterized'
+    ? {results: [], elapsedMs: 1, failure: {statementOrdinal: 1, statementsCompleted: 0, message: '参数失败', sourceRange: {start: 0, end: template.length}}}
+    : command === 'query.sessionState' ? {broken: false, transactionOpen: false, transactionKnown: false} : []);
+  await mount(f);
+  await click('原打开参数'); await click('原识别参数'); await click('原确认参数');
+  const oldDraft = f.openFailureDraft;
+  await click(draftText.failureStatement);
+  expect(f.chooseTarget).toHaveBeenCalledExactlyOnceWith({sourceTabId: 'tab', title: '参数查询' + draftText.failureStatementSuffix, sql: template});
+  expect(executions(f)).toHaveLength(1);
+  expect(f.editor.setSelection).not.toHaveBeenCalled();
+  await click('原打开参数'); await click('原识别参数'); await click('原确认参数');
+  expect(button(draftText.failureStatement).disabled).toBe(false);
+  await act(async () => oldDraft());
+  await act(async () => { f.edit('SELECT 3'); f.edit(sql); });
+  expect(button(draftText.failureStatement).disabled).toBe(true);
+  expect(f.chooseTarget).toHaveBeenCalledTimes(1);
+  expect(executions(f)).toHaveLength(2);
+});
 
 it('原全文回调返回范围后真实按钮只移动光标，不改变正文结果或再次IPC', async () => { const f = fixture(); await mount(f); await click('原全文执行'); const outcome = f.read().outcome, calls = f.invoke.mock.calls.length; expect(button(text.locate).disabled).toBe(false); f.select(0, 5); await click(text.locate); expect(f.editor.setSelection).toHaveBeenCalledExactlyOnceWith({ startLineNumber: 1, startColumn: 11, endLineNumber: 1, endColumn: 18 }); expect(f.editor.revealRangeInCenter).toHaveBeenCalledOnce(); expect(f.editor.focus).toHaveBeenCalledOnce(); expect(f.read().outcome).toBe(outcome); expect(f.model.getValue()).toBe(f.tab.sql); expect(f.editor.executeEdits).not.toHaveBeenCalled(); expect(f.editor.pushUndoStop).not.toHaveBeenCalled(); expect(f.invoke).toHaveBeenCalledTimes(calls); });
 it('原真实选区相对range映射到重复语句的准确选区基址', async () => { const f = fixture(); f.select(19, 27); f.invoke.mockResolvedValueOnce({ results: [], elapsedMs: 1, failure: { statementOrdinal: 1, statementsCompleted: 0, message: '失败', sourceRange: { start: 0, end: 8 } } }); await mount(f); await click('原选区执行'); expect(executions(f)[0][1].sql).toBe('BAD SQL;'); f.select(0, 1); await click(text.locate); expect(f.editor.setSelection.mock.calls[0][0]).toMatchObject({ startColumn: 20, endColumn: 28 }); });

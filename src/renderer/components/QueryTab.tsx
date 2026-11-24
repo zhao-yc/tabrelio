@@ -2797,8 +2797,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
   /** 从仅显示结果定位错误时，先恢复原编辑器，再按已确认的原范围选中。 */
   function locateScriptFailure(failure: QueryFailure, precise = false): boolean {
-    const belongs = outcome?.scriptReport ? scriptFailureRanges.current.has(failure) : outcome?.failure === failure;
-    if (!belongs || failureSource.current !== failureLocator || !failureLocator?.available()) return false;
+    if (!belongsToExecution(failure) || failureSource.current !== failureLocator || !failureLocator?.available()) return false;
     if (precise ? !failureLocator.canLocateError(failure) : !failureLocator.bindRange(failure.sourceRange)) return false;
     if (resultsOnly) flushSync(() => setResultsOnly(false));
     editor.current?.layout();
@@ -2824,7 +2823,22 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const canExecuteSelection = hasSingleSelection && !resultsOnly && !busy && !!connection && !closeRequest && !fileSource.busy;
   const canCompactSql = !!searchEditor && !resultsOnly && !busy && !closeRequest && !fileSource.busy;
   const canNavigateFromCursor = !!searchEditor && !!connection && !resultsOnly && !busy && !closeRequest && !fileSource.busy && !navigationView?.busy;
-  const belongsToExecution = (failure: QueryFailure) => outcome?.scriptReport ? scriptFailureRanges.current.has(failure) : outcome?.failure === failure;
+  function belongsToExecution(failure: QueryFailure): boolean {
+    return outcome?.scriptReport ? scriptFailureRanges.current.has(failure) : outcome?.failure === failure;
+  }
+  function canOpenFailureDraft(failure: QueryFailure): boolean {
+    return !!connection && !busy && !resultModal && !fileSource.busy && belongsToExecution(failure) &&
+      !!failureLocator?.canLocateRange(failure.sourceRange, false);
+  }
+  /** 失败回执只借用原执行模型，使用整句范围保留模板，避免从报错消息复原 SQL。 */
+  function openFailureDraft(failure: QueryFailure): void {
+    if (!onChooseQueryTarget || !connection || !canOpenFailureDraft(failure) || failureSource.current !== failureLocator ||
+        !queryMenuCurrent() || fileSource.isBusy()) return;
+    const sql = failureLocator?.readRange(failure.sourceRange);
+    if (sql === undefined) return;
+    try { onChooseQueryTarget(resultStatementTargetDraft(tab, sql, connection.dialect, 'failure')); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
   const failureNavigation = useQueryFailureNavigation(outcome, {
     locateAvailable: failure => belongsToExecution(failure) && !!failureLocator?.canLocateRange(failure.sourceRange, false),
     onLocate: locateScriptFailure,
@@ -3078,11 +3092,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     </div>}/>{pins.length > 0 && <div className="pinned-results" role="group" aria-label={zh.query.pinSection}><span>{zh.query.pinSection}</span><button className={`current-results ${!pin ? 'selected' : ''}`} aria-pressed={!pin} onClick={() => selectPinnedResult()}>{zh.query.currentResults}</button>{pins.map(item => <div key={item.id} className={`pinned-result ${pin?.id === item.id ? 'selected' : ''}`}><button aria-pressed={pin?.id === item.id} title={pinnedResultTooltip(item)} onClick={() => selectPinnedResult(item)}><Pin size={11}/>{item.label}</button><button aria-label={formatText(zh.query.releasePin, item.label)} onClick={() => releasePin(item.id)}><X size={11}/></button></div>)}</div>}<ErrorBox message={error}/>{!queryRunning && (outcome?.mysqlQueryStatus || interruptedStatus?.taskId === task.current && interruptedStatus.report) &&
         <MysqlQueryStatus key={task.current} report={outcome?.mysqlQueryStatus ?? interruptedStatus!.report}/>}
       {outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length}
-        navigation={failureNavigation} positionLabel={sqlite ? undefined : sourceLocationText.locateLineFor}/>}
+        navigation={failureNavigation} positionLabel={sqlite ? undefined : sourceLocationText.locateLineFor}
+        onOpenDraft={onChooseQueryTarget && openFailureDraft} draftAvailable={canOpenFailureDraft}/>}
       {outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length}
         locateAvailable={!!failureLocator?.available()} onLocate={() => { failureLocator?.locate(); }}
         positionAvailable={!!outcome.failure.errorRange && !!failureLocator?.canLocateError(outcome.failure)}
         positionLabel={outcome.failure.errorRange && !sqlite ? sourceLocationText.locateLine : undefined}
+        onOpenDraft={onChooseQueryTarget && openFailureDraft} draftAvailable={!!onChooseQueryTarget && canOpenFailureDraft(outcome.failure)}
         onLocatePosition={failure => locateScriptFailure(failure, true)}/>}<div className="query-result-filter-bar">{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><span>{filterText.counts(sourceResult.rows.length,filterView?.result.rows.length??sourceResult.rows.length)}</span>{sourceResult.truncated&&<strong>{filterText.truncated}</strong>}</>:null}{resultMemory&&<span role="status" title={memoryText.hint}>{memoryText.saved}</span>}</div>{activeFilterLease&&<QueryResultFilterPanel binding={activeFilterLease.binding} initial={activeFilterLease.view} seed={activeFilterLease.seed} isCurrent={()=>filterPanelCurrent(activeFilterLease)} onApply={expression=>applyFilterRules(activeFilterLease,expression)} onClose={()=>closeFilterPanel(activeFilterLease)}/>}{activeSortLease&&<QueryResultSortPanel binding={activeSortLease.binding} initial={activeSortLease.view} isCurrent={()=>sortPanelCurrent(activeSortLease)} onApply={rules=>applySortPanel(activeSortLease,rules)} onClose={()=>closeSortPanel(activeSortLease)}/>}<div className="query-result-sort-scope">{result?.columns.length && (pin || !(outcome?.explain || outcome?.analysis)) && (!!sortView?.rules.length || !sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal) ? <>{!sortBinding && sourceExportable && settings.activeTabId === tab.id && !resultModal && <strong>{sortText.budget}</strong>}<button disabled={!sortView?.rules.length || !selectionBinding || !!activeColumnLease || !!activeFilterLease} onClick={() => sortResult([])}>{sortText.clear}</button>{!!sortView?.rules.length && <ol className="query-result-sort-priorities" aria-label={sortText.priorities}>{sortView.rules.map((rule,index)=>{
     const column=sourceResult?.columns.find(column=>column.key===rule.column),name=column?.name ?? rule.column;
     return <li key={rule.column}>

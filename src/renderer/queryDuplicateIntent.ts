@@ -56,7 +56,9 @@ function statementDraft(source: string, range: NavigableStatement | undefined, d
   // 未终止的末条语句也可能沿用非标准分隔符。默认分段有歧义时补一个正文未使用的标记。
   try {
     const parts = new SqlScriptScanner(false, false, false, false).push(original, true, 2);
-    if (parts.length === 1 && parts[0] === original.trim()) return original;
+    const trimmed = original.trim();
+    // 回执有时会把普通结尾分号包含在范围内，扫描器会去掉该终止符。
+    if (parts.length === 1 && (parts[0] === trimmed || trimmed.endsWith(';') && parts[0] === trimmed.slice(0, -1).trimEnd())) return original;
   } catch { /* 原语句由现有导航会话确定，此处只测试能否省略分隔符声明。 */ }
   const used = new Set(original.match(/__dbark_\d+!/g));
   let index = 0, marker = '__dbark_0!';
@@ -79,12 +81,12 @@ export function statementDraftSql(source: string, ranges: readonly NavigableStat
   return statementDraftParts(source, ranges, dialect).join(source.includes('\r\n') ? '\r\n' : '\n');
 }
 
-/** 结果来源只提供语句范围。用原目录的打包方式保留例程体所需的客户端分隔符。 */
-export function resultStatementTargetDraft(tab: Pick<WorkspaceTab, 'id' | 'title'>, source: string, dialect: ConnectionProfile['dialect']): QueryTargetDraft {
+/** 执行回执只提供语句范围。用原目录的打包方式保留例程体所需的客户端分隔符。 */
+export function resultStatementTargetDraft(tab: Pick<WorkspaceTab, 'id' | 'title'>, source: string, dialect: ConnectionProfile['dialect'], kind: 'result' | 'failure' = 'result'): QueryTargetDraft {
   if (!source.trim()) throw Error(text.changed);
   const sql = statementDraftSql(source, [{ start: 0, end: source.length, delimiterStart: source.length, delimiterEnd: source.length }], dialect);
   if (sql.length > 20_000_000 || new TextEncoder().encode(sql).byteLength > queryParameterLimits.sqlBytes) throw Error(text.tooLarge);
-  return { sourceTabId: tab.id, title: copyTitle(tab.title, text.resultStatementSuffix), sql };
+  return { sourceTabId: tab.id, title: copyTitle(tab.title, kind === 'failure' ? text.failureStatementSuffix : text.resultStatementSuffix), sql };
 }
 
 /** 一次复制只借用原模型读取权；任何失效永久撤销，创建目标时严格挑选草稿字段。 */

@@ -2245,6 +2245,17 @@ export function PostgresQueryTab({
   const canNavigate = editable && !navigation.busy;
   const canOpenStatementQuery = canNavigate && canDuplicateQuery && !resultsOnly;
   const availableFailure = (failure: QueryFailure) => !pin && scriptFailureRanges.current.has(failure);
+  function canOpenFailureDraft(failure: QueryFailure): boolean {
+    return !locked && availableFailure(failure) && !!failureSource.current?.canLocateRange(failure.sourceRange, false);
+  }
+  /** 使用本次失败的整句原范围创建独立草稿，保持原命名模板和事务状态。 */
+  function openFailureDraft(failure: QueryFailure): void {
+    if (!onChooseQueryTarget || !canOpenFailureDraft(failure) || !pinNavigationCurrent() || files.isBusy()) return;
+    const sql = failureSource.current?.readRange(failure.sourceRange);
+    if (sql === undefined) return;
+    try { onChooseQueryTarget(resultStatementTargetDraft(tab, sql, 'postgresql', 'failure')); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
   const failureNavigation = useQueryFailureNavigation(outcome, {
     locateAvailable: failure => availableFailure(failure) && !!failureSource.current?.canLocateRange(failure.sourceRange, false),
     onLocate: locateFailure,
@@ -2487,9 +2498,10 @@ export function PostgresQueryTab({
       <ErrorBox message={error} />
       {continueOnError && <p className="muted small" role="note">{text.continueHint}</p>}
       {outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length}
-        navigation={failureNavigation} />}
+        navigation={failureNavigation} onOpenDraft={onChooseQueryTarget && openFailureDraft} draftAvailable={canOpenFailureDraft}/>}
       {outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length}
         locateAvailable={!pin && scriptFailureRanges.current.has(outcome.failure) && !!failureSource.current?.available()}
+        onOpenDraft={onChooseQueryTarget && openFailureDraft} draftAvailable={canOpenFailureDraft(outcome.failure)}
         onLocate={() => locateFailure(outcome.failure)} positionAvailable={canLocateFailurePosition(outcome.failure)} onLocatePosition={locateFailurePosition} />}
       {!pin && outcome?.postgresNotices && <PostgresNoticesPanel report={outcome.postgresNotices}
         locateAvailable={entry => noticeRanges.current.has(entry) && !!failureSource.current?.available()} onLocate={locateNotice} />}

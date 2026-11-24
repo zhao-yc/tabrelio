@@ -3,6 +3,7 @@ import type { QueryOutcome } from '../../shared/contracts';
 import type { QueryFailure } from '../../shared/queryFailure';
 import { queryContinueOnErrorZh as t } from '../locales/queryContinueOnError.zh-CN';
 import { queryFailureSourceZh as sourceText } from '../locales/queryFailureSource.zh-CN';
+import { queryDuplicateZh as draftText } from '../locales/queryDuplicate.zh-CN';
 
 /** 仅确认原模板的UTF16半开范围，不搜索SQL文字，不复制或插值参数模板。 */
 export function confirmedQueryContinueRange(source: string, failure: Pick<QueryFailure, 'sourceRange'>): boolean {
@@ -62,9 +63,10 @@ export function useQueryFailureNavigation(outcome: QueryOutcome | null | undefin
 }
 
 /** 展示固定统计与有界错误，不把消息解释为HTML，也不触发查询或自动定位。 */
-export function QueryContinueOnErrorNotice({ report, completedResults, navigation, positionLabel = sourceText.locatePositionFor }: {
+export function QueryContinueOnErrorNotice({ report, completedResults, navigation, positionLabel = sourceText.locatePositionFor, onOpenDraft, draftAvailable }: {
   report: NonNullable<QueryOutcome['scriptReport']>; completedResults: number;
   navigation: ReturnType<typeof useQueryFailureNavigation>; positionLabel?(ordinal: number): string;
+  onOpenDraft?(failure: QueryFailure): void; draftAvailable?(failure: QueryFailure): boolean;
 }) {
   const {entries, count, active, index, locate, move, canLocate, canLocatePosition} = navigation;
   /** 展示预算独立于服务端预算，防异常回包造成巨量DOM。 */
@@ -83,6 +85,7 @@ export function QueryContinueOnErrorNotice({ report, completedResults, navigatio
       <span className="muted small">{active ? t.located(active.statementOrdinal, index + 1, count) : t.navigable(count)}</span>
     </div>}
     {!!entries.length && <ol>{entries.map(({failure, statement, position}, index) => {
+      const canOpenDraft = !!onOpenDraft && !!draftAvailable?.(failure);
       return <li key={`${failure.statementOrdinal}:${index}`} aria-current={active === failure || undefined}>
         <strong>{t.error(failure.statementOrdinal)} · {failure.kind === 'server' ? t.server : t.terminal}</strong>
         <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{bounded(failure.message)}</pre>
@@ -90,6 +93,8 @@ export function QueryContinueOnErrorNotice({ report, completedResults, navigatio
           onClick={() => locate(failure, 'statement')}>{t.locate(failure.statementOrdinal)}</button>
         {failure.errorRange && canLocatePosition && <button disabled={!position} onClick={() => locate(failure, 'position')}>
           {positionLabel(failure.statementOrdinal)}</button>}
+        {onOpenDraft && <button disabled={!canOpenDraft} title={canOpenDraft ? draftText.failureStatementHint : draftText.failureStatementUnavailable}
+          onClick={() => onOpenDraft(failure)}>{draftText.failureStatementFor(failure.statementOrdinal)}</button>}
       </li>;
     })}</ol>}
   </section>;

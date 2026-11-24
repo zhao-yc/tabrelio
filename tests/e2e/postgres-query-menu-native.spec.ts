@@ -768,6 +768,7 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
   const notice = () => tab().getByRole('status', {name: partialText.title, exact: true});
   const locate = () => notice().getByRole('button', {name: failureText.locate, exact: true});
   const precise = () => notice().getByRole('button', {name: failureText.locatePosition, exact: true});
+  const openFailureDraft = () => notice().getByRole('button', {name: queryDuplicateZh.failureStatement, exact: true});
   const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
   const records = async () => (await observer.query('SELECT id FROM public.failure_sentinel ORDER BY id')).rows;
   const select = async (start: number, end = start) => editor().evaluate((element, offsets) => {
@@ -812,6 +813,7 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     await editor().getByRole('textbox').focus(); await page.keyboard.press('ControlOrMeta+End'); await page.keyboard.insertText(' '); await page.keyboard.press('ControlOrMeta+Z');
     await expect.poll(async () => (await inspectModel()).sql).toBe(actual); await expect(locate()).toBeDisabled();
     await expect(precise()).toBeDisabled();
+    await expect(openFailureDraft()).toBeDisabled();
 
     const selectedScript = "INSERT INTO public.failure_sentinel VALUES (3);\r\nSELECT '选区🧭' AS selected_ok;\r\nSELECT missing_column FROM public.failure_sentinel;\r\nINSERT INTO public.failure_sentinel VALUES (4);";
     await replaceDraft(selectedScript);
@@ -855,6 +857,22 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
     await expect(tab()).toContainText('SQLSTATE 42703'); await preciseLocate(named.indexOf('missing_column'), 'm');
     expect(JSON.stringify(await history())).not.toContain(secret);
+    const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+    const beforeDraft = await settings(), beforeDraftHistory = await history(), beforeDraftSessions = await sessions();
+    const sourceTab = beforeDraft.tabs.find(item => item.id === beforeDraft.activeTabId)!;
+    const destination = page.getByRole('dialog', {name: queryDuplicateZh.targetAction, exact: true});
+    await openFailureDraft().click();
+    await destination.getByLabel(queryDuplicateZh.targetConnection, {exact: true}).selectOption(sourceTab.connectionId);
+    await destination.getByRole('button', {name: queryDuplicateZh.targetOpen, exact: true}).click();
+    await expect.poll(async () => {
+      const current = await settings();
+      return current.tabs.find(item => item.id === current.activeTabId);
+    }).toMatchObject({sql: named.slice(0, -1), connectionId: sourceTab.connectionId});
+    expect(JSON.stringify(await settings())).not.toContain(secret);
+    expect(await history()).toEqual(beforeDraftHistory);
+    expect(await sessions()).toEqual(beforeDraftSessions);
+    await page.locator('.tab-strip').getByRole('button', {name: sourceTab.title, exact: true}).click();
+    await expect.poll(async () => (await inspectModel()).sql).toBe(named);
 
     const internal = 'DO $$ BEGIN PERFORM internal_missing; END $$;';
     await replaceDraft(internal); await command('execute-all');
