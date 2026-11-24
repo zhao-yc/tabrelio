@@ -94,6 +94,24 @@ function many(count: number) {
 }
 
 describe('两份固定查询结果的真实只读对话框', () => {
+  it('一份固定基准可与一组本次结果对比，来源编号重复也各归所属侧', async () => {
+    const pins = fixture();
+    const baselines = [pins[0]], inputs = [{ ...pins[2], id: pins[0].id, label: '本次结果' }];
+    const returned = { preferredId: inputs[0].id, baseline: { inputs: baselines } };
+    const f = await mount(pins, { inputs, returned });
+    expect(node(text.baselineTitle).getAttribute('role')).toBe('dialog');
+    expect(node(text.baselineLeft).querySelectorAll('option')).toHaveLength(1);
+    expect(node(text.baselineRight).querySelectorAll('option')).toHaveLength(1);
+    expect(node(text.baselineLeft).value).not.toBe(node(text.baselineRight).value);
+    await compare();
+    expect(counts()).toEqual(['1', '1', '1', '1']);
+    await f.update({ returned: { ...returned, baseline: { inputs: [...baselines] } } });
+    expect(hasCounts()).toBe(false);
+    await f.update({ returned });
+    expect(button(text.start).disabled).toBe(true);
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+
   it('本次执行跳过状态包，保留原序号，允许在五组以上结果中按当前位置选源', async () => {
     const pins = fixture();
     const status: QueryResult = { columns: [], rows: [], affectedRows: 1, truncated: false, elapsedMs: 1, statement: '状态' };

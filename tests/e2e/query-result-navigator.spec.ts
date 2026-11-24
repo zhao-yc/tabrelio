@@ -8,6 +8,7 @@ import { queryResultFilterZh as filterText } from '../../src/renderer/locales/qu
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultKeywordZh as keywordText } from '../../src/renderer/locales/queryResultKeyword.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { queryPinsZh as pinText } from '../../src/renderer/locales/queryPins.zh-CN';
 import { queryDuplicateZh as duplicateText } from '../../src/renderer/locales/queryDuplicate.zh-CN';
@@ -308,6 +309,13 @@ test('多结果查询按名称、字段、SQL预览及序号切换，保持原�
     await expect(grid.getByRole('gridcell', {name: '2', exact: true})).toBeVisible();
     await expect(keyword).toHaveValue('2');
     await expect(grid.getByRole('columnheader', {name: /^sample/})).toHaveCSS('width', '208px');
+    await (await navigationMenuItem(tab, { name: comparisonText.baselineTitle, exact: true })).click();
+    const baselineComparison = page.getByRole('dialog', { name: comparisonText.baselineTitle, exact: true });
+    const baselineSelect = baselineComparison.getByLabel(comparisonText.baselineLeft, { exact: true });
+    await expect(baselineSelect.locator('option:checked')).toHaveText('上月对账基准📌');
+    await expect(baselineComparison.getByLabel(comparisonText.baselineRight, { exact: true }).locator('option')).toHaveCount(1);
+    await baselineComparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click();
+    await expect(renamedPin).toHaveAttribute('aria-pressed', 'true');
     await openFind();
     await expect(findInput).toHaveValue('2');
     await expect(findStatus).toHaveText(findText.count(1, -1));

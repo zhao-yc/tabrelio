@@ -269,6 +269,7 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     await input.fill('target');
     await input.press('Enter');
     await expect(search.getByRole('status')).toHaveText(text.counts(2, 3));
+    await (await navigationMenuItem(query, { name: zh.query.pinResult, exact: true })).click();
     await execute();
     await expect(input).toHaveValue('');
     await expect(cells).toHaveText(['target A', 'other', 'Target C']);
@@ -277,6 +278,23 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     await page.keyboard.press('ControlOrMeta+Shift+PageDown');
     await expect(input).toHaveValue('');
     await expect(cells).toHaveText(['archive A', 'active B']);
+    await expect.poll(async () => (await history()).length).toBe(baseline.length + 1);
+    const beforeBaselineComparison = await history();
+    await (await navigationMenuItem(query, { name: comparisonText.baselineTitle, exact: true })).click();
+    const baselineComparison = page.getByRole('dialog', { name: comparisonText.baselineTitle, exact: true });
+    const leftBaseline = baselineComparison.getByLabel(comparisonText.baselineLeft, { exact: true });
+    const rightCurrent = baselineComparison.getByLabel(comparisonText.baselineRight, { exact: true });
+    await expect(leftBaseline.locator('option')).toHaveText(['固定 1']);
+    await expect(rightCurrent.locator('option')).toHaveCount(2);
+    await expect(rightCurrent).toHaveValue('1');
+    await baselineComparison.getByLabel(comparisonText.alignmentMode).selectOption('name');
+    await baselineComparison.getByRole('checkbox', { name: /^匹配键 / }).first().check();
+    await baselineComparison.getByRole('button', { name: comparisonText.start, exact: true }).click();
+    await expect(baselineComparison.getByLabel(comparisonText.removed, { exact: true })).toHaveText('1');
+    await expect(baselineComparison.getByLabel(comparisonText.changed, { exact: true })).toHaveText('2');
+    await baselineComparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click();
+    await expect(cells).toHaveText(['archive A', 'active B']);
+    expect(await history()).toEqual(beforeBaselineComparison);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

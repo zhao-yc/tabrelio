@@ -2,6 +2,9 @@
 export const queryResultComparisonZh = {
   open: '固定结果对比', title: '固定结果对比', close: '关闭', cancel: '取消对比',
   returnedTitle: '对比已返回结果', leftReturned: '左侧结果集', rightReturned: '右侧结果集',
+  baselineTitle: '与固定结果对比', baselineLeft: '基准固定结果', baselineRight: '本次返回结果',
+  baselineNotice: '左侧为固定基准，右侧为本次返回结果。差异按从基准到本次结果的方向计算，行号对应各自的原始顺序。',
+  baselineRequired: '请选择一份固定基准和一组本次返回结果',
   returnedItem: (ordinal: number, name?: string) => name ? `结果 ${ordinal} · ${name}` : `结果 ${ordinal}`,
   returnedNotice: '使用本次执行已返回的原始行列。差异中的左右行号均对应原返回顺序。',
   returnedRequireTwo: '请选择同一次执行的两组行结果',

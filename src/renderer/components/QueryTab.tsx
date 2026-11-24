@@ -1415,8 +1415,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const resultStatementOrdinals = useMemo(() => outcome?.results === results
     ? outcome.sqliteResultReceipts?.map(receipt => receipt.statementOrdinal) ?? outcome.mysqlResultStatementOrdinals
     : undefined, [outcome, results]);
-  const multipleReturnedResults = !pin && !busy && !queryRunning && !!outcome && !outcome.explain && !outcome.analysis && !outcome.sqliteExplain
-    && outcome.results.filter(item => item.columns.length).length > 1;
+  const returnedOutcome = !busy && !queryRunning && outcome && !outcome.explain && !outcome.analysis && !outcome.sqliteExplain ? outcome : undefined;
+  const multipleReturnedResults = !pin && !!returnedOutcome && returnedOutcome.results.filter(item => item.columns.length).length > 1;
+  const baselineAvailable = pins.length > 0 && !!returnedOutcome?.results.some(item => item.columns.length);
+  const returnedExecution = task.current;
   const resultOrigins = sqlite && !pin && !busy && !queryRunning && settings.activeTabId === tab.id && !closeRequest
     ? outcome?.sqliteResultOrigins?.[resultIndex] : undefined;
   const activeOrigins = originDialog && originDialog.outcome === outcome && originDialog.index === resultIndex &&
@@ -2083,22 +2085,25 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     }catch(reason){setError(errorMessage(reason));}
   }
   /** 对比来源绑定本标签的固定快照或准确的一次执行。 */
-  function openResultComparison(source: 'pinned' | 'returned'):void {
+  function openResultComparison(source: 'pinned' | 'returned' | 'baseline'):void {
     const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id);
     if(!alive.current||busyRef.current||workspace.activeJobs[tab.id]||workspace.settings.activeTabId!==tab.id||current?.kind!=='query'||current.connectionId!==tab.connectionId||(workspace.connectionVersions[current.connectionId]??0)!==connectionVersion||comparisonLeaseRef.current||statisticsLeaseRef.current||columnLeaseRef.current||filterLeaseRef.current||sortLeaseRef.current||presetLeaseRef.current||document.querySelector(appDialogSelector))return;
     let lease: ComparisonLease;
-    if (source === 'returned') {
-      if (!multipleReturnedResults || !outcome || comparisonOutcomeRef.current !== outcome || task.current !== organizationExecution) return;
-      lease = { owner: uid(), inputs: returnedQueryResultComparison(outcome, resultNames),
-        returned: { outcome, execution: task.current, preferredId: String(resultIndex) } };
-    } else {
+    if (source === 'pinned') {
       if (comparisonPinsRef.current !== pins || pins.length < 2) return;
       lease = { owner: uid(), inputs: pins };
+    } else {
+      const baseline = source === 'baseline' ? { inputs: pins, preferredId: pin?.id } : undefined;
+      if (!returnedOutcome || comparisonOutcomeRef.current !== returnedOutcome || task.current !== returnedExecution ||
+          (baseline ? !baselineAvailable || comparisonPinsRef.current !== pins : !multipleReturnedResults)) return;
+      lease = { owner: uid(), inputs: returnedQueryResultComparison(returnedOutcome, resultNames),
+        returned: { outcome: returnedOutcome, execution: returnedExecution, preferredId: String(resultIndex), baseline } };
     }
     invalidateResultSelection();comparisonLeaseRef.current=lease;setComparisonLease(lease);setError('');
   }
   function comparisonSourceCurrent(lease: ComparisonLease): boolean {
-    return lease.returned ? comparisonOutcomeRef.current === lease.returned.outcome && task.current === lease.returned.execution
+    return lease.returned ? comparisonOutcomeRef.current === lease.returned.outcome && task.current === lease.returned.execution &&
+      (!lease.returned.baseline || comparisonPinsRef.current === lease.returned.baseline.inputs)
       : comparisonPinsRef.current === lease.inputs;
   }
   /** 每批核对父级来源；原行及单元格的完整核验由对比器完成。 */
@@ -3005,7 +3010,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         ]}
         moreLabel={menuText.resultMore}
         more={<>
-          <ActionMenuSection label={menuText.resultView}>{<button disabled={busy||pins.length<2||!!comparisonLease||!!statisticsLease} title={comparisonText.notice} onClick={() => openResultComparison('pinned')}>{comparisonText.open}</button>}{multipleReturnedResults && <button disabled={resultModal} onClick={() => openResultComparison('returned')}>{comparisonText.returnedTitle}</button>}{outcome?.warnings && !pin && <button disabled={busy || !!pin || !warningsReportAvailable() || !!closeRequest} onClick={openWarningsReport}>{queryWarningsZh.open}</button>}
+          <ActionMenuSection label={menuText.resultView}>{<button disabled={busy||pins.length<2||!!comparisonLease||!!statisticsLease} title={comparisonText.notice} onClick={() => openResultComparison('pinned')}>{comparisonText.open}</button>}{multipleReturnedResults && <button disabled={resultModal} onClick={() => openResultComparison('returned')}>{comparisonText.returnedTitle}</button>}{baselineAvailable && <button disabled={resultModal} onClick={() => openResultComparison('baseline')}>{comparisonText.baselineTitle}</button>}{outcome?.warnings && !pin && <button disabled={busy || !!pin || !warningsReportAvailable() || !!closeRequest} onClick={openWarningsReport}>{queryWarningsZh.open}</button>}
 <button disabled={busy || !outcome || !result?.columns.length || !!pin} title={zh.query.pinHint} onClick={pinResult}><Pin size={12}/>{zh.query.pinResult}</button>
 {resultOrigins && <button onClick={() => { if (outcome && queryMenuCurrent() && !busyRef.current) setOriginDialog({ outcome, index: resultIndex }); }}>{originsText.open}</button>}
 {mysqlOrigins && <button onClick={() => {

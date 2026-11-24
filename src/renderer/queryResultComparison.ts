@@ -7,10 +7,14 @@ import { bindSqliteResultStorage, copySqliteResultStorage, type SqliteResultStor
 
 export const queryResultComparisonLimits = { rows: 100000, columns: 1024, cells: 2000000, units: 16 * 1024 * 1024, valueUnits: 4096, keys: 8, batchRows: 512, batchUnits: 32768 } as const;
 export interface QueryResultComparisonSource { id: string; label: string; result: QueryResult; }
+export interface QueryResultComparisonBaseline {
+  inputs: readonly QueryResultComparisonSource[];
+  preferredId?: string;
+}
 export interface QueryResultComparisonDraft {
   owner: string;
   inputs: readonly QueryResultComparisonSource[];
-  returned?: { outcome: QueryOutcome; execution: string | undefined; preferredId: string };
+  returned?: { outcome: QueryOutcome; execution: string | undefined; preferredId: string; baseline?: QueryResultComparisonBaseline };
 }
 
 /** 行结果保留原返回位置，跳过语句状态。只建立原结果引用，实际捕获由用户选择匹配键后发起。 */

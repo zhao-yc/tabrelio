@@ -1062,8 +1062,10 @@ export function PostgresQueryTab({
     controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!archiveOutcome || !!originsView || !!recordEdit || !!recordReference || !!resultSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
     locked = operationLocked || !!snippets || !!fullExport;
-  const multipleReturnedResults = !pin && !busy && !!outcome && !outcome.explain && !outcome.analysis
-    && results.filter(item => item.columns.length).length > 1;
+  const returnedOutcome = !busy && outcome && !outcome.explain && !outcome.analysis ? outcome : undefined;
+  const multipleReturnedResults = !pin && !!returnedOutcome && results.filter(item => item.columns.length).length > 1;
+  const baselineAvailable = pinState.items.length > 0 && !!returnedOutcome?.results.some(item => item.columns.length);
+  const returnedExecution = resultExecution.current;
   const resultSources = outcome?.postgresResultSources;
   const resultStatementOrdinals = useMemo(() => resultSources?.map(source => source.statementOrdinal), [resultSources]);
   const receiptSource = pin ? undefined : resultSources?.[selected];
@@ -1366,16 +1368,18 @@ export function PostgresQueryTab({
   }
 
   /** 只从本标签捕获固定快照或已返回结果。 */
-  function openResultComparison(source: 'pinned' | 'returned') {
+  function openResultComparison(source: 'pinned' | 'returned' | 'baseline') {
     if (!pinNavigationCurrent() || comparisonDraftRef.current) return;
     let draft: ComparisonDraft;
-    if (source === 'returned') {
-      if (!multipleReturnedResults || !outcome || comparisonOutcome.current !== outcome || resultExecution.current !== organizationExecution) return;
-      draft = { inputs: returnedQueryResultComparison(outcome, resultNames), owner: uid(),
-        returned: { outcome, execution: resultExecution.current, preferredId: String(selected) } };
-    } else {
+    if (source === 'pinned') {
       if (pinState.items.length < 2) return;
       draft = { inputs: pinState.items, owner: uid() };
+    } else {
+      const baseline = source === 'baseline' ? { inputs: pinState.items, preferredId: pin?.id } : undefined;
+      if (!returnedOutcome || comparisonOutcome.current !== returnedOutcome || resultExecution.current !== returnedExecution ||
+          !(baseline ? baselineAvailable : multipleReturnedResults)) return;
+      draft = { inputs: returnedQueryResultComparison(returnedOutcome, resultNames), owner: uid(),
+        returned: { outcome: returnedOutcome, execution: returnedExecution, preferredId: String(selected), baseline } };
     }
     comparisonDraftRef.current = draft;
     setComparisonDraft(draft);
@@ -1384,7 +1388,8 @@ export function PostgresQueryTab({
   /** 每批核对当前标签、准确来源和本窗口。 */
   function comparisonCurrent(draft: ComparisonDraft) {
     if (!resultScopeCurrent() || comparisonDraftRef.current !== draft) return false;
-    if (draft.returned ? comparisonOutcome.current !== draft.returned.outcome || resultExecution.current !== draft.returned.execution
+    if (draft.returned ? comparisonOutcome.current !== draft.returned.outcome || resultExecution.current !== draft.returned.execution ||
+        !!draft.returned.baseline && pinStateRef.current.items !== draft.returned.baseline.inputs
       : pinStateRef.current.items !== draft.inputs) return false;
     const owned = document.querySelector(`[data-query-result-comparison-owner="${draft.owner}"] [role="dialog"]`);
     return Array.from(document.querySelectorAll(appModalSelector)).every(node => node === owned);
@@ -2543,6 +2548,7 @@ export function PostgresQueryTab({
                 disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
               {pin && <PinnedResultRename tabId={tab.id} pin={pin} disabled={locked} isCurrent={pinNavigationCurrent} onRename={renameSelectedPin}/>}
               {multipleReturnedResults && <button disabled={locked} onClick={() => openResultComparison('returned')}>{comparisonText.returnedTitle}</button>}
+              {baselineAvailable && <button disabled={locked} onClick={() => openResultComparison('baseline')}>{comparisonText.baselineTitle}</button>}
               {multipleReturnedResults && <button disabled={locked} onClick={() => {
                 if (outcome && resultScopeCurrent() && !document.querySelector(appModalSelector)) setArchiveOutcome(outcome);
               }}>{archiveText.open}</button>}
