@@ -3,6 +3,7 @@ import { resultExportLimits, validateResultExportData } from '../shared/resultEx
 import { queryResultFilterKey, queryResultSortKind, type SortDialect } from './queryResultSort';
 import { isPostgresResultIdentifierType } from './postgresResultIdentifier';
 import { queryResultComparisonZh as text } from './locales/queryResultComparison.zh-CN';
+import type { QueryResultComparisonSettings } from './queryResultComparisonSettings';
 import { bindSqliteResultStorage, copySqliteResultStorage, type SqliteResultStorageCode } from '../shared/sqliteResultStorage';
 
 export const queryResultComparisonLimits = { rows: 100000, columns: 1024, cells: 2000000, units: 16 * 1024 * 1024, valueUnits: 4096, keys: 8, batchRows: 512, batchUnits: 32768 } as const;
@@ -124,6 +125,32 @@ function manualColumnPairs(left: readonly ResultColumn[], right: readonly Result
     return { left: l, right: r };
   }).sort((a, b) => a.left - b.left);
 }
+function comparisonColumnPairs(left: readonly ResultColumn[], right: readonly ResultColumn[], alignment: Alignment, dialect?: SortDialect) {
+  if (alignment === 'name') return alignQueryResultComparisonColumns(left, right, dialect);
+  if (alignment !== 'strict') return manualColumnPairs(left, right, alignment, dialect);
+  if (left.length !== right.length || right.some((column, index) => column.key !== left[index].key ||
+      column.name !== left[index].name || !sameQueryResultComparisonColumnType(left[index].type, column.type, dialect))) throw Error(text.identity);
+  return left.map((_, index) => ({ left: index, right: index }));
+}
+
+/** 交换后用原有配对关系找到新左侧的实际键；配对失效时仍可交换来源并重新选键。 */
+export function reverseQueryResultComparisonSettings(left: readonly ResultColumn[], right: readonly ResultColumn[],
+  settings: QueryResultComparisonSettings, dialect?: SortDialect): QueryResultComparisonSettings {
+  try {
+    const pairs = comparisonColumnPairs(left, right, settings.mode === 'manual' ? settings.pairs : settings.mode, dialect);
+    const paired = new Map(pairs.map(pair => [left[pair.left].key, right[pair.right]]));
+    const keys = settings.keys.flatMap(key => {
+      const column = paired.get(key);
+      return column && !queryResultComparisonKeyReason(column, dialect) ? [column.key] : [];
+    });
+    return {
+      mode: settings.mode, keys,
+      pairs: settings.mode === 'manual' ? settings.pairs.map(pair => ({ left: pair.right, right: pair.left })) : [],
+    };
+  } catch {
+    return { mode: settings.mode, keys: [], pairs: [] };
+  }
+}
 /** 二进制只按明确包装和base64原文比较，不解码，也不序列化未知对象。 */
 function binary(value: unknown): value is { type: 'binary'; base64: string } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -150,12 +177,7 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
   const leftRefs = array(leftColumns, queryResultComparisonLimits.columns, 1), rightRefs = array(rightColumns, queryResultComparisonLimits.columns, 1);
   const leftMetadata = leftRefs.map(metadata), rightMetadata = rightRefs.map(metadata);
   if ([leftMetadata, rightMetadata].some(items => new Set(items.map(column => column.key)).size !== items.length)) throw Error(text.identity);
-  if (alignment === 'strict' && (leftMetadata.length !== rightMetadata.length || rightMetadata.some((column, index) =>
-    column.key !== leftMetadata[index].key || column.name !== leftMetadata[index].name ||
-    !sameQueryResultComparisonColumnType(leftMetadata[index].type, column.type, dialect)))) throw Error(text.identity);
-  const pairs = alignment === 'strict' ? leftMetadata.map((_, index) => ({ left: index, right: index }))
-    : alignment === 'name' ? alignQueryResultComparisonColumns(leftMetadata, rightMetadata, dialect)
-    : manualColumnPairs(leftMetadata, rightMetadata, alignment, dialect);
+  const pairs = comparisonColumnPairs(leftMetadata, rightMetadata, alignment, dialect);
   if (!pairs.length) throw Error(text.invalidPair);
   const columns = pairs.map(pair => leftMetadata[pair.left]);
   const sqlite = columns.some(column => column.type === 'SQLITE');

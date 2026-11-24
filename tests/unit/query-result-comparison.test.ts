@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CellValue, QueryResult, ResultColumn } from '../../src/shared/contracts';
-import { captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonLocation, queryResultComparisonValues, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonRow } from '../../src/renderer/queryResultComparison';
+import { captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonLocation, queryResultComparisonValues, reverseQueryResultComparisonSettings, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonRow } from '../../src/renderer/queryResultComparison';
 import { queryResultComparisonZh as text } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 
 const columns: ResultColumn[] = [{ key: 'id', name: '同名', type: 'BIGINT' }, { key: 'value', name: '同名', type: 'DECIMAL(65,20)' }, { key: 'bytes', name: '字节', type: 'BLOB' }];
@@ -132,6 +132,9 @@ describe('固定结果的明确键与稳定完整差异', () => {
     const result = finish(new QueryResultComparisonScan(capture));
     expect(result).toMatchObject({ changed: 1, removed: 0, added: 0 });
     expect(queryResultComparisonValues(capture, result.rows[0])[1]).toMatchObject({ leftType: 't', rightType: 'i', changed: true });
+    const reversed = reverseQueryResultComparisonSettings(left.columns, right.columns, { mode: 'name', pairs: [], keys: ['id'] });
+    expect(reversed).toEqual({ mode: 'name', pairs: [], keys: ['i'] });
+    expect(reverseQueryResultComparisonSettings(right.columns, left.columns, reversed).keys).toEqual(['id']);
   });
 
   it('差异报告冻结指定分类的原值、匹配键和行号，超限与撤销均拒绝', () => {

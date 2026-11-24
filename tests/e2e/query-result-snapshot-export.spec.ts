@@ -307,12 +307,15 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     await viewer.getByRole('button', { name: text.compare, exact: true }).click();
     await comparison.getByRole('button', { name: comparisonText.reuseSettings, exact: true }).click();
     await expect(comparison.getByRole('checkbox', { name: comparisonText.key('label'), exact: true })).toBeChecked();
+    await comparison.getByRole('button', { name: comparisonText.swap, exact: true }).click();
+    await expect(comparison.getByRole('checkbox', { name: comparisonText.key('label'), exact: true })).toBeChecked();
     await expect(comparison.getByLabel(comparisonText.added, { exact: true })).toHaveCount(0);
     await comparison.getByRole('button', { name: comparisonText.start, exact: true }).click();
-    await expect(comparison.getByLabel(comparisonText.added, { exact: true })).toHaveText('52');
+    await expect(comparison.getByLabel(comparisonText.added, { exact: true })).toHaveText('1');
+    await expect(comparison.getByLabel(comparisonText.removed, { exact: true })).toHaveText('52');
     await comparison.getByRole('row').filter({ hasText: comparisonText.changed }).first()
       .getByRole('button', { name: /^查看差异 / }).click();
-    await comparison.getByRole('button', { name: comparisonText.locateRight, exact: true }).click();
+    await comparison.getByRole('button', { name: comparisonText.locateLeft, exact: true }).click();
     await expect(comparison).toBeHidden();
     await expect(viewer.getByRole('gridcell', { name: '匹配甲', exact: true })).toBeFocused();
     await expect(viewer.getByText(text.opened('对比输入.dbark-result.json'), { exact: true })).toBeVisible();

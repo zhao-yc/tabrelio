@@ -3,7 +3,7 @@ import type { CellValue, QueryResult, ResultColumn } from '../../shared/contract
 import { assertResultExcelData } from '../../shared/resultExcel';
 import { resultExcelZh } from '../../shared/resultExcel.zh-CN';
 import { pinLimits } from '../queryPins';
-import { alignQueryResultComparisonColumns, captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonLocation, queryResultComparisonValues, sameQueryResultComparisonColumnType, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonBaseline, type QueryResultComparisonCapture, type QueryResultComparisonColumnPair, type QueryResultComparisonLocation, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonSource, type QueryResultComparisonValue } from '../queryResultComparison';
+import { alignQueryResultComparisonColumns, captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonLocation, queryResultComparisonValues, reverseQueryResultComparisonSettings, sameQueryResultComparisonColumnType, searchQueryResultComparisonKeys, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonBaseline, type QueryResultComparisonCapture, type QueryResultComparisonColumnPair, type QueryResultComparisonLocation, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonSource, type QueryResultComparisonValue } from '../queryResultComparison';
 import { queryResultComparisonZh as text } from '../locales/queryResultComparison.zh-CN';
 import { sameQueryResultComparisonSettings, type QueryResultComparisonSettings, type QueryResultComparisonSettingsMemory } from '../queryResultComparisonSettings';
 import type { SortDialect } from '../queryResultSort';
@@ -21,7 +21,7 @@ interface Props {
   onLocate?(location: QueryResultComparisonLocation): boolean;
   onClose(): void;
 }
-type Draft = QueryResultComparisonSettings & { left: string; right: string };
+type Draft = QueryResultComparisonSettings & { left: string; right: string; reversed: boolean };
 const emptyPair: QueryResultComparisonColumnPair = { left: '', right: '' };
 type Source = { input: QueryResultComparisonSource; id: string; key: string; label: string; result: QueryResult; columns: readonly ResultColumn[]; truncated: boolean };
 type Run = { draft: Draft; left: QueryResult; right: QueryResult; capture: QueryResultComparisonCapture; scan: QueryResultComparisonScan; timer?: ReturnType<typeof setTimeout> };
@@ -122,7 +122,7 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
       : options[Math.max(preferred, 0)];
     const right = baseline ? options[Math.max(preferred, 0)]
       : preferred >= 0 ? options[(preferred + 1) % options.length] : options.at(-1);
-    return { left: left?.key ?? '', right: right?.key ?? '', keys: [], mode: 'strict', pairs: [] };
+    return { left: left?.key ?? '', right: right?.key ?? '', keys: [], mode: 'strict', pairs: [], reversed: false };
   });
   const [candidate, setCandidate] = useState(emptyPair);
   const draftRef = useRef(draft), [view, setView] = useState<View>({ processed: 0, total: 0, error: prepared.error });
@@ -175,14 +175,18 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
     setFilter('differences'); setChangedColumn(''); setKeySearch(undefined); setKeySearchError('');
     resetResultPage();
   }
+  function sourceOptions(reversed: boolean) {
+    return reversed ? { left: prepared.right, right: prepared.left } : prepared;
+  }
   /** 切源与键编辑同步撤销旧扫描及结果，选择新源后要求重新明确勾选键。 */
   function change(next: Draft): void {
     if (report.current || committed.current !== ticket || draftRef.current !== draft || !sourceCurrent()) return;
-    const left = prepared.left.find(source => source.key === next.left), right = prepared.right.find(source => source.key === next.right);
+    const options = sourceOptions(next.reversed);
+    const left = options.left.find(source => source.key === next.left), right = options.right.find(source => source.key === next.right);
     if (!left || !right || next.keys.length > 8 || new Set(next.keys).size !== next.keys.length) return;
     if (next.keys.length) {
       let keyColumns: readonly ResultColumn[] = columns;
-      if (next.mode !== draft.mode || next.pairs !== draft.pairs) {
+      if (next.left !== draft.left || next.right !== draft.right || next.mode !== draft.mode || next.pairs !== draft.pairs) {
         try {
           keyColumns = next.mode === 'name' ? alignQueryResultComparisonColumns(left.columns, right.columns, dialect).map(pair => left.columns[pair.left])
             : next.mode === 'manual' ? left.columns.filter(column => next.pairs.some(pair => pair.left === column.key)) : left.columns;
@@ -197,12 +201,12 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
   /** 单次明确开始才捕获两份真实结果；扫描中不显示部分计数或部分差异。 */
   function start(): void {
     if (report.current || committed.current !== ticket || draftRef.current !== draft || active.current || !draft.keys.length || draft.keys.length > 8 || draft.left === draft.right || !sourceCurrent()) return;
-    const left = prepared.left.find(source => source.key === draft.left)?.result, right = prepared.right.find(source => source.key === draft.right)?.result;
-    if (!left || !right) return;
+    const leftResult = left?.result, rightResult = right?.result;
+    if (!leftResult || !rightResult) return;
     try {
       cancelRun();
-      const capture = captureQueryResultComparison(left, right, draft.keys, dialect, draft.mode === 'manual' ? draft.pairs : draft.mode);
-      const run: Run = { draft, left, right, capture, scan: new QueryResultComparisonScan(capture) };
+      const capture = captureQueryResultComparison(leftResult, rightResult, draft.keys, dialect, draft.mode === 'manual' ? draft.pairs : draft.mode);
+      const run: Run = { draft, left: leftResult, right: rightResult, capture, scan: new QueryResultComparisonScan(capture) };
       last.current = run; active.current = run; setView({ run, processed: 0, total: capture.leftCount + capture.rightCount });
       resetResultFilters();
       /** 最终结果的私有快照与当前来源都通过复核后，才发布四计数和完整记录。 */
@@ -214,12 +218,12 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
           const progress = run.scan.step();
           if (active.current !== run || !environment()) { cancelRun(); setView({ processed: 0, total: 0, error: text.stale }); return; }
           if (progress.done) {
-            const result = run.scan.result(); if (!result || !currentQueryResultComparison(capture, left!, right!)) { invalid.current = true; throw Error(text.stale); }
+            const result = run.scan.result(); if (!result || !currentQueryResultComparison(capture, run.left, run.right)) { invalid.current = true; throw Error(text.stale); }
             if (!environment() || active.current !== run) throw Error(text.stale);
-            settings?.memory.remember(settings.scope, dialect, left!.columns, right!.columns, draft);
+            settings?.memory.remember(settings.scope, dialect, run.left.columns, run.right.columns, draft);
             active.current = undefined; setView({ run, ...progress, result });
           } else { setView({ run, ...progress }); run.timer = setTimeout(tick, 0); }
-        } catch (reason) { if (!currentQueryResultComparison(capture, left!, right!)) invalid.current = true; cancelRun(); if (alive.current) setView({ processed: 0, total: 0, error: errorMessage(reason) }); }
+        } catch (reason) { if (!currentQueryResultComparison(capture, run.left, run.right)) invalid.current = true; cancelRun(); if (alive.current) setView({ processed: 0, total: 0, error: errorMessage(reason) }); }
       }
       run.timer = setTimeout(tick, 0);
     } catch (reason) { setView({ processed: 0, total: 0, error: errorMessage(reason) }); }
@@ -235,7 +239,8 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
   if (view.result && view.run && !currentQueryResultComparison(view.run.capture, view.run.left, view.run.right)) invalid.current = true;
   const valid = environment(), result = valid && view.run?.draft === draft && draftRef.current === draft ? view.result : undefined;
   const running = active.current !== undefined && active.current === view.run;
-  const left = prepared.left.find(source => source.key === draft.left), right = prepared.right.find(source => source.key === draft.right);
+  const currentOptions = sourceOptions(draft.reversed);
+  const left = currentOptions.left.find(source => source.key === draft.left), right = currentOptions.right.find(source => source.key === draft.right);
   const previousSettings = left && right && left !== right ? settings?.memory.read(settings.scope, dialect, left.columns, right.columns) : undefined;
   const alignment = useMemo(() => {
     if (draft.mode !== 'name' || !left || !right || left === right) return {};
@@ -257,6 +262,12 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
   /** 候选列只属于本次来源和配对方式。真正添加时才清除旧匹配键和差异。 */
   function updateCandidate(next: QueryResultComparisonColumnPair): void {
     if (!manualDisabled && draft.mode === 'manual' && committed.current === ticket && draftRef.current === draft) setCandidate(next);
+  }
+  /** 交换来源与匹配设置作为一个草稿变更，旧方向的结果、筛选和报告同时撤销。 */
+  function swapSides(): void {
+    if (!left || !right || left === right) return;
+    const reversed = reverseQueryResultComparisonSettings(left.columns, right.columns, draft, dialect);
+    change({ ...draft, ...reversed, left: draft.right, right: draft.left, reversed: !draft.reversed });
   }
   const indexed = useMemo(() => {
     const matches: { row: QueryResultComparisonRow; index: number }[] = [];
@@ -330,14 +341,16 @@ export function QueryResultComparisonDialog({ inputs, owner, dialect, offline = 
   }
   const kindLabel = (kind: QueryResultComparisonRow['kind']) => text[kind];
   const labels = offline ? { title: text.fileTitle, left: text.leftFile, right: text.rightFile, notice: text.fileNotice }
-    : baseline ? { title: text.baselineTitle, left: text.baselineLeft, right: text.baselineRight, notice: text.baselineNotice }
+    : baseline ? { title: text.baselineTitle, left: draft.reversed ? text.baselineRight : text.baselineLeft,
+      right: draft.reversed ? text.baselineLeft : text.baselineRight, notice: draft.reversed ? text.baselineReverseNotice : text.baselineNotice }
     : returned ? { title: text.returnedTitle, left: text.leftReturned, right: text.rightReturned, notice: text.returnedNotice }
     : { title: text.title, left: text.left, right: text.right, notice: text.notice };
   const { left: leftLabel, right: rightLabel } = labels;
   return <div data-query-result-comparison-owner={owner}><Modal title={labels.title} onClose={close} shouldRestoreFocus={() => !locating.current} wide><div className="modal-content">
     <p>{labels.notice}</p><UsageHelp><p>{columns.some(column => column.type === 'SQLITE') ? text.sqliteKeysHint : dialect === 'postgresql' ? text.postgresKeysHint : text.keysHint}</p><p>{text.identity}</p></UsageHelp>{(left?.truncated || right?.truncated) && <p role="note">{text.truncated}</p>}
-    <div className="filter-inputs"><label>{leftLabel}<select aria-label={leftLabel} value={draft.left} disabled={!valid || !!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, left: event.target.value, keys: [], pairs: [] }); }}>{prepared.left.map(source => <option key={source.key} value={source.key}>{source.label}</option>)}</select></label>
-      <label>{rightLabel}<select aria-label={rightLabel} value={draft.right} disabled={!valid || !!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, right: event.target.value, keys: [], pairs: [] }); }}>{prepared.right.map(source => <option key={source.key} value={source.key}>{source.label}</option>)}</select></label>
+    <div className="filter-inputs"><label>{leftLabel}<select aria-label={leftLabel} value={draft.left} disabled={!valid || !!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, left: event.target.value, keys: [], pairs: [] }); }}>{currentOptions.left.map(source => <option key={source.key} value={source.key}>{source.label}</option>)}</select></label>
+      <label>{rightLabel}<select aria-label={rightLabel} value={draft.right} disabled={!valid || !!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, right: event.target.value, keys: [], pairs: [] }); }}>{currentOptions.right.map(source => <option key={source.key} value={source.key}>{source.label}</option>)}</select></label>
+      <button type="button" disabled={!valid || !!reportPhase || !left || !right || left === right} onClick={swapSides}>{text.swap}</button>
       <label>{text.alignmentMode}<select aria-label={text.alignmentMode} value={draft.mode} disabled={!valid || !!reportPhase} onChange={event => {
         const mode = event.target.value;
         if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && (mode === 'strict' || mode === 'name' || mode === 'manual')) change({ ...draft, mode, keys: [], pairs: [] });

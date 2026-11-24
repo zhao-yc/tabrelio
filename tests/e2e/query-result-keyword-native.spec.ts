@@ -354,9 +354,18 @@ test('查询结果切回时恢复各组筛选、排序和查找条件，并导�
     });
     expect(xlsxRows).toHaveLength(2);
     expect(xlsxRows).toMatchObject(expectedReportRows);
+    await baselineComparison.getByRole('button', { name: comparisonText.swap, exact: true }).click();
+    await expect(baselineComparison.getByText(comparisonText.baselineReverseNotice, { exact: true })).toBeVisible();
+    await expect(rightCurrent).toHaveValue('1');
+    await expect(leftBaseline.locator('option')).toHaveText(['固定 1']);
+    await expect(baselineComparison.getByRole('checkbox', { name: /^匹配键 / }).first()).toBeChecked();
+    await expect(baselineComparison.getByLabel(comparisonText.changed, { exact: true })).toHaveCount(0);
+    await baselineComparison.getByRole('button', { name: comparisonText.start, exact: true }).click();
+    await expect(baselineComparison.getByLabel(comparisonText.added, { exact: true })).toHaveText('1');
+    await expect(baselineComparison.getByLabel(comparisonText.removed, { exact: true })).toHaveText('0');
     await baselineComparison.getByRole('row').filter({ hasText: comparisonText.changed }).first()
       .getByRole('button', { name: /^查看差异 / }).click();
-    await baselineComparison.getByRole('button', { name: comparisonText.locateLeft, exact: true }).click();
+    await baselineComparison.getByRole('button', { name: comparisonText.locateRight, exact: true }).click();
     await expect(baselineComparison).toBeHidden();
     await expect(cells).toHaveText(['target A', 'other', 'Target C']);
     await expect(grid.getByRole('gridcell', { name: '2', exact: true })).toBeFocused();

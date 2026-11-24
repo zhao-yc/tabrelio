@@ -96,6 +96,33 @@ function many(count: number) {
 }
 
 describe('两份固定查询结果的真实只读对话框', () => {
+  it('交换手动配对时映射到新左侧的内部键，主动重算后才发布反向差异', async () => {
+    const pins = fixture(), right = pins[2].result;
+    right.columns = right.columns.map(column => column.key === 'id' ? { ...column, key: 'right_id' } : column);
+    right.rows = right.rows.map(({ id, ...row }) => ({ ...row, right_id: id }));
+    const f = await mount(pins);
+    await choose(text.alignmentMode, 'manual');
+    for (const [leftKey, rightKey] of [['id', 'right_id'], ['nullable', 'nullable']]) {
+      await choose(text.leftColumn, leftKey);
+      await choose(text.rightColumn, rightKey);
+      await click(text.addPair);
+    }
+    await compare();
+    await click(text.swap);
+    expect(node(text.left).value).toBe('right');
+    expect(node(text.right).value).toBe('left');
+    expect(node(text.key('right_id')).checked).toBe(true);
+    await finish();
+    expect(hasCounts()).toBe(false);
+    await click(text.start);
+    await finish();
+    expect(counts()).toEqual(['1', '1', '1', '1']);
+    await click(text.details(0));
+    expect(detail('left', 'nullable')).toContain('""');
+    expect(detail('right', 'nullable')).toContain(text.nullValue);
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+
   it('相同列定义可恢复上一次成功的手动配对和匹配键，等待明确开始', async () => {
     const pins = fixture(), memory = new QueryResultComparisonSettingsMemory();
     const f = await mount(pins, { settings: { memory, scope: 'query:1' } });
