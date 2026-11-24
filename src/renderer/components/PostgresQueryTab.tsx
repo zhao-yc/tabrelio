@@ -1369,14 +1369,24 @@ export function PostgresQueryTab({
     locateFailure();
   }
 
+  function resultDraftRange(index: number, item: QueryResult) {
+    const source = resultSources?.[index];
+    if (returnedOutcome?.results[index] === item && source && resultRanges.current.has(source)) return source.sourceRange;
+  }
+  function canOpenResultDraft(index: number, item: QueryResult): boolean {
+    return !locked && !!failureSource.current?.canLocateRange(resultDraftRange(index, item), false);
+  }
   /** 参数结果沿已验证的编辑器范围提取模板，独立草稿不接收执行参数或会话。 */
-  function openResultStatement() {
-    if (!receiptSource || selectedResultRef.current !== result || !pinNavigationCurrent() ||
-        !resultRanges.current.has(receiptSource)) return;
-    const sql = failureSource.current?.readRange(receiptSource.sourceRange);
+  function openResultDraft(index: number, item: QueryResult) {
+    if (!onChooseQueryTarget || !canOpenResultDraft(index, item) || !pinNavigationCurrent() || files.isBusy()) return;
+    const sql = failureSource.current?.readRange(resultDraftRange(index, item));
     if (sql === undefined) return;
-    try { onChooseQueryTarget?.(resultStatementTargetDraft(tab, sql, 'postgresql')); }
+    try { onChooseQueryTarget(resultStatementTargetDraft(tab, sql, 'postgresql')); }
     catch (reason) { setError(errorMessage(reason)); }
+  }
+  function openResultStatement() {
+    if (!receiptSource || !result || selectedResultRef.current !== result) return;
+    openResultDraft(selected, result);
   }
 
   /** 只从本标签捕获固定快照或已返回结果。 */
@@ -2580,6 +2590,10 @@ export function PostgresQueryTab({
               </select>}
               {hasResultNavigation && <QueryResultNavigator control={resultNavigator} tabId={tab.id} results={results} names={resultNames}
                 statementOrdinals={resultStatementOrdinals} executionErrors={failureNavigation}
+                statementDraft={onChooseQueryTarget ? {
+                  canOpen: entry => entry.kind === 'current' ? canOpenResultDraft(entry.index, entry.result) : canOpenFailureDraft(entry.failure),
+                  open: entry => entry.kind === 'current' ? openResultDraft(entry.index, entry.result) : openFailureDraft(entry.failure),
+                } : undefined}
                 selected={pin ? undefined : selected} pins={pinState.items} selectedPin={pin}
                 disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
               {pin && <PinnedResultRename tabId={tab.id} pin={pin} disabled={locked} isCurrent={pinNavigationCurrent} onRename={renameSelectedPin}/>}

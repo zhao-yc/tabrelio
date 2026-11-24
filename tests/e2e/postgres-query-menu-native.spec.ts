@@ -589,6 +589,11 @@ test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参
     await resultSearch.fill('@3'); await expect(resultDialog.getByRole('option')).toHaveCount(1);
     await expect(resultDialog.getByRole('option')).toContainText(resultNavText.result(2));
     await expect(resultDialog.getByRole('option')).toContainText(resultNavText.statement(3));
+    await resultDialog.getByRole('button', {name: queryDuplicateZh.resultStatement, exact: true}).click();
+    const target = page.getByRole('dialog', {name: queryDuplicateZh.targetAction, exact: true});
+    await expect(resultDialog).toHaveCount(0);
+    await target.getByRole('button', {name: zh.common.cancel, exact: true}).click();
+    await resultNavigation.click(); await resultSearch.fill('@3');
     await resultSearch.press('Enter');
     const resultChoice = tab().getByLabel('PostgreSQL结果集', {exact: true});
     await expect(resultChoice).toHaveValue('1');
@@ -861,7 +866,11 @@ test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保
     const beforeDraft = await settings(), beforeDraftHistory = await history(), beforeDraftSessions = await sessions();
     const sourceTab = beforeDraft.tabs.find(item => item.id === beforeDraft.activeTabId)!;
     const destination = page.getByRole('dialog', {name: queryDuplicateZh.targetAction, exact: true});
-    await openFailureDraft().click();
+    await tab().getByRole('button', {name: resultNavText.open, exact: true}).click();
+    const navigator = page.getByRole('dialog', {name: resultNavText.open, exact: true});
+    await expect(navigator.getByRole('option')).toContainText(resultNavText.failedStatement(1));
+    await navigator.getByRole('button', {name: queryDuplicateZh.failureStatement, exact: true}).click();
+    await expect(navigator).toHaveCount(0);
     await destination.getByLabel(queryDuplicateZh.targetConnection, {exact: true}).selectOption(sourceTab.connectionId);
     await destination.getByRole('button', {name: queryDuplicateZh.targetOpen, exact: true}).click();
     await expect.poll(async () => {

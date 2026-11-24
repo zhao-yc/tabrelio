@@ -362,6 +362,8 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     const {message: returnedFailure} = scriptFailure.outcome.failure as {message: string};
     await step(() => expect(errorDetails.locator('pre')).toHaveText(returnedFailure));
     await step(() => expect(resultDialog.getByRole('button', {name: resultNavText.locateError, exact: true})).toBeDisabled());
+    const navigatorDraft = errorDetails.getByRole('button', {name: draftText.failureStatement, exact: true});
+    await step(() => expect(navigatorDraft).toBeDisabled());
     await step(() => resultSearch.press('Enter'));
     await step(() => expect(resultDialog).toBeVisible());
     await step(() => resultSearch.press('Escape'));
@@ -429,8 +431,11 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     const beforeDraft = await settings();
     const sourceTab = beforeDraft.tabs.find(item => item.id === beforeDraft.activeTabId)!;
     const draftDialog = page.getByRole('dialog', {name: draftText.targetAction, exact: true});
-    const openFailedThird = query().getByRole('button', {name: draftText.failureStatementFor(3), exact: true});
-    await step(() => openFailedThird.click());
+    await step(() => page.keyboard.press('ControlOrMeta+Shift+F8'));
+    await step(() => resultSearch.fill('@3'));
+    const beforeOpen = await model();
+    await step(() => navigatorDraft.click());
+    await step(() => expect(resultDialog).toHaveCount(0));
     await step(() => expect(draftDialog.getByRole('button', {name: draftText.targetOpen, exact: true})).toBeDisabled());
     await step(() => draftDialog.getByLabel(draftText.targetConnection, {exact: true}).selectOption(sourceTab.connectionId));
     await step(() => draftDialog.getByRole('button', {name: draftText.targetOpen, exact: true}).click());
@@ -440,6 +445,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     }).toMatchObject({sql: continuedStatements[2], connectionId: sourceTab.connectionId, title: sourceTab.title + draftText.failureStatementSuffix}));
     await step(() => page.locator('.tab-strip').getByRole('button', {name: sourceTab.title, exact: true}).click());
     await step(() => expect(query().getByRole('gridcell', {name: '后续🚢', exact: true})).toBeVisible());
+    expect(await model()).toEqual(beforeOpen);
     expect((await step(audit)).operations).toEqual(continuedFacts.operations);
     expect(await history()).toEqual(continuedHistory);
     expect(continuedHistory.find(entry => entry.sql === continuedSource)?.success).toBe(false);

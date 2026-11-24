@@ -180,6 +180,10 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     await includeErrors.check();
     await expect(matches).toContainText(resultNavText.failedStatement(2));
     await expect(errorDetails).toContainText('missing_native_field');
+    await errorDetails.getByRole('button', {name: draftText.failureStatement, exact: true}).click();
+    await expect(resultDialog).toHaveCount(0);
+    await destination.getByRole('button', {name: zh.common.cancel, exact: true}).click();
+    await resultNavigation.click(); await includeErrors.check(); await resultSearch.fill('@2');
     await resultSearch.press('Enter');
     await expect(resultDialog).toBeHidden();
     await expect.poll(state).toMatchObject({focused: true, selections: [{text: 'SELECT missing_native_field'}]});
@@ -191,6 +195,18 @@ test('MySQL 系原生语法错误行对应原稿，兼容参数、警告与多�
     }
     await resultSearch.fill('#3'); await expect(matches).toHaveCount(1);
     await expect(matches).toContainText(resultNavText.statement(3));
+    const beforeCallDraft = await settings();
+    await resultDialog.getByRole('button', {name: draftText.resultStatement, exact: true}).click();
+    await destination.getByLabel(draftText.targetConnection, {exact: true}).selectOption(sourceTab.connectionId);
+    await destination.getByRole('button', {name: draftText.targetOpen, exact: true}).click();
+    await expect.poll(async () => {
+      const current = await settings();
+      return current.tabs.find(item => item.id === current.activeTabId)?.sql;
+    }).toBe('CALL nav_result_groups()');
+    await page.locator('.tab-strip').getByRole('button', {name: sourceTab.title, exact: true}).click();
+    expect((await settings()).tabs).toHaveLength(beforeCallDraft.tabs.length + 1);
+    await expect(query.getByRole('gridcell', {name: '70', exact: true})).toBeVisible();
+    await resultNavigation.click(); await resultSearch.fill('#3');
     await resultSearch.press('Enter');
     await expect(query.getByRole('gridcell', {name: '72', exact: true})).toBeVisible();
     await page.keyboard.press('ControlOrMeta+Shift+PageDown');

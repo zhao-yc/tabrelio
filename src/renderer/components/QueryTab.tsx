@@ -2776,16 +2776,27 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     ? outcome?.mysqlResultSourceRanges?.[resultIndex] : undefined;
   const sourceRange = sqliteReceipt?.sourceRange ?? sqlitePlanRange ?? mysqlSourceRange;
   const resultLocation = !busy && !resultModal && !!sourceRange && !!failureLocator?.canLocateRange(sourceRange);
-  const canOpenResultStatement = !!onChooseQueryTarget && !queryRunning && !!sourceResult && !pin &&
-    !!(sqliteReceipt?.sourceRange ?? mysqlSourceRange) && resultLocation && !fileSource.busy;
-  /** 只消费当前结果的原范围，避免拿截断预览或同文的另一条语句创建草稿。 */
-  function openResultStatement() {
-    if (!canOpenResultStatement || !connection || failureSource.current !== failureLocator ||
-        menuResult.current !== resultSqlTarget || !queryMenuCurrent() || fileSource.isBusy()) return;
-    const sql = failureLocator?.readRange(sourceRange);
+  function resultDraftRange(index: number, item: QueryResult) {
+    if (returnedOutcome?.results[index] !== item) return;
+    return sqlite ? returnedOutcome.sqliteResultReceipts?.[index]?.sourceRange : returnedOutcome.mysqlResultSourceRanges?.[index];
+  }
+  function canOpenResultDraft(index: number, item: QueryResult): boolean {
+    return !!connection && !resultModal && !fileSource.busy &&
+      !!failureLocator?.canLocateRange(resultDraftRange(index, item), false);
+  }
+  /** 用结果身份和同一执行的原范围提取语句，选中其它组时也无需先切换网格。 */
+  function openResultDraft(index: number, item: QueryResult) {
+    if (!onChooseQueryTarget || !connection || !canOpenResultDraft(index, item) || failureSource.current !== failureLocator ||
+        !queryMenuCurrent() || fileSource.isBusy()) return;
+    const sql = failureLocator?.readRange(resultDraftRange(index, item));
     if (sql === undefined) return;
-    try { onChooseQueryTarget?.(resultStatementTargetDraft(tab, sql, connection.dialect)); }
+    try { onChooseQueryTarget(resultStatementTargetDraft(tab, sql, connection.dialect)); }
     catch (reason) { setError(errorMessage(reason)); }
+  }
+  const canOpenResultStatement = !!onChooseQueryTarget && !pin && !!sourceResult && canOpenResultDraft(resultIndex, sourceResult);
+  function openResultStatement() {
+    if (!canOpenResultStatement || !sourceResult || menuResult.current !== resultSqlTarget) return;
+    openResultDraft(resultIndex, sourceResult);
   }
   /** 跳转只消费当前结果或计划的原范围，恢复编辑器但不改写正文或布局偏好。 */
   function locateResultSource(): void {
@@ -3023,6 +3034,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       })}</div>
       {hasResultNavigation && <QueryResultNavigator control={resultNavigator} tabId={tab.id} results={results} names={resultNames}
         statementOrdinals={resultStatementOrdinals} executionErrors={failureNavigation}
+        statementDraft={onChooseQueryTarget ? {
+          canOpen: entry => entry.kind === 'current' ? canOpenResultDraft(entry.index, entry.result) : canOpenFailureDraft(entry.failure),
+          open: entry => entry.kind === 'current' ? openResultDraft(entry.index, entry.result) : openFailureDraft(entry.failure),
+        } : undefined}
         selected={pin ? undefined : resultIndex} pins={pins} selectedPin={pin}
         disabled={resultNavigationLocked}
         isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult} onSelectPin={selectPinnedResult}/>}
