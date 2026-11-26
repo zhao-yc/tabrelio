@@ -49,7 +49,7 @@ jobs:
           git rev-parse HEAD HEAD:src HEAD:package.json > package-evidence/source.txt
           sw_vers > package-evidence/platform.txt
           uname -m >> package-evidence/platform.txt
-      - run: pnpm build
+      - run: NODE_OPTIONS=--max-old-space-size=6144 pnpm build
       - name: 生成开发安装包（不发布、不使用发行证书）
         shell: bash
         env:
