@@ -54,6 +54,12 @@ describe('MySQL／MariaDB 数据传输源表选择', () => {
     const search = document.querySelector('input[type="search"]')!; search.value = 'table_0'; await act(async () => search.dispatchEvent(new MemoryEvent('input'))); await click(text.selectAll);
     expect(tableChecks()).toHaveLength(1); expect(tableChecks()[0].checked).toBe(true);
   });
+  it('筛选后全选合并隐藏选择，不覆盖原范围', async () => {
+    await mount(); const checks = tableChecks(); checks[1].checked = true; await act(async () => checks[1].dispatchEvent(new MemoryEvent('click')));
+    const search = document.querySelector('input[type="search"]')!; search.value = 'orders'; await act(async () => search.dispatchEvent(new MemoryEvent('input'))); await click(text.selectAll);
+    search.value = ''; await act(async () => search.dispatchEvent(new MemoryEvent('input')));
+    expect(tableChecks().map(node => node.checked)).toEqual([true, true, false]);
+  });
   it('读取源表目录期间停止按钮发送当前任务编号', async () => {
     const pending = deferred<string[]>(); invoke.mockImplementation(async command => command === 'mysql.backup.tables' ? pending.promise : undefined);
     await mount(pending.promise); expect(button(text.stop).disabled).toBe(false); await click(text.stop);

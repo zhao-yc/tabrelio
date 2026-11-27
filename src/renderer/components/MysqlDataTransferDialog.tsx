@@ -71,8 +71,9 @@ export function MysqlDataTransferDialog({ connections, onClose, onRefresh }: {
   function selectAllTables() {
     if (!catalogue) return;
     const query = tableSearch.trim().toLocaleLowerCase(), candidates = catalogue.filter(name => name.toLocaleLowerCase().includes(query));
-    if (candidates.length > mysqlDataTransferLimits.tables) { setError(text.tooManyTables(mysqlDataTransferLimits.tables)); return; }
-    invalidate(); setTables(candidates);
+    const merged = [...new Set([...tables, ...candidates])];
+    if (merged.length > mysqlDataTransferLimits.tables) { setError(text.tooManyTables(mysqlDataTransferLimits.tables)); return; }
+    invalidate(); setTables(merged);
   }
   function clearTables() { invalidate(); setTables([]); }
   function endpoint(label: string, value: MysqlDataTransferEndpoint, update: (value: MysqlDataTransferEndpoint) => void) {
