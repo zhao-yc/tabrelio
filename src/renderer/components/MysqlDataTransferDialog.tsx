@@ -14,7 +14,7 @@ export function MysqlDataTransferDialog({ connections, onClose, onRefresh }: {
   connections: readonly NetworkConnectionProfile[]; onClose(): void; onRefresh(connectionId: string): void;
 }) {
   const [source, setSource] = useState<MysqlDataTransferEndpoint>(blank), [target, setTarget] = useState<MysqlDataTransferEndpoint>(blank);
-  const [catalogue, setCatalogue] = useState<string[] | null>(null), [tables, setTables] = useState<string[]>([]);
+  const [catalogue, setCatalogue] = useState<string[] | null>(null), [tables, setTables] = useState<string[]>([]), [tableSearch, setTableSearch] = useState('');
   const [content, setContent] = useState<'schema' | 'all'>('all');
   const [preview, setPreview] = useState<MysqlDataTransferPreview | null>(null), [result, setResult] = useState<MysqlDataTransferResult | null>(null);
   const [confirm, setConfirm] = useState(''), [acknowledge, setAcknowledge] = useState(false);
@@ -39,7 +39,7 @@ export function MysqlDataTransferDialog({ connections, onClose, onRefresh }: {
     if (!parsed.success) { setError(text.invalid); return; }
     const taskId = uid();
     void run(async () => {
-      invalidate(); setCatalogue(null); setTables([]);
+      invalidate(); setCatalogue(null); setTables([]); setTableSearch('');
       const names = await invoke('mysql.backup.tables', { ...parsed.data, taskId });
       if (alive.current) setCatalogue(names);
     }, taskId);
@@ -88,13 +88,13 @@ export function MysqlDataTransferDialog({ connections, onClose, onRefresh }: {
   return <Modal title={mysqlDataTransferTitle} wide onClose={close}><div className="modal-content schema-compare-content">
     <UsageHelp><p>{text.limits}</p><p>{text.consequences}</p></UsageHelp><ErrorBox message={error}/>
     <div className="schema-compare-endpoints">
-      {endpoint(text.source, source, value => { invalidate(); setSource(value); setCatalogue(null); setTables([]); })}
+      {endpoint(text.source, source, value => { invalidate(); setSource(value); setCatalogue(null); setTables([]); setTableSearch(''); })}
       {endpoint(text.target, target, value => { invalidate(); setTarget(value); })}
     </div>
     <button onClick={load} disabled={busy || !source.connectionId || !source.database}>{text.load}</button>
     {catalogue?.length === 0 && <p role="status">{text.noTables}</p>}
-    {!!catalogue?.length && <fieldset disabled={busy} className="schema-compare-results"><legend>{text.tables}（{tables.length} / {mysqlDataTransferLimits.tables}）</legend><div className="inline-field"><button type="button" onClick={selectAllTables} disabled={busy || tables.length === catalogue.length}>{text.selectAll}</button><button type="button" onClick={clearTables} disabled={busy || !tables.length}>{text.clearSelection}</button>{catalogue.length > mysqlDataTransferLimits.tables && <span className="muted small">{text.tooManyTables(mysqlDataTransferLimits.tables)}</span>}</div>
-      {catalogue.map(name => <div key={name}><label><input type="checkbox" checked={tables.includes(name)}
+    {!!catalogue?.length && <fieldset disabled={busy} className="schema-compare-results"><legend>{text.tables}（{tables.length} / {mysqlDataTransferLimits.tables}）</legend><div className="inline-field"><label>{text.tableSearch}<input type="search" aria-label={text.tableSearch} value={tableSearch} onChange={event => setTableSearch(event.target.value)} /></label><button type="button" onClick={selectAllTables} disabled={busy || tables.length === catalogue.length}>{text.selectAll}</button><button type="button" onClick={clearTables} disabled={busy || !tables.length}>{text.clearSelection}</button>{catalogue.length > mysqlDataTransferLimits.tables && <span className="muted small">{text.tooManyTables(mysqlDataTransferLimits.tables)}</span>}</div>
+      {catalogue.filter(name => name.toLocaleLowerCase().includes(tableSearch.trim().toLocaleLowerCase())).map(name => <div key={name}><label><input type="checkbox" checked={tables.includes(name)}
         disabled={!tables.includes(name) && tables.length >= mysqlDataTransferLimits.tables}
         onChange={event => { invalidate(); setTables(event.target.checked ? [...tables, name] : tables.filter(table => table !== name)); }}/> {name}</label></div>)}
     </fieldset>}
