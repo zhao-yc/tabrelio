@@ -36,6 +36,7 @@ async function mount(names = ['orders', 'users', 'audit']) {
   const source = document.querySelectorAll('select')[0]; source.value = 'source'; await act(async () => source.dispatchEvent(new MemoryEvent('change')));
   const load = document.querySelectorAll('button').find(button => button.textContent === text.load)!; await act(async () => load.dispatchEvent(new MemoryEvent('click')));
 }
+function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function button(label: string) { const value = document.querySelectorAll('button').find(node => node.textContent === label); if (!value) throw Error('缺少按钮：' + label); return value; }
 function tableChecks() { return document.querySelectorAll('input[type="checkbox"]'); }
 async function click(label: string) { const value = button(label); expect(value.disabled).toBe(false); await act(async () => value.dispatchEvent(new MemoryEvent('click'))); }
@@ -51,5 +52,11 @@ describe('MySQL／MariaDB 数据传输源表选择', () => {
     expect(tableChecks().some(node => node.checked)).toBe(false); expect(document.body.textContent).toContain(text.tooManyTables(32));
     const search = document.querySelector('input[type="search"]')!; search.value = 'table_0'; await act(async () => search.dispatchEvent(new MemoryEvent('input'))); await click(text.selectAll);
     expect(tableChecks()).toHaveLength(1); expect(tableChecks()[0].checked).toBe(true);
+  });
+  it('读取源表目录期间停止按钮发送当前任务编号', async () => {
+    const pending = deferred<string[]>(); invoke.mockImplementation(async command => command === 'mysql.backup.tables' ? pending.promise : undefined);
+    await mount(pending.promise); expect(button(text.stop).disabled).toBe(false); await click(text.stop);
+    expect(invoke).toHaveBeenCalledWith('query.cancel', { taskId: '00000000-0000-4000-8000-000000000001' });
+    await act(async () => pending.reject(Error('已取消')));
   });
 });
