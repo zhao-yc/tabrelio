@@ -5,7 +5,7 @@ export const mysqlDataTransferZh = {
   limits: '支持相同服务器系列和主次版本的普通 InnoDB 表，每批最多 32 张表、10,000 行和 16 MiB 编码数据。',
   targetHint: '输入目标数据库名', acknowledge: '确认在目标库创建所选表',
   consequences: '目标同名对象会阻止传输。建表各自提交，数据在一个事务中验证并提交。',
-  noTables: '源库无可选的 InnoDB 表', sql: '查看建表 SQL',
+  noTables: '源库无可选的 InnoDB 表', selectAll: '全选源表', clearSelection: '清空选择', tooManyTables: (count: number) => `源库有超过 ${count} 张可传输表，请手动缩小选择范围。`, sql: '查看建表 SQL',
   completed: '传输完成，目标已回读核对', incomplete: '传输未全部完成', unknown: '部分结果需到目标库核对',
   pending: '未创建', submitted: '已发送建表，待核对', created: '已创建', rows: (count: number) => '已提交 ' + count + ' 行',
   invalid: '请填写准确的连接与数据库，选择要传输的表。',
