@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { nextStaticParameterMode, parameterScriptBrackets } from '../../src/shared/queryParameters';
 import { mysqlNamedParameterCompletion, mysqlNamedParameterHover, mysqlParameterEditorMode, mysqlParameterTarget } from '../../src/renderer/mysqlNamedParameterEditor';
 
 const mysql = mysqlParameterEditorMode('mysql');
@@ -41,5 +42,18 @@ describe('MySQL 和 MariaDB 命名参数编辑', () => {
     expect(hover('SELECT [$sh|ared], :shared;', mariaUnknown)).toBeUndefined();
     expect(hover("SET sql_mode='MSSQL'; SELECT [$sh|ared], :shared;", maria)).toBeUndefined();
     expect(hover('CALL external_setup(); SELECT :sh|ared;', maria)).toEqual({ statementCount: 1, draftCount: 1 });
+  });
+
+  it('共享脚本扫描器的方括号和静态 sql_mode 变更边界', () => {
+    expect(parameterScriptBrackets({ ...maria, bracketQuotes: 'unknown' })).toBe('unknown');
+    expect(parameterScriptBrackets(maria)).toBe('parameters');
+    expect(parameterScriptBrackets(mssql)).toBe('identifiers');
+    expect(nextStaticParameterMode("SET SESSION sql_mode='MSSQL,NO_BACKSLASH_ESCAPES'", maria)).toEqual({
+      ansiQuotes: true,
+      noBackslashEscapes: true,
+      bracketQuotes: true,
+    });
+    expect(nextStaticParameterMode('CALL configure_mode();', maria)).toBeUndefined();
+    expect(nextStaticParameterMode('SET sql_mode="MSSQL";', { ...maria, ansiQuotes: true })).toBeUndefined();
   });
 });
