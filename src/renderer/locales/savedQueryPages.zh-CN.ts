@@ -24,6 +24,7 @@ export const savedQueryPagesZh={
  reloadDraft:'载入保存版本到原标签',
  reloadContextChanged:'保存记录的连接或默认库已变化，请在新标签打开。',
  reloadDone:'已载入保存版本。切回该标签后可撤销正文改动。',
+ selectAllMatching:'选择当前筛选全部', selectAllReading:'正在读取当前筛选的全部查询概要。', selectAllDone:(count:number)=>`已选择当前筛选的 ${count} 条查询。`, selectAllFailed:'当前筛选中有记录读取失败，未选择全部；请缩小范围或刷新后重试。',
  openBatch:'打开所选查询', openBatchTitle:'批量打开查询标签',
  openBatchHint:'按勾选顺序打开独立标签。更换来源后默认库为未知，所有 SQL 等待手动执行。',
  openBatchConfirm:(count:number)=>`打开 ${count} 个查询标签`,

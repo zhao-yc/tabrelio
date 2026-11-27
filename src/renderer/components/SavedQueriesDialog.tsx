@@ -230,6 +230,36 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   function choose(item: SavedQueryPageEntry, checked: boolean) { if (!editable()) return; const next = new Map(selectedRef.current); if (checked) { if (!next.has(item.query.id) && next.size >= 100) { setError(text.selectionLimit); return; } next.set(item.query.id, selectQuery(item)); } else next.delete(item.query.id); epoch.current++; selectedRef.current = next; setSelected(next); }
   /** 当前页选择先计算完整并集再发布，超100条整批拒绝；取消本页保留隐藏选择。 */
   function choosePage(checked: boolean) { if (!editable() || !reply?.items.length) return; const next = new Map(selectedRef.current); if (checked) { const ids = new Set([...next.keys(), ...reply.items.map(item => item.query.id)]); if (ids.size > 100) { setError(text.selectionLimit); return; } for (const item of reply.items) next.set(item.query.id, selectQuery(item)); } else for (const item of reply.items) next.delete(item.query.id); epoch.current++; selectedRef.current = next; setSelected(next); }
+  /** 独立扫描已应用筛选的全部概要，不消费当前页续读游标；失败或超额时不产生部分选择。 */
+  function chooseAllMatching() {
+    const value = criteriaRef.current, view = pageView.current;
+    if (!editable() || databasePending || view.needsRefresh || !view.reply) return;
+    return run(async ticket => {
+      let scanCursor: string | undefined;
+      const releaseScan = async () => { const cursor = scanCursor; if (!cursor) return; await io.request('queries.pageRelease', { cursor }); if (scanCursor === cursor) scanCursor = undefined; };
+      const read = async (cursor?: string): Promise<SavedQueryPage> => {
+        const taskId = io.id(); active.current = taskId;
+        try { return await io.request(cursor ? 'queries.pageContinue' : 'queries.page', cursor ? { taskId, cursor } : { taskId, onError: value.policy, ...pageFilters(value) }); }
+        finally { if (active.current === taskId) active.current = undefined; }
+      };
+      try {
+        setNotice(t.selectAllReading);
+        let page = await read(), items: SavedQueryPageEntry[] = [];
+        scanCursor = page.cursor;
+        for (;;) {
+          if (page.failures.length || page.stoppedOnError) throw Error(t.selectAllFailed);
+          items = [...items, ...page.items];
+          if (items.length > 100) throw Error(text.selectionLimit);
+          if (!scanCursor) break;
+          const cursor = scanCursor; scanCursor = undefined; page = await read(cursor); scanCursor = page.cursor;
+        }
+        if (!owns(ticket)) return;
+        const next = new Map(selectedRef.current); for (const item of items) next.set(item.query.id, selectQuery(item));
+        epoch.current++; selectedRef.current = next; setSelected(next); setNotice(t.selectAllDone(items.length));
+      } catch (reason) { setNotice(''); throw reason; }
+      finally { await releaseScan(); }
+    });
+  }
   function clearSelection() { if (!editable()) return; epoch.current++; selectedRef.current = new Map(); setSelected(selectedRef.current); }
   /** 原树对象、原选择和代次一起捕获，外来快照或旧回调不能换目标。 */
   function edit(value: SavedQueryOrganizationEdit) { if (!editable() || !organizationRef.current || needsRefresh) return; const next = { value, snapshot: organizationRef.current, selected: Object.freeze([...selectedRef.current.values()].map(item => Object.freeze({ ...item }))), epoch: ++epoch.current }; editRef.current = next; setEditing(next); setError(''); }
@@ -734,7 +764,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         </select></label>
         <label className="saved-query-favorites-filter"><input type="checkbox" checked={favoritesOnly} disabled={blocked} onChange={event => selectFavorites(event.target.checked)}/>{t.favoritesOnly}</label>
         <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label>{changed && reply && <p>{t.pending}</p>}
-        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginRebind}>{t.rebindOpen}</button><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={beginDuplicateBatch}>{t.duplicateBatchOpen}</button><button disabled={blocked || !selected.size || needsRefresh || selected.size > savedQueryOpenBatchLimits.queries} ref={openBatchTrigger} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={() => exportSqlArchive('selected')}>{t.sqlArchive}</button>
+        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><button disabled={blocked || changed || needsRefresh || !reply} onClick={() => void chooseAllMatching()}>{t.selectAllMatching}</button><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginRebind}>{t.rebindOpen}</button><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={beginDuplicateBatch}>{t.duplicateBatchOpen}</button><button disabled={blocked || !selected.size || needsRefresh || selected.size > savedQueryOpenBatchLimits.queries} ref={openBatchTrigger} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={() => exportSqlArchive('selected')}>{t.sqlArchive}</button>
           <button disabled={blocked || changed || !reply || needsRefresh} title={t.sqlArchiveFilteredHint} onClick={() => exportSqlArchive('filtered')}>{t.sqlArchiveFiltered}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
         {selected.size > savedQueryOpenBatchLimits.queries && <p className="muted small">{t.openBatchLimit(savedQueryOpenBatchLimits.queries)}</p>}
         {opening && <QueryBatchOpenPreview rows={[...opening.selection.values()]} targets={opening.targets} connections={connections}
