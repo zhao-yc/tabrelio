@@ -29,7 +29,7 @@ beforeEach(() => { invoke.mockReset().mockImplementation(async command => comman
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.textContent = ''; });
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
-async function mount(names = ['orders', 'users', 'audit']) {
+async function mount(names: string[] | Promise<string[]> = ['orders', 'users', 'audit']) {
   invoke.mockImplementation(async command => command === 'mysql.backup.tables' ? names : undefined);
   const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as unknown as Element);
   await act(async () => root!.render(<MysqlDataTransferDialog connections={connections} onClose={vi.fn()} onRefresh={vi.fn()} />));
@@ -45,6 +45,7 @@ describe('MySQL／MariaDB 数据传输源表选择', () => {
   it('全选与清空只作用于已读取目录', async () => {
     await mount(); expect(tableChecks()).toHaveLength(3); expect(tableChecks().some(node => node.checked)).toBe(false); await click(text.selectAll); expect(tableChecks().every(node => node.checked)).toBe(true);
     const search = document.querySelector('input[type="search"]')!; search.value = 'orders'; await act(async () => search.dispatchEvent(new MemoryEvent('input'))); expect(tableChecks()).toHaveLength(1); expect(tableChecks()[0].checked).toBe(true);
+    search.value = 'missing'; await act(async () => search.dispatchEvent(new MemoryEvent('input'))); expect(tableChecks()).toHaveLength(0); expect(document.body.textContent).toContain(text.noMatchingTables);
     search.value = ''; await act(async () => search.dispatchEvent(new MemoryEvent('input'))); expect(tableChecks()).toHaveLength(3); expect(tableChecks().every(node => node.checked)).toBe(true); await click(text.clearSelection); expect(tableChecks().some(node => node.checked)).toBe(false);
   });
   it('超过32张表时拒绝全选且不截断选择', async () => {
