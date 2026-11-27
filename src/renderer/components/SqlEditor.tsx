@@ -36,7 +36,7 @@ import {CompletionDirectory} from '../completionDirectory';
 import {completionSuggestions,type SqlCompletionItem} from '../completionSuggestions';
 import {completionLimits} from '../../shared/sqlCompletion';
 import {invoke,uid} from '../lib';
-import {resolveCompletionContext,completionContextCapabilities,sameCompletionScope,type SqlCompletionScope} from '../completionContext';
+import {resolveCompletionContext,completionContextCapabilities,sameCompletionScope,sameCompletionState,type SqlCompletionScope} from '../completionContext';
 import {SessionCompletionDirectory} from '../sessionCompletionDirectory';
 import {completionServerFacts} from '../completionServerFacts';
 import { currentStatementZh } from '../locales/currentStatement.zh-CN';
@@ -46,6 +46,8 @@ import StatementNavigationWorker from '../statementNavigation.worker?worker';
 import { editorContentBridge, registerWorkspaceQueryEditor } from '../editorContentBridge';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import { createSqlFieldHoverProvider } from '../sqlFieldHoverProvider';
+import { mysqlNamedParameterCompletion, mysqlNamedParameterHover, mysqlParameterEditorMode, mysqlParameterTarget } from '../mysqlNamedParameterEditor';
+import { mysqlParameterEditorZh as mysqlParameterText } from '../locales/mysqlParameterEditor.zh-CN';
 import SqliteCompletionWorker from '../sqliteCompletion.worker?worker';
 import { SqliteCompletionWorkerClient } from '../sqliteCompletionWorkerClient';
 import { createSqliteCompletionProvider } from '../sqliteCompletionProvider';
@@ -606,9 +608,13 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     let active:AbortController|undefined,disposed=false;
     let hover: ReturnType<typeof createSqlFieldHoverProvider> | undefined;
     const scopeCurrent = () => aliveRef.current && !propsRef.current.readOnly && sameCompletionScope(completionRef.current, completion);
+    const parameterRange = (model: monaco.editor.ITextModel, target: { start: number; end: number }) => {
+      const start = model.getPositionAt(target.start), end = model.getPositionAt(target.end);
+      return { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+    };
     const provider = monaco.languages.registerCompletionItemProvider(languageSelector, {
-      triggerCharacters:['.','`'],
-      provideCompletionItems: async (model, position,_context,token) => {
+      triggerCharacters:['.','`',':','$'],
+      provideCompletionItems: async (model, position,context,token) => {
         if (disposed||readOnly||suggestionsBlocked()||!scopeCurrent()||editorRef.current?.getModel()!==model||model.isDisposed()||token.isCancellationRequested)return{suggestions:[]};
         hover?.cancel();
         active?.abort();const controller=new AbortController();active=controller;statusRef.current?.('idle');
@@ -622,6 +628,21 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
           const cached=completion.sessionId?await invoke('query.completionState',{sessionId:completion.sessionId}):undefined;if(!current())return{suggestions:[]};
           const cachedDialect=cached?.dialect;if(cachedDialect==='sqlite')return{suggestions:[]};
           const scope=resolveCompletionContext(completion.database,cached,completion.databaseUnknown);if(!scope.available){statusRef.current?.(scope.reason==='broken'?'unavailable':'idle');return{suggestions:[]};}
+          const parameterDialect = cachedDialect ?? openedFacts?.dialect ?? network;
+          const parameter = parameterDialect === 'mysql' || parameterDialect === 'mariadb' ? mysqlParameterTarget(source, offset) : undefined;
+          if (parameter && (parameterDialect === 'mysql' || parameterDialect === 'mariadb')) {
+            const items = mysqlNamedParameterCompletion(source, parameter, mysqlParameterEditorMode(parameterDialect, cached));
+            if (items.length && completion.sessionId) {
+              const latest = await invoke('query.completionState', { sessionId: completion.sessionId });
+              if (!current() || !cached || !sameCompletionState(cached, latest)) return { suggestions: [] };
+            }
+            const range = parameterRange(model, parameter);
+            return { incomplete: items.length > 0, suggestions: items.map(({ label, local }, index) => ({
+              range, label, kind: monaco.languages.CompletionItemKind.Variable, filterText: label, insertText: label,
+              detail: local ? mysqlParameterText.currentStatement : mysqlParameterText.otherStatement, sortText: String(index).padStart(3, '0'),
+            })) };
+          }
+          if (context.triggerCharacter === ':' || context.triggerCharacter === '$') return { suggestions: [] };
           const capabilities=completionContextCapabilities(cached,openedFacts);
           const analysis=await worker.analyze(source,offset,scope.mode,controller.signal,capabilities);if(!current())return{suggestions:[]};
           if(analysis.status==='blocked'){statusRef.current?.(analysis.reason==='startup-timeout'?'startupTimeout':analysis.reason==='timeout'?'analysisTimeout':analysis.reason==='budget'?'limited':analysis.reason==='worker'?'unavailable':'idle');return{suggestions:[]};}
@@ -651,7 +672,38 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         return invoke('query.temporaryCompletion', { sessionId, kind: 'columns', database: query.database, table: query.table, prefix: query.prefix, ...(query.details ? { details: true } : {}) });
       }
     });
-    const hoverRegistration = monaco.languages.registerHoverProvider(languageSelector, hover.provider);
+    const hoverRegistration = monaco.languages.registerHoverProvider(languageSelector, {
+      async provideHover(model, position, token) {
+        if (disposed || !scopeCurrent() || contentRef.current?.ready !== true || editorRef.current?.getModel() !== model ||
+            model.isDisposed() || token.isCancellationRequested || model.getValueLength() > completionLimits.sourceUnits) return null;
+        const source = model.getValue(), offset = model.getOffsetAt(position);
+        const target = mysqlParameterTarget(source, offset) ??
+          (source.startsWith('[$', offset) ? mysqlParameterTarget(source, offset + 2) :
+            source[offset] === ':' || source[offset] === '$' && source[offset - 1] === '[' ? mysqlParameterTarget(source, offset + 1) : undefined);
+        if (!target?.closed) return hover?.provider.provideHover(model, position, token);
+        const version = model.getVersionId();
+        const facts = completion.sessionId ? undefined : completionServerFacts.get(completion.connectionId, completion.connectionVersion);
+        const current = () => !disposed && scopeCurrent() && contentRef.current?.ready === true && editorRef.current?.getModel() === model &&
+          !model.isDisposed() && model.getVersionId() === version && !token.isCancellationRequested &&
+          (!!completion.sessionId || completionServerFacts.get(completion.connectionId, completion.connectionVersion) === facts);
+        try {
+          const cached = completion.sessionId ? await invoke('query.completionState', { sessionId: completion.sessionId }) : undefined;
+          if (!current() || cached?.busy || cached?.broken) return null;
+          const parameterDialect = cached?.dialect ?? facts?.dialect ?? network;
+          if (parameterDialect !== 'mysql' && parameterDialect !== 'mariadb') return null;
+          const counts = mysqlNamedParameterHover(source, target, mysqlParameterEditorMode(parameterDialect, cached));
+          if (!counts) return null;
+          if (completion.sessionId) {
+            const latest = await invoke('query.completionState', { sessionId: completion.sessionId });
+            if (!current() || !cached || !sameCompletionState(cached, latest)) return null;
+          }
+          return { range: parameterRange(model, target), contents: [
+            { value: '`' + source.slice(target.start, target.end) + '` · ' + mysqlParameterText.title },
+            { value: mysqlParameterText.references(counts.statementCount, counts.draftCount) },
+          ] };
+        } catch { return null; }
+      },
+    });
     return()=>{disposed=true;active?.abort();hoverRegistration.dispose();hover?.dispose();provider.dispose();worker.dispose();directory.dispose();};
   },[readOnly,dialect,requestedDialect,languageSelector,completion?.connectionId,completion?.connectionVersion,completion?.database,completion?.databaseUnknown,completion?.sessionId]);
   /** 字号与正文桥接可随布局恢复；执行动作及父层onReady不在这里重复发布。 */
