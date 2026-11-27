@@ -47,4 +47,8 @@ describe('结构差异筛选及选择意图', () => {
     const report = schemaCompareResultsFixture(), selected = Array.from({ length: 100 }, (_, index) => JSON.stringify(['columns', `existing-${index}`]));
     expect(apply(report, selected, { snapshotId: report.snapshotId, kind: 'toggle', id: id(report.rows[0]), checked: true })).toBe(selected);
   });
+  it('清除当前筛选项只移除可见选择，隐藏选择保持不变', () => {
+    const report = schemaCompareResultsFixture(), visible = id(report.rows[0]), hidden = id(report.rows[1]), other = id(report.rows[2]);
+    expect(apply(report, [visible, hidden, other], { snapshotId: report.snapshotId, kind: 'clearVisible', ids: [visible, other] })).toEqual([hidden]);
+  });
 });

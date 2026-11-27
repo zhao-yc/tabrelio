@@ -9,6 +9,7 @@ export const defaultSchemaCompareResultsFilter: SchemaCompareResultsFilter = { c
 export type SchemaCompareResultsSelection = { snapshotId: string } & (
   | { kind: 'toggle'; id: string; checked: boolean }
   | { kind: 'selectVisible'; ids: readonly string[] }
+  | { kind: 'clearVisible'; ids: readonly string[] }
   | { kind: 'clearHidden'; ids: readonly string[] }
 );
 
@@ -31,6 +32,10 @@ export function projectSchemaCompareResults(report: SchemaCompareResult, filter:
 export function applySchemaCompareResultsSelection(report: SchemaCompareResult, previous: string[], event: SchemaCompareResultsSelection): string[] {
   if (event.snapshotId !== report.snapshotId) return previous;
   if (event.kind === 'clearHidden') {
+    const cleared = new Set(event.ids);
+    return previous.filter(id => !cleared.has(id));
+  }
+  if (event.kind === 'clearVisible') {
     const cleared = new Set(event.ids);
     return previous.filter(id => !cleared.has(id));
   }

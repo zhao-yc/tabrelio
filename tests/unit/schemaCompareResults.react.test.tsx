@@ -99,6 +99,11 @@ describe('正式结构比较结果组件（内存 ReactDOM）', () => {
     await input(text.category, 'columns'); await click(button(text.selectVisible));
     expect(captured.props.at(-1)!.selectedIds).toEqual([id(report.rows[0]), id(report.rows[4])]);
   });
+  it('清除当前筛选项只清除可见选择', async () => {
+    const report = schemaCompareResultsFixture(); await mount(<Harness selected={[id(report.rows[0]), id(report.rows[1])]}/>);
+    await input(text.category, 'columns'); await click(button(text.clearVisible));
+    expect(captured.props.at(-1)!.selectedIds).toEqual([id(report.rows[1])]);
+  });
   it('特殊名称与不可比较原因始终是文本，原定义按需展开并区分 NULL 与缺失侧', async () => {
     await mount(<Harness/>); expect(document.body.querySelectorAll('pre')).toHaveLength(0);
     expect(byLabel('选择 其它约束 未知约束').disabled).toBe(true); expect(document.body.textContent).toContain('无法识别的约束：<img src=x>');
