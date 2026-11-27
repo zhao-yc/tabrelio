@@ -69,6 +69,20 @@ describe('历史清理完整正式父入口真实React RAM（非原生SQLite验�
     await click(text.cancel); expect(doc.querySelector('[data-history-id="3"]')).not.toBeNull(); expect(doc.body.textContent).toContain(text.selection(4)); expect(calls('history.pageRelease')).toHaveLength(0); expect(calls('history.deleteRelease')).toHaveLength(1);
     await click(text.clearSelection); expect(doc.body.textContent).toContain(text.selection(0));
   });
+  it('全选当前筛选使用独立游标扫描全部摘要，并保留当前页续读游标', async () => {
+    let scanning = false;
+    invoke.mockImplementation(async (command, input) => {
+      if (command === 'history.page') return scanning ? page(['1', '2'], 'scan-first') : page();
+      if (command === 'history.pageContinue') return scanning ? { ...page(['3', '4'], 'scan-end'), cursor: undefined } : page(['3', '4'], 'cursor-second');
+      return undefined;
+    });
+    await mountParent(); scanning = true; await click(pages.selectAll);
+    expect(doc.body.textContent).toContain(pages.selectAllDone(4)); expect(doc.body.textContent).toContain(text.selection(4));
+    expect(calls('history.page')).toHaveLength(2);
+    expect(calls('history.pageContinue').at(-1)![1]).toEqual({ cursor: 'scan-first', taskId: expect.any(String) });
+    await click(pages.next); expect(calls('history.pageContinue').at(-1)![1]).toEqual({ cursor: 'cursor-first', taskId: expect.any(String) });
+    expect(doc.body.textContent).toContain(text.selection(4));
+  });
   it('卡片删除只预览对应一条，不借当前批次或跨页所选替代', async () => {
     await mountParent(); await click(text.selectBatch); const card = doc.querySelector('[data-history-id="2"]')!; const single = card.querySelectorAll('button').find(value => value.textContent === text.single)!;
     await act(async () => single.dispatchEvent(new MemoryEvent('click'))); await click(text.preview); expect(calls('history.deletePreview')[0][1].scope).toEqual({ kind: 'selected', records: [{ id: '2', digest: 'a'.repeat(64) }] });

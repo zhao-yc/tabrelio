@@ -17,6 +17,7 @@ export const historyPagesZh={
  filterStatus:'历史筛选状态',pageStatus:'历史读取进度',
  pending:'筛选已改变，请重新搜索。',summary:'第{0}批 · 已检查{1}条 · 匹配{2}条 · 读取失败{3}条',failedStop:'遇到记录错误，已停止。',more:'还有下一批记录。',done:'已读取完毕。',
  choose:'选择打开历史的连接',connection:'打开历史的连接：{0}',sourceMissing:'来源连接不存在',preview:'SQL 共 {0} 个 UTF-16 单元，可分段查看完整正文。',
+ selectAll:'选择当前筛选全部',selectAllReading:'正在读取当前筛选的全部历史概要。',selectAllDone:(count:number)=>`已选择当前筛选的 ${count} 条历史。`,selectAllTooMany:(count:number)=>`当前筛选超过 ${count} 条可勾选历史，请缩小范围后重试。`,selectAllFailed:'当前筛选中有记录读取失败，未选择全部；请缩小范围或修复记录后重试。',
  sqlFull:'查看完整 SQL',sqlTitle:'完整历史 SQL',sqlClose:'收起完整 SQL',sqlPart:'第 {0} / {1} 段',sqlPrevious:'上一段 SQL',sqlNext:'下一段 SQL',
  sqlPartStatus:'SQL 分段位置', sqlFindTitle:'在正文中查找（区分大小写）', sqlFindPrevious:'上一处正文匹配', sqlFindNext:'下一处正文匹配',
  sqlFindStatus:'正文查找状态', sqlFindMissing:'正文中没有匹配', sqlFindLocated:'已定位正文匹配',
