@@ -70,8 +70,9 @@ export function MysqlDataTransferDialog({ connections, onClose, onRefresh }: {
   }
   function selectAllTables() {
     if (!catalogue) return;
-    if (catalogue.length > mysqlDataTransferLimits.tables) { setError(text.tooManyTables(mysqlDataTransferLimits.tables)); return; }
-    invalidate(); setTables([...catalogue]);
+    const query = tableSearch.trim().toLocaleLowerCase(), candidates = catalogue.filter(name => name.toLocaleLowerCase().includes(query));
+    if (candidates.length > mysqlDataTransferLimits.tables) { setError(text.tooManyTables(mysqlDataTransferLimits.tables)); return; }
+    invalidate(); setTables(candidates);
   }
   function clearTables() { invalidate(); setTables([]); }
   function endpoint(label: string, value: MysqlDataTransferEndpoint, update: (value: MysqlDataTransferEndpoint) => void) {
@@ -93,7 +94,7 @@ export function MysqlDataTransferDialog({ connections, onClose, onRefresh }: {
     </div>
     <button onClick={load} disabled={busy || !source.connectionId || !source.database}>{text.load}</button>
     {catalogue?.length === 0 && <p role="status">{text.noTables}</p>}
-    {!!catalogue?.length && <fieldset disabled={busy} className="schema-compare-results"><legend>{text.tables}（{tables.length} / {mysqlDataTransferLimits.tables}）</legend><div className="inline-field"><label>{text.tableSearch}<input type="search" aria-label={text.tableSearch} value={tableSearch} onChange={event => setTableSearch(event.target.value)} /></label><button type="button" onClick={selectAllTables} disabled={busy || tables.length === catalogue.length}>{text.selectAll}</button><button type="button" onClick={clearTables} disabled={busy || !tables.length}>{text.clearSelection}</button>{catalogue.length > mysqlDataTransferLimits.tables && <span className="muted small">{text.tooManyTables(mysqlDataTransferLimits.tables)}</span>}</div>
+    {!!catalogue?.length && <fieldset disabled={busy} className="schema-compare-results"><legend>{text.tables}（{tables.length} / {mysqlDataTransferLimits.tables}）</legend><div className="inline-field"><label>{text.tableSearch}<input type="search" aria-label={text.tableSearch} value={tableSearch} onChange={event => setTableSearch(event.target.value)} /></label><button type="button" onClick={selectAllTables} disabled={busy || !catalogue.some(name => name.toLocaleLowerCase().includes(tableSearch.trim().toLocaleLowerCase()))}>{text.selectAll}</button><button type="button" onClick={clearTables} disabled={busy || !tables.length}>{text.clearSelection}</button>{catalogue.length > mysqlDataTransferLimits.tables && <span className="muted small">{text.tooManyTables(mysqlDataTransferLimits.tables)}</span>}</div>
       {catalogue.filter(name => name.toLocaleLowerCase().includes(tableSearch.trim().toLocaleLowerCase())).map(name => <div key={name}><label><input type="checkbox" checked={tables.includes(name)}
         disabled={!tables.includes(name) && tables.length >= mysqlDataTransferLimits.tables}
         onChange={event => { invalidate(); setTables(event.target.checked ? [...tables, name] : tables.filter(table => table !== name)); }}/> {name}</label></div>)}

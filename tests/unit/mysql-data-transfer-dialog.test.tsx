@@ -49,5 +49,7 @@ describe('MySQL／MariaDB 数据传输源表选择', () => {
   it('超过32张表时拒绝全选且不截断选择', async () => {
     const names = Array.from({ length: 33 }, (_, index) => 'table_' + index); await mount(names); await click(text.selectAll);
     expect(tableChecks().some(node => node.checked)).toBe(false); expect(document.body.textContent).toContain(text.tooManyTables(32));
+    const search = document.querySelector('input[type="search"]')!; search.value = 'table_0'; await act(async () => search.dispatchEvent(new MemoryEvent('input'))); await click(text.selectAll);
+    expect(tableChecks()).toHaveLength(1); expect(tableChecks()[0].checked).toBe(true);
   });
 });
