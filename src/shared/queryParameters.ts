@@ -3,6 +3,7 @@ import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { navicatParameterNameAt } from './navicatParameter';
 import { queryParameterLimits } from './queryParameterLimits';
 import { QueryParameterFieldError } from './queryParameterFieldError';
+import type { SqlScriptBrackets } from './sqlScriptScanner';
 
 export { queryParameterLimits } from './queryParameterLimits';
 
@@ -21,6 +22,26 @@ export interface SqlLexicalMode {
 export interface QueryParameterStatementRange { start: number; end: number; }
 export interface QueryParameterNames extends SqlLexicalMode { names: string[]; warnings: string[]; maxDecimalScale: 30 | 38; allowTimeEndpointFraction: boolean; dialect?: 'mysql' | 'mariadb' | 'sqlite'; sqliteNavicatParameters?: true; currentStatementRange?: QueryParameterStatementRange; }
 const encoder = new TextEncoder();
+
+/** 参数脚本和编辑器用同一套方括号解释。 */
+export function parameterScriptBrackets(mode: SqlLexicalMode): SqlScriptBrackets {
+  return mode.bracketQuotes === 'unknown' ? 'unknown' : mode.bracketQuotes ? 'identifiers' : 'parameters';
+}
+
+/** 静态预览可预演常量赋值；表达式、调用和版本注释只能在执行后确定模式。 */
+export function nextStaticParameterMode(sql: string, mode: SqlLexicalMode): SqlLexicalMode | undefined {
+  const clean = sql.replace(/^(?:\s+|\/\*(?![!]|M!)[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$))*/, '');
+  const assignment = /^SET\s+(?:(?:SESSION|LOCAL)\s+|@@(?:(?:SESSION|LOCAL)\.)?)?sql_mode\s*=\s*(['"])([A-Za-z0-9_,\s]*)\1\s*$/i.exec(clean);
+  if (assignment && !(assignment[1] === '"' && mode.ansiQuotes)) {
+    const modes = assignment[2].toUpperCase().split(',').map(value => value.trim());
+    const bracketQuotes = mode.bracketQuotes !== undefined && modes.includes('MSSQL');
+    return { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'),
+      ansiQuotes: modes.includes('ANSI_QUOTES') || modes.includes('ANSI') || bracketQuotes,
+      ...(mode.bracketQuotes === undefined ? {} : { bracketQuotes }) };
+  }
+  if (/^(?:SET|CALL|EXECUTE)\b/i.test(clean) || /\/\*(?:!|M!)/.test(clean)) return undefined;
+  return mode;
+}
 
 /** 文本以 UTF-8 十六进制编码，值中的引号、NUL 和 SQL 分隔符均无法影响 SQL 结构。 */
 function textLiteral(value: string): string { return `CONVERT(X'${Array.from(encoder.encode(value), byte => byte.toString(16).padStart(2, '0')).join('')}' USING utf8mb4)`; }
