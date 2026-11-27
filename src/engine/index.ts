@@ -58,7 +58,7 @@ import iconv from 'iconv-lite';
 import { Types, type FieldPacket, type ResultSetHeader } from 'mysql2';
 import type { CellValue, CommandMap, EngineCommand, ConnectionProfile, NetworkConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, SqlPreview, TableDesign, TableInfo, TaskEvent } from '../shared/contracts';
 import { connectionTransportChanged } from '../shared/connectionProfile';
-import { bindQueryParameters, namedParameterTokens, queryParameterLimits, validateQueryParameters, type QueryParameter, type QueryParameterStatementRange, type SqlLexicalMode } from '../shared/queryParameters';
+import { bindQueryParameters, namedParameterTokens, nextStaticParameterMode, parameterScriptBrackets, queryParameterLimits, validateQueryParameters, type QueryParameter, type QueryParameterStatementRange, type SqlLexicalMode } from '../shared/queryParameters';
 import { canonicalReference, validateReferenceValues } from '../shared/references';
 import { buildReferencePageSql, buildChildReferencePageSql, hasStableReferencePagination } from './references';
 import { readIncomingReferences, resolveIncomingReference, recheckIncomingReference } from './incomingReferences';
@@ -1608,11 +1608,6 @@ export class Engine {
     return { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'), noBackslashEscapesKnown: true, ansiQuotes: modes.includes('ANSI_QUOTES'), ansiQuotesKnown: true, ...bracketMode };
   }
 
-  /** 仅在显式参数操作中选择方括号的解释，未知时同时核对标识符和模板。 */
-  private parameterBrackets(mode: SqlLexicalMode) {
-    return mode.bracketQuotes === 'unknown' ? 'unknown' : mode.bracketQuotes ? 'identifiers' : 'parameters';
-  }
-
   /** MariaDB 10.2.1 起允许 38 位小数，MySQL 及更早 MariaDB 保持 30 位。 */
   private maxDecimalScale(managed: ManagedConnection): 30 | 38 {
     const version = /^(\d+)\.(\d+)\.(\d+).*MariaDB/i.exec(managed.status.version.replace(/^5\.5\.5-/, ''));
@@ -1623,26 +1618,11 @@ export class Engine {
 
   /** 当前语句由原文分隔符和原会话确定，识别整条模板一次，保留例程内的分号。 */
   private currentParameterStatement(sql: string, offset: number, mode: SqlLexicalMode) {
-    const current = currentSqlStatement(sql, offset, mode, this.parameterBrackets(mode));
+    const current = currentSqlStatement(sql, offset, mode, parameterScriptBrackets(mode));
     if (!current) throw Error('光标所在位置没有可执行的完整语句');
     const names = [...new Set(namedParameterTokens(current.sql, mode).map(token => token.name))];
     if (names.length > queryParameterLimits.names) throw Error('查询参数不能超过 200 个');
     return { ...current, names };
-  }
-
-  /** 明确的常量 SET 可预演；服务器表达式与版本条件只能在执行后读取实际模式。 */
-  private nextStaticMode(sql: string, mode: SqlLexicalMode): SqlLexicalMode | undefined {
-    const clean = sql.replace(/^(?:\s+|\/\*(?![!]|M!)[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$))*/, '');
-    const assignment = /^SET\s+(?:(?:SESSION|LOCAL)\s+|@@(?:(?:SESSION|LOCAL)\.)?)?sql_mode\s*=\s*(['"])([A-Za-z0-9_,\s]*)\1\s*$/i.exec(clean);
-    if (assignment && !(assignment[1] === '"' && mode.ansiQuotes)) {
-      const modes = assignment[2].toUpperCase().split(',').map(value => value.trim());
-      const bracketQuotes = mode.bracketQuotes !== undefined && modes.includes('MSSQL');
-      return { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'),
-        ansiQuotes: modes.includes('ANSI_QUOTES') || modes.includes('ANSI') || bracketQuotes,
-        ...(mode.bracketQuotes === undefined ? {} : { bracketQuotes }) };
-    }
-    if (/^(?:SET|CALL|EXECUTE)\b/i.test(clean) || /\/\*(?:!|M!)/.test(clean)) return undefined;
-    return mode;
   }
 
   /** 静态路径一次校验完整模板；动态模式边界后预览仅为当前模式下的候选名称。 */
@@ -1653,7 +1633,7 @@ export class Engine {
     for (;;) {
       let statement: string | undefined;
       try {
-        scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false, this.parameterBrackets(mode));
+        scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false, parameterScriptBrackets(mode));
         statement = scanner.push(first ? sql : '', true, 1)[0]; first = false;
         if (!statement) break;
         for (const token of namedParameterTokens(statement, mode)) names.add(token.name);
@@ -1663,7 +1643,7 @@ export class Engine {
           if (bytes > queryParameterLimits.sqlBytes) throw new Error('展开后的 SQL 合计不能超过 20 MiB');
         }
       } catch (error) { if (!dynamic) throw error; break; }
-      const next = this.nextStaticMode(statement, mode);
+      const next = nextStaticParameterMode(statement, mode);
       if (next) mode = next; else dynamic = true;
     }
     if (names.size > queryParameterLimits.names) throw new Error('查询参数不能超过 200 个');
@@ -1967,7 +1947,7 @@ export class Engine {
     for (;;) {
       this.checkCancelled(task);
       scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false,
-        values ? this.parameterBrackets(mode) : 'literal');
+        values ? parameterScriptBrackets(mode) : 'literal');
       const chunk = first ? sql : '', located = locate ? scanner.pushLocated(chunk, true, 1)[0] : undefined;
       const template = locate ? located?.sql : scanner.push(chunk, true, 1)[0]; first = false;
       if (!template) break;

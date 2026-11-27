@@ -10,7 +10,7 @@ export function sameCompletionScope(left:SqlCompletionScope|undefined,right:SqlC
 }
 /** 同一物理会话的模式、对象代次及默认库都必须保持，不把迟到元数据交给新上下文。 */
 export function sameCompletionState(left:CompletionSessionState,right:CompletionSessionState):boolean {
-  return !right.busy&&!right.broken&&left.databaseKnown===right.databaseKnown&&left.database===right.database&&left.objectsRevision===right.objectsRevision&&left.dialect===right.dialect&&left.serverVersion===right.serverVersion&&left.ansiQuotes===right.ansiQuotes&&left.noBackslashEscapes===right.noBackslashEscapes;
+  return !right.busy&&!right.broken&&left.databaseKnown===right.databaseKnown&&left.database===right.database&&left.objectsRevision===right.objectsRevision&&left.dialect===right.dialect&&left.serverVersion===right.serverVersion&&left.ansiQuotes===right.ansiQuotes&&left.noBackslashEscapes===right.noBackslashEscapes&&left.bracketQuotes===right.bracketQuotes;
 }
 
 /** 物理会话事实始终优先；断开、繁忙或未知版本不能借用另一连接轮次的能力。 */

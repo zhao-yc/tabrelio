@@ -1,7 +1,7 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { confirmOwnedDesktopExit, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
-import { executeSql, writeSql } from './live-helpers';
+import { executeSql, modifier, writeSql } from './live-helpers';
 import { navigationMenuItem } from './navigation-menu';
 import { parameterZh as parameter } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { queryStreamZh as stream } from '../../src/renderer/locales/queryStreamExport.zh-CN';
@@ -11,7 +11,7 @@ import type { NetworkConnectionProfile } from '../../src/shared/contracts';
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 test.skip(!process.env.DBARK_MYSQL_NAMED_DIALECT, '仅在独立的 MySQL 或 MariaDB 源码窗口运行');
 
-test('Navicat 命名参数的查询与完整导出，以及 MariaDB 方括号标识符', async ({}, info) => {
+test('Navicat 命名参数的编辑、查询与完整导出，以及 MariaDB 方括号标识符', async ({}, info) => {
   const dialect = process.env.DBARK_MYSQL_NAMED_DIALECT, database = process.env.DBARK_MYSQL_NAMED_DATABASE ?? '';
   const password = process.env.DBARK_MYSQL_NAMED_PASSWORD ?? '', port = Number(process.env.DBARK_MYSQL_NAMED_PORT);
   if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_DEV_URL ||
@@ -82,6 +82,27 @@ test('Navicat 命名参数的查询与完整导出，以及 MariaDB 方括号标
     await modal.screenshot({ path: info.outputPath('命名参数完整导出.png') });
     await exportButton(zh.common.close).click();
 
+    const suggest = async (source: string, label: string, expected: string) => {
+      await writeSql(source);
+      await page.keyboard.press('Control+Space');
+      await expect(tab.locator('.suggest-widget.visible .monaco-list-row.focused .label-name')).toHaveText(label);
+      await page.keyboard.press('Enter');
+      await expect(tab.locator('.monaco-editor .view-line').last()).toHaveText(expected);
+    };
+    const hoverAtEnd = async (source: string, counts: string) => {
+      await writeSql(source);
+      await page.keyboard.press('ArrowLeft');
+      await page.keyboard.press(modifier + '+K');
+      await page.keyboard.press(modifier + '+I');
+      await expect(page.locator('.monaco-hover:visible')).toContainText(counts);
+      await page.keyboard.press('Escape');
+    };
+    const beforeEditor = await tasks();
+    await suggest("SELECT [$payload], ':ignored';\nSELECT :pay", ':payload', 'SELECT :payload');
+    await suggest('SELECT :payload;\nSELECT [$pay', '[$payload]', 'SELECT [$payload]');
+    await hoverAtEnd('DELIMITER //\nSELECT [$payload]//\nSELECT :payload, :payload', '本语句 2 处 · 当前草稿 3 处');
+    expect(await tasks()).toEqual(beforeEditor);
+
     // 相邻命令包含不同的参数名，只有中间的自定义分隔符语句可被识别、发送和记录。
     const currentTemplate = "SELECT [$payload] AS bound, :payload AS repeated, 'a//b' AS quoted";
     const source = [
@@ -118,6 +139,7 @@ test('Navicat 命名参数的查询与完整导出，以及 MariaDB 方括号标
 
     if (dialect === 'mariadb') {
       await executeSql("SET SESSION sql_mode='MSSQL';");
+      await hoverAtEnd('SELECT [$payload], :payload', '本语句 1 处 · 当前草稿 1 处');
       await placeOnThirdLine("SELECT 0;\n\nSELECT [$payload;column] AS stored, :payload AS supplied FROM (SELECT '服务器列值' AS `$payload;column`) AS fixture;\nSELECT :other;");
       await openCurrent();
       await expect(form.locator('.parameter-row')).toHaveCount(1);
@@ -127,6 +149,7 @@ test('Navicat 命名参数的查询与完整导出，以及 MariaDB 方括号标
       await expect(result.getByRole('gridcell', { name: raw, exact: true })).toBeVisible();
       await result.screenshot({ path: info.outputPath('MariaDB MSSQL 方括号标识符.png') });
       await executeSql("SET SESSION sql_mode='';");
+      await hoverAtEnd('SELECT [$payload], :payload', '本语句 2 处 · 当前草稿 2 处');
       await writeSql('SELECT [$payload] AS value_after_mode;');
       await open();
       await input('payload').fill(raw);

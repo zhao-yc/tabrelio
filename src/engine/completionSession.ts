@@ -31,5 +31,5 @@ export function completionSessionState(managed:ManagedConnection,busy:boolean):C
   const sqlMode=managed.sqlMode,modes=sqlMode?.split(','),noBackslashEscapes=modes?modes.includes('NO_BACKSLASH_ESCAPES'):managed.noBackslashEscapesKnown===true?Boolean(managed.serverStatus!&512):undefined;
   // 方言和版本只取当前物理会话的建连缓存，不为补全额外执行探测SQL。
   const server=managed.status;
-  return{databaseKnown:known,...(known?{database:state!.database}:{}),...(modes?{ansiQuotes:modes.includes('ANSI_QUOTES')}:{}),...(noBackslashEscapes===undefined?{}:{noBackslashEscapes}),...(server?.dialect?{dialect:server.dialect}:{}),...(typeof server?.version==='string'&&server.version.length>0&&server.version.length<=128?{serverVersion:server.version}:{}),...(managed.sessionObjects?{objectsRevision:managed.sessionObjects.revision}:{}),broken:false,busy:false};
+  return{databaseKnown:known,...(known?{database:state!.database}:{}),...(modes?{ansiQuotes:modes.includes('ANSI_QUOTES'),...(server?.dialect==='mariadb'?{bracketQuotes:modes.includes('MSSQL')}: {})}:{}),...(noBackslashEscapes===undefined?{}:{noBackslashEscapes}),...(server?.dialect?{dialect:server.dialect}:{}),...(typeof server?.version==='string'&&server.version.length>0&&server.version.length<=128?{serverVersion:server.version}:{}),...(managed.sessionObjects?{objectsRevision:managed.sessionObjects.revision}:{}),broken:false,busy:false};
 }
