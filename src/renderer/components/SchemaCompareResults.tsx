@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import type { SchemaCompareDifference, SchemaCompareResult } from '../../shared/schemaCompare';
+import { schemaCompareLimits, type SchemaCompareDifference, type SchemaCompareResult } from '../../shared/schemaCompare';
 import { schemaCompareZh as labels } from '../locales/schemaCompare.zh-CN';
 import { schemaCompareResultsZh as text } from '../locales/schemaCompareResults.zh-CN';
 import { defaultSchemaCompareResultsFilter, projectSchemaCompareResults, schemaCompareResultsId, type SchemaCompareResultsFilter, type SchemaCompareResultsSelection } from '../schemaCompareResults';
@@ -35,6 +35,8 @@ function Results({ report, selectedIds, disabled, onSelectionChange }: SchemaCom
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; live.current = null; }; }, []);
   const current = () => mounted.current && live.current === binding;
   const view = projectSchemaCompareResults(report, filter, selectedIds), selected = new Set(selectedIds);
+  const visibleSelectableIds = view.rows.filter(row => row.status !== 'same' && row.status !== 'unknown').map(schemaCompareResultsId);
+  const selectVisibleIds = [...new Set([...selectedIds, ...visibleSelectableIds])];
   /** 所有筛选入口只改显示；晚到的输入不能使用新报告或新筛选的上下文。 */
   function changeFilter(next: SchemaCompareResultsFilter): void { if (current()) setFilter(next); }
   /** 清除携带本次隐藏集合，父级仍需活读当前快照；不会回传整份旧选择覆盖新状态。 */
@@ -50,7 +52,8 @@ function Results({ report, selectedIds, disabled, onSelectionChange }: SchemaCom
       <label>{text.name}<input type="search" aria-label={text.name} title={text.searchHint} value={filter.name} onChange={event => changeFilter({ ...filter, name: event.currentTarget.value })}/></label>
       <button type="button" onClick={() => changeFilter(defaultSchemaCompareResultsFilter)}>{text.reset}</button>
     </div>
-    <p role="status" aria-live="polite">{text.count(view.rows.length, view.total)}</p>
+    <p role="status" aria-live="polite">{text.count(view.rows.length, view.total)} · {text.selectedCount(selectedIds.length)}{selectedIds.length >= schemaCompareLimits.selections && ` · ${text.selectionLimit(schemaCompareLimits.selections)}`}</p>
+    {visibleSelectableIds.length > 0 && <button type="button" disabled={disabled || selectVisibleIds.length > schemaCompareLimits.selections || visibleSelectableIds.every(id => selected.has(id))} onClick={() => select({ snapshotId: report.snapshotId, kind: 'selectVisible', ids: visibleSelectableIds })}>{text.selectVisible}</button>}
     {view.hiddenSelectedIds.length > 0 && <div className="schema-compare-hidden-selection" role="status"><strong>{text.hidden(view.hiddenSelectedIds.length)}</strong><button type="button" disabled={disabled} onClick={() => select({ snapshotId: report.snapshotId, kind: 'clearHidden', ids: view.hiddenSelectedIds })}>{text.clearHidden}</button></div>}
     {view.rows.length === 0 ? <p>{view.total ? text.noMatch : text.noRows}</p> : <div className="schema-compare-results"><table><thead><tr><th>{labels.select}</th><th>{labels.category}</th><th>{labels.name}</th><th>{labels.status}</th><th>{labels.properties}</th><th>{labels.detail}</th></tr></thead><tbody>
       {view.rows.map(row => { const id = schemaCompareResultsId(row); return <tr key={id} data-status={row.status}>

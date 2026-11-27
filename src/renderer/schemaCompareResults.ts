@@ -1,4 +1,4 @@
-import type { SchemaCompareCategory, SchemaCompareDifference, SchemaCompareResult, SchemaCompareStatus } from '../shared/schemaCompare';
+import { schemaCompareLimits, type SchemaCompareCategory, type SchemaCompareDifference, type SchemaCompareResult, type SchemaCompareStatus } from '../shared/schemaCompare';
 
 export interface SchemaCompareResultsFilter {
   category: 'all' | SchemaCompareCategory;
@@ -8,6 +8,7 @@ export interface SchemaCompareResultsFilter {
 export const defaultSchemaCompareResultsFilter: SchemaCompareResultsFilter = { category: 'all', status: 'differences', name: '' };
 export type SchemaCompareResultsSelection = { snapshotId: string } & (
   | { kind: 'toggle'; id: string; checked: boolean }
+  | { kind: 'selectVisible'; ids: readonly string[] }
   | { kind: 'clearHidden'; ids: readonly string[] }
 );
 
@@ -33,8 +34,14 @@ export function applySchemaCompareResultsSelection(report: SchemaCompareResult, 
     const cleared = new Set(event.ids);
     return previous.filter(id => !cleared.has(id));
   }
+  if (event.kind === 'selectVisible') {
+    const rows = new Set(report.rows.filter(row => row.status !== 'same' && row.status !== 'unknown').map(schemaCompareResultsId));
+    const ids = [...new Set(event.ids)].filter(id => rows.has(id));
+    const next = [...new Set([...previous, ...ids])];
+    return next.length <= schemaCompareLimits.selections ? next : previous;
+  }
   const row = report.rows.find(item => schemaCompareResultsId(item) === event.id);
   if (!row || row.status === 'same' || row.status === 'unknown') return previous;
-  if (event.checked) return previous.includes(event.id) ? previous : [...previous, event.id];
+  if (event.checked) return previous.includes(event.id) || previous.length >= schemaCompareLimits.selections ? previous : [...previous, event.id];
   return previous.filter(id => id !== event.id);
 }

@@ -37,4 +37,14 @@ describe('结构差异筛选及选择意图', () => {
     expect(apply(report, [a, c, b], { snapshotId: report.snapshotId, kind: 'clearHidden', ids: [b] })).toEqual([a, c]);
     expect(apply(report, [a, b], { snapshotId: report.snapshotId, kind: 'toggle', id: b, checked: false })).toEqual([a]);
   });
+  it('选择当前筛选项保留隐藏选择，并在超过预览上限时整批拒绝', () => {
+    const report = schemaCompareResultsFixture(), a = id(report.rows[0]), b = id(report.rows[1]), c = id(report.rows[2]);
+    expect(apply(report, [a], { snapshotId: report.snapshotId, kind: 'selectVisible', ids: [a, b, c] })).toEqual([a, b, c]);
+    const many = Array.from({ length: 100 }, (_, index) => JSON.stringify(['columns', `existing-${index}`]));
+    expect(apply(report, many, { snapshotId: report.snapshotId, kind: 'selectVisible', ids: [a] })).toBe(many);
+  });
+  it('单项勾选达到上限后不再悄悄扩大预览范围', () => {
+    const report = schemaCompareResultsFixture(), selected = Array.from({ length: 100 }, (_, index) => JSON.stringify(['columns', `existing-${index}`]));
+    expect(apply(report, selected, { snapshotId: report.snapshotId, kind: 'toggle', id: id(report.rows[0]), checked: true })).toBe(selected);
+  });
 });
