@@ -484,7 +484,7 @@ export class Engine {
         if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== input.connectionId)
           throw Error('缺少可信的 MySQL／MariaDB 备份连接');
         this.copySourceProfile(input);
-        return this.withCopySourceTask(input.connectionId, randomUUID(),
+        return this.withCopySourceTask(input.connectionId, input.taskId ?? randomUUID(),
           context => readMysqlBackupTables(context, input.database), '读取备份目录', 'no-default-database');
       }
       case 'mysql.backup.database': {

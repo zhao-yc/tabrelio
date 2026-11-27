@@ -15,7 +15,9 @@ export const mysqlBackupTableScopeSchema = z.object({
   content: z.enum(['all', 'schema', 'data']),
 }).strict();
 export type MysqlBackupTableScope = z.infer<typeof mysqlBackupTableScopeSchema>;
-export const mysqlBackupTablesSchema = z.object({ connectionId: identity, database: mysqlBackupDatabase }).strict();
+/** 选表目录默认兼容旧备份入口；传入任务编号时允许数据传输窗口准确取消目录读取。 */
+export const mysqlBackupTablesSchema = z.object({ connectionId: identity, database: mysqlBackupDatabase, taskId: z.string().uuid().optional() }).strict();
+export type MysqlBackupTablesInput = z.infer<typeof mysqlBackupTablesSchema>;
 export const mysqlDatabaseBackupChooseSchema = mysqlBackupTablesSchema.extend({
   toolToken: z.uuid(), format: z.enum(mysqlDatabaseBackupFormats).optional(), tableScope: mysqlBackupTableScopeSchema.optional(),
 }).strict();

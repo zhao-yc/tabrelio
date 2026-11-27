@@ -2,9 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { mysqlDumpOptionFile } from '../../src/engine/databaseBackupNativeOptions';
 import { databaseBackupGlobalGrants } from '../../src/engine/databaseBackupSource';
 import { parseMysqlDumpVersion } from '../../src/engine/mysqlDumpTool';
-import { mysqlBackupDumpArguments, mysqlDatabaseBackupExecuteSchema } from '../../src/shared/mysqlDatabaseBackup';
+import { mysqlBackupDumpArguments, mysqlBackupTablesSchema, mysqlDatabaseBackupExecuteSchema } from '../../src/shared/mysqlDatabaseBackup';
 
 describe('MySQL／MariaDB 原生整库备份参数', () => {
+  it('选表目录兼容旧入口，并允许数据传输携带可取消任务编号', () => {
+    const input = { connectionId: 'connection', database: 'app' };
+    expect(mysqlBackupTablesSchema.parse(input)).toEqual(input);
+    const taskId = '00000000-0000-4000-8000-000000000001';
+    expect(mysqlBackupTablesSchema.parse({ ...input, taskId })).toEqual({ ...input, taskId });
+    expect(mysqlBackupTablesSchema.safeParse({ ...input, taskId: 'invalid' }).success).toBe(false);
+  });
+
   it('识别不同工具的实际版本格式，拒绝用错系列', () => {
     expect(parseMysqlDumpVersion('mysql', 'mysqldump  Ver 8.3.0 for macos14.2 on arm64 (Homebrew)')).toBe('8.3.0');
     expect(parseMysqlDumpVersion('mysql', 'C:\\bin\\mysqldump.exe  Ver 8.4.11 for Win64 on x86_64')).toBe('8.4.11');

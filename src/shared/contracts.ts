@@ -496,7 +496,7 @@ export interface CommandMap {
   'mysql.dataTransfer.preview': { input: import('./mysqlDataTransfer').MysqlDataTransferPreviewInput; output: import('./mysqlDataTransfer').MysqlDataTransferPreview };
   'mysql.dataTransfer.apply': { input: import('./mysqlDataTransfer').MysqlDataTransferApplyInput; output: import('./mysqlDataTransfer').MysqlDataTransferResult };
   'mysql.dataTransfer.release': { input: { previewId: string }; output: void };
-  'mysql.backup.tables': { input: Pick<import('./mysqlDatabaseBackup').MysqlDatabaseBackupChooseInput, 'connectionId' | 'database'>; output: string[] };
+  'mysql.backup.tables': { input: import('./mysqlDatabaseBackup').MysqlBackupTablesInput; output: string[] };
   'mysql.backup.chooseFile': { input: import('./mysqlDatabaseBackup').MysqlDatabaseBackupChooseInput; output: FileChoice | null };
   'mysql.backup.database': { input: import('./mysqlDatabaseBackup').MysqlDatabaseBackupInput; output: import('./mysqlDatabaseBackup').MysqlDatabaseBackupResult };
   'mysql.sqlFile.choose': { input: import('./mysqlSqlFile').MysqlSqlFilePickInput; output: import('./mysqlSqlFile').MysqlSqlFileChoice | null };

@@ -37,11 +37,12 @@ export function MysqlDataTransferDialog({ connections, onClose, onRefresh }: {
   function load() {
     const parsed = mysqlDataTransferEndpointSchema.safeParse(source);
     if (!parsed.success) { setError(text.invalid); return; }
+    const taskId = uid();
     void run(async () => {
       invalidate(); setCatalogue(null); setTables([]);
-      const names = await invoke('mysql.backup.tables', parsed.data);
+      const names = await invoke('mysql.backup.tables', { ...parsed.data, taskId });
       if (alive.current) setCatalogue(names);
-    });
+    }, taskId);
   }
   function review() {
     const parsed = mysqlDataTransferPreviewSchema.safeParse({ source, target, tables, content, taskId: uid() });
